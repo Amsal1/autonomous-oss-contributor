@@ -3,8 +3,9 @@ for exactly the flags ``sandboxd.argv`` emits (M4, §23 item 15).
 
 ``FakeRuntime`` and the filter tests use it to turn every generated argv into the request the
 CLI would send, so ``ossbot.dockerfilter.rules`` checks the same bytes in unit tests that it
-checks in production. The zero-valued keys mirror what the CLI serializes; FEAT-004 re-records
-the corpus from the pinned CLI and replaces the hand-built fixtures if they differ.
+checks in production. The bodies equal what the pinned CLI (29.9.1) sends, recorded in
+``tests/unit/dockerfilter/corpus/recorded.json`` by ``record_corpus.py`` (FEAT-004); only the Env
+order differs (the CLI does not keep the flag order), which no consumer depends on.
 """
 
 from __future__ import annotations
@@ -60,7 +61,10 @@ def _mount(spec: str) -> dict[str, Any]:
         fields[key] = value
     if fields.get("type") != "volume" or set(fields) - {"type", "src", "dst"}:
         raise CliModelError("only type=volume,src,dst[,readonly] is modelled")
-    return {"Type": "volume", "Source": fields["src"], "Target": fields["dst"], "ReadOnly": read_only}
+    mount: dict[str, Any] = {"Type": "volume", "Source": fields["src"], "Target": fields["dst"]}
+    if read_only:  # the CLI omits ReadOnly=false (omitempty)
+        mount["ReadOnly"] = True
+    return mount
 
 
 def parse_run(argv: list[str], environ: Mapping[str, str]) -> CreateRequest:
@@ -121,7 +125,7 @@ def parse_run(argv: list[str], environ: Mapping[str, str]) -> CreateRequest:
         "Binds": None, "ContainerIDFile": "", "LogConfig": {"Type": "", "Config": {}}, "NetworkMode": network,
         "PortBindings": {}, "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0}, "AutoRemove": False,
         "VolumeDriver": "", "VolumesFrom": None, "ConsoleSize": [0, 0], "CapAdd": None,
-        "CapDrop": values.get("--cap-drop"), "CgroupnsMode": "", "Dns": values.get("--dns", []),
+        "CapDrop": values.get("--cap-drop"), "CgroupnsMode": "", "Dns": values.get("--dns"),
         "DnsOptions": [], "DnsSearch": values.get("--dns-search", []), "ExtraHosts": None, "GroupAdd": None,
         "IpcMode": "", "Cgroup": "", "Links": None, "OomScoreAdj": 0, "PidMode": "", "Privileged": False,
         "PublishAllPorts": False, "ReadonlyRootfs": "--read-only" in bools, "SecurityOpt": values.get("--security-opt"),
@@ -131,7 +135,7 @@ def parse_run(argv: list[str], environ: Mapping[str, str]) -> CreateRequest:
         "BlkioDeviceReadIOps": [], "BlkioDeviceWriteIOps": [], "CpuPeriod": 0, "CpuQuota": 0, "CpuRealtimePeriod": 0,
         "CpuRealtimeRuntime": 0, "CpusetCpus": "", "CpusetMems": "", "Devices": [], "DeviceCgroupRules": None,
         "DeviceRequests": None, "MemoryReservation": 0, "MemorySwap": _bytes(swap) if swap else 0,
-        "MemorySwappiness": None, "OomKillDisable": False, "PidsLimit": int(one("--pids-limit", "0")) or None,
+        "MemorySwappiness": -1, "OomKillDisable": False, "PidsLimit": int(one("--pids-limit", "0")) or None,
         "Ulimits": ulimits or None, "CpuCount": 0, "CpuPercent": 0, "IOMaximumIOps": 0, "IOMaximumBandwidth": 0,
         "Mounts": [_mount(m) for m in values.get("--mount", [])] or None, "MaskedPaths": None,
         "ReadonlyPaths": None, "Init": True if "--init" in bools else None,
@@ -140,13 +144,9 @@ def parse_run(argv: list[str], environ: Mapping[str, str]) -> CreateRequest:
         "Hostname": one("--hostname"), "Domainname": "", "User": one("--user"), "AttachStdin": False,
         "AttachStdout": not started, "AttachStderr": not started, "Tty": False, "OpenStdin": False,
         "StdinOnce": False, "Env": env, "Cmd": cmd or None, "Image": image, "Volumes": {},
-        "WorkingDir": one("--workdir"), "Entrypoint": None, "OnBuild": None, "Labels": labels,
+        "WorkingDir": one("--workdir"), "Entrypoint": None, "Labels": labels,
         "HostConfig": host_config,
-        "NetworkingConfig": {"EndpointsConfig": {network: {
-            "IPAMConfig": None, "Links": None, "Aliases": None, "MacAddress": "", "DriverOpts": None,
-            "GwPriority": 0, "NetworkID": "", "EndpointID": "", "Gateway": "", "IPAddress": "", "IPPrefixLen": 0,
-            "IPv6Gateway": "", "GlobalIPv6Address": "", "GlobalIPv6PrefixLen": 0, "DNSNames": None,
-        }}},
+        "NetworkingConfig": {"EndpointsConfig": {}},
     }  # fmt: skip
     # `docker create` (no -a, no -d) sets AttachStdout/AttachStderr like a foreground run; nothing
     # ever attaches (the attach endpoint is not in the filter's allowlist).

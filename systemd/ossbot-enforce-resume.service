@@ -1,0 +1,10 @@
+# Root resume enforcer (DESIGN §13.2): verifies the request (owner gatekeeper/root, newer than the
+# kill flag), removes killed/paused/resume-request and the Windows marker, then starts gatekeeper,
+# proxy, dockerfilter, sandboxd, runner, hermes in that order. The request file is always consumed.
+[Unit]
+Description=ossbot resume enforcement
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ossbot/bin/ossbot-resume --request
+TimeoutStartSec=300

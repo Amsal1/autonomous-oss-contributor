@@ -1,0 +1,11 @@
+# Resume request watcher (DESIGN §13.2): the gatekeeper writes resume-request after a human confirm.
+[Unit]
+Description=ossbot resume request watcher
+After=ossbot-boot-gate.service
+
+[Path]
+PathExists=/var/lib/ossbot/control/resume-request
+Unit=ossbot-enforce-resume.service
+
+[Install]
+WantedBy=multi-user.target

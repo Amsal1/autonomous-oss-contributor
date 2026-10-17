@@ -13,23 +13,23 @@ OSSBOT_LOG_DIR=/srv/ossbot/logs
 OSSBOT_STEPS=(
   "users|step_users|"
   "apt-base|step_apt_base|"
-  "docker|-|not implemented yet (FEAT-004)"
-  "dockerfilter|-|not implemented yet (FEAT-004)"
+  "docker|step_docker|"
+  "dockerfilter|step_dockerfilter|"
   "uv|step_uv|"
-  "app-deploy|-|not implemented yet (FEAT-004)"
+  "app-deploy|step_app_deploy|"
   "kiro-cli-hermes|-|phase 2: FEAT-007"
   "hermes|-|phase 2: FEAT-007"
-  "images|-|not implemented yet (FEAT-004)"
-  "networks|-|not implemented yet (FEAT-004)"
-  "firewall|-|not implemented yet (FEAT-004)"
-  "systemd|-|not implemented yet (FEAT-004)"
-  "audit-anchors|-|not implemented yet (FEAT-004)"
-  "secrets-seed|-|not implemented yet (FEAT-004)"
-  "enable-start|-|not implemented yet (FEAT-004)"
-  "doctor|-|not implemented yet (FEAT-004)"
+  "images|step_images|"
+  "networks|step_networks|"
+  "firewall|step_firewall|"
+  "systemd|step_systemd|"
+  "audit-anchors|step_audit_anchors|"
+  "secrets-seed|step_secrets_seed|"
+  "enable-start|step_enable_start|"
+  "doctor|step_doctor|"
 )
 
-OSSBOT_APT_BASE=(ca-certificates curl git jq unzip rsync iptables acl e2fsprogs shellcheck sudo)
+OSSBOT_APT_BASE=(ca-certificates curl git jq unzip rsync iptables acl e2fsprogs shellcheck sudo gnupg)
 
 step_apt_base() {
   local pkg missing=()
@@ -118,11 +118,24 @@ main() {
   # cannot change code halfway through a run.
   OSSBOT_LIBDIR=$(mktemp -d)
   trap 'rm -rf "${OSSBOT_LIBDIR:-/nonexistent}"' EXIT
-  install -m 0600 "$OSSBOT_REPO"/scripts/lib/common.sh "$OSSBOT_REPO"/scripts/lib/users.sh "$OSSBOT_LIBDIR"/
+  local lib
+  for lib in common users docker services firewall kiro images; do
+    install -m 0600 "$OSSBOT_REPO/scripts/lib/$lib.sh" "$OSSBOT_LIBDIR/"
+  done
   # shellcheck source=lib/common.sh disable=SC1091
   source "$OSSBOT_LIBDIR/common.sh"
   # shellcheck source=lib/users.sh disable=SC1091
   source "$OSSBOT_LIBDIR/users.sh"
+  # shellcheck source=lib/docker.sh disable=SC1091
+  source "$OSSBOT_LIBDIR/docker.sh"
+  # shellcheck source=lib/services.sh disable=SC1091
+  source "$OSSBOT_LIBDIR/services.sh"
+  # shellcheck source=lib/firewall.sh disable=SC1091
+  source "$OSSBOT_LIBDIR/firewall.sh"
+  # shellcheck source=lib/kiro.sh disable=SC1091
+  source "$OSSBOT_LIBDIR/kiro.sh"
+  # shellcheck source=lib/images.sh disable=SC1091
+  source "$OSSBOT_LIBDIR/images.sh"
 
   install -d -m 0750 "$OSSBOT_LOG_DIR"
   local logfile

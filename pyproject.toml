@@ -21,6 +21,7 @@ dependencies = [
 ossbot-gatekeeper = "ossbot.gatekeeper.main:main"
 ossbot-dockerfilter = "ossbot.dockerfilter.main:main"
 ossbot-sandboxd = "ossbot.sandboxd.main:main"
+ossctl = "ossbot.ctl.cli:main"
 
 [dependency-groups]
 dev = [

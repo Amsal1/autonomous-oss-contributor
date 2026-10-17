@@ -1,0 +1,15 @@
+# Audit anchor on demand (DESIGN §12.7, N7): the gatekeeper connects after every outbound write;
+# root appends the current audit head to the append-only audit-anchors.log.
+[Unit]
+Description=ossbot audit anchor socket
+
+[Socket]
+ListenStream=/run/ossbot/anchor.sock
+SocketUser=root
+SocketGroup=gatekeeper
+SocketMode=0660
+Accept=yes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

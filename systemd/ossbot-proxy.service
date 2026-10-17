@@ -1,0 +1,22 @@
+# Egress proxy (DESIGN §11.2): squid in the root-managed container ossbot-proxy on ossbot-egress at
+# 10.212.0.2, no published ports, ip_forward=0 in its netns. squid.conf is rendered from the
+# gatekeeper's config snapshot and the live resolver. Runs after a soft kill, skipped after a full
+# kill (ExecCondition).
+[Unit]
+Description=ossbot egress proxy (squid)
+Requires=ossbot-boot-gate.service docker.service ossbot-firewall.service ossbot-firewall-docker.service
+After=ossbot-boot-gate.service docker.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-gatekeeper.service
+
+[Service]
+Type=simple
+ExecCondition=/opt/ossbot/bin/ossbot-boot-gate --allow minimal
+ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
+ExecStartPre=-/usr/bin/docker rm --force ossbot-proxy
+ExecStartPre=/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.render squid --out /etc/ossbot/proxy/squid.conf
+ExecStart=/opt/ossbot/bin/ossbot-proxy-run
+ExecStop=/usr/bin/docker stop --time 5 ossbot-proxy
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

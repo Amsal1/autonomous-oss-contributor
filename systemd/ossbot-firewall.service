@@ -1,0 +1,19 @@
+# Host egress rules (DESIGN §11.4): OSSBOT-IN, OSSBOT-OUT and the ip6tables chains, applied before
+# Docker and the network. Never flushed on stop (fail closed). Runs while killed.
+[Unit]
+Description=ossbot firewall (host chains)
+DefaultDependencies=no
+Wants=network-pre.target
+After=local-fs.target ossbot-boot-gate.service
+Requires=ossbot-boot-gate.service
+Before=network-pre.target docker.service
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/ossbot/bin/ossbot-firewall --apply --part host
+
+[Install]
+WantedBy=multi-user.target

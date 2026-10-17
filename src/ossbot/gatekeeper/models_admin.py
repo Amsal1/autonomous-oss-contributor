@@ -6,11 +6,13 @@ the new content is validated before an atomic ``os.replace`` of a same-directory
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import json
 import os
 import re
 import sqlite3
+import stat
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +108,12 @@ class ModelsAdmin:
             raise ModelSetError(str(exc)) from exc
         tmp = self.path.with_name(f".models.yaml.tmp-{os.getpid()}")
         tmp.write_text(new_text, encoding="utf-8")
+        # Keep the original mode and group (drvfs metadata: e.g. ossadmin:osscfg 0775), so the
+        # live readers (runner, Hermes, the operator) can still read it after the replace.
+        current = os.stat(self.path)
+        os.chmod(tmp, stat.S_IMODE(current.st_mode))
+        with contextlib.suppress(PermissionError):  # not in the group: the mode alone keeps it readable
+            os.chown(tmp, -1, current.st_gid)
         os.replace(tmp, self.path)
         diff = "".join(
             difflib.unified_diff(old_text.splitlines(True), new_text.splitlines(True), "a/models.yaml", "b/models.yaml")

@@ -23,7 +23,10 @@ docker:
   containerd_io: "2.4.2-2~ubuntu.24.04~noble"
   docker_buildx_plugin: "0.38.0-1~ubuntu.24.04~noble"
   docker_compose_plugin: "5.6.0-1~ubuntu.24.04~noble"
-  source: "download.docker.com/linux/ubuntu/dists/noble/stable/binary-amd64/Packages (compose plugin major = 5)"
+  apt_repo: "https://download.docker.com/linux/ubuntu"
+  gpg_url: "https://download.docker.com/linux/ubuntu/gpg"
+  gpg_fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
+  source: "download.docker.com/linux/ubuntu/dists/noble/stable/binary-amd64/Packages (compose plugin major = 5); key fingerprint per docs.docker.com/engine/install/ubuntu"
 
 kiro_cli:
   version: "2.32.0"
@@ -59,14 +62,14 @@ images:
   # /etc/ossbot/versions.lock.yaml is what the Docker filter and sandboxd read. 'pending' = not
   # built yet: the filter then allows no image and sandboxd refuses every job (fail closed).
   sandbox_full:
-    digest: "pending (FEAT-004 images step)"
+    digest: "sha256:515fe87ab96ff859b148fc5ea5802edee844d509cdf0b347743f8bc36e7e2ce8"
   sandbox_llm:
-    digest: "pending (FEAT-004 images step)"
+    digest: "sha256:7279bffe79fbe399c1e5dbedf60948ac65a5f940cf58f44531f4fbf73d8609d2"
     kiro_cli_version: "2.32.0"
-    agent_configs_sha256: "pending (python -m ossbot.sandboxd.probes hash-agents at build)"
-    settings_sha256: "pending (python -m ossbot.sandboxd.probes hash-settings at build)"
+    agent_configs_sha256: "c40c1d9a796848f0927473432ca8420b551c075235cdb5c73393671529409751"
+    settings_sha256: "346dabea17dd16d5ac89af301240639ee379e16f6740ec406d781b95395d0608"
   proxy:
-    digest: "pending (FEAT-004 images step)"
+    digest: "sha256:24c46953e1f21cc58ce93e62a69e1cf44326ee089b699060a034ac0542aa3e55"
 
 kind:
   version: "0.33.0"

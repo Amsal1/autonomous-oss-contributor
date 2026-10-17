@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# ossbot-boot-gate (installed as /opt/ossbot/bin/ossbot-boot-gate; DESIGN 7.5, 13.2). Self-contained.
+#   ossbot-boot-gate                  boot: KILL marker -> 'killed' with level full (or soft -> full);
+#                                     repo mount missing -> killed (mount_missing). Never resumes.
+#   ossbot-boot-gate --allow minimal  ExecCondition of gatekeeper and proxy: exit 0 when there is no
+#                                     'killed' flag or it has level soft; exit 1 for level full or an
+#                                     unparseable flag (fail closed).
+set -euo pipefail
+
+REPO=${OSSBOT_REPO:-/mnt/d/Work/autonomous-oss-contributor}
+CONTROL=${OSSBOT_CONTROL_DIR:-/var/lib/ossbot/control}
+MARKER="$REPO/.ossbot-local/KILL"
+KILLED="$CONTROL/killed"
+
+# Level of the current flag: none | soft | full (missing or unparseable level = full).
+flag_level() {
+  if [[ ! -e $KILLED && ! -L $KILLED ]]; then echo none; return; fi
+  if [[ -L $KILLED || ! -f $KILLED ]]; then echo full; return; fi
+  local level
+  level=$(head -c 4096 "$KILLED" | jq -r 'if type == "object" then (.level // "") else "" end' 2>/dev/null || true)
+  if [[ $level == soft ]]; then echo soft; else echo full; fi
+}
+
+write_killed() {
+  local reason=$1 actor=$2 tmp
+  tmp="$CONTROL/.killed.tmp-$$"
+  jq -cn --arg level full --arg reason "$reason" --arg actor "$actor" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{level: $level, reason: $reason, actor: $actor, ts: $ts}' >"$tmp"
+  chown root:osscontrol "$tmp" 2>/dev/null || true
+  chmod 0640 "$tmp"
+  mv -f "$tmp" "$KILLED"
+}
+
+if [[ ${1:-} == --allow ]]; then
+  [[ ${2:-} == minimal ]] || { echo "usage: ossbot-boot-gate [--allow minimal]" >&2; exit 2; }
+  case $(flag_level) in
+    none|soft) exit 0 ;;
+    *) echo "ossbot-boot-gate: killed at level full; unit skipped" >&2; exit 1 ;;
+  esac
+fi
+[[ $# -eq 0 ]] || { echo "usage: ossbot-boot-gate [--allow minimal]" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "ossbot-boot-gate: must run as root" >&2; exit 2; }
+[[ -d $CONTROL ]] || { echo "ossbot-boot-gate: control dir $CONTROL missing" >&2; exit 1; }
+
+current=$(flag_level)
+if ! mountpoint -q "$REPO" || [[ ! -d $REPO/scripts ]]; then
+  if [[ $current != full ]]; then
+    write_killed mount_missing boot-gate
+    echo "ossbot-boot-gate: repo mount missing; killed (level full)"
+  fi
+  exit 0
+fi
+if [[ -e $MARKER ]]; then
+  reason=$(head -c 4096 "$MARKER" | tr -d '\r' | sed '1s/^\xEF\xBB\xBF//' | jq -r '.reason // empty' 2>/dev/null | tr -cd 'A-Za-z0-9 _.:/-' | head -c 200 || true)
+  reason=${reason:-kill_marker}
+  if [[ $current != full ]]; then
+    write_killed "marker: $reason" kill.ps1
+    echo "ossbot-boot-gate: KILL marker present; killed (level full, was $current)"
+  else
+    echo "ossbot-boot-gate: KILL marker present; already killed at level full"
+  fi
+  exit 0
+fi
+echo "ossbot-boot-gate: no marker (state: $current)"
+exit 0

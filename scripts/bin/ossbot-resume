@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ossbot-resume (installed as /opt/ossbot/bin/ossbot-resume; DESIGN 13.2-13.3, N4). Self-contained.
+#   ossbot-resume --request                    ossbot-enforce-resume.service: the gatekeeper wrote
+#                                              resume-request after a human confirm; verify it (owner
+#                                              gatekeeper or root, newer than 'killed'), always consume it
+#   ossbot-resume --offline --via V [--actor A] resume.ps1 / ossctl when the gatekeeper is down: append
+#                                              one JSON line to resume.log FIRST (the gatekeeper turns it
+#                                              into an audit event + Telegram FYI on its next start)
+# Then: remove killed, paused, resume-request and the Windows marker together, and start in order
+# gatekeeper, proxy, dockerfilter, sandboxd, runner, hermes (units that do not exist are skipped).
+# Dry-run is never changed. Exit 0 done, 1 refused, 3 partial (a unit did not start).
+set -uo pipefail
+
+REPO=${OSSBOT_REPO:-/mnt/d/Work/autonomous-oss-contributor}
+CONTROL=${OSSBOT_CONTROL_DIR:-/var/lib/ossbot/control}
+RESUME_LOG=${OSSBOT_RESUME_LOG:-/srv/ossbot/logs/resume.log}
+MARKER="$REPO/.ossbot-local/KILL"
+mode="" via="" actor="${SUDO_USER:-root}"
+actor_uid=${SUDO_UID:-$EUID}
+while (($#)); do
+  case $1 in
+    --request) mode=request; shift ;;
+    --offline) mode=offline; shift ;;
+    --via) via=${2:-}; shift 2 ;;
+    --actor) actor=${2:-}; shift 2 ;;
+    --actor-uid) actor_uid=${2:-}; shift 2 ;;
+    *) echo "usage: ossbot-resume --request | --offline --via V [--actor A] [--actor-uid N]" >&2; exit 2 ;;
+  esac
+done
+[[ -n $mode ]] || { echo "usage: ossbot-resume --request | --offline --via V" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "ossbot-resume: must run as root" >&2; exit 2; }
+log() { printf 'ossbot-resume: %s\n' "$*"; }
+
+main() {
+if [[ $mode == request ]]; then
+  req="$CONTROL/resume-request"
+  if [[ -L $req || ! -f $req ]]; then
+    rm -f "$req"
+    log "refused: resume-request is not a regular file"
+    exit 1
+  fi
+  owner=$(stat -c %U "$req")
+  if [[ $owner != gatekeeper && $owner != root ]]; then
+    rm -f "$req"
+    log "refused: resume-request owned by $owner"
+    exit 1
+  fi
+  if [[ -e $CONTROL/killed && ! $req -nt $CONTROL/killed ]]; then
+    rm -f "$req"
+    log "refused: resume-request is older than the kill flag"
+    exit 1
+  fi
+  via=gatekeeper
+else
+  via=$(printf '%s' "${via:-manual}" | tr -cd 'A-Za-z0-9_.-' | head -c 40)
+  actor=$(printf '%s' "$actor" | tr -cd 'A-Za-z0-9_.@:\\-' | head -c 80)
+  [[ $actor_uid =~ ^[0-9]+$ ]] || actor_uid=0
+  # N4: the log line is written before anything is changed.
+  install -d -o root -g ossart -m 0750 "$(dirname "$RESUME_LOG")"
+  [[ -e $RESUME_LOG ]] || install -o root -g root -m 0644 /dev/null "$RESUME_LOG"
+  jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg via "$via" --arg actor "$actor" \
+    --argjson uid "$actor_uid" --arg killed "$(head -c 1024 "$CONTROL/killed" 2>/dev/null | jq -c . 2>/dev/null || echo null)" \
+    '{ts: $ts, event: "operator_resume_offline", via: $via, actor: $actor, actor_uid: $uid, killed: $killed}' \
+    >>"$RESUME_LOG" || { log "refused: could not append to $RESUME_LOG"; exit 1; }
+fi
+
+rm -f "$CONTROL/killed" "$CONTROL/paused" "$CONTROL/resume-request" "$MARKER"
+# Re-arm the kill path unit (RemainAfterExit) for the next kill.
+systemctl stop ossbot-enforce-kill.service >/dev/null 2>&1 || true
+log "flags and marker removed (via $via)"
+
+failed=()
+start_unit() {
+  local u=$1
+  systemctl cat "$u" >/dev/null 2>&1 || return 0
+  systemctl is-enabled --quiet "$u" 2>/dev/null || return 0
+  systemctl reset-failed "$u" >/dev/null 2>&1 || true
+  if systemctl is-active --quiet "$u"; then return 0; fi
+  if timeout 120 systemctl start "$u"; then log "started $u"; else failed+=("$u"); fi
+}
+for u in ossbot-gatekeeper.service ossbot-proxy.service ossbot-dockerfilter.service \
+         ossbot-sandboxd.service ossbot-runner.service ossbot-hermes.service; do
+  start_unit "$u"
+done
+if ((${#failed[@]})); then
+  log "PARTIAL: did not start: ${failed[*]}"
+  exit 3
+fi
+log "done"
+exit 0
+}
+
+# Streamed over stdin (resume.ps1): nothing below may read the script stream.
+main </dev/null
+# shellcheck disable=SC2317  # reached when main returns instead of exiting
+exit $?

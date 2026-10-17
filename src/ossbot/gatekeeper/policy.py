@@ -168,6 +168,11 @@ def check_diff(
     return out
 
 
+def kiro_key_hashes(value: str | None) -> frozenset[str]:
+    """`KIRO_KEY_SHA256` is a comma list (sandbox + hermes key, DESIGN §18.3)."""
+    return frozenset(h.strip().lower() for h in (value or "").split(",") if h.strip())
+
+
 def check_text(
     kind: TextKind,
     text: str,
@@ -198,7 +203,7 @@ def check_text(
             out.append(Violation("secret_pattern", pattern))
     if bundle.policy.secrets.kiro_key_hash_check and kiro_key_sha256:
         for candidate in TOKENISH_RE.findall(text):
-            if sha256_text(candidate) == kiro_key_sha256:
+            if sha256_text(candidate) in kiro_key_hashes(kiro_key_sha256):
                 out.append(Violation("kiro_key", "token matches KIRO_KEY_SHA256"))
                 break
     lowered = text.lower()

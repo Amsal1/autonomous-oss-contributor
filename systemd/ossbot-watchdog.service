@@ -1,0 +1,12 @@
+# Watchdog tick (DESIGN §13.2, §13.4), root, every 30 s via ossbot-watchdog.timer: invariants
+# (control/secret/socket modes), firewall --check, kill re-enforcement, gatekeeper health, anchors.
+# Never starts or restarts ossbot units while killed or paused.
+[Unit]
+Description=ossbot watchdog tick
+After=ossbot-boot-gate.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.watchdog.tick
+WorkingDirectory=/
+TimeoutStartSec=25

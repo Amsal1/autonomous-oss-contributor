@@ -1,0 +1,19 @@
+# ossbot boot gate (DESIGN §7.5, §13.2). Installed by scripts/provision.sh (step systemd).
+# Converts the Windows marker .ossbot-local/KILL into the ext4 'killed' flag with level full
+# (or upgrades soft -> full); a missing repo mount also writes killed (mount_missing, fail closed).
+# Marker absence never resumes anything. Every other ossbot unit and docker require this unit.
+[Unit]
+Description=ossbot boot gate (KILL marker -> killed flag)
+DefaultDependencies=no
+After=local-fs.target mnt-d-Work-autonomous\x2doss\x2dcontributor.mount ossbot-nointerop.service
+Before=docker.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service ossbot-runner.service ossbot-hermes.service ossbot-watchdog.service ossbot-killswitch.path ossbot-resume.path
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/ossbot/bin/ossbot-boot-gate
+
+[Install]
+WantedBy=multi-user.target

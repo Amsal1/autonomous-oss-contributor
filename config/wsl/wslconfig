@@ -1,0 +1,23 @@
+# Installed by scripts/bootstrap.ps1 to %USERPROFILE%\.wslconfig. Source of truth: config/wsl/wslconfig.
+# WSL on this machine is dedicated to the ossbot distro. Host: 31.4 GB RAM, 24 logical CPUs.
+[wsl2]
+memory=20GB
+processors=20
+swap=8GB
+swapFile=D:\\Work\\autonomous-oss-contributor\\.wsl\\swap.vhdx
+networkingMode=nat
+localhostForwarding=false
+dnsTunneling=true
+autoProxy=false
+firewall=true
+guiApplications=false
+gpuSupport=false
+nestedVirtualization=false
+telemetry=false
+
+[general]
+instanceIdleTimeout=-1
+
+[experimental]
+autoMemoryReclaim=gradual
+sparseVhd=true

@@ -1,0 +1,14 @@
+# DOCKER-USER rules (DESIGN §11.4, M6): OSSBOT-FWD, re-applied on every Docker (re)start (PartOf).
+[Unit]
+Description=ossbot firewall (DOCKER-USER chain)
+After=docker.service ossbot-firewall.service
+BindsTo=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/ossbot/bin/ossbot-firewall --apply --part docker
+
+[Install]
+WantedBy=docker.service

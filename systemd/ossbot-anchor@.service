@@ -1,0 +1,12 @@
+# One audit anchor per connection on /run/ossbot/anchor.sock (root). The payload is ignored.
+[Unit]
+Description=ossbot audit anchor (per connection)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.watchdog.anchors --serve-one
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+WorkingDirectory=/
+TimeoutStartSec=15

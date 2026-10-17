@@ -19,7 +19,9 @@ ENTRYPOINTS_DIR = "/opt/ossbot/entrypoints"
 PROXY_URL = "http://proxy:3128"
 TMP_EXEC = "/tmp:rw,exec,nosuid,nodev,size=2g"  # noqa: S108 - container path
 TMP_NOEXEC = "/tmp:rw,noexec,nosuid,nodev,size=2g"  # noqa: S108
-HOME_TMPFS = "/home/agent:rw,noexec,nosuid,nodev,size=512m"
+# mode=1777: Docker mounts the tmpfs root as root:root 0700 (verified live on Docker 29.9.1, FEAT-004),
+# so uid 10001 could not write its own HOME without it.
+HOME_TMPFS = "/home/agent:rw,noexec,nosuid,nodev,size=512m,mode=1777"
 LLM_HOME = "/home/agent"
 LLM_CWD = "/home/agent/cwd"
 RW_HOME = "/work/.home"

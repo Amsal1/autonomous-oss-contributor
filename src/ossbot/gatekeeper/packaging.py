@@ -290,7 +290,7 @@ class Packager:
         patch_text = derived.patch.decode("utf-8", "replace")
         if ctx.config.policy.secrets.kiro_key_hash_check and ctx.kiro_key_sha256:
             for candidate in policy.TOKENISH_RE.findall(patch_text):
-                if sha256_hex(candidate.encode("utf-8")) == ctx.kiro_key_sha256:
+                if sha256_hex(candidate.encode("utf-8")) in policy.kiro_key_hashes(ctx.kiro_key_sha256):
                     violations.append(policy.Violation("kiro_key", "patch"))
                     break
         if ctx.config.policy.secrets.gitleaks:

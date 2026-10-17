@@ -1,0 +1,10 @@
+# Build context for sandbox/images/* is the repo root (scripts/lib/images.sh). Only what the
+# Dockerfiles COPY is sent; never the VHD under .wsl/, local state or anything personal.
+*
+!sandbox/entrypoints/
+!sandbox/fixtures/
+!sandbox/kiro/
+!sandbox/probes/
+!src/ossbot/sandbox_tools/
+!.kiro/agents/
+!prompts/

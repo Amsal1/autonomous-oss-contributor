@@ -36,14 +36,16 @@ step_users() {
   ensure_dir /srv/ossbot/gatekeeper gatekeeper gatekeeper 0700
   ensure_dir /srv/ossbot/runner ossrunner ossrunner 0700
   ensure_dir /srv/ossbot/sandboxd ossbox ossbox 0700
-  ensure_dir /srv/ossbot/docker root root 0700
+  # dockerd resets its data root to 0710 on every start; root:root 0710 is still root-only.
+  ensure_dir /srv/ossbot/docker root root 0710
   ensure_dir /srv/ossbot/logs root ossart 0750
   ensure_dir /srv/ossbot/artifacts ossbox ossart 0750
   ensure_dir /srv/ossbot/config-snapshot gatekeeper gatekeeper 0755
   ensure_dir /etc/ossbot root root 0755
   ensure_dir /etc/ossbot/secrets root root 0751
   ensure_dir /var/lib/ossbot root root 0755
-  ensure_dir /var/lib/ossbot/control gatekeeper osscontrol 0750
+  # setgid: flags written by the gatekeeper inherit group osscontrol (runner/sandboxd read them).
+  ensure_dir /var/lib/ossbot/control gatekeeper osscontrol 2750
   ensure_dir /var/lib/ossbot/probes root gatekeeper 0750
   ensure_dir /var/lib/ossbot/staging root root 0700
   ensure_dir /opt/ossbot root root 0755
@@ -57,6 +59,13 @@ step_users() {
   ensure_managed_block /home/ossadmin/.profile ossadmin ossadmin 0644 <<'EOF'
 export PATH="/opt/ossbot/bin:$PATH"
 export UV_PROJECT_ENVIRONMENT="$HOME/.venvs/ossbot"
+EOF
+
+  # root runs git read-only on the repo (gitleaks over the history, doctor); the repo is owned by
+  # ossadmin on drvfs, so mark exactly this path safe for root (no repo config is touched).
+  ensure_managed_block /root/.gitconfig root root 0644 <<EOF
+[safe]
+directory = ${OSSBOT_REPO:-/mnt/d/Work/autonomous-oss-contributor}
 EOF
 
   # sudo: NOPASSWD only for the root helpers and ossctl; ossadmin has no password (Decision 3).

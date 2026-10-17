@@ -181,9 +181,11 @@ def test_image_allowlist_from_lock_copy(tmp_path: Path) -> None:
     assert rules.load_image_allowlist(tmp_path / "missing.yaml") == {}
 
 
-def test_repo_lock_images_are_pending_until_feat004() -> None:
+def test_repo_lock_images_are_recorded_by_the_images_step() -> None:
+    """FEAT-004's provision step 'images' wrote every digest and probe hash (until then: pending)."""
     pins = load_image_pins(Path(__file__).resolve().parents[3] / "config" / "versions.lock.yaml")
-    assert pins.digests == {}  # fail closed: no image allowed before the images step records digests
+    assert set(pins.digests) == {"sandbox-full", "sandbox-llm", "proxy"}
+    assert pins.agent_configs_sha256 is not None and pins.settings_sha256 is not None
     assert pins.kiro_cli_version == "2.32.0"
 
 

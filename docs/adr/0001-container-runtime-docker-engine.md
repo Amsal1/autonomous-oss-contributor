@@ -21,3 +21,7 @@ One more small root service to keep correct; it is deterministic and covered by 
 
 ## Implementation addendum (FEAT-001, 2026-10-17)
 - Verified on download.docker.com (noble/stable, amd64): newest `docker-ce`/`docker-ce-cli` is `5:29.9.1-1~ubuntu.24.04~noble` (DESIGN §0 said 29.8.2), `containerd.io` `2.4.2-2`, `docker-buildx-plugin` `0.38.0-1`, `docker-compose-plugin` `5.6.0-1` (compose major version 5). The pins in `config/versions.lock.yaml` are updated to these. The Docker install itself and the firewall-backend check stay in FEAT-004.
+
+## Implementation addendum (FEAT-004, 2026-10-18)
+- Installed from download.docker.com (apt key fingerprint `9DC858229FC7DD38854AE2D88D81803C0EBFCD88`, pinned in `versions.lock.yaml`) at exactly the pinned versions and held with `apt-mark hold`: Docker 29.9.1 (API 1.56), containerd 2.4.2, buildx 0.38.0, Compose v5.6.0. `docker info` reports `FirewallBackend.Driver = iptables` with `"firewall-backend": "iptables"` in daemon.json, data root `/srv/ossbot/docker`, `docker0` at 10.211.0.1/24 and the containerd snapshotter image store (so `ossbot/<image>@sha256:<id>` resolves locally with `--pull never`). The `docker` group exists and stays empty.
+- `docker.service` gets a drop-in (`/etc/systemd/system/docker.service.d/ossbot.conf`): `Requires=`/`After=ossbot-boot-gate.service`, `After=ossbot-firewall.service`.

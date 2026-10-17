@@ -453,7 +453,7 @@ HOSTCONFIG_KNOWN: set[str] = {
     *CREATE_HOSTCONFIG_EMPTY, "Mounts", "Tmpfs", "Privileged", "PublishAllPorts", "OomKillDisable", "AutoRemove",
     "ReadonlyRootfs", "Init", "CapDrop", "SecurityOpt", "NetworkMode", "Dns", "DnsSearch", "PidMode", "IpcMode",
     "UTSMode", "UsernsMode", "CgroupnsMode", "CgroupParent", "Runtime", "PidsLimit", "Memory", "MemorySwap",
-    "NanoCpus", "Ulimits", "ShmSize", "LogConfig", "RestartPolicy", "Isolation", "ConsoleSize",
+    "NanoCpus", "Ulimits", "ShmSize", "LogConfig", "RestartPolicy", "Isolation", "ConsoleSize", "MemorySwappiness",
 }  # fmt: skip
 CONFIG_KNOWN: set[str] = {
     "Image", "User", "Hostname", "Labels", "Entrypoint", "Cmd", "WorkingDir", "Env", "Tty", "OpenStdin",
@@ -506,6 +506,9 @@ def _check_hostconfig(host: dict[str, Any], profile: str) -> None:
     console = host.get("ConsoleSize")
     if not is_zero(console) and console != [0, 0]:
         raise Denied(f"value:{p}ConsoleSize")
+    # The pinned CLI always sends -1 (= kernel default) for an unset --memory-swappiness (§23 item 15).
+    if host.get("MemorySwappiness") not in (None, -1):
+        raise Denied(f"value:{p}MemorySwappiness")
     _check_rest_zero(host, HOSTCONFIG_KNOWN, p)
 
 
@@ -651,6 +654,7 @@ _ROUTES: list[tuple[str, re.Pattern[str], str]] = [
     ("HEAD", re.compile(r"^/containers/(?P<id>[^/]+)/archive$"), "containers/archive-head"),
     ("GET", re.compile(r"^/containers/(?P<id>[^/]+)/archive$"), "containers/archive-get"),
     ("POST", re.compile(r"^/networks/create$"), "networks/create"),
+    ("GET", re.compile(r"^/networks/(?P<id>[^/]+)$"), "networks/inspect"),
     ("POST", re.compile(r"^/networks/(?P<id>[^/]+)/connect$"), "networks/connect"),
     ("POST", re.compile(r"^/networks/(?P<id>[^/]+)/disconnect$"), "networks/disconnect"),
     ("DELETE", re.compile(r"^/networks/(?P<id>[^/]+)$"), "networks/delete"),
@@ -757,8 +761,9 @@ def _route(req: Request, lookup: Lookup, policy: FilterPolicy, op: str, ref: str
     elif op in {"networks/connect", "networks/disconnect"}:
         _ossbot_network(lookup, ref)
         _check_connect(req, lookup, op == "networks/connect")
-    elif op == "networks/delete":
-        _check_query(req, set())
+    elif op in {"networks/delete", "networks/inspect"}:
+        # `docker network rm` inspects the network by name first (recorded from the pinned CLI).
+        _check_query(req, {"verbose", "scope"} if op == "networks/inspect" else set())
         _ossbot_network(lookup, ref)
     elif op == "volumes/create":
         validate_volume_create(req)

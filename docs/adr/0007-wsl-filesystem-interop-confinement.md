@@ -12,3 +12,11 @@ Hard user requirement: the distro may only see `D:\Work\autonomous-oss-contribut
 
 ## Consequences
 No `/mnt/c`, no Windows PATH, no `.exe` execution from Linux. Windows → Linux (`wsl.exe -d ossbot -u root`) still works for kill/resume, which also means Windows-user processes are root-equivalent over the distro (out of scope, ADR-0010). **Verify:** fstab escaping form, metadata/gid behaviour after Windows-side edits, `default=ossnobody` honoured.
+
+## Implementation addendum (FEAT-004, 2026-10-18)
+Verified live (DESIGN §23 items 3 and 4):
+- The fstab source form `D:\134Work\134autonomous-oss-contributor` works on WSL 3.0.3: the repo is mounted as `9p` with `aname=drvfs;path=D:\Work\autonomous-oss-contributor;metadata;uid=1000;gid=1500;umask=002` and survives `wsl --shutdown`. The two fallback forms stay in `scripts/lib/wsl.sh`; bootstrap tries them only when the repo is not mounted at all (exit 3 of `wsl.sh check`).
+- After `automount enabled=false` the ext4 directory `/mnt/c` left over from the old automount still exists; `wsl.sh apply` removes empty leftover drive directories through a bind mount of `/` after the restart, so `/mnt` holds only `d/Work/<repo>` (plus WSL's own `/mnt/wsl`, `/mnt/wslg`).
+- Windows-side writes keep the group write bit: a file created from Windows shows `ossadmin:osscfg 775`; the gatekeeper (osscfg) can write `config/`, ossnobody and ossrunner cannot (`tests/system/test_config_write.sh`).
+- **Deviation:** `[interop] enabled=false` alone does not unregister the `WSLInterop` binfmt_misc entry on 3.0.3 (it stays `enabled`, handler `/init`), so a PE file did not fail with ENOEXEC (the handler then failed on its vsock). `wsl.sh` installs `ossbot-nointerop.service` (sysinit, before the boot gate), which writes `-1` to every `/proc/sys/fs/binfmt_misc/WSLInterop*`. With it, executing `whoami.exe` from the mount fails with "Exec format error"; `wsl.sh check` and doctor fail if the entry reappears. Windows -> Linux `wsl.exe -d ossbot -u root --exec ...` keeps working.
+- `[user] default=ossnobody` is honoured: plain `wsl.exe -d ossbot` lands as `ossnobody`; no Windows entries on PATH for ossnobody, ossadmin or root.

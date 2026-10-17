@@ -1,0 +1,153 @@
+"""Sandbox smoke tests (DESIGN §22.5, marker ``sandbox``): real Docker behind the root filter.
+
+Run as root on the provisioned distro (ROOTDEV pytest -m sandbox). Containers are created
+through sandboxd's own code (``JobService.execute`` with the fixed templates and
+``DockerCliRuntime`` on ``/run/ossbot/docker-filter.sock``), so every request also passes the
+Docker filter. Key-dependent checks are marked ``needs_key`` and skipped with a reason.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import secrets
+import shutil
+import subprocess
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from ossbot.common.clock import SystemClock
+from ossbot.common.images import DEFAULT_LOCK_COPY, load_image_pins
+from ossbot.sandboxd.argv import Volumes, probe_spec
+from ossbot.sandboxd.db import Store
+from ossbot.sandboxd.jobs import JobService, Outcome, Plan, Settings
+from ossbot.sandboxd.keyscan import KeyScanner
+from ossbot.sandboxd.models import CatalogCache
+from ossbot.sandboxd.networks import Networks
+from ossbot.sandboxd.runtime.base import Mount
+from ossbot.sandboxd.runtime.docker_cli import FILTER_SOCKET, DockerCliRuntime
+from ossbot.sandboxd.subnets import SubnetAllocator
+
+CONTROL = Path("/var/lib/ossbot/control")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    for item in items:
+        if "/tests/sandbox/" in item.nodeid.replace("\\", "/") or item.nodeid.startswith("tests/sandbox/"):
+            item.add_marker(pytest.mark.sandbox)
+
+
+class NoGatekeeper:
+    """sandboxd's gatekeeper calls are not needed for probe-entrypoint plans."""
+
+    paused: list[str]
+
+    def __init__(self) -> None:
+        self.paused = []
+
+    def catalog(self) -> list[dict[str, Any]]:
+        return []
+
+    def pause(self, reason: str) -> None:
+        self.paused.append(reason)
+
+    def contribution_state(self, cid: str) -> str | None:
+        return None
+
+    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str) -> None:
+        return None
+
+
+@dataclass
+class Sandbox:
+    svc: JobService
+    runtime: DockerCliRuntime
+    root: Path
+    gatekeeper: NoGatekeeper
+
+    def plan(self, cid: str, template: str, entrypoint: str = "probe", repo_mode: str = "none",
+             env: dict[str, str] | None = None, inputs: dict[str, Path] | None = None,
+             create_task: bool = False, timeout: int = 600) -> Plan:  # fmt: skip
+        run_id = f"smk-{template.replace('_', '-')}-{secrets.token_hex(3)}"
+        return Plan(
+            run_id=run_id, cid=cid, template=template, entrypoint=entrypoint, repo_mode=repo_mode, env=env or {},
+            inputs=inputs or {}, timeout_s=timeout, cpus=1.0, memory_mb=1024,
+            dest=self.svc.settings.artifacts_dir / cid / "runs" / run_id, create_task_volume=create_task,
+        )  # fmt: skip
+
+    def run(self, plan: Plan) -> Outcome:
+        return self.svc.execute(plan)
+
+    def smoke(self, cid: str, template: str, repo_mode: str = "none", **kw: Any) -> dict[str, Any]:
+        env = {"OSSBOT_PROBE": "smoke", **kw.pop("env", {})}
+        out = self.run(self.plan(cid, template, repo_mode=repo_mode, env=env, **kw))
+        assert out.exit_code == 0 and out.error_class is None, (out.exit_code, out.error_class, out.logs[-2000:])
+        facts: dict[str, Any] = json.loads(out.files["probe.json"])
+        return facts
+
+    def fixture_task_volume(self, cid: str) -> None:
+        """Fresh task volume with the probe fixture untarred (symlinks preserved), like ProbeRunner."""
+        task = Volumes("x", cid).task
+        with contextlib.suppress(Exception):  # absent is fine
+            self.runtime.remove_volume(task)
+        self.runtime.create_volume(task, {"ossbot.sandbox": "1", "ossbot.cid": cid.lower()})
+        run_id = f"smk-fixture-{secrets.token_hex(3)}"
+        spec = probe_spec(run_id, cid, self.svc._image("sandbox-full"), "extract_fixture", (Mount(task, "/work"),),
+                          suffix="fixture")  # fmt: skip
+        self.runtime.run(spec)
+        try:
+            assert self.runtime.wait(spec.name, 300) == 0
+        finally:
+            self.runtime.remove(spec.name)
+
+    def cleanup(self, cid: str) -> None:
+        self.svc.networks.release(cid)
+        with contextlib.suppress(Exception):
+            self.runtime.remove_volume(Volumes("x", cid).task)
+
+
+def proxy_ip_on(network: str) -> str:
+    out = subprocess.run(
+        ["/usr/bin/docker", "inspect", "-f", "{{json .NetworkSettings.Networks}}", "ossbot-proxy"],
+        capture_output=True, text=True, check=True,
+    )  # fmt: skip
+    return str(json.loads(out.stdout)[network]["IPAddress"])
+
+
+@pytest.fixture(scope="session")
+def sandbox(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sandbox]:
+    if os.geteuid() != 0:
+        pytest.fail("the sandbox suite runs as root (ROOTDEV pytest -m sandbox)")
+    if not FILTER_SOCKET.exists():
+        pytest.fail("Docker filter socket missing: provision first")
+    if (CONTROL / "killed").exists() or (CONTROL / "paused").exists():
+        pytest.fail("ossbot is killed or paused; resume first")
+    pins = load_image_pins(DEFAULT_LOCK_COPY)
+    for image in ("sandbox-full", "sandbox-llm"):
+        if pins.ref(image) is None:
+            pytest.fail(f"{image} digest not pinned in {DEFAULT_LOCK_COPY}")
+    root = tmp_path_factory.mktemp("sandbox")
+    for sub in ("artifacts", "logs", "staging", "inputs"):
+        (root / sub).mkdir()
+    runtime = DockerCliRuntime()
+    store = Store(root / "sandboxd.db")
+    clock = SystemClock()
+    gatekeeper = NoGatekeeper()
+    svc = JobService(
+        store=store, runtime=runtime, pins=lambda: load_image_pins(DEFAULT_LOCK_COPY),
+        catalog=CatalogCache(gatekeeper.catalog, clock), gatekeeper=gatekeeper, scanner=KeyScanner([]), clock=clock,
+        settings=Settings(artifacts_dir=root / "artifacts", logs_dir=root / "logs", staging_dir=root / "staging",
+                          control_dir=CONTROL, input_roots=(root / "inputs",)),
+        trust_mode=lambda: "ids", networks=Networks(runtime, SubnetAllocator(store, clock)), background=False,
+    )  # fmt: skip
+    box = Sandbox(svc=svc, runtime=runtime, root=root, gatekeeper=gatekeeper)
+    yield box
+    for cid in ("c_SMOKETEST1", "c_SMOKETEST2", "c_SMOKETEST3", "c_SMOKETEST4", "sys-catalog"):
+        box.cleanup(cid)
+    store.close()
+    shutil.rmtree(root, ignore_errors=True)

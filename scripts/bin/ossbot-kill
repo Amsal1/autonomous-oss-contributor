@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# ossbot-kill (installed as /opt/ossbot/bin/ossbot-kill; DESIGN 13.1-13.3). Self-contained bash:
+# kill.ps1 streams it over stdin, so it works even if /opt/ossbot or the app venv is broken.
+#   ossbot-kill --full|--soft [--reason R] [--actor A]   write the flag (levels only escalate), enforce
+#   ossbot-kill --enforce                                enforce the current flag (ossbot-enforce-kill)
+# Enforcement: kill every ossbot.sandbox=1 container, detach the proxy from and remove every
+# ossbot-t-* network, compose down ossbot-* projects, delete ossbot-* kind clusters, stop runner,
+# sandboxd and hermes; at level full also gatekeeper and proxy. The Docker filter and both firewall
+# units stay up. Exit 0 done, 3 partial (what failed is listed), 2 usage.
+# Test hook (tests/system/test_kill.ps1): --test-hang N sleeps N s before doing anything (N8).
+set -uo pipefail
+
+CONTROL=${OSSBOT_CONTROL_DIR:-/var/lib/ossbot/control}
+KILLED="$CONTROL/killed"
+mode="" reason="" actor="${SUDO_USER:-root}" hang=0
+while (($#)); do
+  case $1 in
+    --full) mode=full; shift ;;
+    --soft) mode=soft; shift ;;
+    --enforce) mode=enforce; shift ;;
+    --reason) reason=${2:-}; shift 2 ;;
+    --actor) actor=${2:-}; shift 2 ;;
+    --test-hang) hang=${2:-0}; shift 2 ;;
+    *) echo "usage: ossbot-kill --full|--soft [--reason R] [--actor A] | --enforce" >&2; exit 2 ;;
+  esac
+done
+[[ -n $mode ]] || { echo "usage: ossbot-kill --full|--soft [--reason R] | --enforce" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "ossbot-kill: must run as root" >&2; exit 2; }
+
+failed=()
+log() { printf 'ossbot-kill: %s\n' "$*"; }
+
+flag_level() {
+  if [[ ! -e $KILLED && ! -L $KILLED ]]; then echo none; return; fi
+  if [[ -L $KILLED || ! -f $KILLED ]]; then echo full; return; fi
+  local level
+  level=$(head -c 4096 "$KILLED" | jq -r 'if type == "object" then (.level // "") else "" end' 2>/dev/null || true)
+  if [[ $level == soft ]]; then echo soft; else echo full; fi
+}
+
+write_flag() {
+  local level=$1 tmp
+  tmp="$CONTROL/.killed.tmp-$$"
+  reason=$(printf '%s' "${reason:-manual}" | tr -cd 'A-Za-z0-9 _.:/-' | head -c 200)
+  jq -cn --arg level "$level" --arg reason "$reason" --arg actor "$actor" \
+    --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '{level: $level, reason: $reason, actor: $actor, ts: $ts}' >"$tmp" \
+    || { failed+=("write flag"); return; }
+  chown root:osscontrol "$tmp" 2>/dev/null || true
+  chmod 0640 "$tmp"
+  mv -f "$tmp" "$KILLED" || failed+=("write flag")
+}
+
+unit_exists() { systemctl cat "$1" >/dev/null 2>&1; }
+
+stop_units() {
+  local u
+  for u in "$@"; do
+    unit_exists "$u" || continue
+    if ! timeout 20 systemctl stop "$u"; then failed+=("stop $u"); fi
+  done
+}
+
+enforce() {
+  local level=$1
+  if timeout 5 docker info >/dev/null 2>&1; then
+    local ids net nets
+    ids=$(docker ps -q --filter label=ossbot.sandbox=1 2>/dev/null) || failed+=("list containers")
+    if [[ -n $ids ]]; then
+      # shellcheck disable=SC2086  # ids are docker short ids
+      docker kill $ids >/dev/null 2>&1 || true
+      if [[ -n $(docker ps -q --filter label=ossbot.sandbox=1 2>/dev/null) ]]; then failed+=("kill containers"); fi
+      log "killed $(wc -w <<<"$ids") sandbox container(s)"
+    fi
+    nets=$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -E '^ossbot-t-' || true)
+    for net in $nets; do
+      docker network disconnect -f "$net" ossbot-proxy >/dev/null 2>&1 || true
+      # A network still has the stopped sandbox endpoints until the containers are gone.
+      for c in $(docker network inspect -f '{{range .Containers}}{{.Name}} {{end}}' "$net" 2>/dev/null); do
+        docker network disconnect -f "$net" "$c" >/dev/null 2>&1 || true
+      done
+      docker network rm "$net" >/dev/null 2>&1 || failed+=("rm network $net")
+    done
+    if docker compose version >/dev/null 2>&1; then
+      local p
+      for p in $(docker compose ls --all --format json 2>/dev/null | jq -r '.[].Name' 2>/dev/null | grep -E '^ossbot-' || true); do
+        docker compose -p "$p" down --remove-orphans >/dev/null 2>&1 || failed+=("compose down $p")
+      done
+    fi
+  else
+    log "docker not answering; no containers to kill"
+  fi
+  if command -v kind >/dev/null 2>&1; then
+    local k
+    for k in $(kind get clusters 2>/dev/null | grep -E '^ossbot-' || true); do
+      kind delete cluster --name "$k" >/dev/null 2>&1 || failed+=("kind delete $k")
+    done
+  fi
+  stop_units ossbot-runner.service ossbot-sandboxd.service ossbot-hermes.service
+  if [[ $level == full ]]; then
+    stop_units ossbot-gatekeeper.service ossbot-proxy.service
+  fi
+}
+
+main() {
+[[ $hang =~ ^[0-9]+$ ]] && ((hang > 0)) && sleep "$hang"
+case $mode in
+  enforce)
+    level=$(flag_level)
+    if [[ $level == none ]]; then log "no killed flag; nothing to enforce"; exit 0; fi
+    enforce "$level"
+    ;;
+  soft|full)
+    current=$(flag_level)
+    want=$mode
+    [[ $current == full ]] && want=full
+    if [[ $current != "$want" ]]; then write_flag "$want"; fi
+    log "killed flag level $want (was $current)"
+    enforce "$want"
+    ;;
+esac
+
+if ((${#failed[@]})); then
+  log "PARTIAL: ${failed[*]}"
+  exit 3
+fi
+log "done"
+exit 0
+}
+
+# Streamed over stdin (kill.ps1): nothing below may read the script stream.
+main </dev/null
+# shellcheck disable=SC2317  # reached when main returns instead of exiting
+exit $?

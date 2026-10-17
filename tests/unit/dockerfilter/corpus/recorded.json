@@ -1,0 +1,2626 @@
+{
+ "_comment": "Recorded from the pinned Docker CLI by record_corpus.py (DESIGN \u00a723 item 15).",
+ "creates": {
+  "agent-exec": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/exec.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "NO_PROXY=",
+     "HOME=/work/.home",
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan-exec",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-exec-r1-plan",
+       "Target": "/run/exec",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,exec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "agent-exec",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/work/repo"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan-exec"
+    ]
+   }
+  },
+  "agent-llm": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/kiro.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "EFFORT=high",
+     "MODEL=claude-test",
+     "OSSBOT_TRUST_MODE=ids",
+     "ROLE=coder",
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128",
+     "PROMPT_FILE=plan.md",
+     "REQUIRE_MCP=1",
+     "TRUST_TOOLS=@ossbot-exec/run",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 1073741824,
+     "MemoryReservation": 0,
+     "MemorySwap": 1073741824,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-exec-r1-plan",
+       "Target": "/run/exec",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-c-01abcdefgh-llm",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/home/agent": "rw,noexec,nosuid,nodev,size=512m,mode=1777",
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-llm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "agent-llm",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/home/agent/cwd"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "catalog": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/list_models.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY="
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-sys-catalog-catalog",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/home/agent": "rw,noexec,nosuid,nodev,size=512m,mode=1777",
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-llm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Labels": {
+     "ossbot.cid": "sys-catalog",
+     "ossbot.profile": "catalog",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/home/agent/cwd"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "fetch": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/fetch.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "NO_PROXY=",
+     "OSSBOT_ARG_CLONE_DEPTH=200",
+     "OSSBOT_ARG_REPO=owner/repo",
+     "HOME=/work/.home",
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-c-01abcdefgh-fetch",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,exec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "fetch",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/work/repo"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "fixture": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/probe.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "NO_PROXY=",
+     "OSSBOT_PROBE=extract_fixture",
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 268435456,
+     "MemoryReservation": 0,
+     "MemorySwap": 268435456,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 1000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "probe",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan-fixture"
+    ]
+   }
+  },
+  "package": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/package.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_ARG_ROUND_BASE=1111111111111111111111111111111111111111",
+     "HOME=/work/.home"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,exec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "package",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/work/repo"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "probe-agent-llm": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/probe.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_PROBE=smoke"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 1073741824,
+     "MemoryReservation": 0,
+     "MemorySwap": 1073741824,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-exec-r1-plan",
+       "Target": "/run/exec",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-c-01abcdefgh-llm",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/home/agent": "rw,noexec,nosuid,nodev,size=512m,mode=1777",
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-llm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "agent-llm",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/home/agent/cwd"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "probe-fetch": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/probe.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "OSSBOT_PROBE=smoke",
+     "HOME=/work/.home",
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY="
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-c-01abcdefgh-fetch",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,exec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "fetch",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/work/repo"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "probe-research": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/probe.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_PROBE=settings",
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/home/agent": "rw,noexec,nosuid,nodev,size=512m,mode=1777",
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-llm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "research",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/home/agent/cwd"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "research-none": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/kiro.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTP_PROXY=http://proxy:3128",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "EFFORT=high",
+     "MODEL=claude-test",
+     "ROLE=vetter",
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_TRUST_MODE=ids",
+     "PROMPT_FILE=plan.md",
+     "TRUST_TOOLS=read,web_search,web_fetch"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-c-01abcdefgh-research",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/home/agent": "rw,noexec,nosuid,nodev,size=512m,mode=1777",
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-llm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "research",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/home/agent/cwd"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "research-snapshot": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/kiro.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "EFFORT=high",
+     "PROMPT_FILE=plan.md",
+     "ROLE=planner",
+     "TRUST_TOOLS=read,web_search,web_fetch",
+     "HTTP_PROXY=http://proxy:3128",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "MODEL=claude-test",
+     "OSSBOT_TRUST_MODE=ids"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-ro-r1-plan",
+       "Target": "/work/repo",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-c-01abcdefgh-research",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/home/agent": "rw,noexec,nosuid,nodev,size=512m,mode=1777",
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-llm@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "research",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/home/agent/cwd"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "snapcheck": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/probe.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_PROBE=snapshot_check"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 268435456,
+     "MemoryReservation": 0,
+     "MemorySwap": 268435456,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-ro-r1-plan",
+       "Target": "/work/repo",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 1000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "probe",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan-snapcheck"
+    ]
+   }
+  },
+  "snapshot": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/snapshot.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY="
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 1073741824,
+     "MemoryReservation": 0,
+     "MemorySwap": 1073741824,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-ro-r1-plan",
+       "Target": "/snap",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 1000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "snapshot",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan-snapshot"
+    ]
+   }
+  },
+  "stage-in": {
+   "body": {
+    "AttachStderr": true,
+    "AttachStdin": false,
+    "AttachStdout": true,
+    "Cmd": [
+     "/bin/true"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY="
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 268435456,
+     "MemoryReservation": 0,
+     "MemorySwap": 268435456,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/in",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 1000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,noexec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "stage-in",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/"
+   },
+   "followed_by": [],
+   "query": {
+    "name": [
+     "ossbot-r1-plan-stagein"
+    ]
+   }
+  },
+  "unbundle": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/unbundle.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_ARG_MODE=fix_round",
+     "HOME=/work/.home"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,exec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "package",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/work/repo"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "validate": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/validate.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_ARG_PLAN_FILE=validate.json",
+     "HOME=/work/.home"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": [
+      "127.0.0.1"
+     ],
+     "DnsOptions": [],
+     "DnsSearch": [
+      "."
+     ],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 4294967296,
+     "MemoryReservation": 0,
+     "MemorySwap": 4294967296,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-task-c_01abcdefgh",
+       "Target": "/work",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 2000000000,
+     "NetworkMode": "ossbot-t-c-01abcdefgh-validate",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,exec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "c_01abcdefgh",
+     "ossbot.profile": "validate",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/work/repo"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  }
+ },
+ "docker_cli_version": "29.9.1",
+ "operations": {
+  "get_archive": [
+   {
+    "method": "GET",
+    "path": "/v1.52/containers/ossbot-r1-plan/archive",
+    "query": {
+     "path": [
+      "/io/output"
+     ]
+    }
+   }
+  ],
+  "inspect_status": [
+   {
+    "method": "GET",
+    "path": "/v1.52/containers/ossbot-r1-plan-exec/json",
+    "query": {}
+   }
+  ],
+  "kill": [
+   {
+    "method": "POST",
+    "path": "/v1.52/containers/ossbot-r1-plan/kill",
+    "query": {}
+   }
+  ],
+  "list": [
+   {
+    "method": "GET",
+    "path": "/v1.52/containers/json",
+    "query": {
+     "all": [
+      "1"
+     ],
+     "filters": [
+      "{\"label\":{\"ossbot.cid=c_01abcdefgh\":true,\"ossbot.sandbox=1\":true}}"
+     ],
+     "size": [
+      "1"
+     ]
+    }
+   }
+  ],
+  "logs": [
+   {
+    "method": "GET",
+    "path": "/v1.52/containers/ossbot-r1-plan/json",
+    "query": {}
+   },
+   {
+    "method": "GET",
+    "path": "/v1.52/containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/logs",
+    "query": {
+     "stderr": [
+      "1"
+     ],
+     "stdout": [
+      "1"
+     ]
+    }
+   }
+  ],
+  "network_connect": [
+   {
+    "body": {
+     "Container": "ossbot-proxy",
+     "EndpointConfig": {
+      "Aliases": [
+       "proxy"
+      ],
+      "DNSNames": null,
+      "DriverOpts": {},
+      "EndpointID": "",
+      "Gateway": "",
+      "GlobalIPv6Address": "",
+      "GlobalIPv6PrefixLen": 0,
+      "GwPriority": 0,
+      "IPAMConfig": {},
+      "IPAddress": "",
+      "IPPrefixLen": 0,
+      "IPv6Gateway": "",
+      "Links": null,
+      "MacAddress": "",
+      "NetworkID": ""
+     }
+    },
+    "method": "POST",
+    "path": "/v1.52/networks/ossbot-t-c-01abcdefgh-research/connect",
+    "query": {}
+   }
+  ],
+  "network_create": [
+   {
+    "body": {
+     "Attachable": false,
+     "ConfigFrom": null,
+     "ConfigOnly": false,
+     "Driver": "bridge",
+     "IPAM": {
+      "Config": [
+       {
+        "Subnet": "10.213.64.0/28"
+       }
+      ],
+      "Driver": "default",
+      "Options": {}
+     },
+     "Ingress": false,
+     "Internal": true,
+     "Labels": {
+      "ossbot.cid": "c_01abcdefgh",
+      "ossbot.profile": "research",
+      "ossbot.sandbox": "1"
+     },
+     "Name": "ossbot-t-c-01abcdefgh-research",
+     "Options": {},
+     "Scope": ""
+    },
+    "method": "POST",
+    "path": "/v1.52/networks/create",
+    "query": {}
+   }
+  ],
+  "network_disconnect": [
+   {
+    "body": {
+     "Container": "ossbot-proxy",
+     "Force": true
+    },
+    "method": "POST",
+    "path": "/v1.52/networks/ossbot-t-c-01abcdefgh-research/disconnect",
+    "query": {}
+   }
+  ],
+  "network_remove": [
+   {
+    "method": "GET",
+    "path": "/v1.52/networks/ossbot-t-c-01abcdefgh-research",
+    "query": {}
+   },
+   {
+    "method": "DELETE",
+    "path": "/v1.52/networks/ossbot-t-c-01abcdefgh-research",
+    "query": {}
+   }
+  ],
+  "put_archive": [
+   {
+    "method": "HEAD",
+    "path": "/v1.52/containers/ossbot-r1-plan-stagein/archive",
+    "query": {
+     "path": [
+      "/in"
+     ]
+    }
+   },
+   {
+    "method": "PUT",
+    "path": "/v1.52/containers/ossbot-r1-plan-stagein/archive",
+    "query": {
+     "noOverwriteDirNonDir": [
+      "true"
+     ],
+     "path": [
+      "/in"
+     ]
+    },
+    "raw_len": 10240
+   }
+  ],
+  "remove": [
+   {
+    "method": "DELETE",
+    "path": "/v1.52/containers/ossbot-r1-plan",
+    "query": {
+     "force": [
+      "1"
+     ],
+     "v": [
+      "1"
+     ]
+    }
+   }
+  ],
+  "volume_create": [
+   {
+    "body": {
+     "Driver": "local",
+     "Labels": {
+      "ossbot.run": "r1-plan",
+      "ossbot.sandbox": "1"
+     },
+     "Name": "ossbot-in-r1-plan"
+    },
+    "method": "POST",
+    "path": "/v1.52/volumes/create",
+    "query": {}
+   }
+  ],
+  "volume_remove": [
+   {
+    "method": "DELETE",
+    "path": "/v1.52/volumes/ossbot-in-r1-plan",
+    "query": {
+     "force": [
+      "1"
+     ]
+    }
+   }
+  ],
+  "wait": [
+   {
+    "method": "POST",
+    "path": "/v1.52/containers/ossbot-r1-plan/wait",
+    "query": {}
+   }
+  ]
+ }
+}

@@ -1,0 +1,11 @@
+# Kill flag watcher (DESIGN §13.2): the 'killed' flag triggers the root enforcer. Runs always.
+[Unit]
+Description=ossbot kill switch watcher
+After=ossbot-boot-gate.service
+
+[Path]
+PathExists=/var/lib/ossbot/control/killed
+Unit=ossbot-enforce-kill.service
+
+[Install]
+WantedBy=multi-user.target

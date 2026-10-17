@@ -1,0 +1,35 @@
+# sandboxd (DESIGN §7.5, §10.2): not in the docker group; Docker only via the root filter socket.
+# Not started while killed; refuses jobs while paused.
+[Unit]
+Description=ossbot sandbox daemon
+ConditionPathExists=!/var/lib/ossbot/control/killed
+Requires=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service
+Wants=ossbot-dockerfilter.service
+After=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service
+
+[Service]
+Type=simple
+User=ossbox
+Group=ossbox
+# chown of /run/ossbot/sandboxd.sock to osssbx needs membership (not in §7.3 groups).
+SupplementaryGroups=osssbx
+EnvironmentFile=/etc/ossbot/secrets/sandboxd.env
+Environment=OSSBOT_DOCKER_CONFIG=/srv/ossbot/sandboxd/docker-config
+ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
+ExecStart=/opt/ossbot/app/.venv/bin/ossbot-sandboxd
+Restart=always
+RestartSec=5
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/ossbot/sandboxd /srv/ossbot/artifacts /srv/ossbot/logs/runs /run/ossbot
+ReadOnlyPaths=/mnt/d/Work/autonomous-oss-contributor
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,12 @@
+# Root kill enforcer (DESIGN §13.2): kills sandbox containers, removes task networks, stops runner,
+# sandboxd and hermes; at level full also gatekeeper and proxy. RemainAfterExit keeps the path
+# unit from re-triggering while the flag exists; ossbot-resume stops this unit again.
+[Unit]
+Description=ossbot kill enforcement
+After=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/opt/ossbot/bin/ossbot-kill --enforce
+TimeoutStartSec=60

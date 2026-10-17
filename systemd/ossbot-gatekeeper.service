@@ -1,0 +1,36 @@
+# Gatekeeper (DESIGN §7.5, §12). Runs after a soft kill (killed mode), skipped after a full kill
+# (ExecCondition). Fail-closed egress: Requires both firewall units and re-checks them before start.
+[Unit]
+Description=ossbot gatekeeper
+Requires=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service
+After=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-dockerfilter.service
+RequiresMountsFor=/mnt/d/Work/autonomous-oss-contributor
+
+[Service]
+Type=simple
+User=gatekeeper
+Group=gatekeeper
+# Socket groups: chown of /run/ossbot/gatekeeper.sock to ossapi needs membership (not in §7.3 groups).
+SupplementaryGroups=ossapi
+EnvironmentFile=/etc/ossbot/secrets/gatekeeper.env
+ExecCondition=/opt/ossbot/bin/ossbot-boot-gate --allow minimal
+ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
+ExecStart=/opt/ossbot/app/.venv/bin/ossbot-gatekeeper
+Restart=always
+RestartSec=5
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/ossbot/gatekeeper /srv/ossbot/config-snapshot /var/lib/ossbot/control /run/ossbot
+ReadOnlyPaths=/mnt/d/Work/autonomous-oss-contributor
+# M8: the only writer of config/models.yaml (more specific path wins over the repo-wide read-only).
+ReadWritePaths=/mnt/d/Work/autonomous-oss-contributor/config
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
