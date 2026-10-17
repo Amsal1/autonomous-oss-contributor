@@ -1,0 +1,145 @@
+[project]
+name = "ossbot"
+version = "0.1.0"
+description = "Self-hosted autonomous open-source contributor with a deterministic human-approval gatekeeper"
+readme = "docs/DESIGN.md"
+requires-python = ">=3.12,<3.14"
+# Pinned with == (PLAN Decision 4); latest stable on PyPI as of 2026-10-17.
+dependencies = [
+    "fastapi==0.143.3",
+    "uvicorn==0.54.0",
+    "pydantic==2.14.1",
+    "httpx==0.28.1",
+    "python-telegram-bot==22.8",
+    "ruamel.yaml==0.19.1",
+    "jinja2==3.1.6",
+    "typer==0.27.3",
+    "h11==0.16.0",
+]
+
+[project.scripts]
+ossbot-gatekeeper = "ossbot.gatekeeper.main:main"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "respx==0.23.1",
+    "hypothesis==6.170.1",
+    "ruff==0.17.1",
+    "mypy==2.4.0",
+    "import-linter==2.15",
+]
+
+[build-system]
+requires = ["uv_build==0.13.1"]
+build-backend = "uv_build"
+
+[tool.uv]
+required-version = "==0.13.1"
+
+# ---------------------------------------------------------------- pytest
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-markers", "-ra", "-p", "no:cacheprovider"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+    "unit: hermetic unit tests (default; no Docker, no network)",
+    "telegram: Telegram rendering/handler tests with a mocked Bot API",
+    "acp: fake V3 ACP server contract tests",
+    "e2e: pipeline end to end against FakeRuntime and local fakes",
+    "e2e_docker: pipeline end to end with real Docker (root)",
+    "sandbox: sandbox isolation smoke tests (Docker + images, root)",
+    "system: root-run probes on the provisioned distro",
+    "isolation: WSL isolation checks run from Windows",
+]
+
+# ---------------------------------------------------------------- ruff
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+src = ["src", "tests"]
+cache-dir = "/tmp/ossbot-ruff-cache"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "S", "SIM", "RUF", "PL", "PT", "TID", "BLE", "C4"]
+ignore = [
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004",
+    "SIM108",
+    "S101",   # assert is fine in tests and for type narrowing
+    "S603",   # subprocess with argv lists is the project rule
+    "RUF001", "RUF003",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S105", "S106", "S108", "S608", "PLC0415", "PLR0904", "PT011", "PT018", "E741"]
+# SQL built only from fixed fragments of the module itself; every value is a bound parameter.
+"src/ossbot/gatekeeper/{approvals,state_machine}.py" = ["S608"]
+# Enum values are signal names, not credentials.
+"src/ossbot/gatekeeper/anomaly.py" = ["S105"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+# ---------------------------------------------------------------- mypy
+[tool.mypy]
+python_version = "3.12"
+files = ["src"]
+mypy_path = "src"
+plugins = ["pydantic.mypy"]
+cache_dir = "/tmp/ossbot-mypy-cache"
+warn_unused_configs = true
+warn_redundant_casts = true
+check_untyped_defs = true
+no_implicit_optional = true
+
+# strict for the safety-critical packages (DESIGN §18.1)
+[[tool.mypy.overrides]]
+module = ["ossbot.gatekeeper.*", "ossbot.dockerfilter.*", "ossbot.common.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+warn_return_any = true
+warn_unused_ignores = true
+no_implicit_reexport = true
+strict_equality = true
+extra_checks = true
+
+[[tool.mypy.overrides]]
+module = ["ruamel.*"]
+ignore_missing_imports = true
+
+# ---------------------------------------------------------------- import-linter (§18.1, I1)
+[tool.importlinter]
+root_package = "ossbot"
+include_external_packages = false
+
+[[tool.importlinter.contracts]]
+name = "Only ossbot.gatekeeper.submit imports ossbot.gatekeeper.github_writer"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.**"]
+ignore_imports = ["ossbot.gatekeeper.submit -> ossbot.gatekeeper.github_writer"]
+# submit.py/github_writer.py land in FEAT-002; switch this to "error" there.
+unmatched_ignore_imports_alerting = "warn"
+forbidden_modules = ["ossbot.gatekeeper.github_writer"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
+name = "Untrusted-side components never import the gatekeeper"
+type = "forbidden"
+source_modules = ["ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools"]
+forbidden_modules = ["ossbot.gatekeeper"]
+
+[[tool.importlinter.contracts]]
+name = "ossbot.common depends on no component"
+type = "forbidden"
+source_modules = ["ossbot.common"]
+forbidden_modules = [
+    "ossbot.gatekeeper", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools",
+    "ossbot.dockerfilter", "ossbot.ctl", "ossbot.watchdog",
+]

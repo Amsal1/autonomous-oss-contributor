@@ -1,0 +1,247 @@
+"""Roles from fake SO_PEERCRED uids, the route table (no approve route, I1/I3), operator FYIs (§12.2)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.routing import APIRoute
+
+from ossbot.gatekeeper import db
+from ossbot.gatekeeper.app import create_app
+from ossbot.gatekeeper.authz import ALL_ROLES, Role, interactive_ancestry
+from ossbot.gatekeeper.context import AppContext
+from tests.conftest import (
+    UID_NOBODY,
+    UID_OPERATOR,
+    UID_REQUESTER,
+    UID_ROOT,
+    UID_SANDBOX,
+    UID_WORKER,
+    insert_contribution,
+)
+from tests.unit.gatekeeper.api_helpers import client
+
+O, W, S, R = Role.OPERATOR, Role.WORKER, Role.SANDBOX, Role.REQUESTER
+ANY = ALL_ROLES
+# DESIGN §12.2 endpoint table: (method, path) -> roles.
+EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
+    ("GET", "/v1/health"): ANY,
+    ("GET", "/v1/control"): ANY,
+    ("POST", "/v1/control/pause"): frozenset({O, W, S, R}),
+    ("POST", "/v1/control/kill"): frozenset({O, W, R}),
+    ("POST", "/v1/control/resume"): frozenset({O}),
+    ("POST", "/v1/control/dry-run"): frozenset({O}),
+    ("GET", "/v1/config/snapshot"): ANY,
+    ("POST", "/v1/config/reload"): frozenset({O}),
+    ("GET", "/v1/contributions"): ANY,
+    ("GET", "/v1/contributions/{cid}"): ANY,
+    ("POST", "/v1/contributions"): frozenset({W}),
+    ("POST", "/v1/contributions/import"): frozenset({O}),
+    ("GET", "/v1/contributions/{cid}/import-bundle"): frozenset({W}),
+    ("POST", "/v1/contributions/{cid}/transition"): frozenset({W}),
+    ("POST", "/v1/contributions/{cid}/package"): frozenset({W}),
+    ("POST", "/v1/contributions/{cid}/package-ts"): frozenset({W}),
+    ("POST", "/v1/actions"): frozenset({W}),
+    ("POST", "/v1/sandbox/probe-result"): frozenset({S}),
+    ("GET", "/v1/models/catalog"): ANY,
+    ("POST", "/v1/models/catalog"): frozenset({W}),
+    ("POST", "/v1/discovery-requests"): frozenset({R, O}),
+    ("POST", "/v1/notify"): frozenset({W, R}),
+    ("GET", "/v1/models"): frozenset({O}),
+    ("PUT", "/v1/models/{role}"): frozenset({O}),
+    ("GET", "/v1/audit/verify"): frozenset({O}),
+}
+UIDS = {O: UID_OPERATOR, W: UID_WORKER, S: UID_SANDBOX, R: UID_REQUESTER}
+
+
+def api_routes(routes: list[Any]) -> list[APIRoute]:
+    """Flatten routes; FastAPI 0.143 keeps included routers as lazy wrappers (``original_router``)."""
+    out: list[APIRoute] = []
+    for route in routes:
+        if isinstance(route, APIRoute):
+            out.append(route)
+        elif hasattr(route, "original_router"):
+            out.extend(api_routes(route.original_router.routes))
+    return out
+
+
+def route_table(ctx: AppContext) -> dict[tuple[str, str], frozenset[Role]]:
+    table: dict[tuple[str, str], frozenset[Role]] = {}
+    routes = api_routes(create_app(ctx, housekeeping=False).routes)
+    assert routes, "no API routes found"
+    for route in routes:
+        roles = [d.call.allowed_roles for d in route.dependant.dependencies if hasattr(d.call, "allowed_roles")]
+        assert len(roles) == 1, f"{route.path} has no role dependency"
+        for method in route.methods:
+            table[(method, route.path)] = roles[0]
+    return table
+
+
+def test_route_table_matches_design(ctx: AppContext) -> None:
+    assert route_table(ctx) == EXPECTED
+
+
+def test_there_is_no_approve_route(ctx: AppContext) -> None:
+    """I1/I3: approvals come only from Telegram callbacks inside the gatekeeper."""
+    for _, path in route_table(ctx):
+        assert "approve" not in path and "confirm" not in path and "approval" not in path
+
+
+@pytest.mark.parametrize("uid", [UID_NOBODY, 4321, None])
+async def test_unknown_or_missing_peer_is_403(ctx: AppContext, uid: int | None) -> None:
+    async with client(ctx, uid) as c:
+        resp = await c.get("/v1/health")
+    assert resp.status_code == 403
+
+
+async def test_root_is_operator(ctx: AppContext) -> None:
+    async with client(ctx, UID_ROOT) as c:
+        assert (await c.get("/v1/audit/verify")).status_code == 200
+
+
+@pytest.mark.parametrize("role", [W, S, R])
+async def test_non_operator_resume_is_403_and_audited(ctx: AppContext, role: Role) -> None:
+    ctx.control.pause("x", "test")
+    async with client(ctx, UIDS[role]) as c:
+        resp = await c.post("/v1/control/resume")
+    assert resp.status_code == 403
+    assert not ctx.paths.resume_request.exists()
+    row = ctx.conn.execute("SELECT actor FROM audit_events WHERE event = 'forbidden_call'").fetchone()
+    assert row is not None and row["actor"] == f"uid:{UIDS[role]}"
+
+
+def outbox_texts(ctx: AppContext) -> list[str]:
+    return [json.loads(r["payload_json"])["text"] for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox")]
+
+
+async def test_operator_go_actions_emit_fyi(ctx: AppContext) -> None:
+    async with client(ctx, UID_OPERATOR) as c:
+        assert (await c.post("/v1/control/pause", json={"reason": "maintenance"})).status_code == 200
+        assert (await c.post("/v1/control/resume")).status_code == 202
+        assert (await c.post("/v1/control/dry-run", json={"enabled": False})).status_code == 200
+        policy = ctx.paths.config_dir / "policy.yaml"
+        policy.write_text(policy.read_text().replace("comments_per_24h: 10", "comments_per_24h: 8"))
+        preview = (await c.post("/v1/config/reload", json={})).json()
+        assert preview["applied"] is False and "comments_per_24h" in preview["diff"]
+        applied = await c.post("/v1/config/reload", json={"confirm_hash": preview["hash"]})
+        assert applied.status_code == 200 and applied.json()["applied"] is True
+    texts = outbox_texts(ctx)
+    for action in ("RESUME", "DRY-RUN OFF", "CONFIG RELOAD"):
+        assert any(f"Local operator action: {action} by uid {UID_OPERATOR}" in t for t in texts), action
+
+
+async def test_dry_run_on_is_immediate_without_fyi(ctx: AppContext) -> None:
+    ctx.control.set_dry_run(False, "test")
+    async with client(ctx, UID_OPERATOR) as c:
+        assert (await c.post("/v1/control/dry-run", json={"enabled": True})).json()["dry_run"] is True
+    assert not any("DRY-RUN" in t for t in outbox_texts(ctx))
+
+
+async def test_worker_and_requester_can_stop(ctx: AppContext) -> None:
+    async with client(ctx, UID_REQUESTER) as c:
+        assert (await c.post("/v1/control/pause", json={"reason": "hermes"})).json()["state"] == "paused"
+        assert (await c.post("/v1/control/kill", json={"reason": "hermes"})).json()["state"] == "killed"
+    async with client(ctx, UID_SANDBOX) as c:
+        assert (await c.post("/v1/control/kill", json={"reason": "x"})).status_code == 403
+
+
+async def test_requester_gets_redacted_view(ctx: AppContext) -> None:
+    cid = insert_contribution(ctx, plan_json='{"secret": "plan"}', pr_body="body")
+    async with client(ctx, UID_REQUESTER) as c:
+        doc = (await c.get(f"/v1/contributions/{cid}")).json()
+    assert "plan_json" not in doc and "pr_body" not in doc and doc["id"] == cid
+    async with client(ctx, UID_OPERATOR) as c:
+        assert "plan_json" in (await c.get(f"/v1/contributions/{cid}")).json()
+
+
+async def test_transition_via_api_worker_only(ctx: AppContext) -> None:
+    cid = insert_contribution(ctx)
+    body = {"from": "DISCOVERED", "to": "VETTING", "evidence": {}}
+    async with client(ctx, UID_OPERATOR) as c:
+        assert (await c.post(f"/v1/contributions/{cid}/transition", json=body)).status_code == 403
+    async with client(ctx, UID_WORKER) as c:
+        resp = await c.post(f"/v1/contributions/{cid}/transition", json=body)
+        assert resp.status_code == 200 and resp.json()["state"] == "VETTING"
+        gate = await c.post(f"/v1/contributions/{cid}/transition", json={"from": "VETTING", "to": "AWAITING_APPROVAL"})
+        assert gate.status_code == 409
+        extra = await c.post(f"/v1/contributions/{cid}/transition", json={**body, "approve": True})
+        assert extra.status_code == 400  # extra="forbid"
+
+
+async def test_notify_rate_limited(ctx: AppContext) -> None:
+    async with client(ctx, UID_REQUESTER) as c:
+        for _ in range(10):
+            assert (await c.post("/v1/notify", json={"text": "hi"})).status_code == 202
+        assert (await c.post("/v1/notify", json={"text": "hi"})).status_code == 429
+    async with client(ctx, UID_WORKER) as c:
+        assert (await c.post("/v1/notify", json={"text": "hi"})).status_code == 202  # per caller
+
+
+async def test_not_yet_implemented_routes_are_501(ctx: AppContext) -> None:
+    cid = insert_contribution(ctx, source="operator", issue_number=None)
+    async with client(ctx, UID_WORKER) as c:
+        assert (await c.post(f"/v1/contributions/{cid}/package")).status_code == 501
+        assert (await c.get(f"/v1/contributions/{cid}/import-bundle")).status_code == 501
+
+
+async def test_actions_create_pending_approval(ctx: AppContext) -> None:
+    cid = insert_contribution(ctx, issue_number=77)
+    async with client(ctx, UID_WORKER) as c:
+        resp = await c.post("/v1/actions", json={"cid": cid, "kind": "issue_claim", "target_number": 77,
+                                                 "body": "I'd like to work on this.\r\n"})  # fmt: skip
+        assert resp.status_code == 201, resp.text
+        bad = await c.post("/v1/actions", json={"cid": cid, "kind": "push_update", "target_number": 77, "body": "x"})
+        assert bad.status_code == 400
+        wrong = await c.post("/v1/actions", json={"cid": cid, "kind": "comment", "target_number": 5, "body": "x"})
+        assert wrong.status_code == 400
+        leak = await c.post("/v1/actions", json={"cid": cid, "kind": "comment", "target_number": 77,
+                                                 "body": "ping test-work-login"})  # fmt: skip
+        assert leak.status_code == 422 and "confidential" in leak.json()["violations"]
+    data = resp.json()
+    row = db.one(ctx.conn, "SELECT payload_json FROM outbound_actions WHERE id = ?", (data["action_id"],))
+    assert row is not None
+    body = json.loads(row[0])["body"]
+    assert "\r" not in body and body.endswith(f"<!-- ossbot:action={data['action_id']} -->")
+    approval = db.one(ctx.conn, "SELECT status, tg_chat_id FROM approvals WHERE id = ?", (data["approval_id"],))
+    assert approval is not None and approval["status"] == "pending" and approval["tg_chat_id"] == 4242
+
+
+async def test_actions_refused_while_killed(ctx: AppContext) -> None:
+    cid = insert_contribution(ctx, issue_number=78)
+    ctx.control.kill("x", "test")
+    async with client(ctx, UID_WORKER) as c:
+        resp = await c.post("/v1/actions", json={"cid": cid, "kind": "comment", "target_number": 78, "body": "x"})
+    assert resp.status_code == 423
+
+
+async def test_discovery_request(ctx: AppContext) -> None:
+    async with client(ctx, UID_REQUESTER) as c:
+        ok = await c.post("/v1/discovery-requests", json={"url": "https://github.com/langfuse/langfuse/issues/9"})
+        assert ok.status_code == 201
+        pr = await c.post("/v1/discovery-requests", json={"url": "https://github.com/langfuse/langfuse/pull/9"})
+        assert pr.status_code == 400
+        other = await c.post("/v1/discovery-requests", json={"url": "https://github.com/nobody/x/issues/1"})
+        assert other.status_code == 400
+
+
+async def test_schema_errors_are_400(ctx: AppContext) -> None:
+    async with client(ctx, UID_OPERATOR) as c:
+        resp = await c.post("/v1/control/pause", json={"reason": ""})
+    assert resp.status_code == 400 and resp.json()["error"] == "schema_error"
+
+
+def test_interactive_ancestry(tmp_path: Path) -> None:
+    def proc(pid: int, ppid: int, tty: int) -> None:
+        (tmp_path / str(pid)).mkdir()
+        (tmp_path / str(pid) / "stat").write_text(f"{pid} (some (odd) name) S {ppid} 1 1 {tty} 0 0\n")
+
+    proc(300, 200, 0)
+    proc(200, 100, 34816)
+    proc(100, 1, 0)
+    proc(400, 1, 0)
+    assert interactive_ancestry(300, proc=str(tmp_path)) is True
+    assert interactive_ancestry(400, proc=str(tmp_path)) is False
+    assert interactive_ancestry(999, proc=str(tmp_path)) is False

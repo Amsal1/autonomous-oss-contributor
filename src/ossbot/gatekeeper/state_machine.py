@@ -1,0 +1,342 @@
+"""Contribution state machine owned by the gatekeeper (DESIGN §9.2, I13).
+
+* ``ALLOWED[from][to]`` is the set of actors that may drive an edge. FAILED edges are generated:
+  W|G from every working state, G|H from every gate state (N1).
+* Live-PR redirect (M4): with ``pr_number`` set, a move to FAILED/ABANDONED becomes WATCHING
+  (except the human WATCHING->ABANDONED), cancelling the fix's open actions and approvals.
+* Guards answer 409 ``guard_failed:<guard>``; a known edge with the wrong actor answers 403.
+* Kill/pause is checked on entry to working states (and SUBMITTING); moves that stop work (the
+  redirect, into SUBMIT_FAILED, into WATCHING from a gate state) are allowed while paused/killed.
+* The transition and its audit event commit in one SQLite transaction; entering IMPLEMENTING
+  invalidates the contribution's open approvals in the same transaction.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import timedelta
+from enum import StrEnum
+from typing import Any
+
+from ossbot.common.clock import Clock, from_iso, to_iso
+from ossbot.common.config import Limits
+from ossbot.common.control_flags import Blocked
+from ossbot.common.hashing import canonical_json
+from ossbot.common.schemas import State, TransitionResponse
+from ossbot.gatekeeper import db
+from ossbot.gatekeeper.approvals import ApprovalService
+from ossbot.gatekeeper.audit import AuditLog
+from ossbot.gatekeeper.control import ControlService
+
+
+class Actor(StrEnum):
+    WORKER = "worker"  # runner via UDS
+    GATEKEEPER = "gatekeeper_internal"  # gatekeeper's own code paths (package import, submit, expiry)
+    HUMAN = "human"  # Telegram decision or operator TTY-confirmed command
+
+
+W = frozenset({Actor.WORKER})
+G = frozenset({Actor.GATEKEEPER})
+H = frozenset({Actor.HUMAN})
+
+S = State
+WORKING: frozenset[State] = frozenset(
+    {
+        S.IMPORTED, S.VETTING, S.FETCHING, S.FETCHED, S.PLANNING, S.PLANNED, S.IMPLEMENTING, S.IMPLEMENTED,
+        S.VALIDATING, S.VALIDATION_FAILED, S.VALIDATED, S.REVIEWING, S.REVISE, S.REVIEW_PASSED,
+        S.REVIEW_REJECTED, S.PACKAGING, S.CHANGES_REQUESTED, S.WATCHING, S.DISCOVERED, S.VETTED,
+    }
+)  # fmt: skip
+GATE: frozenset[State] = frozenset({S.AWAITING_APPROVAL, S.APPROVED, S.SUBMITTING, S.SUBMITTED, S.SUBMIT_FAILED})
+APPROVAL_STATES: frozenset[State] = frozenset(
+    {S.AWAITING_APPROVAL, S.APPROVED, S.SUBMITTING, S.SUBMITTED, S.SUBMIT_FAILED, S.DRY_RUN_DONE, S.REJECTED}
+)
+
+_LISTED: dict[State, dict[State, frozenset[Actor]]] = {
+    S.DISCOVERED: {S.VETTING: W},
+    S.VETTING: {S.VETTED: W, S.SKIPPED: W},
+    S.VETTED: {S.FETCHING: W, S.SKIPPED: W | G},  # FETCHING guarded (claim); G = claim rejected (N1)
+    S.IMPORTED: {S.FETCHING: W},  # M3: creation is G (import endpoint), fetch is W
+    S.FETCHING: {S.FETCHED: W},
+    S.FETCHED: {S.PLANNING: W, S.IMPLEMENTED: W},  # IMPLEMENTED guarded: source='operator' + unbundle done
+    S.PLANNING: {S.PLANNED: W, S.ABANDONED: W},
+    S.PLANNED: {S.IMPLEMENTING: W},
+    S.IMPLEMENTING: {S.IMPLEMENTED: W},
+    S.IMPLEMENTED: {S.VALIDATING: W},
+    S.VALIDATING: {S.VALIDATED: W, S.VALIDATION_FAILED: W},
+    S.VALIDATION_FAILED: {S.IMPLEMENTING: W},  # attempt < max
+    S.VALIDATED: {S.REVIEWING: W},
+    S.REVIEWING: {S.REVISE: W, S.REVIEW_REJECTED: W, S.REVIEW_PASSED: W},
+    S.REVISE: {S.IMPLEMENTING: W, S.ABANDONED: W},  # round < max
+    S.REVIEW_REJECTED: {S.ABANDONED: W},
+    S.REVIEW_PASSED: {S.PACKAGING: W},
+    S.PACKAGING: {S.AWAITING_APPROVAL: G},
+    S.AWAITING_APPROVAL: {
+        S.APPROVED: H,
+        S.REJECTED: H,
+        S.CHANGES_REQUESTED: H,
+        S.EXPIRED: G,
+        S.WATCHING: H | G,  # WATCHING only when pr_number IS NOT NULL
+    },
+    S.CHANGES_REQUESTED: {S.IMPLEMENTING: W},
+    S.APPROVED: {S.SUBMITTING: G},
+    S.SUBMITTING: {S.SUBMITTED: G, S.DRY_RUN_DONE: G, S.SUBMIT_FAILED: G, S.WATCHING: G},
+    S.SUBMIT_FAILED: {S.AWAITING_APPROVAL: H, S.WATCHING: H},  # WATCHING only when pr_number set
+    S.SUBMITTED: {S.WATCHING: G},
+    S.WATCHING: {S.WATCHING: W, S.IMPLEMENTING: W, S.MERGED: W, S.CLOSED: W, S.ABANDONED: H},
+}
+
+
+def _build_allowed() -> dict[State, dict[State, frozenset[Actor]]]:
+    allowed = {k: dict(v) for k, v in _LISTED.items()}
+    for state in WORKING:
+        allowed.setdefault(state, {})[S.FAILED] = W | G
+    for state in GATE:
+        allowed.setdefault(state, {})[S.FAILED] = G | H
+    return allowed
+
+
+ALLOWED: dict[State, dict[State, frozenset[Actor]]] = _build_allowed()
+
+# Entering one of these requires running control state.
+BLOCKED_WHILE_STOPPED: frozenset[State] = (WORKING | {S.SUBMITTING}) - {S.WATCHING}
+EVIDENCE_MAX_BYTES = 64 * 1024
+
+
+def all_edges() -> list[tuple[State, State, frozenset[Actor]]]:
+    return [(f, t, a) for f, targets in ALLOWED.items() for t, a in targets.items()]
+
+
+class TransitionError(RuntimeError):
+    def __init__(self, status: int, code: str, detail: str = "") -> None:
+        self.status = status
+        self.code = code
+        super().__init__(f"{status} {code}{': ' + detail if detail else ''}")
+
+
+@dataclass(frozen=True)
+class Target:
+    to: State
+    actors: frozenset[Actor]
+    redirected_from: State | None
+
+
+def resolve_target(from_: State, to: State, pr_number: int | None) -> Target:
+    """Apply the live-PR redirect (M4). Raises 409 if the requested edge does not exist."""
+    actors = ALLOWED.get(from_, {}).get(to)
+    if actors is None:
+        raise TransitionError(409, "no_edge", f"{from_.value}->{to.value}")
+    if pr_number is not None and to in {S.FAILED, S.ABANDONED} and not (from_ is S.WATCHING and to is S.ABANDONED):
+        if from_ in WORKING:
+            return Target(S.WATCHING, W | G, to)
+        if from_ in GATE:
+            return Target(S.WATCHING, G | H, to)
+    return Target(to, actors, None)
+
+
+class StateMachine:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        clock: Clock,
+        audit: AuditLog,
+        approvals: ApprovalService,
+        control: ControlService,
+        limits: Callable[[], Limits],
+        notify: Callable[[str], None] | None = None,
+    ) -> None:
+        self.conn = conn
+        self.clock = clock
+        self.audit = audit
+        self.approvals = approvals
+        self.control = control
+        self.limits = limits
+        self.notify = notify or (lambda text: None)
+
+    # ---------------------------------------------------------------- guards
+    def _guard(self, row: sqlite3.Row, from_: State, to: State, redirected: bool) -> str | None:
+        pr = row["pr_number"]
+        if from_ is S.VETTED and to is S.FETCHING:
+            vetting = json.loads(row["vetting_json"] or "{}")
+            if vetting.get("requires_claim_comment"):
+                statuses = ["done"] + (["dry_run_done"] if db.current_dry_run(self.conn) else [])
+                found = self.conn.execute(
+                    "SELECT 1 FROM outbound_actions WHERE cid = ? AND kind = 'issue_claim' AND status IN"
+                    f" ({','.join('?' * len(statuses))}) LIMIT 1",
+                    (row["id"], *statuses),
+                ).fetchone()
+                if found is None:
+                    return "claim"
+        if from_ is S.FETCHED and to is S.IMPLEMENTED:
+            if row["source"] != "operator":
+                return "source_operator"
+            unbundled = self.conn.execute(
+                "SELECT 1 FROM stage_runs WHERE cid = ? AND stage = 'unbundle' AND status = 'succeeded' LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            if unbundled is None:
+                return "unbundle_done"
+        if from_ is S.AWAITING_APPROVAL and to in {S.REJECTED, S.EXPIRED} and pr is not None:
+            return "pr_number_null"
+        if not redirected and to is S.WATCHING and from_ in {S.AWAITING_APPROVAL, S.SUBMIT_FAILED} and pr is None:
+            return "pr_number_set"
+        if from_ is S.SUBMITTING and to is S.DRY_RUN_DONE and pr is not None:
+            return "pr_number_null"
+        if from_ is S.SUBMITTING and to is S.WATCHING and pr is None:
+            return "pr_number_set"
+        limits = self.limits()
+        if to is S.IMPLEMENTING:
+            if from_ is S.VALIDATION_FAILED and row["implement_attempts"] >= limits.max_implement_attempts:
+                return "implement_attempts"
+            if from_ is S.REVISE and row["review_rounds"] >= limits.max_review_rounds:
+                return "review_rounds"
+            if from_ is S.CHANGES_REQUESTED and row["change_rounds"] >= limits.max_change_rounds:
+                return "change_rounds"
+            if from_ is S.WATCHING and row["watch_rounds"] >= limits.watch_rounds_max:
+                return "watch_rounds"
+        if (
+            not redirected
+            and from_ is S.WATCHING
+            and to is S.WATCHING
+            and row["watch_rounds"] >= limits.watch_rounds_max
+        ):
+            return "watch_rounds"
+        return None
+
+    @staticmethod
+    def _counter_updates(from_: State, to: State, redirected: bool) -> dict[str, str]:
+        if redirected:
+            return {}
+        if to is S.IMPLEMENTING:
+            column = {
+                S.VALIDATION_FAILED: "implement_attempts",
+                S.REVISE: "review_rounds",
+                S.CHANGES_REQUESTED: "change_rounds",
+                S.WATCHING: "watch_rounds",
+            }.get(from_)
+            return {column: f"{column} + 1"} if column else {}
+        if from_ is S.WATCHING and to is S.WATCHING:
+            return {"watch_rounds": "watch_rounds + 1"}
+        return {}
+
+    # ------------------------------------------------------------ transition
+    def transition(
+        self,
+        cid: str,
+        from_: State,
+        to: State,
+        actor: Actor,
+        evidence: dict[str, Any] | None = None,
+        audit_actor: str | None = None,
+    ) -> TransitionResponse:
+        evidence = evidence or {}
+        if len(canonical_json(evidence)) > EVIDENCE_MAX_BYTES:
+            raise TransitionError(400, "evidence_too_large")
+        who = audit_actor or actor.value
+        forbidden: TransitionError | None = None
+        with db.transaction(self.conn):
+            row = db.one(self.conn, "SELECT * FROM contributions WHERE id = ?", (cid,))
+            if row is None:
+                raise TransitionError(404, "not_found", cid)
+            if row["state"] != from_.value:
+                raise TransitionError(409, "stale_from", f"current {row['state']}")
+            target = resolve_target(from_, to, row["pr_number"])
+            if actor not in target.actors:
+                forbidden = TransitionError(403, "forbidden_transition", f"{from_.value}->{to.value} by {actor.value}")
+            else:
+                redirected = target.redirected_from is not None
+                guard = self._guard(row, from_, target.to, redirected)
+                if guard is not None:
+                    raise TransitionError(409, f"guard_failed:{guard}")
+                stops_work = redirected or target.to is S.SUBMIT_FAILED or (target.to is S.WATCHING and from_ in GATE)
+                if target.to in BLOCKED_WHILE_STOPPED and not stops_work:
+                    try:
+                        self.control.require_running(f"transition {from_.value}->{target.to.value}")
+                    except Blocked as exc:
+                        raise TransitionError(423, exc.flags.state, str(exc)) from exc
+                self._apply(row, from_, target, evidence, who)
+        if forbidden is not None:
+            with db.transaction(self.conn):
+                self.audit.append(who, "forbidden_transition", {"from": from_.value, "to": to.value}, cid)
+            raise forbidden
+        return TransitionResponse(state=target.to, redirected_from=target.redirected_from)
+
+    def _apply(self, row: sqlite3.Row, from_: State, target: Target, evidence: dict[str, Any], who: str) -> None:
+        cid = str(row["id"])
+        error_class = str(evidence.get("error_class", "unknown"))[:64]
+        sets = {"state": "?", "state_reason": "?", "updated_at": "?"}
+        params: list[Any] = [target.to.value]
+        if target.redirected_from is not None:
+            params.append(f"fix_round_failed:{error_class}")
+        else:
+            reason = evidence.get("reason") or evidence.get("error_class")
+            params.append(str(reason)[:200] if reason is not None else None)
+        params.append(to_iso(self.clock.now()))
+        for column, expr in self._counter_updates(from_, target.to, target.redirected_from is not None).items():
+            sets[column] = expr
+        if target.redirected_from is not None and error_class == "branch_moved":
+            sets["watch_rounds"] = "?"
+            params.append(self.limits().watch_rounds_max)
+        assignments = ", ".join(f"{k} = {v}" for k, v in sets.items())
+        self.conn.execute(f"UPDATE contributions SET {assignments} WHERE id = ?", (*params, cid))
+        if target.to is S.IMPLEMENTING:
+            self.approvals.invalidate_contribution(cid, "entered_implementing")
+        if target.redirected_from is not None:
+            self.conn.execute(
+                "UPDATE outbound_actions SET status = 'cancelled'"
+                " WHERE cid = ? AND status IN ('pending_approval','approved')",
+                (cid,),
+            )
+            self.approvals.invalidate_contribution(cid, "fix_round_failed")
+        self.audit.append(
+            who,
+            "transition",
+            {
+                "from": from_.value,
+                "to": target.to.value,
+                "redirected_from": target.redirected_from.value if target.redirected_from else None,
+                "evidence": evidence,
+            },
+            cid,
+        )
+        if target.redirected_from is not None:
+            note = f"Fix for PR #{row['pr_number']} failed ({error_class}); still watching. [Stop watching]"
+            if error_class == "branch_moved":
+                note = f"branch has commits not made by ossbot; fixes disabled for PR #{row['pr_number']}"
+            self.notify(note)
+
+    # ------------------------------------------------------------- expiry sweep
+    def sweep_expired(self) -> list[str]:
+        """Hourly: AWAITING_APPROVAL whose newest approval is > expiry days old and not live (§9.2)."""
+        days = self.limits().contribution_expiry_days
+        cutoff = self.clock.now() - timedelta(days=days)
+        now_iso = to_iso(self.clock.now())
+        moved: list[str] = []
+        for row in self.conn.execute("SELECT * FROM contributions WHERE state = 'AWAITING_APPROVAL'").fetchall():
+            newest = self.conn.execute(
+                "SELECT a.created_at FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+                " WHERE o.cid = ? ORDER BY a.created_at DESC LIMIT 1",
+                (row["id"],),
+            ).fetchone()
+            live = self.conn.execute(
+                "SELECT 1 FROM approvals a JOIN outbound_actions o ON o.id = a.action_id WHERE o.cid = ?"
+                " AND a.status IN ('pending','armed','confirmed') AND a.expires_at > ? LIMIT 1",
+                (row["id"], now_iso),
+            ).fetchone()
+            reference = from_iso(newest["created_at"]) if newest else from_iso(row["updated_at"])
+            if live is not None or reference > cutoff:
+                continue
+            to = S.EXPIRED if row["pr_number"] is None else S.WATCHING
+            if to is S.WATCHING:
+                with db.transaction(self.conn):
+                    self.conn.execute(
+                        "UPDATE outbound_actions SET status = 'cancelled' WHERE cid = ? AND kind = 'push_update'"
+                        " AND status IN ('pending_approval','approved')",
+                        (row["id"],),
+                    )
+            self.transition(row["id"], S.AWAITING_APPROVAL, to, Actor.GATEKEEPER, {"reason": "expired"})
+            moved.append(str(row["id"]))
+        return moved

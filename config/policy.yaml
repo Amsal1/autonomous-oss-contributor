@@ -1,0 +1,60 @@
+# Gatekeeper policy (DESIGN §12.6). Loaded only via the config snapshot (§7.9): edits take
+# effect after /reload (Telegram) or `ossctl config reload` plus a human confirm.
+# Unknown keys are rejected. Effective forbidden paths/logins/confidentiality = config ∪ floor.
+version: 1
+dry_run_default: true
+sandbox:
+  coder_mode: split                # split only in v1 (single is phase 2)
+limits:
+  prs_per_24h: 2
+  open_prs_per_repo: 1
+  comments_per_24h: 10
+  issue_claims_per_24h: 2
+  max_concurrent_pipelines: 2
+  max_awaiting_approval: 5
+  approval_ttl_hours: 72
+  confirm_ttl_seconds: 300
+  contribution_expiry_days: 7
+  watch_rounds_max: 3
+  repo_cooldown_days_after_close: 30
+  repo_cooldown_days_after_user_reject: 7
+  rediscover_cooldown_days: 7        # M6: per issue, after FAILED/ABANDONED/EXPIRED/other SKIPPED
+  max_implement_attempts: 2          # extra implement attempts after a validation failure (§9.1)
+  max_review_rounds: 2
+  max_change_rounds: 5
+diff:
+  max_files: 25
+  max_changed_lines: 600
+  forbidden_paths: [".github/workflows/**", ".github/actions/**", "**/CODEOWNERS", "LICENSE*", "COPYING*", "**/*.pem", "**/*.key", "**/.env*", ".kiro/**", ".git*/hooks/**"]
+  forbid_binary: true
+  forbid_submodule_changes: true
+  forbid_symlinks: true
+  forbid_file_modes: ["120000", "160000"]
+text:
+  title_max: 256
+  body_max: 60000          # GitHub hard limit is 65536
+  comment_max: 20000
+  commit_message_max: 10000
+  commit_subject_max: 100
+  confidentiality_denylist: []   # generic extras; personal strings go in profile.yaml confidentiality_floor
+  require_disclosure: true
+secrets:
+  gitleaks: true
+  extra_patterns: ["ksk_[A-Za-z0-9_\\-]{16,}", "gh[pousr]_[A-Za-z0-9]{36,}", "github_pat_[A-Za-z0-9_]{60,}", "\\d{6,12}:[A-Za-z0-9_-]{30,}"]
+  kiro_key_hash_check: true
+anomaly:
+  max_consecutive_stage_failures: 5
+  max_proxy_denies_per_task: 50
+  max_kiro_invocations_per_hour: 120
+validation:
+  stack:
+    enabled: false                 # phase 2 (§10.7)
+discovery:
+  proactive: false
+  interval_hours: 6
+  top_n: 5
+telegram:
+  mode: single
+backup:
+  include_secrets: false
+  keep: 8

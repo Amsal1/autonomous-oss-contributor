@@ -1,0 +1,33 @@
+# Egress allowlist (DESIGN §11.3, §10.3, §11.2). Loaded only via the config snapshot.
+# Squid dstdomain semantics: a leading dot means the domain and all subdomains.
+# Virtual categories (no host list here): web_public (any host minus always_denied),
+# kiro_idc_login (derived from profile.kiro at render time), pkg_helm (targets.yaml egress_extra).
+version: 1
+categories:
+  kiro_core: [app.kiro.dev, assets.app.kiro.dev, prod.us-east-1.auth.desktop.kiro.dev, runtime.us-east-1.kiro.dev, runtime.eu-central-1.kiro.dev, management.us-east-1.kiro.dev, management.eu-central-1.kiro.dev, q.us-east-1.amazonaws.com, q.eu-central-1.amazonaws.com]
+  kiro_telemetry: [telemetry.us-east-1.kiro.dev, telemetry.eu-central-1.kiro.dev, prod.us-east-1.telemetry.desktop.kiro.dev, prod.us-east-1.telemetry.kiro.aws.dev, dataplane.rum.us-east-1.amazonaws.com, dataplane.rum.eu-central-1.amazonaws.com]
+  kiro_download: [cli.kiro.dev, prod.download.cli.kiro.dev, desktop-release.q.us-east-1.amazonaws.com]
+  github_read: [github.com, codeload.github.com, api.github.com, raw.githubusercontent.com, objects.githubusercontent.com, release-assets.githubusercontent.com, github-releases.githubusercontent.com, ghcr.io, pkg-containers.githubusercontent.com]
+  gatekeeper: [api.telegram.org, api.github.com, github.com]
+  pkg_python: [pypi.org, files.pythonhosted.org]
+  pkg_node: [registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com, nodejs.org]
+  pkg_go: [proxy.golang.org, sum.golang.org, go.dev, dl.google.com, storage.googleapis.com]
+  pkg_jvm: [repo.maven.apache.org, repo1.maven.org, plugins.gradle.org, plugins-artifacts.gradle.org, services.gradle.org, downloads.gradle.org, maven.google.com, dl.google.com]
+  pkg_rust: [crates.io, index.crates.io, static.crates.io]
+  pkg_ruby: [rubygems.org, index.rubygems.org]
+  pkg_iac: [registry.terraform.io, releases.hashicorp.com, registry.opentofu.org, get.opentofu.org]
+# Denied unless `ossctl egress learn` shows the CLI fails without them.
+denied_by_default: [kiro_telemetry]
+sandbox_profiles:
+  fetch: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_helm]
+  validate: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_helm]
+  research: [kiro_core, web_public]
+  agent-llm: [kiro_core]
+  catalog: [kiro_core]
+host_callers:
+  runner: {port: 3140, categories: [github_read]}
+  hermes: {port: 3141, categories: [kiro_core, kiro_idc_login, web_public]}
+  gatekeeper: {port: 3150, categories: [gatekeeper]}
+always_denied:
+  cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, "::1/128", "fc00::/7", "fe80::/10"]
+  domains: [.github.io, gist.github.com, uploads.github.com, checkpoint-api.hashicorp.com]

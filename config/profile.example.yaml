@@ -1,0 +1,20 @@
+# Template for config/profile.yaml (gitignored; holds the owner's personal values, §18.8).
+# Copy to profile.yaml and replace every placeholder. Loaded only via the config snapshot.
+version: 1
+github_login: your-github-login          # API identity; GET /user must match before every write
+commit_name: "Your Name"                 # author == committer == Signed-off-by
+commit_email: you@example.com            # must be a verified email on github_login
+signoff: true
+forbidden_logins: [your-work-account]    # merged into the monotonic policy floor; must not be empty
+confidentiality_floor: [your-work-account, "@your-employer.example"]
+telegram:
+  user_id: 0                             # numeric; the only allowlisted Telegram user (0 = not configured)
+kiro:
+  idc_start_url: https://example.awsapps.com/start   # only for Hermes device-flow login (option c)
+  idc_region: us-east-1
+backup:
+  age_recipients: ["age1replace-with-your-public-key"]   # public keys only
+interests:                               # used to weight discovery and prompt the planner on relevance
+  summary: "Describe your role and stack"
+  categories_priority: {llm-observability: 1, iac: 2, android: 3}
+  prior_contributions: []

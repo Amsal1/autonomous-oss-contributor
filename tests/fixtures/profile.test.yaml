@@ -1,0 +1,19 @@
+# Test profile: fake values only. Tests never read config/profile.yaml.
+version: 1
+github_login: test-bot-login
+commit_name: "Test Person"
+commit_email: test.person@example.org
+signoff: true
+forbidden_logins: [test-work-login]
+confidentiality_floor: [test-work-login, "@corp.example"]
+telegram:
+  user_id: 4242
+kiro:
+  idc_start_url: https://test-org.awsapps.com/start
+  idc_region: us-east-1
+backup:
+  age_recipients: []
+interests:
+  summary: "test"
+  categories_priority: {llm-observability: 1}
+  prior_contributions: []

@@ -27,3 +27,14 @@ A small Python service (`ossbot-gatekeeper`, Unix user `gatekeeper`) is the trus
 
 ## Consequences
 More moving parts (runner ↔ gatekeeper API). Every public action is re-validated at execution time, so stale approvals fail closed.
+
+## Implementation addendum (FEAT-001, 2026-10-17)
+- Peer credentials: uvicorn 0.54 keeps the ASGI app per connection (`H11Protocol.app`). `ossbot.gatekeeper.authz.PeerCredH11Protocol` reads `SO_PEERCRED` once in `connection_made` and wraps that connection's app so every request scope carries `scope["ossbot.peer"]`. Roles map from the peer uid only. The socket is created by the gatekeeper itself with umask 0117 (0660 from the start), group `ossapi`, and handed to `uvicorn.Server.run(sockets=[...])`.
+- All endpoints are `async def`, so every SQLite transaction runs on the event-loop thread and transactions never interleave on the shared connection.
+- FastAPI 0.143 stores included routers lazily (`_IncludedRouter.original_router`). The route-table test (no approve route, role matrix of §12.2) walks those wrappers.
+- Kill/pause on transitions: entry into every working state and into `SUBMITTING` is refused while paused or killed (423). Moves that stop work are allowed: the live-PR redirect into `WATCHING`, any move into `SUBMIT_FAILED`, and `WATCHING` reached from a gate state. Restart reconciliation (M5) needs that last case.
+- Resume detection: the enforcer removes the flags; `control.reconcile()` runs at start and every 10 s. It moves `control_state` to `running` only when all flags are absent and either this process wrote `resume-request` or new `resume.log` lines (the offline `ossbot-resume` path, N4) were found in the same pass. Otherwise N12 applies: DB killed without a flag stays killed with an alert, and DB paused without a flag rewrites the flag. `resume.log` is read on every reconcile, not only at start, because a soft-killed gatekeeper keeps running across an offline resume. A partial last line is not consumed, and a file shorter than the stored offset is read from the start.
+- The binding for `open_pr`/`push_update` re-derives the bundle, patch and commit-message hashes through an `ArtifactSource` interface. Until the FEAT-002 git TCB provides it, the default `NoArtifacts` raises, so PR-kind approvals fail closed.
+- `POST /v1/discovery-requests` creates a `DISCOVERED` contribution with `source='hermes_request'` (for operators too), subject to the same re-discovery rules. There is no separate requests table.
+- `POST /v1/actions` is refused (423) while paused or killed. The body is normalized and gets `<!-- ossbot:action=<id> -->` appended at storage time. A secret or Kiro-key hit is reported as anomaly `secret_in_text`: the action is blocked, and a second hit within 24 h pauses.
+- The targets denylist no longer carries the work account (no personal values in tracked files). `policy.check_repo` refuses any repo owned by an effective forbidden login (profile union floor) instead.

@@ -1,0 +1,149 @@
+# Contribution targets (DESIGN §17). Loaded only via the config snapshot. Generic seed list:
+# `why:` texts are neutral; personal relevance lives in profile.yaml `interests`.
+# Seeded from §17.2 (verified 2026-10-17 via the GitHub search API); re-verified by
+# `ossctl targets verify`. AI-policy and CLA status come from vetting, not from this file.
+version: 1
+defaults:
+  enabled: true
+  labels: ["good first issue", "help wanted", "bug", "documentation", "kind/bug", "area/docs"]
+  skip_labels: ["wontfix", "duplicate", "needs-triage", "stale", "question", "blocked", "discussion"]
+  clone_depth: 200
+  max_changed_lines: 400
+  validation: [static, unit, smoke]
+  stack_validation: none          # compose | kind are phase 2
+  cla_signed: false
+  ai_policy_override: null        # null | allowed (prefer the /repos button, which writes a DB override)
+  egress_extra: []
+categories:
+  - id: llm-observability
+    priority: 1                   # 1 = highest
+    why: "LLM tracing, evaluation and gateway platforms"
+    repos:
+      - { repo: langfuse/langfuse }
+      - { repo: langfuse/langfuse-python }
+      - { repo: langfuse/langfuse-js }
+      - { repo: langfuse/langfuse-docs }
+      - { repo: traceloop/openllmetry }
+      - { repo: Arize-ai/phoenix }
+      - { repo: Arize-ai/openinference }
+      - { repo: openlit/openlit }
+      - { repo: Helicone/helicone }
+      - { repo: comet-ml/opik }
+      - { repo: BerriAI/litellm }
+  - id: automation
+    priority: 1
+    why: "Workflow automation platforms"
+    repos:
+      - { repo: n8n-io/n8n }
+  - id: agent-runtime
+    priority: 1
+    why: "ossbot's own runtime; upstream the V3 ACP adapter"
+    repos:
+      - { repo: tobenwarrior/hermes-kiro-provider, relation: "vendored in ossbot", discovery: false }
+      - { repo: NousResearch/hermes-agent }
+  - id: opentelemetry
+    priority: 1
+    why: "OpenTelemetry collector, instrumentation and GenAI semantic conventions"
+    repos:
+      - { repo: open-telemetry/opentelemetry-collector }
+      - { repo: open-telemetry/opentelemetry-collector-contrib }
+      - { repo: open-telemetry/semantic-conventions }
+      - { repo: open-telemetry/opentelemetry-python-contrib }
+      - { repo: open-telemetry/opentelemetry-js-contrib }
+      - { repo: open-telemetry/opentelemetry-go-contrib }
+      - { repo: open-telemetry/opentelemetry-operator }
+      - { repo: open-telemetry/opentelemetry-helm-charts }
+  - id: iac
+    priority: 2
+    why: "Infrastructure as code tooling and modules"
+    repos:
+      - { repo: opentofu/opentofu }
+      - { repo: terraform-aws-modules/terraform-aws-eks }
+      - { repo: terraform-aws-modules/terraform-aws-vpc }
+      - { repo: terraform-aws-modules/terraform-aws-rds-aurora }
+      - { repo: hashicorp/terraform-provider-aws, note: "unit tests only" }
+      - { repo: gruntwork-io/terragrunt }
+      - { repo: terraform-linters/tflint }
+      - { repo: terraform-docs/terraform-docs }
+      - { repo: infracost/infracost }
+      - { repo: runatlantis/atlantis }
+      - { repo: bridgecrewio/checkov }
+  - id: ci-cd-aws
+    priority: 2
+    why: "CI/CD integrations for AWS"
+    repos:
+      - { repo: aws-actions/configure-aws-credentials }
+      - { repo: aws-actions/amazon-ecr-login }
+      - { repo: aws/aws-cli, note: "low priority" }
+  - id: secrets-pki
+    priority: 2
+    why: "Secrets management and PKI"
+    repos:
+      - { repo: external-secrets/external-secrets }
+      - { repo: openbao/openbao }
+      - { repo: getsops/sops }
+      - { repo: cert-manager/cert-manager }
+      - { repo: smallstep/certificates }
+      - { repo: kubernetes-sigs/secrets-store-csi-driver }
+      - { repo: aws/secrets-store-csi-driver-provider-aws }
+  - id: kubernetes-platform
+    priority: 2
+    why: "Kubernetes platform components and controllers"
+    repos:
+      - { repo: aws/karpenter-provider-aws }
+      - { repo: kubernetes-sigs/karpenter }
+      - { repo: argoproj/argo-cd }
+      - { repo: helm/helm }
+      - { repo: crossplane/crossplane }
+      - { repo: kyverno/kyverno }
+      - { repo: kubernetes-sigs/external-dns }
+      - { repo: kubernetes-sigs/aws-load-balancer-controller }
+      - { repo: aws/eks-charts }
+      - { repo: kedacore/keda }
+      - { repo: stakater/Reloader }
+  - id: finops
+    priority: 2
+    why: "Cloud cost visibility"
+    repos:
+      - { repo: opencost/opencost }
+  - id: observability
+    priority: 2
+    why: "Metrics, logs and telemetry pipelines"
+    repos:
+      - { repo: prometheus-community/postgres_exporter }
+      - { repo: grafana/alloy }
+      - { repo: grafana/loki }
+      - { repo: prometheus-community/helm-charts }
+      - { repo: VictoriaMetrics/VictoriaMetrics }
+  - id: databases
+    priority: 2
+    why: "Database operators"
+    repos:
+      - { repo: cloudnative-pg/cloudnative-pg }
+  - id: security-supply-chain
+    priority: 3
+    why: "Security scanning and supply-chain tooling"
+    repos:
+      - { repo: aquasecurity/trivy }
+      - { repo: aquasecurity/trivy-operator }
+      - { repo: anchore/syft }
+      - { repo: anchore/grype }
+      - { repo: gravitational/teleport, note: "CLA expected" }
+      - { repo: renovatebot/renovate }
+  - id: ai-platform
+    priority: 3
+    why: "ML lifecycle and LLM evaluation platforms"
+    repos:
+      - { repo: mlflow/mlflow }
+      - { repo: promptfoo/promptfoo }
+  - id: android
+    priority: 3
+    why: "Android tooling"
+    repos:
+      - { repo: Genymobile/scrcpy }
+      - { repo: termux/termux-app }
+      - { repo: termux/termux-packages }
+      - { repo: tiann/KernelSU }
+denylist:
+  - pattern: "LineageOS/*"        # Gerrit
+  - pattern: "aosp-mirror/*"      # Gerrit
