@@ -1694,7 +1694,7 @@ Why ext4 instead of a gitignored env file in the repo: a file on NTFS is visible
 - `docs/ARCHITECTURE.md` (concise, derived from Sections 7-16) and `docs/SETUP.md`, the disaster-recovery runbook (Section 18.7).
 - `.gitleaks.toml`: default rules + `kiro-api-key` (`ksk_...`), `telegram-bot-token` (`\d{6,12}:[A-Za-z0-9_-]{30,}`). `.githooks/pre-commit` runs `gitleaks git --staged --redact --config .gitleaks.toml` using `tools/bin/gitleaks.exe` (downloaded by `install-hooks.ps1`, gitignored, sha256-verified), falling back to the distro's gitleaks.
 - `.gitignore` (updated in this revision): `tools/bin/`, `.ossbot-local/`, `backups/`, `config/profile.yaml` added to the existing entries (`.wsl/` already covers `swap.vhdx`).
-- `.gitattributes`: `* text=auto eol=lf`, `*.ps1 text eol=crlf`, binaries `binary` (already committed).
+- `.gitattributes`: `* text=auto eol=lf`, `*.ps1 text eol=crlf`, binaries `binary`. Not yet in the repo (v1 designed it; the file itself is the first implementation commit). Until then Git for Windows (`core.autocrlf=true` here) warns that LF will become CRLF on checkout, which would break bash scripts, systemd units, and Dockerfiles read from the drvfs mount.
 - Private harness repo `origin` (exists, pushed by the user): pushed only by the user with his own credential manager login, never the gatekeeper's classic PAT and never from a workflow step or ossbot component.
 
 ### 18.6 (J) Tests: Part III.
