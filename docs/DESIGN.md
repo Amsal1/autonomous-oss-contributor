@@ -1229,6 +1229,7 @@ This deviates from "gitignored env file in the repo": secrets live on ext4 insid
 - `docs/ARCHITECTURE.md` (concise, derived from Sections 7-16), `docs/SETUP.md` (live steps: create Telegram bot with BotFather, get user ID via @userinfobot or `getUpdates`, create Kiro API keys in app.kiro.dev, create classic PAT `public_repo` and fine-grained read-only PAT on Amsal1, verify the commit email on Amsal1, run bootstrap, setup-secrets, doctor, first dry-run).
 - `.gitleaks.toml`: default rules + custom `kiro-api-key` (`ksk_...`), `telegram-bot-token`. `.githooks/pre-commit` runs `gitleaks git --staged --redact --config .gitleaks.toml` using `tools/bin/gitleaks.exe` (downloaded by `scripts/install-hooks.ps1`, gitignored, sha256-verified) and falls back to the distro's gitleaks via `wsl.exe`; `install-hooks.ps1` sets the repo-local `core.hooksPath=.githooks` (run by the user).
 - `.gitignore` additions: `tools/bin/`, `.ossbot-local/`, `*.patch` under `artifacts/`.
+- `.gitattributes`: `* text=auto eol=lf`, with `*.ps1 text eol=crlf` and binaries marked `binary`. Git for Windows on this laptop converts LF to CRLF on checkout (observed when committing this document), which would break bash scripts, systemd units, and Dockerfiles read from the drvfs mount.
 
 ### 18.6 (J) Tests: see Part III.
 
