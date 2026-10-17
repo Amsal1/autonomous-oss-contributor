@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# ossbot-firewall (installed as /opt/ossbot/bin/ossbot-firewall; DESIGN §11.4, §7.5).
+# Thin wrapper around the renderer in the root-owned app venv:
+#   ossbot-firewall --apply [--part host|docker]   flush + refill OSSBOT-* chains, jumps at position 1
+#   ossbot-firewall --check [--part ...]           exit 1 on any drift (every unit's ExecStartPre, watchdog)
+#   ossbot-firewall --print [--part ...]           show the rendered rules
+# Runs isolated (-I: no user site, no PYTHON* env) so nothing outside /opt/ossbot/app is imported.
+set -euo pipefail
+
+PY=/opt/ossbot/app/.venv/bin/python
+if [[ $EUID -ne 0 ]]; then
+  echo "ossbot-firewall: must run as root" >&2
+  exit 2
+fi
+if [[ ! -x $PY ]]; then
+  echo "ossbot-firewall --check: app venv missing ($PY)" >&2
+  exit 1
+fi
+exec "$PY" -I -m ossbot.ctl.render firewall "$@"

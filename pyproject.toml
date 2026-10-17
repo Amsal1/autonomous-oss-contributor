@@ -19,6 +19,8 @@ dependencies = [
 
 [project.scripts]
 ossbot-gatekeeper = "ossbot.gatekeeper.main:main"
+ossbot-dockerfilter = "ossbot.dockerfilter.main:main"
+ossbot-sandboxd = "ossbot.sandboxd.main:main"
 
 [dependency-groups]
 dev = [
@@ -133,6 +135,15 @@ name = "Untrusted-side components never import the gatekeeper"
 type = "forbidden"
 source_modules = ["ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools"]
 forbidden_modules = ["ossbot.gatekeeper"]
+
+[[tool.importlinter.contracts]]
+name = "Sandbox tools are stdlib-only (copied into the images as single files)"
+type = "forbidden"
+source_modules = ["ossbot.sandbox_tools"]
+forbidden_modules = [
+    "ossbot.common", "ossbot.gatekeeper", "ossbot.runner", "ossbot.sandboxd", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog",
+]
 
 [[tool.importlinter.contracts]]
 name = "ossbot.common depends on no component"

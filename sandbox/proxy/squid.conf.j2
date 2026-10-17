@@ -1,0 +1,45 @@
+# ossbot squid configuration (DESIGN §11.2-11.3). RENDERED by `ossbot.ctl.render squid`; do not edit.
+# Config snapshot: {{ snapshot_hash }}
+# CONNECT host matching only, no TLS interception. Callers: 3128 = sandboxes (profile by source
+# pool), 3140/3141/3150 = host uids via the bridge (src 10.212.0.1 only). Denies come first.
+
+{% for l in listeners -%}
+http_port {{ l.bind }} name={{ l.name }}
+{% endfor %}
+dns_nameservers {{ nameservers | join(" ") }}
+cache deny all
+via off
+forwarded_for delete
+httpd_suppress_version_string on
+pid_filename /run/squid.pid
+coredump_dir /var/spool/squid
+logformat ossbot %ts.%03tu %>a %>lp %Ss/%03>Hs %rm %ru %<a
+access_log stdio:/var/log/squid/access.log ossbot
+cache_log /var/log/squid/cache.log
+
+acl SSL_ports port 443
+acl Safe_ports port 80 443
+acl CONNECT method CONNECT
+{% for l in listeners -%}
+acl port_{{ l.name }} myportname {{ l.name }}
+{% endfor -%}
+acl src_host src {{ host_src }}
+{% for p in pools -%}
+acl pool_{{ p.name }} src {{ p.cidr }}
+{% endfor %}
+{% for name, hosts in categories.items() -%}
+acl cat_{{ name }} dstdomain {{ hosts | join(" ") }}
+{% endfor -%}
+acl denied_domains dstdomain {{ denied_domains | join(" ") }}
+acl denied_dst dst {{ denied_cidrs | join(" ") }}
+
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+http_access deny denied_domains
+http_access deny denied_dst
+# 3128 serves only the task pools, never the host side of the bridge.
+http_access deny port_sandbox src_host
+{% for r in rules -%}
+http_access allow port_{{ r.port }} {{ r.src }} {{ r.dst }}
+{% endfor -%}
+http_access deny all

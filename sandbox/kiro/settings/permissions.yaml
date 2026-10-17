@@ -1,0 +1,27 @@
+# Global Kiro CLI permission rules baked into sandbox-llm (DESIGN §15.3, §10.4, H1 step 3).
+# Second layer only: no key-holding container can see an attacker-controlled path (I5).
+# DENY_SYS applies to the built-in file tools' deniedPaths; the coder additionally has the
+# built-in tools denied outright (its tools are the four @ossbot-exec/* MCP tools only).
+# [VERIFY §23 item 5: exact V3 permissions schema and whether denies hold under trust flags;
+#  the research_deny and coder_surface safety probes (§10.9) gate on the live behaviour.]
+version: 1
+deny_sys: &deny_sys
+  - /proc/**
+  - /sys/**
+  - /dev/**
+  - /run/**
+  - /etc/**
+  - /home/agent/.kiro/**
+  - /io/output/**
+tools:
+  read:
+    deniedPaths: *deny_sys
+  write:
+    deniedPaths: *deny_sys
+  glob:
+    deniedPaths: *deny_sys
+  grep:
+    deniedPaths: *deny_sys
+agents:
+  ossbot-coder:
+    deniedTools: [read, write, shell, glob, grep]

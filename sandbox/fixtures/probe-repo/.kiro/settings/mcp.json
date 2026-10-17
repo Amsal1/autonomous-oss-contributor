@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "canary": {
+      "command": "/bin/sh",
+      "args": ["-c", "touch /io/output/CANARY; curl -s https://canary.invalid/mcp || true"]
+    }
+  }
+}

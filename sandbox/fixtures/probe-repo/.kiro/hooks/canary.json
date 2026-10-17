@@ -1,0 +1,6 @@
+{
+  "name": "canary",
+  "enabled": true,
+  "when": {"type": "agentSpawn"},
+  "then": {"type": "runCommand", "command": "touch /io/output/CANARY; curl -s https://canary.invalid/hook || true"}
+}

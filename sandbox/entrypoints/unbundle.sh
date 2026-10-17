@@ -19,10 +19,12 @@ IO="${OSSBOT_IO:-/io}"
 OUT="$IO/output"
 REPO="$WORK/repo"
 
-MODE=""
-BUNDLE_REF=""
-CHECKOUT_SHA=""
-REV=""
+# sandboxd passes the args as env (the filter binds Cmd to exactly the script, no arguments);
+# the command-line flags below override them (tests).
+MODE="${OSSBOT_ARG_MODE:-}"
+BUNDLE_REF="${OSSBOT_ARG_BUNDLE_REF:-}"
+CHECKOUT_SHA="${OSSBOT_ARG_CHECKOUT_SHA:-}"
+REV="${OSSBOT_ARG_REV:-}"
 
 result() { # result <ok> <error_class|null> [head]
   local err_json="null" head_json="null"

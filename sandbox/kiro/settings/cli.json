@@ -1,0 +1,10 @@
+{
+  "telemetry.enabled": false,
+  "app.disableAutoupdates": true,
+  "chat.enableKnowledge": false,
+  "chat.enableCodeIntelligence": false,
+  "chat.enableDelegate": false,
+  "chat.enableMainAgentSubagentTool": false,
+  "chat.enableWorkflows": false,
+  "chat.enableCheckpoint": false
+}

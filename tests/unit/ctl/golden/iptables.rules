@@ -1,0 +1,42 @@
+iptables -N OSSBOT-IN 2>/dev/null || iptables -F OSSBOT-IN
+iptables -A OSSBOT-IN -s 10.212.0.2/32 -d 10.255.255.254/32 -p udp --dport 53 -j ACCEPT
+iptables -A OSSBOT-IN -s 10.212.0.2/32 -d 10.255.255.254/32 -p tcp --dport 53 -j ACCEPT
+iptables -A OSSBOT-IN -s 10.213.0.0/16 -j DROP
+iptables -A OSSBOT-IN -s 10.212.0.0/24 -m conntrack --ctstate NEW -j DROP
+iptables -C INPUT -j OSSBOT-IN 2>/dev/null || iptables -I INPUT 1 -j OSSBOT-IN
+iptables -N OSSBOT-OUT 2>/dev/null || iptables -F OSSBOT-OUT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner -d 10.212.0.2 -p tcp --dport 3140 -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner -o lo -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner hermes -d 10.212.0.2 -p tcp --dport 3141 -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner hermes -o lo -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner hermes -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -d 10.212.0.2 -p tcp --dport 3150 -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -o lo -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossbox -o lo -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossbox -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossnobody -o lo -j ACCEPT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossnobody -j REJECT
+iptables -C OUTPUT -j OSSBOT-OUT 2>/dev/null || iptables -I OUTPUT 1 -j OSSBOT-OUT
+ip6tables -N OSSBOT-OUT 2>/dev/null || ip6tables -F OSSBOT-OUT
+ip6tables -A OSSBOT-OUT -m owner --uid-owner ossrunner -o lo -j ACCEPT
+ip6tables -A OSSBOT-OUT -m owner --uid-owner ossrunner -j DROP
+ip6tables -A OSSBOT-OUT -m owner --uid-owner hermes -o lo -j ACCEPT
+ip6tables -A OSSBOT-OUT -m owner --uid-owner hermes -j DROP
+ip6tables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -o lo -j ACCEPT
+ip6tables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -j DROP
+ip6tables -A OSSBOT-OUT -m owner --uid-owner ossbox -o lo -j ACCEPT
+ip6tables -A OSSBOT-OUT -m owner --uid-owner ossbox -j DROP
+ip6tables -A OSSBOT-OUT -m owner --uid-owner ossnobody -o lo -j ACCEPT
+ip6tables -A OSSBOT-OUT -m owner --uid-owner ossnobody -j DROP
+ip6tables -C OUTPUT -j OSSBOT-OUT 2>/dev/null || ip6tables -I OUTPUT 1 -j OSSBOT-OUT
+ip6tables -N OSSBOT-FWD 2>/dev/null || ip6tables -F OSSBOT-FWD
+ip6tables -A OSSBOT-FWD -i docker0 -j DROP
+ip6tables -A OSSBOT-FWD -o docker0 -j DROP
+ip6tables -A OSSBOT-FWD -i br-+ -j DROP
+ip6tables -A OSSBOT-FWD -o br-+ -j DROP
+ip6tables -C FORWARD -j OSSBOT-FWD 2>/dev/null || ip6tables -I FORWARD 1 -j OSSBOT-FWD
+iptables -N OSSBOT-FWD 2>/dev/null || iptables -F OSSBOT-FWD
+iptables -A OSSBOT-FWD -s 10.213.0.0/16 ! -d 10.213.0.0/16 -j DROP
+iptables -C DOCKER-USER -j OSSBOT-FWD 2>/dev/null || iptables -I DOCKER-USER 1 -j OSSBOT-FWD

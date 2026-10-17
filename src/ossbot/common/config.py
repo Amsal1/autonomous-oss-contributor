@@ -43,6 +43,8 @@ class Strict(BaseModel):
 class SandboxPolicy(Strict):
     coder_mode: Literal["split", "single"] = "split"
     coder_single_mode_evidence: str | None = None
+    # §15.3/§10.9: "all" runs kiro-cli with --trust-all-tools and needs probes passed under "all".
+    kiro_trust_mode: Literal["ids", "all"] = "ids"
 
     @model_validator(mode="after")
     def _single_is_phase2(self) -> SandboxPolicy:

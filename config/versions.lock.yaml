@@ -38,6 +38,36 @@ hermes:
   peeled_commit: "pending (FEAT-007)"
   source: "GitHub releases API latest = v0.22.2 (2026-10-15); git/ref/tags/v0.22.2 -> annotated tag object above"
 
+base_images:
+  # Index digest of ubuntu:24.04 (multi-arch); every sandbox and proxy Dockerfile pins FROM to it.
+  ubuntu_24_04: "sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac"
+  source: "hub.docker.com/v2/repositories/library/ubuntu/tags/24.04 (pushed 2026-10-17)"
+
+mise:
+  version: "2026.10.13"
+  url: "https://github.com/jdx/mise/releases/download/v2026.10.13/mise-v2026.10.13-linux-x64.tar.gz"
+  sha256: "b775d3feee8f0cdb1934c60a1ec26526d6eb7cdeb258b48c64cfadcec07a8fec"
+  source: "GitHub releases API latest = v2026.10.13 (2026-10-17); sha256 = release asset digest"
+
+squid:
+  # Ubuntu noble-updates package installed in ossbot/proxy (ADR-0005 addendum, §23 item 16).
+  apt_version: "6.14-0ubuntu0.24.04.4"
+  source: "apt-cache policy squid on the ossbot distro, 2026-10-17"
+
+images:
+  # Written by the provision 'images' step (FEAT-004) after each build; the root-owned copy at
+  # /etc/ossbot/versions.lock.yaml is what the Docker filter and sandboxd read. 'pending' = not
+  # built yet: the filter then allows no image and sandboxd refuses every job (fail closed).
+  sandbox_full:
+    digest: "pending (FEAT-004 images step)"
+  sandbox_llm:
+    digest: "pending (FEAT-004 images step)"
+    kiro_cli_version: "2.32.0"
+    agent_configs_sha256: "pending (python -m ossbot.sandboxd.probes hash-agents at build)"
+    settings_sha256: "pending (python -m ossbot.sandboxd.probes hash-settings at build)"
+  proxy:
+    digest: "pending (FEAT-004 images step)"
+
 kind:
   version: "0.33.0"
   sha256: "pending (recorded when installed, phase 2)"

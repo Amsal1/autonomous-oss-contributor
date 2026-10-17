@@ -1,0 +1,36 @@
+{
+  "_comment": "Hand-built allow corpus (FEAT-003): one request per allowed non-create operation, in the shape the Docker CLI sends. FEAT-004 re-records it from the pinned CLI (DESIGN §23 item 15). Container creates are generated from every sandboxd argv variant in test_rules.py.",
+  "lookup": {
+    "containers": {
+      "aaa111": {"profile": "research", "status": "exited"},
+      "bbb222": {"profile": "stage-in", "status": "created"},
+      "ccc333": {"profile": "fetch", "status": "created"},
+      "ddd444": {"profile": null, "status": "running", "name": "ossbot-proxy"}
+    },
+    "networks": {"ossbot-t-c-01abcdefgh-research": "ossbot-t-c-01abcdefgh-research"}
+  },
+  "requests": [
+    {"name": "ping", "method": "HEAD", "path": "/_ping"},
+    {"name": "ping-get", "method": "GET", "path": "/_ping"},
+    {"name": "version", "method": "GET", "path": "/version"},
+    {"name": "info", "method": "GET", "path": "/v1.52/info"},
+    {"name": "start", "method": "POST", "path": "/v1.52/containers/ccc333/start"},
+    {"name": "wait", "method": "POST", "path": "/v1.52/containers/aaa111/wait", "query": {"condition": ["next-exit"]}},
+    {"name": "kill", "method": "POST", "path": "/v1.52/containers/aaa111/kill", "query": {"signal": ["SIGKILL"]}},
+    {"name": "rm", "method": "DELETE", "path": "/v1.52/containers/aaa111", "query": {"v": ["1"], "force": ["1"]}},
+    {"name": "inspect", "method": "GET", "path": "/v1.52/containers/aaa111/json"},
+    {"name": "logs", "method": "GET", "path": "/v1.52/containers/aaa111/logs", "query": {"stdout": ["1"], "stderr": ["1"], "tail": ["100"]}},
+    {"name": "cp-in-stat", "method": "HEAD", "path": "/v1.52/containers/bbb222/archive", "query": {"path": ["/in"]}},
+    {"name": "cp-in", "method": "PUT", "path": "/v1.52/containers/bbb222/archive", "query": {"path": ["/in"], "noOverwriteDirNonDir": ["true"]}, "raw_body": "tar-bytes"},
+    {"name": "cp-out", "method": "GET", "path": "/v1.52/containers/aaa111/archive", "query": {"path": ["/io/output"]}},
+    {"name": "cp-out-created", "method": "GET", "path": "/v1.52/containers/ccc333/archive", "query": {"path": ["/io/output"]}},
+    {"name": "ps", "method": "GET", "path": "/v1.52/containers/json", "query": {"all": ["1"], "filters": ["{\"label\":{\"ossbot.sandbox=1\":true}}"]}},
+    {"name": "network-create", "method": "POST", "path": "/v1.52/networks/create", "body": {"Name": "ossbot-t-c-01abcdefgh-research", "CheckDuplicate": false, "Driver": "bridge", "Scope": "", "EnableIPv6": false, "IPAM": {"Driver": "default", "Options": {}, "Config": [{"Subnet": "10.213.64.0/28", "IPRange": "", "Gateway": "", "AuxAddress": {}}]}, "Internal": true, "Attachable": false, "Ingress": false, "ConfigOnly": false, "ConfigFrom": null, "Options": {}, "Labels": {"ossbot.sandbox": "1", "ossbot.cid": "c_01abcdefgh", "ossbot.profile": "research"}}},
+    {"name": "network-connect-proxy", "method": "POST", "path": "/v1.52/networks/ossbot-t-c-01abcdefgh-research/connect", "body": {"Container": "ossbot-proxy", "EndpointConfig": {"IPAMConfig": null, "Links": null, "Aliases": ["proxy"], "MacAddress": "", "DriverOpts": null, "NetworkID": "", "EndpointID": "", "Gateway": "", "IPAddress": ""}}},
+    {"name": "network-disconnect", "method": "POST", "path": "/v1.52/networks/ossbot-t-c-01abcdefgh-research/disconnect", "body": {"Container": "ossbot-proxy", "Force": true}},
+    {"name": "network-rm", "method": "DELETE", "path": "/v1.52/networks/ossbot-t-c-01abcdefgh-research"},
+    {"name": "volume-create", "method": "POST", "path": "/v1.52/volumes/create", "body": {"Name": "ossbot-task-c_01abcdefgh", "Driver": "local", "DriverOpts": {}, "Labels": {"ossbot.sandbox": "1", "ossbot.cid": "c_01abcdefgh"}}},
+    {"name": "volume-rm", "method": "DELETE", "path": "/v1.52/volumes/ossbot-out-r1-plan", "query": {"force": ["1"]}},
+    {"name": "df", "method": "GET", "path": "/v1.52/system/df"}
+  ]
+}

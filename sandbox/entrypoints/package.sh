@@ -20,10 +20,12 @@ OUT="$IO/output"
 REPO="$WORK/repo"
 PKG="$PKG_ROOT/pkg"
 
-ROUND_BASE=""
-PACKAGE_TS=""
-NAME=""
-EMAIL=""
+# sandboxd passes the args as env (the filter binds Cmd to exactly the script, no arguments);
+# the command-line flags below override them (tests).
+ROUND_BASE="${OSSBOT_ARG_ROUND_BASE:-}"
+PACKAGE_TS="${OSSBOT_ARG_PACKAGE_TS:-}"
+NAME="${OSSBOT_ARG_NAME:-}"
+EMAIL="${OSSBOT_ARG_EMAIL:-}"
 
 result() { # result <ok:true|false> <error_class|null> [head]
   local ok="$1" err="$2" head="${3:-}"
