@@ -1,0 +1,10 @@
+.env
+.env.*
+.wsl/
+data/
+secrets/
+logs/
+*.log
+__pycache__/
+.venv/
+node_modules/
