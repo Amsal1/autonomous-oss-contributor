@@ -1,55 +1,56 @@
-# Design review: docs/DESIGN.md (Draft v2, revision 3)
+# Design review: docs/DESIGN.md (Draft v2, revision 4)
 
-Reviewer: design-review step (fresh context, round 4) · Date: 2026-10-17
-Scope: DESIGN.md Parts I–III, with close reading of every section the revision touched (§5 AC 26–30, §6.1, §7.3, §7.5, §9.1–9.13, §10.1–10.9, §12.2–12.7, §13, §15.1–15.4, §16.3, §19, §20, §22, §23, §27.0), ADR-0001..0018 (all revision-3 amendments read), and the round-3 review and verdict. Checked against the ten verbatim user messages.
+Reviewer: design-review step (fresh context, round 5) · Date: 2026-10-17
+Scope:
+- DESIGN.md, with a close reading of every section revision 4 touched: §0 facts, 7.3, 7.5, 8.4 T2, 9.8, 9.11, 9.13, 10.8, 10.9, 12.2, 12.4, 12.5, 12.5a, 15.2, 15.4, 19, 22.1, 22.6, §23 items 13 and 19, and §27.0a.
+- The revision-4 amendments in ADR-0002, 0003, 0014 and 0017.
+- The round-4 review and verdict (R4-M1, R4-M2, R4-N1..N6).
+- Everything checked against the ten verbatim user messages.
 
-Live checks run for this round:
-- A local git 2.55 experiment (temp dir under the gitignored `.ossbot-local/`, removed afterwards). It built a bundle with the revision-3 `package.sh` shape (`checkout -B ossbot-change`, `bundle create refs/heads/ossbot-change ^<base>`), then fetched it into a bare repo with and without `-c protocol.file.allow=never`, and ran `bundle verify` under the same flag.
-- Nothing pushed or fetched from any remote. No builds or tests run, because there is no code yet.
+Live checks this round:
+- A local git 2.55.0 experiment in a temp dir under the gitignored `.ossbot-local/`, removed afterwards. It confirmed three things:
+  - a fetch from a local repo path by bare SHA works under the default protocol v2, which is what `package.sh` does;
+  - `-c protocol.file.allow=never -c protocol.file.allow=always` allows the fetch, and the reverse order refuses it with `transport 'file' not allowed`, so the last `-c` wins;
+  - plain `never` refuses a fresh local fetch.
+- Nothing was pushed or fetched from any remote. No builds or tests were run, because there is no code yet.
 
-Verdict: **CHANGES_REQUESTED** (0 HIGH, 2 MEDIUM, 6 NIT)
+Verdict: **APPROVED** (0 HIGH, 0 MEDIUM, 3 NIT)
 
 ## Overall assessment
 
-Revision 3 resolves all 19 round-3 findings (M1–M11, N1–N8). The fixes are consistent across DESIGN, §19/§20/§22/§23 and the ADR amendments, and the four stated deviations (M2 snapshot root, M6 repo-fact skips, M9 root probe, M10 no `setup-hermes.sh`) are each justified and safer than or equal to what was asked.
+Revision 4 resolves all 8 round-4 findings. Both MEDIUMs are fixed correctly and consistently across DESIGN, §19, §22, §23 and the ADRs:
+- **R4-M1.** A scoped `protocol.file.allow=always` now applies to the bundle fetch argv only, on gatekeeper-built paths. `never` stays the default everywhere else, and there is a test that the production args are used.
+- **R4-M2.** The root probe imports a stdlib-only `kiro_acp.v3_core` from the root-owned `/opt/ossbot/app/vendor/` copy and runs under `python -I`. It compares the hermes-side copy by hash (`adapter_drift`), and `adapter_sha256` is part of the probe key.
+
+The four stated deviations are justified:
+- the `/opt/ossbot/app/vendor` location;
+- the stdlib-only `v3_core` split, which also closes the "import Hermes base classes as root" route;
+- `uv sync` running after the move, because venvs are not relocatable;
+- `probe.sh` accepted in every profile, with the key bound to the (profile, `Cmd`) pair.
 
 The trust boundary still holds in the design text:
-- **Approval** is deterministic and Telegram-only, with two taps and the mode recomputed at Approve, at Confirm and before the first write.
-- **Submission** now has `control_checkpoint()` before every write, and restart reconciliation uses reads only. Nothing resumes a write without a fresh approval.
-- **The M4 redirect** lives in the gatekeeper's state machine. It can only move a contribution towards `WATCHING`, never towards a gate state, and worker actors gain no new edge.
-- **Operator import** uploads bytes, so there is no path field and no confused deputy. The imported change goes through the same package re-authoring, derived preview and approval as every other change.
+- Approval is deterministic, Telegram-only and two-tap. The mode is recomputed at Approve and at Confirm, and now (R4-N2) at every write checkpoint.
+- Restart reconciliation is reads only. No path resumes a write without a fresh approval.
+- No hermes-writable byte runs as root.
+- The Docker filter independently refuses any Kiro run outside the probe-gated (profile, `Cmd`) pairs.
+- The Kiro key stays confined to research, agent-llm and catalog containers, plus the hermes uid with its own revocable key.
 
-Two problems remain, both from the revision-3 fixes:
-- **R4-M1 (correctness, verified).** Every bundle fetch in the design runs with `protocol.file.allow=never`, and git refuses a bundle fetch under that setting. So every `/package`, every operator-import validation and every unbundle fails closed, and no contribution can complete.
-- **R4-M2 (security, ambiguity).** The new root `ossbot-hermes-probe` reuses "the vendored adapter's own `launch_spec()`" so that it cannot drift from production. The production copy is the one under `~hermes`, which uid `hermes` can write. If the probe imports that copy, there is a `hermes` → root escalation, which would undo the gatekeeper-token and kill-switch boundaries. The design does not say where the root process loads that code from.
-
-Both are small, concrete fixes. Everything else I found is NIT.
+I found three new items. Each is defence-in-depth hardening with no demonstrated path across the trust boundary, so they are NITs and the design is ready for implementation.
 
 ---
 
-## Resolution of round-3 findings
+## Resolution of round-4 findings
 
-| ID | Status | Evidence in revision 3 |
+| ID | Status | Evidence in revision 4 |
 |---|---|---|
-| M1 | Resolved, but see R4-M1 | §9.11 step 3 uses `checkout -q -B ossbot-change` and `bundle create … refs/heads/ossbot-change "^$ROUND_BASE"`. §12.5 step 3 requires exactly one `list-heads` line for `refs/heads/ossbot-change` (422 `bundle_refs`) and fetches it to `refs/ossbot/r<rev>`. §9.8 unbundle fetches the same ref to `refs/ossbot/prev/r<rev>`. Tests `test_real_package_script_bundle` and `test_bundle_refs_rejected`. The ref shape is correct; my git 2.55 run confirms the bundle lists exactly that head. The transport flag around the fetch is wrong (R4-M1). |
-| M2 | Resolved | §10.1: `install -d -o 10001 -g 10001 -m 0700` for `/work /work/repo /io/output /run/exec /snap /home/agent`; `/io/input` and `/in` stay root 0755. §10.2 template: `exec` on `/tmp` only for fetch, validate, agent-exec and package. §10.8 Tmpfs rule enforces that profile set. §23 items 5 and 14 carry the [VERIFY]s, and S-perm-1 is in 22.5. Snapshot now writes the volume root, which also fixes the `/work/repo/repo` nesting. |
-| M3 | Resolved | §9.13, §12.2: `bundle_b64` (≤ 50 MB decoded, 70 MB request cap on that route only), no path field, a test asserting that. Validation happens before any row exists: single head, prerequisites == `{base_sha}`, base ancestry, head descends from base. Storage is gatekeeper-only, served by `GET …/import-bundle` (worker, state-limited, sha256-checked by the runner). Path `IMPORTED→FETCHING (W)` → fetch at `base_sha` (§9.6 handles shallow history) → unbundle `mode=import` → `FETCHED→IMPLEMENTED` (W, guarded) → `VALIDATING`. `IMPORTED` is in `WORKING`, so it gets generated `FAILED` edges and the kill check. |
-| M4 | Resolved | §9.2: `resolve_target()` redirects `FAILED`/`ABANDONED` to `WATCHING` whenever `pr_number` is set, keeps the task volume, cancels the fix's actions and invalidates approvals. `WATCHING→ABANDONED` is H only (`stop_watch` plus confirm). `branch_moved` sets `watch_rounds = watch_rounds_max`. AC 28 and `test_fix_round_failure_returns_to_watching`, `test_branch_moved_disables_fixes`, `test_stop_watching_human_only`, `test_e2e_fix_round_failure.py`. The redirect runs before the actor check and never widens worker reach into gate states. |
-| M5 | Resolved | §12.5: step 0 commits `consumed`/`executing` first. `control_checkpoint()` runs before fork, push, PR and every retry, and an interruption ends `failed interrupted` → `SUBMIT_FAILED` → Retry with a fresh card. Restart reconciliation table per kind, reads only, runs while killed. `reconcile_pending` on read errors keeps the slot consumed. §12.3 action marker; §13.1/13.2; ADR-0008; AC 29; tests listed. |
-| M6 | Resolved | §12.7 partial index `contributions_issue_active` over non-terminal states. §9.4 deterministic rules enforced in the gatekeeper's insert path (409 `duplicate_active` or `not_rediscoverable:<rule>`). New `limits.rediscover_cooldown_days: 7`. The repo-fact-skip deviation is justified (otherwise the seeded first target could never be retried). AC 30. |
-| M7 | Resolved | §9.11: `OSSBOT_FORMAT_PATCH` with `--no-signature --no-stat --full-index`, pinned diff config, `--no-ext-diff --no-textconv --no-color`, run by both sides with no system or global config. §12.5 step 6 compares `patch-id --stable` plus the numstat set; byte-only differences are logged at INFO. `patch_sha256` is over the gatekeeper's own output. Tests listed. (One determinism NIT on numstat: R4-N6.) |
-| M8 | Resolved | §15.1 renders `tools.tool_search.enabled: off`, with the YAML-1.1 parsing [VERIFY] in §23 item 13. The surface check forbids `tool_search`, `tool_describe` and `tool_call` explicitly, and there is a fake test. Fail-closed either way. |
-| M9 | Resolved for the check itself; see R4-M2 | §15.2 `assert_surface`: `currentModeId == ossbot-chat` after `session/new` and `session/load`; tools ⊆ web tools where advertised; on violation, refuse, close and soft-kill. The root probe acts as the ACP client and evaluates the stream deterministically. The result file is root:gatekeeper 0640, keyed by version and agent/permissions/settings hashes, and gates the relay (pass younger than 2 h). §23 item 11 records that chat stays disabled if custom modes cannot be selected. The gate is sound. Where the root process loads the adapter code from is unspecified (R4-M2). |
-| M10 | Resolved | §15.4: `git clone --depth 1 --branch`, tag object and peeled commit verified against `versions.lock.yaml`, `uv sync --frozen --no-dev` as `hermes`. No website installer and no `setup-hermes.sh`; the same path for upgrades; doctor drift check. (Install-script hygiene NIT: R4-N4.) |
-| M11 | Resolved | §10.2/10.3/10.8/10.9/16.3: `catalog` profile (`list_models` only, `repo_mode none`, no inputs, `kiro_core` egress, fixed network `ossbot-t-sys-catalog-catalog`), exempt from the probe gate. Probes get `resolve()`d models after a catalog refresh. Fixed order list_models → upsert → probes → jobs; `catalog_empty` alert with an hourly retry. Tests `test_list_models_exempt` and `test_e2e_first_start.py`. |
-| N1 | Resolved | §7.5 has a single header. |
-| N2 | Resolved | Duplicates removed (§13.2, §15.1). |
-| N3 | Resolved | The summarizer is `repo_mode none` in §9.1, §10.2 and §15.3. The helper is `snapshot` everywhere. |
-| N4 | Resolved | §12.2/§13.1/§13.2: offline `ossctl resume` path, `resume.log`, and `resume_log_offset` FYI on the next start. |
-| N5 | Resolved | §10.8: `start` is refused while killed or paused; the job is recorded `interrupted`. |
-| N6 | Resolved | `sandbox_full_digest` is in `probe_key`, the PK, AC 26 and the gate test. |
-| N7 | Resolved | `/v1/toolsets` uses `extra="ignore"` with required `name`, `enabled`, `tools`, and there is a pass test. |
-| N8 | Resolved | §15.3, §10.9 `coder_surface` exact-id assertion, §23 item 5. |
+| R4-M1 | Resolved | **Gatekeeper.** §12.5 defines `BUNDLE_FETCH_ARGS = GIT_ARGS + ["-c","protocol.file.allow=always"]`. It is used only for the `/package` fetch (step 3) and the import-validation fetch (9.13 step 2). `bundle_path` is gatekeeper-built from `cid` and the integer `rev`, and a mismatched `artifact_dir` returns 400. `list-heads` and `verify` keep plain `GIT_ARGS`. A fetch failure returns 422 `bundle_invalid`.<br>**Sandbox.** `unbundle.sh` (9.8, and 9.13 step 4 for import) and `package.sh` (fetch from `/work/repo/.git`) carry the same scoped override, and 9.11 states `never` stays the default.<br>**Docs and tests.** 8.4 T2, §0, §19 and §23 19 are updated, and ADR-0014 is amended. New tests: `test_bundle_fetch_needs_scoped_override`, `test_gitops_args.py` (every other call has effective `never`), `test_unbundle_script_real_bundle` (both modes), and `test_package_verify.py` on production args. My git 2.55 run confirms that the last `-c` wins and that the scoped override is sufficient. |
+| R4-M2 | Resolved | **Probe process.** §15.2, §7.5, §7.3 and ADR-0002: the probe runs `/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.hermes_probe`, cwd `/`. It imports `kiro_acp` only from `/opt/ossbot/app/vendor/hermes-kiro-provider/` (root:root 0755/0644, installed by `app deploy`), and nothing under `/home/hermes` is ever imported or put on `sys.path`. `launch_spec`, `session_new_params` and `assert_surface` are in stdlib-only `v3_core.py`, and the Hermes glue is never imported by root.<br>**Drift check.** The hermes-side copy is hashed with `O_NOFOLLOW`, regular files only and sorted paths. A symlink, special file or mismatch gives `adapter_drift`, which is handled as a failed probe (soft kill, alert). `adapter_sha256` is in the probe key.<br>**Executables.** `kiro-cli` runs only via `runuser -u hermes --`, and the NDJSON stream is parsed as untrusted data.<br>**Tests.** `test_hermes_probe_paths.py` checks module origin, `sys.path`, that no `hermes*` module is loaded, that `PYTHONPATH` is ignored, and the drift cases. |
+| R4-N1 | Resolved | 9.8 and 9.13 step 4: a single head equal to the runner-supplied `bundle_ref` from gatekeeper state (`refs/heads/ossbot-change` for `fix_round`, `import_head_ref` for `import`). §19 row and unbundle tests in both modes. |
+| R4-N2 | Resolved | §12.5 `control_checkpoint(snapshot)` requires `running` and `control_state.dry_run == snapshot.dry_run` before steps 4–6, before every retry, and before the 12.5a push. A failure gives `interrupted` with cause `mode_changed`, then `SUBMIT_FAILED` and a fresh card. Also in §12.4 and ADR-0003, with test `test_dryrun_on_mid_submission_stops_write`. |
+| R4-N3 | Resolved | §12.2 `POST /v1/models/catalog` (worker): 1–200 entries, the `--force` regex, `name` ≤ 200, no `forced` field, `forced` never changed, and stale ids omitted from GET unless forced. Referenced from 10.9 step 2 and 16.3. Test `test_catalog_upsert.py`. |
+| R4-N4 | Resolved, with a residual race noted in R5-N2 | §15.4: clone and verify in root-only `/var/lib/ossbot/staging`, `chown -R --no-dereference`, `refuse_link` on every path involved, `stat` owner/type check on `$H`, `mv -T $D $D.prev; mv -T $S $D`, `uv sync` as `hermes` at the final path, and rollback to `$D.prev`. Hermes is stopped, all `hermes` processes are killed, and `pgrep` is re-checked. System test `test_hermes_install_hygiene.sh`. |
+| R4-N5 | Resolved | §10.8 `Cmd` row binds the entrypoint per profile. `KIRO_API_KEY` is allowed only for (research, kiro), (agent-llm, kiro) and (catalog, list_models). `stack` is refused, and `stage-in` is `/bin/true` only. Four deny-corpus cases (22.1), and ADR-0017 is amended. |
+| R4-N6 | Resolved | §9.11 `OSSBOT_NUMSTAT` (`diff.algorithm=myers`, `diff.renames=false`, `core.quotePath=true`, `--no-ext-diff --no-textconv --no-color`), defined once in `ossbot.common.gitcmd` and baked into the image. The gatekeeper uses it in step 5. Tests `test_numstat_pinned` and `test_gitcmd_image_env.py`. |
 
 ---
 
@@ -61,112 +62,100 @@ None.
 
 ### MEDIUM
 
-**R4-M1. Every bundle fetch runs under `protocol.file.allow=never`, which git refuses for bundles. Every `/package`, every import validation and every unbundle fails, so no contribution can complete.**
-Where:
-- §12.5 step 3: "`git bundle verify`, with `protocol.file.allow=always` scoped to this one command … Then run `git fetch <bundle> refs/heads/ossbot-change:refs/ossbot/r<rev>`". `GIT_ARGS` carries `-c protocol.file.allow=never`.
-- §9.13 step 2: the import bundle "is fetched with `transfer.fsckObjects=true` into a temporary per-import mirror", using the same gatekeeper git args.
-- §9.8: the unbundle job fetches "with the hardened git flags from 9.11", and §9.11's `G` includes `-c protocol.file.allow=never`. This covers fix-round and `mode=import` unbundles.
-
-Verified locally with git 2.55.0:
-- `git -c protocol.file.allow=never fetch ../c.bundle refs/heads/ossbot-change:refs/ossbot/r1` → `fatal: transport 'file' not allowed`, exit 128. Git's transport layer applies the `file` allow-check to bundle paths.
-- `git -c protocol.file.allow=never bundle verify ../c.bundle` → `is okay`, exit 0. `bundle verify` does not use the transport, so the design scopes the override to the one command that does not need it.
-
-Each failure is closed (the stage or `/package` errors), but the first `/package`, the first import and the first fix round can never succeed.
-
-Fix: move the scoped override onto the bundle fetch, everywhere a bundle is fetched, and keep `never` as the default for everything else:
-```python
-# gatekeeper (12.5 step 3, 9.13 step 2)
-BUNDLE_FETCH_ARGS = GIT_ARGS + ["-c", "protocol.file.allow=always"]   # last -c wins; this argv only
-run(["git", *BUNDLE_FETCH_ARGS, "fetch", "--no-tags", str(bundle_path),   # bundle_path: gatekeeper-chosen absolute path
-     "refs/heads/ossbot-change:refs/ossbot/r%d" % rev], env=GIT_ENV, cwd=mirror)
-# `git bundle list-heads` / `git bundle verify` keep plain GIT_ARGS (they need no transport)
-```
-```bash
-# sandbox unbundle.sh (9.8 fix_round, 9.13 import)
-$G -c protocol.file.allow=always fetch -q --no-tags /io/input/<bundle> <ref>:<dst>
-```
-Also:
-- Reword §12.5 step 3 so the override is on the fetch, not on `verify`.
-- Add to §23 item 19: "bundle fetch requires `protocol.file.allow` ≠ never (verified on 2.55); `bundle verify`/`list-heads` do not".
-- Make `test_real_package_script_bundle` and `test_package_verify.py` run the verifier with the production `GIT_ARGS`, not a relaxed test config, so this class of error is caught. Add `test_unbundle_script_real_bundle`, which runs the real `unbundle.sh` in both modes.
-
-**R4-M2. The root `ossbot-hermes-probe` reuses "the vendored adapter's own `launch_spec()`/`session_new_params()`", but the design never says where root loads that code from. The production copy is `~hermes/.hermes/plugins/model-providers/kiro-acp`, which uid `hermes` can write.**
-Where: §15.2 Hermes-side probe bullet 1 ("so the probe and production cannot drift"); §15.2 vendoring paragraph ("Provisioning copies it to `~hermes/.hermes/plugins/model-providers/kiro-acp`"); §7.5 unit table; §18.1 (`ctl/hermes_probe.py`).
-uid `hermes` is in the untrusted-reasoning tier. It holds a Kiro key, has `web_public` egress, and code-execution bugs in Hermes, its plugins or kiro-cli are an accepted residual risk (§15.1). The design accepts that residual risk only for the Hermes key.
-
-The no-drift wording points an implementer at the very copy production runs. If root imports that copy, or puts it on its `sys.path`, `hermes`-uid code runs as root. Root can then:
-- read `gatekeeper.env` (the write token);
-- clear the kill flags;
-- forge the probe result.
-
-That breaks the core invariant: no path from Hermes to a public write, approval, resume, or limit change. The same applies if root runs any hermes-owned executable as root.
-
-Fix (add to §15.2 and to ADR-0002's amendment):
-- **Root-owned adapter.** `ossbot.ctl.hermes_probe` imports `kiro_acp` only from the root-owned install `/opt/ossbot/vendor/hermes-kiro-provider/` (root:root 0755, files 0644), copied by provisioning from the repo's `vendor/`. It never imports from, or adds to `sys.path`, any path under `/home/hermes`.
-- **Drift check by hash, not by import.** Root computes `adapter_sha256` over the deployed `~hermes/.hermes/plugins/model-providers/kiro-acp/**` (regular files only, `O_NOFOLLOW`, sorted relative paths) and over the root-owned copy. A mismatch fails the probe with `adapter_drift`.
-- **Probe key.** `adapter_sha256` joins the key: `(kiro_cli_version, hermes_agent_sha256, permissions_sha256, settings_sha256, adapter_sha256)`.
-- **Execution as hermes only.** Root launches anything hermes-owned only via `runuser -u hermes --` (already the case for `kiro-cli acp`). It reads hermes-owned files only to hash them, never to parse them as code or config that root acts on.
-- **Tests.** Add `tests/unit/ctl/test_hermes_probe_paths.py`: `sys.path` and `importlib` origins of `kiro_acp` in the probe process are under `/opt/ossbot`, and a modified hermes-side copy → `adapter_drift`.
+None.
 
 ### NIT
 
-**R4-N1.** §9.8 says the unbundle job "checks `git bundle list-heads` (exactly `refs/heads/ossbot-change`, M1)" for every mode. §9.13 step 4 fetches `<import_head_ref>`, which is any `refs/heads/<name>`. Make the check mode-specific:
-- `mode=fix_round`: the single head is `refs/heads/ossbot-change`.
-- `mode=import`: the single head equals `contributions.import_head_ref`, passed in `bundle_ref` by the runner from gatekeeper state.
+**R5-N1. The gatekeeper bundle fetch, now running with `protocol.file.allow=always`, reads from an ossbox-writable directory. A swap after the sha256 check could make the fetch read a local repository instead of a bundle.**
+Where: §12.5 (the `BUNDLE_FETCH_ARGS` paragraph and step 3); §7.3 (`/srv/ossbot/artifacts/<cid>/<rev>/` is ossbox:ossart 0750).
 
-**R4-N2.** §12.5 `control_checkpoint()` requires only `running`. A `/dryrun on` that lands between step 1 (snapshot, `dry_run=false`) and a later write does not stop that write. NFR-1 binds the exact mode, and §12.4 says `dry_run` is recomputed "immediately before the first write". Make the checkpoint also require `control_state.dry_run == snapshot.dry_run`. On a mismatch, use the same `interrupted` → `SUBMIT_FAILED` path, with the note "mode changed during submission".
+The path is gatekeeper-built, but its directory belongs to `ossbox`. `git fetch <path>` treats a regular file as a bundle and a directory as a local repository, which means running `upload-pack` against that repository's own config. Under revision 3's blanket `never`, the directory case was refused. The scoped `always` re-enables it.
 
-**R4-N3.** §16.3 and §10.9 step 2 say "runner upserts `model_catalog` via the gatekeeper", but the closed endpoint list in §12.2 (`extra="forbid"`) has no such route. Add `POST /v1/models/catalog  worker  {models: [{model_id, name}]}`. Validate each `model_id` with the same regex as `--force` (`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`), cap at 200 entries, and never set `forced` from this route.
+So a compromised sandboxd (a lower trust tier, without the write token) could replace `change.bundle` with a repository directory between the sha256 check and the fetch. The gatekeeper's git would then run against attacker-chosen repo config. I know of no repo-level key that makes `upload-pack` execute code:
+- `uploadpack.packObjectsHook` is honoured only from protected config;
+- `core.hooksPath` and `core.fsmonitor` are overridden on the command line.
 
-**R4-N4.** §15.4 install script hygiene:
-- Root runs `git clone` and `chown -R` at `$D.new` inside `/home/hermes/.hermes/`, which `hermes` can write. On `ossctl hermes upgrade`, a pre-planted `$D.new` symlink would redirect root's writes.
-- `mv -T "$D.new" "$D"` fails when `$D` already exists; the `$D.prev` step is implied but not shown.
+Integrity is also unaffected. Every check, the derived preview and the binding come from the gatekeeper's own mirror, and the bundle is re-hashed at Confirm. This is therefore hardening, not a hole.
 
-Fix: clone and verify in a root-owned staging dir (`/var/lib/ossbot/staging/hermes-<tag>`, removed first if present), `chown -R --no-dereference hermes:hermes`, then `mv -T "$D" "$D.prev"` (after removing an old `.prev`) and `mv -T staging "$D"`. Refuse to proceed if any of these paths is a symlink (`test ! -L`).
+Fix: run all bundle commands on a gatekeeper-private copy, and never recurse into submodules.
+```python
+# 12.5 step 3 and 9.13 step 2: copy once, then operate only on the copy
+fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW)
+st = os.fstat(fd)
+if not stat.S_ISREG(st.st_mode) or st.st_size > 50 * 2**20:
+    raise Http422("bundle_invalid")
+priv = Path(f"/srv/ossbot/gatekeeper/work/{cid}-r{rev}.bundle")   # gatekeeper 0700 tree
+copy_fd_to(fd, priv, mode=0o600)
+if sha256_file(priv) != req.sha256s["change.bundle"]:
+    raise Http422("bundle_invalid")
+# list-heads / verify / fetch all use `priv`
+run(["git", *BUNDLE_FETCH_ARGS, "fetch", "--no-tags", "--no-recurse-submodules", str(priv),
+     f"refs/heads/ossbot-change:refs/ossbot/r{rev}"], env=GIT_ENV, cwd=mirror)
+```
+Also add `--no-recurse-submodules` to the fetches in `unbundle.sh` and `package.sh`, which run in a hostile work tree. Add one case to `test_gitops_args.py`: a directory at the artifact path gives 422 `bundle_invalid`.
 
-**R4-N5.** §10.8 create spec allows any `Cmd` from the entrypoint set for any profile, and `KIRO_API_KEY` for `catalog`. A compromised sandboxd is out of scope, because it already holds the key. But the filter is meant as an independent backstop, and as written it would accept `profile=catalog` + `kiro.sh` + key, which bypasses the probe gate at the filter layer. Bind `Cmd` to profile:
-- `catalog` ⇒ `list_models` only;
-- `research` and `agent-llm` ⇒ `kiro` only;
-- `agent-exec` ⇒ `exec`;
-- `snapshot` ⇒ `snapshot`;
-- `probe` ⇒ `probe`.
+**R5-N2. A process can still run as `hermes` during the Hermes upgrade swap window, so "the `refuse_link` checks cannot be raced" is not fully true.**
+Where: §15.4 install script and the "Install hygiene" paragraph; §15.2 probe triggers; §27.0a "R4-N4 order and race".
 
-Add one deny-corpus case.
+Three gaps:
+- The gatekeeper can trigger `ossbot-hermes-probe` hourly, or on demand, during an upgrade. The probe launches `runuser -u hermes -- /home/hermes/.local/bin/kiro-cli`, a hermes-writable binary, while root is renaming paths inside `~/.hermes`.
+- `ossctl hermes login` can also start a `hermes` process in that window.
+- The rollback branch runs `pkill` then `sleep 1` but has no `pgrep` re-check, and the `uv sync` it follows runs hermes-uid build code.
 
-**R4-N6.** §9.11 and §12.5 step 5: `FORMAT_PATCH` pins `diff.renames=false`, but both numstat invocations (`git diff --numstat …` in `package.sh` and in the gatekeeper) do not. So the numstat-set comparison depends on each side's built-in rename default. Run both with the same `-c diff.algorithm=myers -c diff.renames=false -c core.quotePath=true` prefix, ideally as `ossbot.common.gitcmd.NUMSTAT` next to `FORMAT_PATCH`.
+The names root moves are fixed (`hermes-agent`, `.prev`, `.failed`), and `$H` is type-checked, so I see no concrete root escalation. It is still a gap in a stated guarantee.
+
+Fix:
+- `provision.sh` takes `flock /run/ossbot/hermes-upgrade.lock` for the whole step and stops `ossbot-hermes-probe.socket` until the step ends. `ossbot.ctl.hermes_probe` and `ossctl hermes login` take the same lock non-blocking; while it is held the probe is inconclusive ("Hermes is upgrading") and does not kill.
+- Repeat the `pgrep -u hermes` refusal after the `pkill` in the rollback branch.
+- Add a case to `test_hermes_install_hygiene.sh`: a probe triggered mid-upgrade is refused.
+
+**R5-N3. Importing `kiro_acp.v3_core` first runs `kiro_acp/__init__.py`, and the design does not say how the vendor path reaches root's `sys.path` under `python -I`.**
+Where: §15.2 code-origin bullets; §18.2 `app deploy`.
+
+A Hermes provider package's `__init__.py` typically does the provider registration, which imports Hermes base classes. Root's venv has no Hermes, so the import fails closed and the `test_hermes_probe_paths.py` check "no `hermes*` module is loaded" would catch it. This is an implementability gap, not a hole. `-I` also ignores `PYTHONPATH`, so the vendor tree must reach `sys.path` some other way, which is unstated.
+
+Fix: state both rules.
+- The fork keeps `kiro_acp/__init__.py` import-free, and Hermes registration moves to `kiro_acp/hermes_plugin.py`, which the plugin manifest names as its entry point.
+- `pyproject.toml` declares `vendor/hermes-kiro-provider` as a uv path dependency, installed non-editable into `/opt/ossbot/app/.venv`.
+- Add to `test_hermes_probe_paths.py`: `kiro_acp.__file__` lies under `/opt/ossbot`, and importing `kiro_acp.v3_core` loads no module outside the stdlib, `ossbot` and `kiro_acp`.
 
 ---
 
 ## Verified assumptions
 
-- **git 2.55.0 (local, this round):**
-  - A bundle created from `checkout -B ossbot-change` with `bundle create refs/heads/ossbot-change ^<base>` lists exactly `<sha> refs/heads/ossbot-change` and one prerequisite. This confirms the M1 fix shape.
-  - `fetch <bundle> refs/heads/ossbot-change:refs/ossbot/r1` succeeds without `protocol.file.allow=never`.
-  - The same fetch fails with `transport 'file' not allowed` under `protocol.file.allow=never` (R4-M1).
-  - `bundle verify` succeeds under `protocol.file.allow=never`.
-- **M4 redirect (design-internal):** it only ever targets `WATCHING`, and from GATE states the actors stay G|H. A worker cannot reach any gate state or approval through it. `WATCHING→ABANDONED` is H only.
-- **M5 (design-internal):** reconciliation is reads only, and an `executing` row counts against rate limits until resolved. Resume never re-enters steps 4–6 (§12.5, §13.2, ADR-0008).
-- **M3 (design-internal):** the import route takes bytes only. The gatekeeper never opens an operator-named path. The imported tree is re-authored by `package.sh` and re-derived by the gatekeeper before any card.
-- **M9 (design-internal):** the probe result is written by root to a root:gatekeeper 0640 file that Hermes cannot write. The relay requires a pass younger than 2 h. An inconclusive probe disables chat without killing.
-- **M11 (design-internal):** the `catalog` profile has no prompt, agent or inputs, and a fixed network from the `agent-llm` pool. `KIRO_API_KEY` is allowed only for research, agent-llm and catalog, in both the argv test and the filter.
-- **Repo docs:** all 18 ADRs exist. The revision-3 amendments in ADR-0002, 0003, 0005, 0008, 0014, 0017 and 0018 match §9, §10, §12, §13 and §15.
-- **User intent:**
-  - Isolation inside `D:\Work\autonomous-oss-contributor`: the distro VHD is in `.wsl\`, the drvfs mount covers only the repo, and interop is off.
-  - The dedicated `ossbot` distro, the Telegram-only two-tap approval as the sole human gate, and kill levels soft, full and hard all hold.
-  - Kiro CLI V3 headless for pipeline roles, Hermes over V3 ACP behind the single bot, the global model switch (`models.yaml` plus the catalog), AI disclosure, and maintainer/contributor vetting (§9.5) are all present.
-  - DCO identity is `Amsal Khan <md.amsalkhan@gmail.com>`, and the GitHub login is `Amsal1`.
-  - README, AGENTS.md and SETUP.md are required in FR-16 and §6.1.
+- **git 2.55.0, local, this round:**
+  - `-c protocol.file.allow=never -c protocol.file.allow=always fetch <local path> <sha>` succeeds, and the reverse order fails with `transport 'file' not allowed`. The last `-c` wins, which is the premise of `BUNDLE_FETCH_ARGS` and of `$G -c protocol.file.allow=always`.
+  - A fetch of an unadvertised SHA from a local repo (`package.sh`: `fetch /work/repo/.git "$ROUND_BASE"`) succeeds under the default protocol v2.
+  - Plain `never` refuses a fresh local fetch, so the override in `package.sh` is required.
+  - Round 4's results (bundle fetch refused under `never`; `bundle verify` and `list-heads` unaffected) are recorded in §0 and §23 19 exactly as measured.
+- **R4-M1, design-internal:**
+  - `BUNDLE_FETCH_ARGS` appears only at 12.5 step 3 and 9.13 step 2, and both paths are gatekeeper-built.
+  - `test_gitops_args.py` pins every other call to an effective `never`.
+  - The display and the binding still come from the gatekeeper mirror (12.4, 12.5 steps 4–6).
+- **R4-M2, design-internal:**
+  - `/opt/ossbot/app` is root:root 0755 with files 0644 (7.3).
+  - The unit's `ExecStart` uses the root venv with `-I` (7.5).
+  - Hermes-owned files are only hashed, and hermes-owned executables run only via `runuser -u hermes --`.
+  - The probe result file stays root:gatekeeper 0640.
+- **R4-N2:** the checkpoint is required before fork, push, PR, every retry and the `push_update` push. Reconciliation is still reads only. Neither a restart nor `/resume` re-enters steps 4–6.
+- **R4-N5:** the filter's key rule is keyed on the (profile, `Cmd`) pair, so `probe.sh` in any profile never receives the key, and `catalog` + `kiro.sh` is refused.
+- **ADRs:** the revision-4 amendments in 0002, 0003, 0014 and 0017 match DESIGN §9.8, 9.11, 9.13, 10.8, 12.2, 12.5 and 15.2–15.4.
+- **User intent** (unchanged by revision 4, re-checked against the touched sections):
+  - Isolation: everything is under `D:\Work\autonomous-oss-contributor`. The VHD is in `.wsl\`, only the repo is mounted, and interop is off. New paths (`/opt/ossbot/app/vendor`, `/var/lib/ossbot/staging`) are inside the distro.
+  - Gating: Telegram-only two-tap approval is the sole human gate, with kill and pause at soft, full and hard levels. Everything else is autonomous.
+  - Runtime: the dedicated `ossbot` distro, Kiro CLI V3 headless for the pipeline, and Hermes over V3 ACP behind the single bot.
+  - Models, disclosure and vetting: the global model switch (`models.yaml` plus a catalog, now with a defined upsert route), the AI disclosure block, and maintainer/contributor vetting (§9.5).
+  - Identity: DCO `Amsal Khan <md.amsalkhan@gmail.com>`, login `Amsal1`.
+  - Docs: README, AGENTS.md and SETUP.md (FR-16, §6.1).
 
 ## Unverified or wrong assumptions
 
-- **Wrong (R4-M1):** that `protocol.file.allow=always` is needed for `git bundle verify` and not for `git fetch <bundle>`. It is the other way round.
-- **Unspecified, security-relevant (R4-M2):** the code origin of `kiro_acp` inside the root probe process.
-- **Not re-checked this round, correctly tagged [VERIFY] in the design (§23):**
-  - Docker 29 copy-up ownership and `exec` tmpfs (item 14).
-  - Whether kiro-cli needs exec under `/tmp` (item 5).
-  - Hermes `tool_search.enabled: off` parsing and api_server behaviour (item 13).
-  - V3 ACP `currentModeId` and the tool-list field, and custom `modeId` selection (item 11).
-  - Kiro V3 Tool Search and MCP ids (item 5).
-  - The peeled commit of `v0.22.2` and the `setup-hermes.sh` steps (item 13).
-  - `patch-id --stable` equality across the image and gatekeeper git versions (item 19).
-- **Not re-checked, carried from earlier rounds and still tagged:** Telegram Bot API limits; GitHub PAT behaviour; Docker firewall backend and embedded DNS; drvfs fstab escaping; `instanceIdleTimeout=-1`; V3 ACP auth options; `--list-models` schema; squid attachment limits; `age -d -i -`.
+- **Unspecified, low risk (R5-N1):** whether the gatekeeper copies the bundle before fetching it. As written, it fetches in place from an ossbox-owned directory.
+- **Unspecified (R5-N3):** how `kiro_acp` reaches root's `sys.path` under `-I`, and whether `kiro_acp/__init__.py` stays import-free. I could not inspect the vendored fork, because `vendor/` does not exist in the repo yet.
+- **Not re-checked this round, correctly tagged [VERIFY] in §23:**
+  - item 13: whether `v3_core` can be stdlib-only; whether `uv sync --frozen` at the final path yields a working entry point; Tool Search `off` parsing; the peeled tag commit;
+  - item 19: the last-`-c`-wins and bundle-transport behaviour on the image's and the gatekeeper's git versions, and `patch-id --stable` equality across them;
+  - item 11: V3 ACP `currentModeId` and custom `modeId` selection;
+  - item 14: Docker 29 copy-up ownership and `exec` tmpfs;
+  - item 5: Kiro Tool Search ids and `/tmp` exec needs.
+- **Carried from earlier rounds, still tagged:** Telegram Bot API limits; GitHub PAT behaviour; Docker firewall backend and embedded DNS; drvfs fstab escaping; `instanceIdleTimeout=-1`; V3 ACP auth options; `--list-models` schema; squid attachment limits; `age -d -i -`.
