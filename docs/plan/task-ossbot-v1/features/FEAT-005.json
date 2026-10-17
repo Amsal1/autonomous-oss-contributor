@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-005",
+  "type": "feat",
+  "description": "Decorated Telegram review UX and chat relay plumbing (PLAN.md items 22-23). Replaces the Phase 1 minimal card renderer with the full DESIGN §14.3-14.4a experience: decorated PR card (repo stats, issue, rationale, maintainers/CODEOWNERS, CLA/DCO/AI-policy checks, risk/confidence, derived diffstat, validation tiers, self-review, commit identity, verbatim PR title/body/commit message in escaped <pre>), comment/claim/push_update cards, chunking, diff paging and .patch document, test logs, Request changes / Edit title / Edit body / Clear edits via ForceReply correlation, reject reasons, retry/give-up/stop-watching, the remaining commands of §14.5 with a plugin-style registry (entry point group ossbot.telegram_commands) and setMyCommands, and the ChatBackend + Hermes API relay with the fail-closed Hermes tool-surface check (§14.1, §15.1). Callbacks never pass through Hermes; the token/approval code from FEAT-002 is reused unchanged. Depends on FEAT-001/002; independent of FEAT-006/007 (Hermes is faked).",
+  "status": "pending",
+  "steps": [
+    "Item 22: src/ossbot/gatekeeper/telegram/{render.py,chunking.py,cards.py,pending_input.py} and handler/keyboard extensions per §14.3, §14.4, §14.4a (two-phase keyboard: Approve token minted only when body_parts_delivered == body_parts_total; invisible/bidi pre-pass with counts; pages <= 3500 chars; .patch via sendDocument when > 3 pages or 30 KB; pr_body.md when K > 3 or > 10 000 chars; logs summary + .txt); commands /queue /approve <cid> (N4 token rotation) /reject /reload /repos /model (UI shell; writer lands in FEAT-006) /limits (/budget) /logs /newchat via commands/registry.py with safety classes read|stop|go|config; outbox 429 retry_after; tests tests/telegram/{test_chunking.py,test_cards.py,test_body_verbatim.py} + extended test_handlers.py and test_escape.py; golden snapshots under tests/telegram/golden/.",
+    "Item 23: src/ossbot/gatekeeper/chat/{backend.py,hermes_api.py,hermes_surface.py} (POST /v1/responses with X-Hermes-Session-Key tg-<uid>-<n>, GET /v1/capabilities, GET /v1/toolsets surface check at start/hourly/after reconnect with the §15.1 allowlist and forbidden bridge tools, soft kill hermes_tool_surface on drift or unverifiable, relay gate on /var/lib/ossbot/probes/hermes-kiro.json pass < 2 h), tests/fakes/fake_hermes.py, tests/unit/gatekeeper/test_hermes_surface.py (all six §15.1 fakes), tests/telegram/test_relay.py; then run the FEAT verification, set status completed, record findings, commit locally."
+  ],
+  "acceptance_criteria": [
+    "DEV pytest -m telegram passes AC 14: no message > 4096 chars, HTML always well-formed (hypothesis), every callback_data <= 64 bytes, diff pages correctly, .patch sent when the diff exceeds one page, PR body verbatim in <pre>, Approve only after every body part was delivered",
+    "Golden cards exist and pass for open_pr, push_update, comment and issue_claim in LIVE and DRY RUN, plus long, non-ASCII, edited-by-you and import variants",
+    "test_hermes_surface.py passes AC 25 (terminal, file/read_file, bridge tools, 404 -> kill; allowlist and allowlist-with-extra-fields -> pass); test_relay.py proves Hermes text is rendered escaped with no buttons and never executed as a command",
+    "ruff, mypy strict, lint-imports clean; git status --porcelain empty after the commit"
+  ],
+  "verification": [
+    "wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m \"unit or telegram\"",
+    "DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports",
+    "git status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

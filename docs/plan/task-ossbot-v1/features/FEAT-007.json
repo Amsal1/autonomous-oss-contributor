@@ -1,0 +1,30 @@
+{
+  "id": "FEAT-007",
+  "type": "feat",
+  "description": "Kiro V3 ACP provider fork and Hermes v0.22.2 integration (PLAN.md items 27-28). Vendors tobenwarrior/hermes-kiro-provider@02c4dd06585436751145961658a22b773f23a0ef into vendor/hermes-kiro-provider/ (plain files, LICENSE kept, UPSTREAM_COMMIT/UPSTREAM_URL, committed unmodified first), adds the V3 adapter beside the V2 code (kiro_acp/v3_core.py stdlib-only launch/session/surface logic, kiro_acp/v3.py Hermes glue with live session/set_config_option model+effort switch from config/models.yaml, kiro_acp/hermes_plugin.py with an import-free __init__.py per R5-N3, V3 primary / V2 fallback via HERMES_KIRO_ACP_ENGINE), contract tests against a fake V3 ACP server (DESIGN §22.3), the pinned Hermes install with the R4-N4/R5-N2 hygiene, the ossbot Hermes plugin and allowlisted config (§15.1), the root ossbot-hermes-probe (R4-M2 code origin), ossctl hermes/kiro upgrade, and a real 'kiro-cli acp --agent-engine=v3' initialize handshake recorded in the ADR-0002 addendum. Depends on FEAT-004 (provisioning, units), FEAT-005 (relay gating) and FEAT-006 (common/models.py).",
+  "status": "pending",
+  "steps": [
+    "Item 27: verify DESIGN §23 items 10, 11, 12, 5c by web search (V3 ACP auth, currentModeId/tool-list fields, CLI 3.0 status) and record. Download the pinned commit (archive or a clone inside the gitignored .ossbot-local/; never a submodule or remote of this repo), copy into vendor/hermes-kiro-provider/ with LICENSE, UPSTREAM_COMMIT, UPSTREAM_URL, commit unmodified. Add kiro_acp/v3_core.py, kiro_acp/v3.py, kiro_acp/hermes_plugin.py (plugin manifest names it; __init__.py import-free), engine selection; declare vendor/hermes-kiro-provider as a non-editable uv path dependency in pyproject.toml and re-lock; tests/fakes/fake_acp_v3.py (scripted NDJSON JSON-RPC stdio server) and tests/acp/{test_v3_contract.py,test_mode_mismatch.py,test_hermes_probe_eval.py}.",
+    "Item 28: replace the Decision 8 no-op provision steps with 'kiro-cli for hermes' (manifest + sha256 to ~hermes/.local/bin; shared cli.json; hermes permissions.yaml) and 'hermes' (§15.4 script; R5-N2: flock /run/ossbot/hermes-upgrade.lock for the whole step, stop ossbot-hermes-probe.socket, repeat the pgrep -u hermes refusal after the rollback pkill); record the peeled commit of v0.22.2 in versions.lock.yaml and the reproduced setup-hermes.sh steps in the ADR-0002 addendum (§23 items 13, 28). Add hermes/config/{config.yaml.j2,permissions.yaml}, hermes/plugins/ossbot/{plugin.yaml,__init__.py,tools.py}, .kiro/agents/ossbot-chat.json, systemd/ossbot-hermes.service, ossbot-hermes-probe.socket, ossbot-hermes-probe@.service, src/ossbot/ctl/hermes_probe.py (root ACP client/evaluator, imports kiro_acp only from /opt/ossbot/app/vendor, adapter drift hash, non-blocking upgrade lock -> inconclusive, --selftest, --handshake-only per PLAN Decision 11), ossctl hermes upgrade|login and ossctl kiro upgrade; tests/unit/ctl/test_hermes_probe_paths.py and tests/system/test_hermes_install_hygiene.sh (incl. a mid-upgrade probe-trigger case). Re-run bootstrap; run the real handshake; append its redacted outcome to docs/adr/0002-agent-runtime-hermes-kiro-acp.md; run the FEAT verification, set status completed, record findings (Hermes state layout for backups, auth outcome, mode/tool fields), commit locally."
+  ],
+  "acceptance_criteria": [
+    "DEV pytest -m acp passes AC 20: capability negotiation, session/new with _meta.kiro from models.yaml, model change via set_config_option and never set_model, every permission request answered with reject_once (or cancelled), unknown agent-to-client requests get JSON-RPC errors, access token absent from all log records, launch argv contains --agent-engine=v3 and none of --agent/--model/--effort/--trust-*; mode vibe or an advertised read tool -> no session/prompt and a kill request",
+    "test_hermes_probe_paths.py passes (kiro_acp.v3_core origin under the root copy, PYTHONPATH ignored under -I, drift -> adapter_drift); test_hermes_install_hygiene.sh passes including the mid-upgrade probe-trigger case",
+    "After bootstrap: kiro-cli --version (as hermes) prints the pinned version, hermes --version prints v0.22.2, bootstrap re-run is unchanged, ossbot-hermes is active and doctor reports the relay disabled pending KIRO_API_KEY",
+    "The real kiro-cli acp --agent-engine=v3 initialize handshake ran and its redacted outcome (capabilities/extension methods or the exact error) is in the ADR-0002 addendum",
+    "vendor/hermes-kiro-provider keeps LICENSE, UPSTREAM_COMMIT, UPSTREAM_URL; git status --porcelain empty after the commit"
+  ],
+  "verification": [
+    "wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m \"unit or acp\"",
+    "powershell -NoProfile -File scripts\\bootstrap.ps1   # twice; second run only 'unchanged'",
+    "wsl.exe -d ossbot -u root --exec runuser -u hermes -- /home/hermes/.local/bin/kiro-cli --version",
+    "wsl.exe -d ossbot -u root --exec runuser -u hermes -- /home/hermes/.local/bin/hermes --version",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec bash tests/system/test_hermes_install_hygiene.sh",
+    "wsl.exe -d ossbot -u root --exec /opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.hermes_probe --handshake-only",
+    "wsl.exe -d ossbot -u root --exec systemctl is-active ossbot-hermes",
+    "DEV ruff check src tests ; DEV mypy ; DEV lint-imports",
+    "git status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

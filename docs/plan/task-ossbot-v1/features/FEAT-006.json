@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-006",
+  "type": "feat",
+  "description": "Runner pipeline (discover -> vet -> fetch -> plan -> implement -> validate -> review -> package -> preview -> submit -> watch, plus operator import and fix rounds) and the global model switch (PLAN.md items 24-26). Implements config/models.yaml as single source of truth with ossbot.common.models.resolve(), the gatekeeper writer PUT /v1/models/{role} (ruamel round-trip, atomic, catalog-or-forced ids), ossctl model set/list and models refresh, Telegram /model, the catalog job with new-model notifications (DESIGN §16), the runner service with all stages of §9.3-9.13 talking only to the gatekeeper UDS API and sandboxd, role prompts and Kiro agent JSONs (§15.3), and the e2e suites against a local fake upstream with a stubbed kiro-cli and FakeRuntime (§22.4) plus the e2e_docker run through the real sandbox stack. Depends on FEAT-001..005; independent of FEAT-007 (the runner reaches Kiro only through sandboxd).",
+  "status": "pending",
+  "steps": [
+    "Item 24: config/models.yaml (§16.1; verify model id spelling for kiro-cli chat --list-models --format json, §23 item 9, and record), src/ossbot/common/models.py, src/ossbot/gatekeeper/models_admin.py + api/models.py (GET /v1/models, PUT /v1/models/{role}), ossctl model set|list [--force] [--commit] and ossctl models refresh, Telegram /model with catalog buttons + confirm, new-model card [Set as default] [Set for role…] [Ignore]; tests tests/unit/gatekeeper/test_models_admin.py and tests/unit/common/test_models_resolve.py.",
+    "Item 25: src/ossbot/runner/{main,scheduler,pipeline,github_read,scoring,llm,output_parse,prompts,gk_client,sbx_client,squidlog}.py and runner/stages/{discover,vet,fetch,plan,implement,validate,review,package,watch,catalog,importer}.py per §9.3-9.13 and §13.4 runner anomalies (first-start order M11: list_models -> catalog upsert -> probes -> first stage; kill/pause checked before each stage and at each heartbeat); console script ossbot-runner; ossctl discover, ossctl contribution import, ossctl targets verify; prompts/*.md and *.j2 (web-research rule, untrusted wrapper, disclosure §12.3 with {{ profile.github_login }}); .kiro/agents/ossbot-{vetter,planner,coder,reviewer,summarizer}.json (do not overwrite pre-existing files); TRUST_TOOLS per role in sandboxd/profiles.py; verify §23 items 5, 5b, 6, 8, 21, 24 by docs/web and record (key-dependent ones as pending live probes in the ADR-0005 addendum); extend tests/unit/gatekeeper/test_control.py to every real stage entrypoint; tests/unit/runner/**.",
+    "Item 26: tests/fakes/upstream_fixture.py, tests/bin/kiro-cli stub, tests/e2e/{test_e2e_dry_run,test_e2e_live_fake,test_e2e_dryrun_toggle,test_e2e_injection,test_e2e_import,test_e2e_first_start,test_e2e_fix_round_failure,test_e2e_resume}.py (FakeRuntime) and test_e2e_docker.py (marker e2e_docker); add and enable systemd/ossbot-runner.service via scripts/lib/services.sh; re-run scripts\\bootstrap.ps1 to deploy; run the FEAT verification, set status completed, record findings, commit locally."
+  ],
+  "acceptance_criteria": [
+    "DEV pytest -m \"unit or telegram or e2e\" passes, including AC 4 (dry-run card, zero writes, audit 'would' payload), AC 5 (live against fake: exact SHA pushed, title/body hashes, identity Amsal Khan from the test profile), AC 8 (injection fixture has no effect), AC 13 (ossctl model set and /model rewrite models.yaml with comments preserved, next coder invocation uses --model <id>, non-catalog id rejected without --force, new model -> one notification), AC 28 (fix-round failure returns to WATCHING), AC 30 (re-discovery rules)",
+    "ROOTDEV pytest -m e2e_docker passes through real sandboxd + dockerfilter + Docker + proxy with the stub kiro-cli",
+    "After bootstrap, ossbot-runner is active and idles with catalog_empty while no Kiro key exists; tests/system/test_config_write.sh still passes",
+    "ruff, mypy, lint-imports (runner never imports gatekeeper) clean; git status --porcelain empty after the commit"
+  ],
+  "verification": [
+    "wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m \"unit or telegram or e2e\"",
+    "powershell -NoProfile -File scripts\\bootstrap.ps1",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/root/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m e2e_docker",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec bash tests/system/test_config_write.sh",
+    "wsl.exe -d ossbot -u root --exec systemctl is-active ossbot-runner",
+    "DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports",
+    "git status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

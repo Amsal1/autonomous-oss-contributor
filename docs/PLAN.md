@@ -1,0 +1,276 @@
+# ossbot implementation plan
+
+Source of truth: `docs/DESIGN.md` (Draft v2 rev 4, APPROVED in review round 5) and ADR-0001..0018. This plan sequences the work; it does not re-decide the architecture. Section references (§) point into DESIGN.md. When this plan and DESIGN.md disagree on a detail, DESIGN.md wins, except for the planner decisions in "Decisions" below, which fill gaps the design leaves open.
+
+The work is split into exactly two build phases. Phase 1 makes it safe to run anything. Phase 2 makes it useful. Within each phase, work is grouped into FEATs (the units the build workflow executes, one coder step each, artifacts in `docs/plan/task-ossbot-v1/`). Items are numbered globally and ordered by dependency; every item leaves the repo buildable and its tests green.
+
+## Current state (checked 2026-10-17 during planning)
+
+- Repo: docs only (DESIGN, ADRs, reviews), `.gitignore`, empty `.gitkeep` dirs. No `.gitattributes` yet; Windows git has `core.autocrlf=true`.
+- WSL 3.0.3.0, kernel 6.18.54.1-1. Distro `ossbot` registered (default, VERSION 2), BasePath `d:\Work\autonomous-oss-contributor\.wsl\ossbot`, Ubuntu 24.04.5, `/etc/wsl.conf` has only `[boot] systemd=true`. Automount is ON (`/mnt/c`, `/mnt/d` visible), interop ON, no uid 1000 user, Python 3.12.3 and git 2.43.0 present, no uv/docker/kiro-cli/hermes/gitleaks/shellcheck. 955 GB free on the VHD. `%USERPROFILE%\.wslconfig` does not exist.
+- kiro-cli manifest `latest` = 2.32.0, headless `kirocli-x86_64-linux.tar.gz` sha256 `05989f9bfe465b304e8d1b2dba50aec2b84fcc1deaa4c0773af3f539d6e0d312` (re-fetched; CLI 3.0 not yet out).
+- No real secrets exist (KIRO_API_KEY x2, Telegram token/user ID, GitHub classic + fine-grained PAT are created by the user later). Everything below is testable with fakes; live checks are reported by `ossctl doctor` as "awaiting secrets".
+
+## Conventions every item follows
+
+Command prefixes used in Verify lines (run from Windows PowerShell 5.1 in the repo root):
+
+| Name | Expands to | Use |
+|---|---|---|
+| `DEV` | `wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen` | lint, type-check, hermetic tests (`unit telegram acp e2e`) as ossadmin |
+| `ROOTDEV` | `wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/root/.venvs/ossbot /opt/ossbot/bin/uv run --frozen` | pytest markers that need root (`sandbox`, `system`, `e2e_docker`) |
+| `ROOT` | `wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec` | shell system tests, systemctl, docker as root |
+| `STREAM <script> <args>` | `(Get-Content -Raw <script>) -replace "`r","" \| wsl.exe -d ossbot -u root -- bash -s -- <args>` | provisioning scripts, the design's stdin-streaming rule (§7.2, N4) |
+
+- `wsl.exe --exec` passes PowerShell-quoted arguments intact (verified: `"unit or telegram"` arrives as one argv). Never use `wsl ... -- bash -c "..."` with embedded quotes from PowerShell 5.1; it mangles them. Multi-line ad-hoc scripts go through `STREAM`.
+- All shell, Python, systemd, Dockerfile and YAML files are LF (`.gitattributes`, item 1). PowerShell scripts are CRLF and PowerShell 5.1 compatible.
+- Commits are made with Windows git only. Before every commit: `Remove-Item Env:GIT_AUTHOR_NAME,Env:GIT_AUTHOR_EMAIL,Env:GIT_COMMITTER_NAME,Env:GIT_COMMITTER_EMAIL -ErrorAction SilentlyContinue`, then `git -C d:\Work\autonomous-oss-contributor var GIT_AUTHOR_IDENT` must start with `Amsal Khan <md.amsalkhan@gmail.com>`. Conventional Commit messages. Never push, pull, fetch, add remotes or rewrite history. Never set the GIT_* identity env vars.
+- Everything stays inside `D:\Work\autonomous-oss-contributor` except the three documented host exceptions (NFR-3): `%USERPROFILE%\.wslconfig`, the `ossbot-autostart` Scheduled Task, optional Hyper-V firewall rules.
+- `§23 [VERIFY]` items are checked (web search or live probe) before the dependent code is written. Results go into `config/versions.lock.yaml` or an "Implementation addendum" section appended to the relevant ADR. Items that need a real key are recorded as "pending live probe (needs <secret>)" and surfaced by `ossctl doctor`.
+- Lint gate for every Python item: `DEV ruff check src tests`, `DEV ruff format --check src tests`, `DEV mypy` (strict for `ossbot.gatekeeper`, `ossbot.dockerfilter`, `ossbot.common`), `DEV lint-imports`. Shell: `ROOT shellcheck <files>` once shellcheck is installed (item 2). These are implied in every Verify line below together with the named tests.
+
+## Decisions (planner, filling gaps the design leaves open)
+
+1. Dev environment bootstrap. The real `provision.sh` is written first with a step selector (`--only users,apt-base,uv`), and FEAT-001 runs just those three steps. That creates every §7.3 user/group/dir (ossadmin = uid 1000, ossnobody = 1001), installs shellcheck and gitleaks, and installs the pinned uv at `/opt/ossbot/bin/uv`. No throwaway dev script; the same code path is exercised again by the full provision in FEAT-004.
+2. Dev venvs live on ext4 (`UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot`, root: `/root/.venvs/ossbot`), never in the repo on drvfs: 9p is slow and a venv on the mount would be visible to Windows tools. The deployed runtime venv stays `/opt/ossbot/app/.venv` (`--no-dev`).
+3. ossadmin sudo is `NOPASSWD` only for `/opt/ossbot/bin/*` and `/opt/ossbot/app/.venv/bin/ossctl` (`/etc/sudoers.d/ossbot-ossadmin`, 0440, validated with `visudo -cf`). ossadmin has no password, so general sudo is unavailable. This keeps "only ossadmin has sudo" (§7.2) usable for `ossctl resume`/`backup` without making ossadmin a general root shell.
+4. Python dependencies are pinned with `==` in `pyproject.toml` (latest stable at implementation time, checked by web search, within the §18.1 stack: FastAPI, uvicorn, pydantic 2, httpx, python-telegram-bot 22.x, ruamel.yaml, Jinja2, typer, h11; dev: pytest, pytest-asyncio, respx, hypothesis, ruff, mypy, import-linter) and locked in `uv.lock`. All installs use `--frozen`.
+5. The gatekeeper must start without user secrets ("gatekeeper service active" is required before the user creates any). Provisioning seeds `gatekeeper.env` with only the internal randoms `OSSBOT_TOKEN_PEPPER` and `HERMES_API_KEY` (and `hermes.env` with the matching `API_SERVER_KEY`) when absent. setup-secrets preserves them. With no `TELEGRAM_BOT_TOKEN` or `profile.telegram.user_id == 0` the Telegram front-end stays disabled; with no `GITHUB_WRITE_TOKEN` every submit is refused (`error_class=no_write_token`). Both are logged at WARNING and listed by doctor as "awaiting secrets".
+6. The owner's local `config/profile.yaml` (gitignored, never committed) is created in FEAT-004 from `profile.example.yaml` with the values the user gave (DESIGN §2, §25): `github_login: Amsal1`, `commit_name: Amsal Khan`, `commit_email: md.amsalkhan@gmail.com`, `forbidden_logins: [<work-login>]`, `confidentiality_floor: [<work-login>, "@<work-domain>"]`, `kiro.idc_start_url: https://<org>.awsapps.com/start`, `telegram.user_id: 0` (not configured yet), `backup.age_recipients: []`. The gatekeeper needs a non-empty `forbidden_logins` to start (§7.9).
+7. Phase 1 ships a minimal approval card (escaped `<pre>` title/body/commit message plus derived numstat) through the same `telegram/cards.py` interface, so the two-tap binding is testable end to end. FEAT-005 replaces the renderer with the decorated §14.4 card without touching the token/approval code.
+8. Provision steps `kiro-cli for hermes` and `hermes` exist in Phase 1 as named no-op steps that print `skipped (phase 2: FEAT-007)`. kiro-cli for the `sandbox-llm` image (manifest + sha256) is Phase 1 (FEAT-003), because the sandbox smoke tests need every profile's image.
+9. `ossctl backup`/`restore` move to Phase 2 (FEAT-008), next to SETUP.md: the backup include list depends on the Hermes state layout (§23 item 28), which is only known after FEAT-007.
+10. Bootstrap runs for real in FEAT-004 against the existing `ossbot` distro: it installs `.wslconfig`, `wsl.conf`, the fstab block, and restarts WSL (`wsl --shutdown` is allowed; WSL is dedicated to ossbot). The Hyper-V firewall step runs only if the session is already elevated; otherwise bootstrap records WARN and prints the follow-up command. No UAC prompt is triggered.
+11. The real V3 ACP handshake is implemented as `python -I -m ossbot.ctl.hermes_probe --handshake-only` (same root-owned `kiro_acp.v3_core` launch/session code as the probe): `initialize`, then a `session/new` attempt. The redacted transcript summary goes into the ADR-0002 addendum. It needs no key; an auth error on `session/new` is an expected, recorded result.
+12. The three round-5 NITs are implemented: R5-N1 in item 9 (gatekeeper copies the bundle with `O_NOFOLLOW` into its own work dir), R5-N3 in item 27 (import-free `kiro_acp/__init__.py`, vendor tree as a non-editable uv path dependency), R5-N2 in item 28 (Hermes upgrade lock).
+
+## Required overall verification (the bar for the final review)
+
+All of these must pass on this laptop before the work is called done. Phase reviewers check the subset their phase owns (marked P1/P2).
+
+1. Provisioning (P1, completed in P2): `STREAM scripts/provision.sh` (via `scripts\bootstrap.ps1`) succeeds twice, the second run reports only `unchanged`; `ROOT docker version`, `ROOT docker compose version`, `ROOT systemctl is-active ossbot-gatekeeper` = `active` (P1); `ROOT runuser -u hermes -- /home/hermes/.local/bin/kiro-cli --version` and `ROOT runuser -u hermes -- /home/hermes/.local/bin/hermes --version` (P2).
+2. WSL confinement (P1): after `wsl --terminate ossbot` and restart, `scripts\test-isolation.ps1` passes: `/mnt/c` absent, `/mnt/d` lists only `Work`, `/mnt/d/Work` only the repo, `$PATH` has no Windows entries, executing a PE file from the mount fails with "Exec format error", `wsl.exe -d ossbot` lands as `ossnobody`, `nproc` 20, ≈20 GB RAM, ≈8 GB swap, Windows `localhost` cannot reach a distro `127.0.0.1` listener.
+3. Hermetic tests in ossbot (P1 subset, all in P2): `DEV pytest -m "unit or telegram or acp or e2e"` green, covering gatekeeper approval binding and every invalidation, rate limits, kill/pause blocks every stage/job/outbound kind, policy and allowlist, Telegram rendering/chunking/escaping/buttons with a mocked Bot API, fake V3 ACP server contract tests for the forked provider, pipeline e2e against the local fake upstream with a stubbed kiro-cli.
+4. Sandbox egress/isolation smoke (P1): `ROOTDEV pytest -m sandbox` green (§22.5), `ROOT bash tests/system/test_*.sh` green (§22.6), `tests\system\test_kill.ps1` green.
+5. Real `kiro-cli acp --agent-engine=v3` initialize handshake attempted and recorded in the ADR-0002 addendum (P2).
+6. `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor` plus `scripts\ossctl.ps1 doctor` run and list the items awaiting user secrets, everything else PASS or a documented WARN (P1 partial, P2 full).
+7. gitleaks clean: `ROOT gitleaks git --redact --config .gitleaks.toml .` exits 0 (P2; P1 runs the distro gitleaks on the history).
+8. `git status --porcelain` empty at the end of each phase (all work committed locally; nothing pushed).
+
+---
+
+## Phase 1: Safety core, sandbox isolation, provisioning foundation
+
+Goal: everything needed to run anything safely. At the end of Phase 1 the distro is confined, Docker runs behind the filter, egress is allowlisted and fail-closed, the gatekeeper runs as a systemd service in dry-run with its full approval/kill/policy/audit core, the kill switch works from Telegram (fake), `ossctl` and Windows, and sandbox profiles pass their isolation smoke tests. No runner, no Hermes, no real Telegram traffic yet.
+
+### FEAT-001: Repo foundation and gatekeeper safety core
+
+- [ ] 1. Line endings and repo hygiene. Add `.gitattributes` (`* text=auto eol=lf`, `*.ps1 text eol=crlf`, `*.png *.jpg *.tar *.gz *.zip *.exe binary`), run `git add --renormalize .`, and extend `.gitignore` with `.pytest_cache/`, `.mypy_cache/`, `.ruff_cache/`, `*.egg-info/`. Commit this first and alone.
+      Files: `.gitattributes`, `.gitignore`
+      Verify: `git ls-files --eol` shows `i/lf w/lf` for every `.md` file; `git status --porcelain` empty after the commit.
+
+- [ ] 2. Provisioning skeleton with its first three steps. Write `scripts/provision.sh` (bash 5, `set -euo pipefail`, step registry in the §18.2 order, `--only <a,b>` and `--list`, per-step idempotence, logging to `/srv/ossbot/logs/provision-<ts>.log`, prints `changed`/`unchanged` per step) and `scripts/lib/{common.sh,users.sh}`. Implement step `users` (every user, group, uid and directory of §7.3, including the control dir `gatekeeper:osscontrol 0750` and `/etc/ossbot/secrets` 0751; ossadmin uid 1000 with `~/.profile` exporting `PATH=/opt/ossbot/bin:$PATH` and `UV_PROJECT_ENVIRONMENT=$HOME/.venvs/ossbot`; the sudoers drop-in of Decision 3), step `apt-base` (§18.2 package list plus `shellcheck`; gitleaks from its GitHub release, sha256-verified, to `/usr/local/bin/gitleaks`) and step `uv` (pinned uv release tarball, sha256 from `config/versions.lock.yaml`, installed to `/opt/ossbot/bin/uv`). Create `config/versions.lock.yaml` with the pins known from DESIGN §0 (uv 0.13.1, docker-ce `5:29.8.2-1~ubuntu.24.04~noble`, gitleaks 8.30.1, kiro-cli 2.32.0 + the headless sha256 above, hermes `v0.22.2` tag object `7b77e29eedd85a8497ce2821448dac7964dc46f6`, kind 0.33.0, tofu 1.13.1), re-checking each version and sha256 by web search first.
+      Files: `scripts/provision.sh`, `scripts/lib/common.sh`, `scripts/lib/users.sh`, `config/versions.lock.yaml`
+      Verify: `STREAM scripts/provision.sh --only users,apt-base,uv` prints `changed` for each; a second run prints `unchanged` for each; `ROOT id ossadmin` shows uid 1000 and groups `sudo osscfg ossapi`; `ROOT /opt/ossbot/bin/uv --version` and `ROOT gitleaks version` print the pinned versions; `ROOT visudo -cf /etc/sudoers.d/ossbot-ossadmin` OK; `ROOT shellcheck scripts/provision.sh scripts/lib/common.sh scripts/lib/users.sh` clean.
+
+- [ ] 3. Python project and common library. Create `pyproject.toml` (project `ossbot`, `requires-python = ">=3.12,<3.14"`, pinned deps per Decision 4, console scripts added as each entrypoint lands (`ossbot-gatekeeper` here; `ossbot-dockerfilter`, `ossbot-sandboxd`, `ossctl` in FEAT-003/004; `ossbot-runner` in FEAT-006); pytest markers `unit telegram acp e2e e2e_docker sandbox system isolation` with `--strict-markers`; ruff, mypy strict sections; import-linter contracts from §18.1: only `ossbot.gatekeeper.submit` imports `ossbot.gatekeeper.github_writer`; `runner`, `sandboxd`, `sandbox_tools` never import `gatekeeper`), `uv.lock`, and `src/ossbot/common/` (`config.py` pydantic `extra=forbid` models for policy/targets/egress/profile/models, `snapshot.py` with the §7.9 N2 hash, `paths.py`, `logging.py` JSON formatter + redaction hook, `clock.py` injectable clock, `ids.py` (`c_`/`a_` ULID-derived ids, 22-char base64url tokens), `yamlio.py` ruamel round-trip, `uds.py` httpx UDS transport, `redact.py`, `hashing.py` canonical JSON + sha256, `schemas.py`, `rediscover.py` (§9.4 M6 rules)). Add `config/{policy.yaml,egress.yaml,targets.yaml}` (targets seeded from §17.2 with neutral `why:` texts), `config/profile.example.yaml` (placeholders only, §18.8) and `tests/fixtures/profile.test.yaml`.
+      Files: `pyproject.toml`, `uv.lock`, `src/ossbot/__init__.py`, `src/ossbot/common/*.py`, `config/*.yaml`, `tests/conftest.py`, `tests/fixtures/profile.test.yaml`, `tests/unit/common/test_*.py`
+      Verify: `DEV pytest -m unit tests/unit/common` green (`test_snapshot_hash.py` N2 cases, config schema accept/reject, rediscover rules table, canonical JSON stability); `DEV lint-imports` passes.
+
+- [ ] 4. Gatekeeper database, control state, audit. Implement `gatekeeper/db.py` (SQLite WAL, migrations runner) with `migrations/0001_init.sql` exactly as §12.7 (all tables, the partial unique index, audit triggers), `control.py` (running/paused/killed, dry-run default ON on a fresh DB and after reset (I7), levels soft/full, flag files in the control dir, startup reconcile N12, `resume_log_offset` handling of `resume.log` N4), `audit.py` (hash chain, `verify`), `anchors.py` (client for `/run/ossbot/anchor.sock`, every 5 min and on every outbound write), `anomaly.py` (signal → pause/kill table of §13.4, gatekeeper-side rows).
+      Files: `src/ossbot/gatekeeper/{db.py,control.py,audit.py,anchors.py,anomaly.py}`, `src/ossbot/gatekeeper/migrations/0001_init.sql`, `tests/unit/gatekeeper/{test_audit.py,test_control_reconcile.py}`
+      Verify: `DEV pytest -m unit tests/unit/gatekeeper/test_audit.py tests/unit/gatekeeper/test_control_reconcile.py` green, including `test_recomputed_chain_fails_against_anchors` (AC 16).
+
+- [ ] 5. State machine, approvals, policy, rate limits, snapshot. Implement `state_machine.py` (`ALLOWED` with actors, generated FAILED edges, live-PR redirect `resolve_target`, guards, loop counters, kill/pause check on entry to working states, §9.2), `approvals.py` (binding v2 per kind, canonical hash, normalization at storage N3, lifecycle pending→armed→confirmed→consumed, every invalidation trigger of §12.4 in the same transaction as its cause, TTLs 72 h / 5 min, `ui_tokens` minting bound to `tg_message_id`), `policy.py` (§12.6 incl. `FORBIDDEN_PATHS_FLOOR`, monotonic `policy_floor`, confidentiality floor, Kiro key hash check, disclosure check, `coder_mode: single` rejection), `ratelimit.py` (counters derived from `outbound_actions`, `executing` counts as consumed), config snapshot load/reload with confirm hash (§7.9).
+      Files: `src/ossbot/gatekeeper/{state_machine.py,approvals.py,policy.py,ratelimit.py}`, `tests/unit/gatekeeper/{test_state_machine.py,test_approvals.py,test_policy.py,test_policy_floor.py,test_ratelimit.py,test_snapshot.py,test_discover.py,test_control.py}`
+      Verify: `DEV pytest -m unit tests/unit/gatekeeper` green; must include `test_worker_cannot_drive_approval_states` (AC 19), every single-field binding change, `test_dry_run_toggle_invalidates` both directions (AC 6), rate-limit edges (AC 11), and `test_control.py` parametrized over every stage entrypoint × {paused, killed} (AC 10; entrypoint list is a constant shared with the runner and sandboxd so later FEATs extend the same parametrization).
+
+- [ ] 6. Gatekeeper API and authz over the UDS. Implement `authz.py` (SO_PEERCRED uid → role table of §12.2; ossnobody → 403), `app.py`/`main.py` (FastAPI on uvicorn UDS `/run/ossbot/gatekeeper.sock`, group ossapi 0660), `api/{control.py,config.py,contributions.py,actions.py,models.py,audit.py,notify.py}` with every v1 endpoint of §12.2 except the ones whose logic lands later (`/package`, `/import`, `/import-bundle` return 501 until item 9), the operator FYI hook, `outbox.py` (persistent `tg_outbox`, sender pluggable; real Telegram sender in item 10). There is no approve endpoint.
+      Files: `src/ossbot/gatekeeper/{authz.py,app.py,main.py,outbox.py}`, `src/ossbot/gatekeeper/api/*.py`, `tests/unit/gatekeeper/{test_authz.py,test_api_uds.py,test_catalog_upsert.py}`
+      Verify: `DEV pytest -m unit tests/unit/gatekeeper` green, including the route-table assertion that no approve route exists (I1/I3), fake-peercred role mapping, `test_catalog_upsert.py` (R4-N3); the API test starts uvicorn on a temp UDS.
+
+- [ ] 7. Commit FEAT-001.
+      Verify: `DEV pytest -m unit` green; lint gate green; `git status --porcelain` empty after commit.
+
+### FEAT-002: Gatekeeper git TCB, submission, Telegram decision path
+
+Depends on FEAT-001.
+
+- [ ] 8. Fixed git commands and package entrypoints. Implement `common/gitcmd.py` (`FORMAT_PATCH`, `NUMSTAT`, M7/R4-N6), `sandbox_tools/numstat2json.py` (stdlib), `sandbox/entrypoints/package.sh` and `unbundle.sh` exactly as §9.11/§9.8/§9.13 (named branch `ossbot-change`, scoped `protocol.file.allow=always` only on the bundle/work-tree fetch, `--no-recurse-submodules` on every bundle fetch per R5-N1). Check §23 item 19 on git 2.43 (distro) first and record the result.
+      Files: `src/ossbot/common/gitcmd.py`, `src/ossbot/sandbox_tools/numstat2json.py`, `sandbox/entrypoints/{package.sh,unbundle.sh}`, `tests/unit/entrypoints/test_unbundle_script.py`
+      Verify: `DEV pytest -m unit tests/unit/entrypoints` green (both modes, `bundle_refs`, `bundle_prereq_missing`); `ROOT shellcheck sandbox/entrypoints/package.sh sandbox/entrypoints/unbundle.sh` clean.
+
+- [ ] 9. Package verification, derivation, import. Implement `gitops.py` (`GIT_ENV`, `GIT_ARGS`, `BUNDLE_FETCH_ARGS`, per-upstream cache, per-rev mirrors with alternates, retention), `derive.py` (numstat, raw modes, patch, commit message, identities, patch-id compare), the `/package` and `/package-ts` handlers (§12.5 steps 1-8 and §12.5a), `imports.py` and the `/import` + `/import-bundle` handlers (§9.13 M3). R5-N1: open the artifact bundle with `O_NOFOLLOW`, require `S_ISREG` and ≤ 50 MB, copy to `/srv/ossbot/gatekeeper/work/<cid>-r<rev>.bundle` (0600), hash the copy, and run list-heads/verify/fetch only on the copy.
+      Files: `src/ossbot/gatekeeper/{gitops.py,derive.py,imports.py}`, `src/ossbot/gatekeeper/api/contributions.py`, `tests/unit/gatekeeper/{test_package_verify.py,test_gitops_args.py,test_import.py,test_claim_live.py}`
+      Verify: `DEV pytest -m unit tests/unit/gatekeeper` green, including `test_real_package_script_bundle`, `test_bundle_fetch_needs_scoped_override`, `test_numstat_pinned`, `test_patch_compare_tolerates_git_version`, `test_hostile_git_config_ignored`, every rejection of AC 15, and the new R5-N1 case "a directory at the artifact path → 422 bundle_invalid".
+
+- [ ] 10. Submission, reconciliation, Telegram decision path. Implement `github_writer.py` (fork, push via `GIT_ASKPASS` fd helper, PR, comment; importable only from `submit.py`), `submit.py` (immutable snapshot, binding recheck, `GET /user` identity check → kill on mismatch, `control_checkpoint()` before each write incl. R4-N2 mode check, dry-run "would" payloads, retries, 422 reconcile, interruption), `reconcile.py` (restart reconciliation by reads only, §12.5 table), the live checks of §12.6. Telegram: `telegram/{bot.py,auth.py,handlers.py,keyboards.py,escape.py,cards.py (minimal, Decision 7),commands/{registry.py,builtin.py}}` with the update authorization of §14.2, callback token validation (`^t:[A-Za-z0-9_-]{22}$`, purpose, message id, single use, TTL), Approve → mode-stating Confirm → submit, Reject, and the safety commands `/status /pause /resume /kill /dryrun /help` (`go` commands confirm). Proxy via `HTTPXRequest(proxy=http://10.212.0.2:3150)`. Add `tests/fakes/{fake_github.py,fake_telegram.py}`.
+      Files: `src/ossbot/gatekeeper/{github_writer.py,submit.py,reconcile.py}`, `src/ossbot/gatekeeper/telegram/**`, `tests/fakes/{fake_github.py,fake_telegram.py}`, `tests/unit/gatekeeper/{test_submit.py,test_live_checks.py,test_import_contracts.py}`, `tests/telegram/{test_handlers.py,test_escape.py}`
+      Verify: `DEV pytest -m "unit or telegram"` green, including `test_kill_between_push_and_pr`, `test_restart_reconciles_executing` (fake GitHub sees only GETs), `test_resume_does_not_submit`, `test_dryrun_on_mid_submission_stops_write`, dry-run makes zero write calls (AC 4), handler rejection of foreign user / group chat / wrong message id / replayed / expired token with no state change (AC 7), escape property test.
+
+- [ ] 11. Commit FEAT-002.
+      Verify: `DEV pytest -m "unit or telegram"` green; lint gate green (import-linter proves the `github_writer` contract); `git status --porcelain` empty after commit.
+
+### FEAT-003: Sandbox layer, Docker filter, egress
+
+Depends on FEAT-001 (control flags, catalog API) and FEAT-002 (`gitcmd`, package entrypoints). Unit-testable without Docker; the Docker-backed smoke tests run in FEAT-004 once provisioning exists.
+
+- [ ] 12. Docker API filter. Implement `dockerfilter/{main.py,rules.py}` (stdlib + h11, root, `/run/ossbot/docker-filter.sock` root:ossdock 0660; every row of the §10.8 allow table and the complete create specification incl. duplicate-key rejection, zero-value rule, `Cmd`/profile binding R4-N5, image digest allowlist from the snapshot, refusal of create/start while killed or paused).
+      Files: `src/ossbot/dockerfilter/{__init__.py,main.py,rules.py}`, `tests/unit/dockerfilter/test_rules.py`, `tests/unit/dockerfilter/corpus/*.json`
+      Verify: `DEV pytest -m unit tests/unit/dockerfilter` green over the allow corpus and every single-key mutation in the deny corpus listed in §22.1. (The corpus is re-recorded from the pinned Docker CLI in item 17, §23 item 15.)
+
+- [ ] 13. sandboxd. Implement `sandboxd/{main.py,app.py,jobs.py,profiles.py,networks.py,subnets.py,argv.py,keyscan.py,stagein.py,snapshot.py,probes.py,killwatch.py}` and `runtime/{base.py,docker_cli.py,fake.py}`: JobSpec API of §10.2 on `/run/ossbot/sandboxd.sock`, repo_mode per profile, the four-step job lifecycle (stage-in, snapshot, run, collect), /28 allocation persisted in `sandboxd.db`, one job per cid, the run template, output key scan (§10.6), probe tuple + gate (§10.9, `list_models` exempt), model validation against `GET /v1/models/catalog`, refusal while paused/killed, `destroy` only for terminal contributions.
+      Files: `src/ossbot/sandboxd/**`, `tests/unit/sandboxd/{test_argv.py,test_stagein_snapshot.py,test_probe_gate.py,test_models.py,test_keyscan.py}`
+      Verify: `DEV pytest -m unit tests/unit/sandboxd tests/unit/dockerfilter` green; `test_argv.py` also feeds every generated variant through `dockerfilter.rules` (M4).
+
+- [ ] 14. Sandbox tools, entrypoints, images, Kiro settings, proxy and firewall rendering. Implement `sandbox_tools/{execd.py,exec_mcp.py}` (§10.4 path rules, TOCTOU recheck, caps, four tools), the remaining entrypoints `sandbox/entrypoints/{fetch.sh,kiro.sh,exec.sh,validate.sh,snapshot.sh,list_models.sh,probe.sh}`, `sandbox/images/{full,llm,proxy}/Dockerfile` (digest-pinned `ubuntu:24.04`, UID 10001, fixed dirs with the M2 owners/modes, `OSSBOT_FORMAT_PATCH`/`OSSBOT_NUMSTAT` rendered from `gitcmd`, kiro-cli 2.32.0 headless tarball sha256-verified in `llm` only, probe fixture tar in `full`), `sandbox/kiro/settings/{cli.json,permissions.yaml}`, `sandbox/probes/*.md`, `sandbox/fixtures/probe-repo/` (+ a build step that tars it preserving symlinks), `sandbox/proxy/squid.conf.j2`, and the renderers `ossbot.ctl.render` for squid (from `egress.yaml` snapshot, ports 3128/3140/3141/3150, `dns_nameservers` from `/etc/resolv.conf`) and for `ossbot-firewall` (`OSSBOT-IN`, `OSSBOT-OUT`, `OSSBOT-FWD`, ip6tables, `--apply` and `--check`, §11.4) installed as `/opt/ossbot/bin/ossbot-firewall`. Check §23 items 14 and 16 (web) before writing the rules; record findings in an ADR-0005 addendum.
+      Files: `src/ossbot/sandbox_tools/**`, `sandbox/**`, `src/ossbot/ctl/render.py`, `scripts/bin/ossbot-firewall` (thin wrapper), `tests/unit/sandbox_tools/{test_execd.py,test_exec_mcp.py}`, `tests/unit/sandboxd/test_kiro_settings.py`, `tests/unit/sandbox/test_gitcmd_image_env.py`, `tests/unit/ctl/test_render.py`
+      Verify: `DEV pytest -m unit` green (execd symlink/TOCTOU cases, relay retry and lstat refusal, the eight `cli.json` keys, image env equals `gitcmd`, squid and iptables golden renders); `ROOT shellcheck sandbox/entrypoints/*.sh` clean.
+
+- [ ] 15. Commit FEAT-003.
+      Verify: `DEV pytest -m unit` green; lint gate green; `git status --porcelain` empty after commit.
+
+### FEAT-004: Provisioning, WSL confinement, services, kill switch end to end
+
+Depends on FEAT-001..003. This FEAT changes the real machine: `.wslconfig`, `wsl.conf`, fstab, Docker, iptables, systemd. All of it is inside the repo folder or the three documented host exceptions.
+
+- [ ] 16. Host-side scripts and WSL confinement. Write `config/wsl/wslconfig` (§7.7 verbatim), `scripts/lib/{common.ps1,wslconfig.ps1}` (render, sha256, backup to `.ossbot-local\`, write UTF-8 no BOM CRLF, verify `nproc`/`free`/`swapon`), `scripts/lib/wsl.sh` (`wsl.conf` of §7.2, managed fstab block with the `\134` form and the two fallbacks, `/etc/fstab.ossbot.bak` rollback, mountpoint on ext4), `scripts/bootstrap.ps1` (§18.2 steps 1-6, from zero incl. `wsl --install Ubuntu-24.04 --name ossbot --location <repo>\.wsl\ossbot --no-launch` when missing, `--import-in-place` offer when only the VHD exists, never unregisters; `-DistroName/-Location` parameters for `tests/system/test_bootstrap_zero.ps1`, which refuses `ossbot`), `scripts/hyperv-firewall.ps1` (+ `-Remove`), `scripts/uninstall-host.ps1`, `scripts/test-isolation.ps1` (§22.8; for the PE check it copies `C:\Windows\System32\whoami.exe` to the gitignored `.ossbot-local\isolation\` and executes it from the distro, because `tools/bin/gitleaks.exe` only exists after FEAT-008). Check §23 items 1, 3, 4, 25 first and record results in ADR-0013/ADR-0007 addenda.
+      Files: `config/wsl/wslconfig`, `scripts/{bootstrap.ps1,hyperv-firewall.ps1,uninstall-host.ps1,test-isolation.ps1}`, `scripts/lib/{common.ps1,wslconfig.ps1,wsl.sh}`, `tests/system/test_bootstrap_zero.ps1`
+      Verify: `powershell -NoProfile -File scripts\bootstrap.ps1 -Only wsl` installs `.wslconfig` and the isolation config, restarts WSL, and passes; `powershell -NoProfile -File scripts\test-isolation.ps1` passes every check of overall verification 2.
+
+- [ ] 17. Full provision. Complete `provision.sh` with the §18.2 step 5 order: `users`, `apt-base` and `uv` (from item 2), `docker` (pinned apt, `daemon.json` of §7.4, `firewall-backend` per §23 item 14, empty docker group), `dockerfilter`, `app deploy` (rsync `src/ pyproject.toml uv.lock prompts/ vendor/` to `/opt/ossbot/app` as root data, `uv sync --frozen --no-dev`), `kiro-cli for hermes` and `hermes` (no-op, Decision 8), `images` (full, llm, proxy; digests written back to `versions.lock.yaml`), `networks` (`ossbot-egress` 10.212.0.0/24), `firewall`, `systemd` (all units of §7.5 except Hermes ones, tmpfiles, boot gate enabled first), `audit anchors` (`chattr +a`), `secrets seed` (Decision 5), `enable/start`, `doctor --quick`. Write `scripts/lib/{docker.sh,firewall.sh,images.sh,services.sh,kiro.sh}` and `systemd/*` (boot gate, firewall x2, dockerfilter, proxy, gatekeeper, sandboxd, anchor socket, killswitch/resume paths, enforce-kill/resume, watchdog timer). Re-record the Docker filter corpus from the pinned CLI (§23 item 15) and re-run item 12's tests.
+      Files: `scripts/provision.sh`, `scripts/lib/*.sh`, `systemd/**`, `config/versions.lock.yaml`, `tests/unit/dockerfilter/corpus/*.json`
+      Verify: `powershell -NoProfile -File scripts\bootstrap.ps1` succeeds; a second run reports only `unchanged`; `ROOT docker version`, `ROOT docker compose version` succeed; `ROOT systemctl is-active ossbot-boot-gate ossbot-firewall ossbot-firewall-docker ossbot-dockerfilter ossbot-proxy ossbot-gatekeeper ossbot-sandboxd ossbot-watchdog.timer` all `active`; `ROOT /opt/ossbot/bin/ossbot-firewall --check` exits 0.
+
+- [ ] 18. Kill switch, resume, watchdog end to end. Write `scripts/bin/{ossbot-boot-gate,ossbot-kill,ossbot-resume}` (self-contained bash, §13.2-13.3), `scripts/{kill.ps1,resume.ps1}` (§13.3 incl. N8 30 s timeout → `wsl --terminate`, `-Hard` → disable task + `wsl --shutdown`), `src/ossbot/watchdog/{tick.py,anchors.py,perms.py}` (30 s invariants, firewall `--check`, anchors every 10th tick, gatekeeper health → pause, kill re-enforcement, never starts units while killed/paused), the anchor service, `ossctl` CLI skeleton (`ctl/cli.py`: `status pause kill resume dryrun config reload doctor audit verify test`) with the offline resume path (N4), and `scripts/ossctl.ps1`.
+      Files: `scripts/bin/*`, `scripts/{kill.ps1,resume.ps1,ossctl.ps1}`, `src/ossbot/watchdog/**`, `src/ossbot/ctl/{cli.py,doctor.py}`, `tests/system/test_kill.ps1`
+      Verify: `powershell -NoProfile -File tests\system\test_kill.ps1` passes all §22.6 kill cases (AC 9: containers gone ≤ 10 s, gatekeeper 423, soft vs full reboot cases, distro-stopped marker case, hung in-distro kill returns ≈35 s, resume order); `-Hard` case ends with WSL stopped and `resume.ps1` restores.
+
+- [ ] 19. Setup secrets, profile, doctor (awaiting secrets). Write `scripts/setup-secrets.ps1` + `scripts/setup-secrets.sh` (§18.3: SecureString prompts, NUL-separated stdin record, format validation, per-file owner/mode, preserves Decision 5 randoms; `--selftest` mode that feeds fake well-formed values into a temp root to test validation without touching `/etc/ossbot/secrets`). Create the local `config/profile.yaml` (Decision 6; gitignored). Implement `ossctl doctor` checks of §18.3 in the M11 order; every check that needs a secret reports `AWAITING SECRET: <name>` instead of FAIL. Windows part in `ossctl.ps1 doctor` (`.wslconfig` hash, Hyper-V, localhost-forwarding probe, autostart task).
+      Files: `scripts/{setup-secrets.ps1,setup-secrets.sh}`, `src/ossbot/ctl/doctor.py`, `config/profile.yaml` (local only)
+      Verify: `STREAM scripts/setup-secrets.sh --selftest` passes; `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor` and `powershell -NoProfile -File scripts\ossctl.ps1 doctor` complete, list Telegram, GitHub write/read and both Kiro keys as awaiting, and show every non-secret check PASS (Hyper-V may be WARN if not elevated).
+
+- [ ] 20. Sandbox smoke and system tests on the provisioned distro. Write `tests/sandbox/test_profiles.py` (§22.5, all bullets runnable without a key: proxy 403, no DNS, mounts, caps, uid, ro rootfs, ports 3140/3141/3150 unreachable, S-symlink-1, stage-in, S-perm-1, S-key-1; S-ws-1 and Kiro-host CONNECT checks are marked `needs_key` and skipped with a reason) and `tests/system/{test_control_perms.sh,test_secret_perms.sh,test_docker_filter.sh,test_egress_per_uid.sh,test_firewall_failclosed.sh,test_proxy_dns.sh,test_config_write.sh,test_audit_anchor.sh}`.
+      Files: `tests/sandbox/**`, `tests/system/*.sh`
+      Verify: `ROOTDEV pytest -m sandbox` green (key-dependent cases skipped with reason); each `ROOT bash tests/system/<name>.sh` exits 0 (AC 12, 18).
+
+- [ ] 21. Phase 1 close-out. Run gitleaks over the history with the distro binary, commit FEAT-004.
+      Verify: every Phase 1 verification command below passes; `git status --porcelain` empty.
+
+### Phase 1 verification (run inside ossbot, from the repo root)
+
+```powershell
+DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports
+DEV pytest -m "unit or telegram"
+ROOTDEV pytest -m sandbox
+ROOT bash tests/system/test_control_perms.sh      # and every other tests/system/*.sh
+powershell -NoProfile -File tests\system\test_kill.ps1
+wsl.exe --terminate ossbot ; powershell -NoProfile -File scripts\test-isolation.ps1
+powershell -NoProfile -File scripts\bootstrap.ps1             # second run: only "unchanged"
+ROOT docker version ; ROOT docker compose version
+ROOT systemctl is-active ossbot-gatekeeper ossbot-dockerfilter ossbot-proxy ossbot-sandboxd ossbot-watchdog.timer
+ROOT /opt/ossbot/bin/ossbot-firewall --check
+ROOT /opt/ossbot/app/.venv/bin/ossctl doctor ; powershell -NoProfile -File scripts\ossctl.ps1 doctor
+ROOT /opt/ossbot/app/.venv/bin/ossctl audit verify
+ROOT gitleaks git --redact .
+git status --porcelain                                         # empty
+```
+
+Phase 1 acceptance criteria covered: 2, 6, 7, 9, 10, 11, 12 (key-free parts), 15, 16, 18, 19, 21, 26 (gate logic), 27 (verification logic), 29.
+
+---
+
+## Phase 2: Telegram UX, pipeline, Kiro and Hermes, model switch, open-source docs, hardening
+
+Goal: the system finds, implements, validates and previews contributions, chats through Hermes, switches models globally, and is documented well enough to rebuild from a fresh Windows install or publish. Depends on all of Phase 1.
+
+### FEAT-005: Decorated Telegram review UX and chat relay plumbing
+
+Depends on FEAT-002 (token/approval core, minimal cards) and FEAT-001 (outbox).
+
+- [ ] 22. Cards and rendering. Implement `telegram/{render.py,chunking.py,cards.py,pending_input.py}`: the §14.4 decorated PR card, the §14.4a comment/claim/push_update cards, verbatim `<pre>` body and commit message with the invisible/bidi pre-pass, chunking ≤ 3900 with `<pre>` reopen, the two-phase keyboard (Approve minted only after all parts are delivered), diff paging via `editMessageText`, `.patch` and `pr_body.md` documents, test-log summary + `.txt`, Request changes / Edit title / Edit body / Clear my edits via ForceReply correlation, Reject reasons with cooldown, Retry / Give up on this fix / Stop watching. Extend the command registry with `/queue /approve /reject /reload /repos /model /limits (/budget) /logs /newchat`, entry-point group `ossbot.telegram_commands`, `setMyCommands`. Outbox honours 429 `retry_after`. The approval/token code from item 10 is reused unchanged.
+      Files: `src/ossbot/gatekeeper/telegram/**`, `tests/telegram/{test_escape.py,test_chunking.py,test_cards.py,test_body_verbatim.py,test_handlers.py}`, `tests/telegram/golden/*`
+      Verify: `DEV pytest -m telegram` green (AC 14: ≤ 4096 chars, well-formed HTML property test, every `callback_data` ≤ 64 bytes, paging, `.patch`, verbatim body, Approve hidden until delivered; golden cards in LIVE and DRY RUN for every action kind; `/approve <cid>` rotates tokens N4).
+
+- [ ] 23. Chat backend and Hermes surface check, then commit FEAT-005. Implement `gatekeeper/chat/{backend.py,hermes_api.py,hermes_surface.py}` (`ChatBackend` interface; `POST /v1/responses` with `X-Hermes-Session-Key: tg-<uid>-<n>`; `GET /v1/capabilities` at start; escaped `🤖` replies with no buttons; `ossbot_notify` path; relay enabled only while the surface check passes and `/var/lib/ossbot/probes/hermes-kiro.json` reports a pass younger than 2 h; soft kill `hermes_tool_surface` on drift) and `tests/fakes/fake_hermes.py`.
+      Files: `src/ossbot/gatekeeper/chat/**`, `tests/fakes/fake_hermes.py`, `tests/unit/gatekeeper/test_hermes_surface.py`, `tests/telegram/test_relay.py`
+      Verify: `DEV pytest -m "unit or telegram"` green, including every `test_hermes_surface.py` fake of §15.1 (AC 25) and `test_relay.py` (Hermes output containing `/approve` or HTML renders as text, no buttons, no command runs); `git status --porcelain` empty after the commit.
+
+### FEAT-006: Runner pipeline, global model switch, catalog
+
+Depends on FEAT-001..005 (gatekeeper API, sandboxd, cards). Independent of FEAT-007: the runner talks to Kiro only through sandboxd.
+
+- [ ] 24. Global model switch. Write `config/models.yaml` (§16.1; model id spelling verified from the Kiro docs for `chat --list-models --format json`, §23 item 9), `common/models.py` (`resolve()` with fallbacks, catalog/forced rule N6, mtime cache, last-good on a broken file), `gatekeeper/models_admin.py` + `GET /v1/models`, `PUT /v1/models/{role}` (catalog id or `--force` regex, ruamel round-trip keeping comments, atomic `os.replace` inside `config/`, audit event, diff reply), `ossctl model set|list [--force] [--commit]`, `ossctl models refresh`, Telegram `/model` with catalog buttons and confirm, and the new-model card `[Set as default] [Set for role…] [Ignore]`.
+      Files: `config/models.yaml`, `src/ossbot/common/models.py`, `src/ossbot/gatekeeper/models_admin.py`, `src/ossbot/gatekeeper/api/models.py`, `src/ossbot/gatekeeper/telegram/commands/builtin.py`, `src/ossbot/ctl/cli.py`, `tests/unit/gatekeeper/test_models_admin.py`, `tests/unit/common/test_models_resolve.py`
+      Verify: `DEV pytest -m "unit or telegram"` green (comments preserved, atomic write, non-catalog id rejected without `--force`, unknown role rejected); after `scripts\bootstrap.ps1` redeploys the app, `ROOT bash tests/system/test_config_write.sh` green (gatekeeper writes `config/models.yaml`, no temp file left, runner cannot write `config/`).
+
+- [ ] 25. Runner and stages. Implement `runner/{main.py,scheduler.py,pipeline.py,github_read.py,scoring.py,llm.py,output_parse.py,prompts.py,gk_client.py,sbx_client.py,squidlog.py}` and `runner/stages/{discover,vet,fetch,plan,implement,validate,review,package,watch,catalog,importer}.py` per §9.3-9.13 (stage_runs + 15 s heartbeat, interrupted re-queue max 3, loop bounds, claim guard, first-start order M11, `needs_network` refetch once, fix rounds via unbundle, `git reset --soft <round_base>` after implement, task-volume lifecycle, §13.4 runner anomalies, kill/pause check before each stage and at each heartbeat), the `ossbot-runner` console script, `ossctl discover`, `ossctl contribution import`, `ossctl targets verify`. Write `prompts/{vetter,planner,coder,reviewer,summarizer,chat_system,watcher_reply}.md`, `prompts/{pr_body.md.j2,pr_disclosure.md,commit_message.md.j2,untrusted_wrapper.md}` (web-research rule of §15.3, disclosure template of §12.3 using `{{ profile.github_login }}`), and `.kiro/agents/ossbot-{vetter,planner,coder,reviewer,summarizer}.json` (never overwrite pre-existing files); set the per-role `TRUST_TOOLS` constants in `sandboxd/profiles.py`. Re-verify §23 items 5, 5b, 6, 8, 21, 24 by docs/web; anything needing a key is recorded as a pending live probe in the ADR-0005 addendum.
+      Files: `src/ossbot/runner/**`, `prompts/**`, `.kiro/agents/ossbot-*.json`, `src/ossbot/sandboxd/profiles.py`, `config/targets.yaml`, `tests/unit/runner/**`, `tests/unit/gatekeeper/test_control.py`
+      Verify: `DEV pytest -m unit` green, including runner scoring, output parsing with one repair retry, discovery filters and the re-discovery cache, squid log parser, model resolution on the invocation path, and `test_control.py` extended to every real runner stage entrypoint (AC 10).
+
+- [ ] 26. Pipeline e2e with fakes, then commit FEAT-006. Write `tests/fakes/upstream_fixture.py` (fake-org/fake-tool with the hostile extras of §22.4), `tests/bin/kiro-cli` (stub emitting canned stream-json per `--agent`, incl. the injection fixture), `tests/e2e/{test_e2e_dry_run.py,test_e2e_live_fake.py,test_e2e_dryrun_toggle.py,test_e2e_injection.py,test_e2e_import.py,test_e2e_first_start.py,test_e2e_fix_round_failure.py,test_e2e_resume.py}` (FakeRuntime) and `tests/e2e/test_e2e_docker.py` (marker `e2e_docker`, real sandboxd + filter + proxy, local git daemon container as upstream). Add and enable `systemd/ossbot-runner.service` in `scripts/lib/services.sh`.
+      Files: `tests/e2e/**`, `tests/fakes/upstream_fixture.py`, `tests/bin/kiro-cli`, `scripts/lib/services.sh`, `systemd/ossbot-runner.service`
+      Verify: `DEV pytest -m e2e` green (AC 4, 5, 8, 13 pipeline side, 28, 30); after `scripts\bootstrap.ps1`, `ROOTDEV pytest -m e2e_docker` green and `ROOT systemctl is-active ossbot-runner` = `active` (it idles with `catalog_empty` while no Kiro key exists); `git status --porcelain` empty after the commit.
+
+### FEAT-007: Kiro V3 ACP provider fork, Hermes, live chat model switch
+
+Depends on FEAT-004 (provisioning, units), FEAT-005 (relay gating) and FEAT-006 (`common/models.py`).
+
+- [ ] 27. Vendored provider fork. Fetch `https://github.com/tobenwarrior/hermes-kiro-provider` at `02c4dd06585436751145961658a22b773f23a0ef` (download the commit's archive or clone into the gitignored `.ossbot-local/`, never as a submodule or remote of this repo) and copy it into `vendor/hermes-kiro-provider/` as plain files, keeping `LICENSE` and adding `UPSTREAM_COMMIT` and `UPSTREAM_URL`. Commit it unmodified first. Then add `kiro_acp/v3_core.py` (stdlib-only `launch_spec()`, `session_new_params()`, `assert_surface()`, permission answering, redacting JSON-RPC logger), `kiro_acp/v3.py` (Hermes provider glue: handlers before `session/new`, capability gating, live `session/set_config_option` model/effort switch from `models.yaml`, turn completion from the prompt response, `session/load` on reconnect without resending, `on_surface_violation` hook), `kiro_acp/hermes_plugin.py` (R5-N3: Hermes registration moves here and is named by the plugin manifest; `kiro_acp/__init__.py` stays import-free), and `HERMES_KIRO_ACP_ENGINE=v3|v2` selection with the original V2 code untouched. Declare `vendor/hermes-kiro-provider` as a non-editable uv path dependency of the app (R5-N3) and re-lock. Write `tests/fakes/fake_acp_v3.py` and the `tests/acp/` suites. Check §23 items 10, 11, 12 and 5c by web search first.
+      Files: `vendor/hermes-kiro-provider/**`, `pyproject.toml`, `uv.lock`, `tests/fakes/fake_acp_v3.py`, `tests/acp/{test_v3_contract.py,test_mode_mismatch.py,test_hermes_probe_eval.py}`
+      Verify: `DEV pytest -m acp` green (AC 20: capability gating, `_meta.kiro` on `session/new`, `set_config_option` and never `set_model`, reject options or `cancelled`, unknown request → JSON-RPC error, access token absent from every log record, launch argv has `--agent-engine=v3` and no v2 flags, mode `vibe` or a `read` tool → no prompt sent and kill requested).
+
+- [ ] 28. Hermes install, plugin, root probe, real handshake, then commit FEAT-007. Replace the Decision 8 no-ops with the real provision steps `kiro-cli for hermes` (manifest + sha256 into `~hermes/.local/bin`, `cli.json` and `permissions.yaml` for `hermes`) and `hermes` (the §15.4 script plus R5-N2: hold `flock /run/ossbot/hermes-upgrade.lock` for the whole step, stop `ossbot-hermes-probe.socket` first, repeat the `pgrep -u hermes` refusal after the rollback `pkill`); record the peeled commit in `versions.lock.yaml` and reproduce the non-dependency steps of the tag's `setup-hermes.sh` (§23 item 13; list in the ADR-0002 addendum). Add `hermes/config/{config.yaml.j2,permissions.yaml}` (allowlisted toolsets, `tool_search` off, §15.1), `hermes/plugins/ossbot/{plugin.yaml,__init__.py,tools.py}`, `.kiro/agents/ossbot-chat.json`, the units `ossbot-hermes.service`, `ossbot-hermes-probe.socket`, `ossbot-hermes-probe@.service`, and `ctl/hermes_probe.py` (root ACP client + evaluator, R4-M2 code-origin rules, adapter drift hash, non-blocking lock → inconclusive "Hermes is upgrading", `--selftest`, `--handshake-only` per Decision 11). Add `ossctl hermes upgrade|login` and `ossctl kiro upgrade`. Run the real handshake and append the redacted outcome to the ADR-0002 addendum.
+      Files: `scripts/lib/{kiro.sh,hermes.sh}`, `hermes/**`, `.kiro/agents/ossbot-chat.json`, `systemd/ossbot-hermes*`, `src/ossbot/ctl/{hermes_probe.py,cli.py}`, `tests/unit/ctl/test_hermes_probe_paths.py`, `tests/system/test_hermes_install_hygiene.sh`, `config/versions.lock.yaml`, `docs/adr/0002-agent-runtime-hermes-kiro-acp.md`
+      Verify: `powershell -NoProfile -File scripts\bootstrap.ps1` succeeds and a re-run reports only `unchanged`; `ROOT runuser -u hermes -- /home/hermes/.local/bin/kiro-cli --version` prints 2.32.0 (or the re-verified pin) and `ROOT runuser -u hermes -- /home/hermes/.local/bin/hermes --version` prints v0.22.2; `DEV pytest -m "unit or acp"` green incl. `test_hermes_probe_paths.py`; `ROOT bash tests/system/test_hermes_install_hygiene.sh` green incl. the mid-upgrade probe-trigger case; `ROOT /opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.hermes_probe --handshake-only` ran and its outcome is in ADR-0002; `ROOT systemctl is-active ossbot-hermes` = `active` with the relay reported disabled by doctor (awaiting `KIRO_API_KEY`); `git status --porcelain` empty after the commit.
+
+### FEAT-008: Backup/restore, open-source docs, CI, final hardening
+
+Depends on everything above (docs describe the built system; the backup include list needs FEAT-007's Hermes layout).
+
+- [ ] 29. Backup and restore. Implement `ctl/backup.py` and `ctl/restore.py` (§18.8: pause/checkpoint, SQLite online backup, audit verify on the copy, MANIFEST, age to `profile.backup.age_recipients`, retention 8, restore moves state aside, forces killed + dry-run ON, invalidates approvals, re-applies `chattr +a`), `scripts/{backup.ps1,restore.ps1}`, the disabled `ossbot-backup.timer` + `ossctl backup schedule on|off`. Pin age with sha256 (§23 item 26); take the Hermes include list from §23 item 28 as recorded in FEAT-007.
+      Files: `src/ossbot/ctl/{backup.py,restore.py,cli.py}`, `scripts/{backup.ps1,restore.ps1}`, `systemd/ossbot-backup.{service,timer}`, `scripts/provision.sh` (age added to the `apt-base` step), `config/versions.lock.yaml`, `tests/unit/ctl/{test_backup.py,test_restore.py}`, `tests/system/test_backup_roundtrip.sh`
+      Verify: `DEV pytest -m unit tests/unit/ctl` green; `ROOT bash tests/system/test_backup_roundtrip.sh` green (in-place variant of AC 22: audit verify passes, Hermes memory files identical, restored state killed + dry-run ON); the test resumes the system afterwards.
+
+- [ ] 30. Harness docs and secret hygiene. Write `README.md` and `AGENTS.md` (§18.5 content verbatim in intent, no personal values, mermaid diagram, Telegram command table generated by `ossctl docs commands`), `docs/SETUP.md` (§18.7 runbook from a fresh Windows install, including the "after the build" credential steps), `docs/ARCHITECTURE.md`, `.kiro/steering/{product,tech,structure,safety-invariants,web-research}.md` (`safety-invariants.md` with `inclusion: always`), `.kiro/agents/harness-dev.json`, `.gitleaks.toml`, `.githooks/pre-commit` (gitleaks on staged changes, then `ossctl lint personal`), `scripts/install-hooks.ps1` (downloads sha256-verified `tools/bin/gitleaks.exe`; the user runs it, see SETUP.md), `ctl/lint_personal.py`, `ossctl docs commands [--check]`. Check §23 items 23 and 27 first.
+      Files: `README.md`, `AGENTS.md`, `docs/{SETUP.md,ARCHITECTURE.md}`, `.kiro/steering/*.md`, `.kiro/agents/harness-dev.json`, `.gitleaks.toml`, `.githooks/pre-commit`, `scripts/install-hooks.ps1`, `src/ossbot/ctl/{lint_personal.py,cli.py}`, `tests/unit/ctl/{test_lint_personal.py,test_docs_commands.py}`
+      Verify: `DEV pytest -m unit tests/unit/ctl` green; `DEV ossctl lint personal` and `DEV ossctl docs commands --check` exit 0; AC 17 hook check in a throwaway clone under the gitignored `.ossbot-local/hooktest/` (clone the repo there, set `core.hooksPath` in that clone only, stage a file with a fake `ghp_` token, the commit is refused; delete the clone). The main repo's git config is not changed.
+
+- [ ] 31. CI. Write `.github/workflows/ci.yml` (§18.9: push + pull_request, `permissions: contents: read`, every action pinned by full commit SHA with a version comment, `concurrency`, jobs `lint`, `test`, `secrets`; PSScriptAnalyzer via `pwsh`; `ossctl docs commands --check`; the `profile.example.yaml` placeholder check). Add `tests/unit/test_ci_workflow.py` that loads the YAML and asserts the permissions block, SHA pinning and the job commands.
+      Files: `.github/workflows/ci.yml`, `tests/unit/test_ci_workflow.py`
+      Verify: `DEV pytest -m unit tests/unit/test_ci_workflow.py` green; every command the `lint` and `test` jobs run passes via `DEV`; `ROOT gitleaks git --redact --config .gitleaks.toml .` exits 0.
+
+- [ ] 32. Final hardening and full verification, then commit FEAT-008. Run the whole "Required overall verification" list and the Phase 2 verification block, fix what fails, and record the `ossctl doctor` summary (which checks are PASS, WARN, AWAITING SECRET) in the FEAT-008 `findings`.
+      Verify: all eight overall checks pass; `git status --porcelain` empty.
+
+### Phase 2 verification (run inside ossbot, from the repo root)
+
+```powershell
+DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports
+DEV pytest -m "unit or telegram or acp or e2e"
+ROOTDEV pytest -m "sandbox or e2e_docker"
+ROOT bash tests/system/test_hermes_install_hygiene.sh ; ROOT bash tests/system/test_backup_roundtrip.sh   # plus all Phase 1 system tests
+powershell -NoProfile -File tests\system\test_kill.ps1
+wsl.exe --terminate ossbot ; powershell -NoProfile -File scripts\test-isolation.ps1
+powershell -NoProfile -File scripts\bootstrap.ps1             # second run: only "unchanged"
+ROOT runuser -u hermes -- /home/hermes/.local/bin/kiro-cli --version
+ROOT runuser -u hermes -- /home/hermes/.local/bin/hermes --version
+ROOT systemctl is-active ossbot-gatekeeper ossbot-runner ossbot-sandboxd ossbot-hermes
+ROOT /opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.hermes_probe --handshake-only
+ROOT /opt/ossbot/app/.venv/bin/ossctl doctor ; powershell -NoProfile -File scripts\ossctl.ps1 doctor
+DEV ossctl lint personal ; DEV ossctl docs commands --check
+ROOT gitleaks git --redact --config .gitleaks.toml .
+git status --porcelain                                         # empty
+```
+
+Phase 2 acceptance criteria covered: 1, 3, 4, 5, 8, 13, 14, 17, 20, 22, 23, 24, 25, 28, 30, plus the key-dependent parts of 12 and 26 through `ossctl doctor --probes` once secrets exist.
+
+---
+
+## Deferred (phase-2 of the design, not built in v1)
+
+Per §6.1 these stay off or absent; the implementation keeps their flags rejecting anything but the v1 value: stack validation (compose/kind, `ossbot-stack`, `stack` profile, `container_registries`), `sandbox.coder_mode: single`, `telegram.mode: dual`, proactive discovery, `sandbox-android` image and `ossctl images build android`, enabling the scheduled backup timer by default (the unit ships disabled), Hermes provider fallbacks 1 and 2 (built only if the V3 path fails its probes once keys exist), `WslcRuntime`, Langfuse telemetry hook (interface only).
+
+## After the build (needs the user)
+
+Create the external credentials (BotFather token, Telegram user ID, two Kiro API keys, classic PAT `public_repo`, fine-grained read PAT, age identity), run `scripts\setup-secrets.ps1`, then `scripts\ossctl.ps1 doctor --probes` until green, run the first dry run from Telegram, and only then `/dryrun off`. Optional: an elevated `scripts\hyperv-firewall.ps1`. The user pushes `origin` himself.

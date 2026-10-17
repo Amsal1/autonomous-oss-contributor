@@ -1,0 +1,32 @@
+{
+  "id": "FEAT-001",
+  "type": "feat",
+  "description": "Repo foundation and gatekeeper safety core (PLAN.md items 1-7). Lands .gitattributes first, the first three idempotent provision.sh steps (users, apt-base, uv) run for real in the existing 'ossbot' distro to create the dev environment (ossadmin uid 1000, pinned uv at /opt/ossbot/bin/uv, shellcheck, gitleaks), the uv project with pinned deps, ossbot.common, and the deterministic gatekeeper core: SQLite schema of DESIGN §12.7, control state (running/paused/killed soft|full, dry-run default ON), hash-chained audit with anchors client, state machine with actor table and live-PR redirect (§9.2), approval binding/lifecycle/invalidation and message-bound ui_tokens (§12.4), policy with monotonic floors (§12.6, §7.9), rate limits, config snapshot, UDS API with SO_PEERCRED roles (§12.2, no approve endpoint), outbox. First FEAT; everything else depends on it.",
+  "status": "pending",
+  "steps": [
+    "Item 1: add .gitattributes (* text=auto eol=lf; *.ps1 text eol=crlf; binaries binary), extend .gitignore (.pytest_cache/ .mypy_cache/ .ruff_cache/ *.egg-info/), git add --renormalize ., commit alone.",
+    "Item 2: write scripts/provision.sh (step registry in DESIGN §18.2 order, --only/--list, changed/unchanged output, log to /srv/ossbot/logs/provision-<ts>.log), scripts/lib/common.sh and scripts/lib/users.sh; implement steps 'users' (all users/groups/uids/dirs/modes of §7.3; ossadmin uid 1000 with ~/.profile PATH and UV_PROJECT_ENVIRONMENT; ossnobody 1001; /etc/sudoers.d/ossbot-ossadmin NOPASSWD only for /opt/ossbot/bin/* and /opt/ossbot/app/.venv/bin/ossctl, PLAN Decision 3), 'apt-base' (§18.2 packages + shellcheck; gitleaks release sha256-verified to /usr/local/bin) and 'uv' (pinned tarball sha256 from versions.lock). Create config/versions.lock.yaml with the DESIGN §0 pins after re-checking each by web search. Run: (Get-Content -Raw scripts/provision.sh) -replace \"`r\",\"\" | wsl.exe -d ossbot -u root -- bash -s -- --only users,apt-base,uv (twice).",
+    "Item 3: pyproject.toml (requires-python >=3.12,<3.14; == pins per PLAN Decision 4; console script ossbot-gatekeeper; pytest markers with --strict-markers; ruff; mypy strict for ossbot.gatekeeper/dockerfilter/common; import-linter contracts of §18.1), uv lock, src/ossbot/common/{config,snapshot,paths,logging,clock,ids,yamlio,uds,redact,hashing,schemas,rediscover}.py, config/{policy,egress,targets}.yaml (targets from §17.2, neutral why texts), config/profile.example.yaml (placeholders only), tests/fixtures/profile.test.yaml, tests/conftest.py, tests/unit/common/test_*.py incl. test_snapshot_hash.py (N2).",
+    "Item 4: src/ossbot/gatekeeper/{db.py,control.py,audit.py,anchors.py,anomaly.py} + migrations/0001_init.sql verbatim from §12.7; tests test_audit.py (incl. test_recomputed_chain_fails_against_anchors) and test_control_reconcile.py (N12, resume.log offset N4).",
+    "Item 5: state_machine.py, approvals.py, policy.py, ratelimit.py, snapshot load/reload with confirm hash; tests test_state_machine.py, test_approvals.py (all non-git cases), test_policy.py, test_policy_floor.py, test_ratelimit.py, test_snapshot.py, test_discover.py, test_control.py parametrized over a shared stage/job/outbound-kind constant x {paused, killed}.",
+    "Item 6: authz.py (peercred uid -> operator/worker/sandbox/requester; others 403), app.py/main.py (uvicorn on /run/ossbot/gatekeeper.sock, ossapi 0660), api/{control,config,contributions,actions,models,audit,notify}.py with every §12.2 endpoint (package/import/import-bundle return 501 until FEAT-002), operator FYI hook, outbox.py (pluggable sender); tests test_authz.py (route table has no approve route), test_api_uds.py (temp UDS), test_catalog_upsert.py (R4-N3).",
+    "Item 7: run the full FEAT verification, set this file's status to completed, record findings, commit locally (identity check first)."
+  ],
+  "acceptance_criteria": [
+    "git ls-files --eol shows LF in the index for every text file; .gitattributes committed in its own first commit",
+    "provision.sh --only users,apt-base,uv prints changed on first run and unchanged on the second; ossadmin is uid 1000 in groups sudo, osscfg, ossapi; /opt/ossbot/bin/uv --version and gitleaks version print the pinned versions",
+    "DEV pytest -m unit passes with the DESIGN §22.1 cases for state machine (AC 19: worker gets 403 on every approval-state edge), approvals (every single-field binding change, dry-run toggle both directions, AC 6), rate limits (AC 11), control x {paused, killed} (AC 10), audit anchors (AC 16), policy floors, snapshot hash N2, authz (no approve route)",
+    "ruff check, ruff format --check, mypy (strict packages), lint-imports all pass; shellcheck clean on scripts/provision.sh and scripts/lib/*.sh",
+    "No personal values in tracked files outside docs/ (profile.example.yaml has placeholders only)"
+  ],
+  "verification": [
+    "(Get-Content -Raw scripts/provision.sh) -replace \"`r\",\"\" | wsl.exe -d ossbot -u root -- bash -s -- --only users,apt-base,uv   # second run: all unchanged",
+    "wsl.exe -d ossbot -u root --exec id ossadmin",
+    "wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m unit",
+    "DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports   (DEV prefix as above, minus 'pytest -m unit')",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec shellcheck scripts/provision.sh scripts/lib/common.sh scripts/lib/users.sh",
+    "git status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

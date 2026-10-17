@@ -1,0 +1,37 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Provisioning from zero, WSL confinement, systemd services and the kill switch end to end (PLAN.md items 16-21). This FEAT changes the real machine (allowed: WSL is dedicated to ossbot): installs %USERPROFILE%\\.wslconfig from config/wsl/wslconfig (DESIGN §7.7, backup to .ossbot-local\\), wsl.conf + single drvfs fstab line (§7.2), runs the full provision.sh (§18.2: Docker Engine pinned + daemon.json, Docker filter, app deploy to /opt/ossbot/app, images full/llm/proxy, ossbot-egress network, firewall units fail-closed, all §7.5 units except runner/Hermes, anchors chattr +a, secrets seed per PLAN Decision 5, start with dry-run ON), registers ossbot-autostart, implements boot gate / ossbot-kill / ossbot-resume / kill.ps1 / resume.ps1 / watchdog (§13), setup-secrets (validated, not run with real values), the local gitignored config/profile.yaml (PLAN Decision 6), ossctl CLI skeleton + doctor that lists items awaiting secrets, and the sandbox smoke + system test suites (§22.5, §22.6, §22.8). Hermes and kiro-cli-for-hermes provision steps are named no-ops until FEAT-007 (Decision 8). Depends on FEAT-001..003.",
+  "status": "pending",
+  "steps": [
+    "Item 16: verify DESIGN §23 items 1, 3, 4, 25 (web + live) and write ADR-0013/ADR-0007 addenda. Write config/wsl/wslconfig (§7.7 verbatim), scripts/lib/{common.ps1,wslconfig.ps1}, scripts/lib/wsl.sh (wsl.conf §7.2 with default=ossnobody, automount off, mountFsTab, interop off; managed '# BEGIN ossbot' fstab block with the \\134 form, fallbacks D:/Work/... then D:\\\\Work\\\\..., rollback from /etc/fstab.ossbot.bak), scripts/bootstrap.ps1 (§18.2 steps 1-6; -Only <phase> switch; from-zero create via wsl --install Ubuntu-24.04 --name ossbot --location <repo>\\.wsl\\ossbot --no-launch; --import-in-place offer; never unregister; Hyper-V step only when already elevated else WARN; -DistroName/-Location for tests/system/test_bootstrap_zero.ps1 which refuses 'ossbot'), scripts/hyperv-firewall.ps1 (+ -Remove), scripts/uninstall-host.ps1, scripts/test-isolation.ps1 (§22.8; PE check uses a copy of C:\\Windows\\System32\\whoami.exe in .ossbot-local\\isolation\\). Run bootstrap -Only wsl and test-isolation.",
+    "Item 17: complete provision.sh steps docker, dockerfilter, app deploy, kiro-cli-for-hermes (no-op), hermes (no-op), images (write digests to config/versions.lock.yaml), networks, firewall, systemd (+ systemd/tmpfiles.d/ossbot.conf; units of §7.5 with hardening, Requires/After firewall units, ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check, ExecCondition boot-gate --allow minimal for gatekeeper/proxy), audit anchors, secrets seed (Decision 5), enable/start, doctor --quick; scripts/lib/{docker.sh,firewall.sh,images.sh,services.sh,kiro.sh}; systemd/*. Re-record the Docker filter allow corpus from the pinned docker CLI (§23 item 15) and re-run the filter tests. Run the full bootstrap twice.",
+    "Item 18: scripts/bin/{ossbot-boot-gate,ossbot-kill,ossbot-resume} (self-contained bash per §13.2-13.3, resume.log append N4), ossbot-enforce-kill/resume units and path units, scripts/{kill.ps1,resume.ps1} (marker first, 30 s timeout -> wsl --terminate, -Hard disables task + wsl --shutdown), src/ossbot/watchdog/{tick.py,anchors.py,perms.py} + ossbot-watchdog.timer, anchor socket service, src/ossbot/ctl/cli.py (status, pause, kill, resume incl. offline path, dryrun, config reload, audit verify, doctor, test), scripts/ossctl.ps1, tests/system/test_kill.ps1 with all §22.6 kill cases.",
+    "Item 19: scripts/setup-secrets.ps1 + scripts/setup-secrets.sh (§18.3; NUL record over stdin; validation regexes; preserves seeded randoms; --selftest against a temp root). Create the local gitignored config/profile.yaml with the owner values of PLAN Decision 6 (never commit it). src/ossbot/ctl/doctor.py with every §18.3 check in M11 order; checks needing Telegram/GitHub/Kiro secrets report AWAITING SECRET; Windows part in ossctl.ps1 doctor.",
+    "Item 20: tests/sandbox/test_profiles.py (§22.5 via sandboxd and the probe entrypoint; key-dependent cases marked needs_key and skipped with a reason) and tests/system/{test_control_perms,test_secret_perms,test_docker_filter,test_egress_per_uid,test_firewall_failclosed,test_proxy_dns,test_config_write,test_audit_anchor}.sh; fix whatever they find in FEAT-001..003 code.",
+    "Item 21: run the complete '### Phase 1 verification' block of docs/PLAN.md, run gitleaks over the history, set status completed, record findings (verified WSL/Docker facts, doctor output summary, anything Phase 2 needs), commit locally."
+  ],
+  "acceptance_criteria": [
+    "scripts\\bootstrap.ps1 succeeds and a second run prints only 'unchanged' (AC 1 for Phase 1 steps); docker version and docker compose version work as root; ossbot-gatekeeper, ossbot-dockerfilter, ossbot-proxy, ossbot-sandboxd, ossbot-firewall, ossbot-firewall-docker, ossbot-boot-gate and ossbot-watchdog.timer are active; ossbot-firewall --check exits 0",
+    "After wsl --terminate ossbot, scripts\\test-isolation.ps1 passes every AC 2 / §22.8 check (no /mnt/c, only the repo under /mnt/d, PE exec fails with Exec format error, default user ossnobody, nproc 20, ~20 GB RAM, ~8 GB swap, localhost forwarding probe fails)",
+    "tests\\system\\test_kill.ps1 passes AC 9 (containers gone <= 10 s, gatekeeper 423, soft/full reboot cases, distro-stopped marker, hung kill returns ~35 s, resume order) and -Hard leaves WSL stopped with resume.ps1 restoring",
+    "ROOTDEV pytest -m sandbox passes (key-free AC 12 checks) and every tests/system/*.sh exits 0 (AC 18)",
+    "ossctl doctor (distro and Windows parts) completes; only secret-dependent checks are AWAITING SECRET, Hyper-V may be WARN when not elevated, everything else PASS",
+    "config/profile.yaml exists locally and is not tracked; git status --porcelain empty after the commit"
+  ],
+  "verification": [
+    "powershell -NoProfile -File scripts\\bootstrap.ps1   # twice; second run only 'unchanged'",
+    "wsl.exe --terminate ossbot ; powershell -NoProfile -File scripts\\test-isolation.ps1",
+    "powershell -NoProfile -File tests\\system\\test_kill.ps1",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/root/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m sandbox",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec bash tests/system/test_control_perms.sh   # and each other tests/system/*.sh",
+    "wsl.exe -d ossbot -u root --exec systemctl is-active ossbot-gatekeeper ossbot-dockerfilter ossbot-proxy ossbot-sandboxd ossbot-watchdog.timer",
+    "wsl.exe -d ossbot -u root --exec docker version ; wsl.exe -d ossbot -u root --exec docker compose version",
+    "wsl.exe -d ossbot -u root --exec /opt/ossbot/app/.venv/bin/ossctl doctor ; powershell -NoProfile -File scripts\\ossctl.ps1 doctor",
+    "DEV pytest -m \"unit or telegram\" ; DEV ruff check src tests ; DEV mypy ; DEV lint-imports",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec gitleaks git --redact .",
+    "git status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

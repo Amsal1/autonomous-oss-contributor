@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Sandbox layer, Docker API filter and egress rendering (PLAN.md items 12-15). Implements the root Docker API filter with the complete create specification (DESIGN §10.8, incl. R4-N5 Cmd/profile binding), sandboxd with the JobSpec API, fixed docker argv templates, stage-in/snapshot/run/collect lifecycle, /28 subnet allocation, Kiro key output scanning and the safety-probe gate (§10.2-10.6, §10.9), the stdlib sandbox tools (ossbot-execd, ossbot-exec-mcp relay, split coder §10.4), every remaining entrypoint script, the full/llm/proxy Dockerfiles (kiro-cli 2.32.0 headless only in sandbox-llm), baked Kiro settings, probe fixture repo, and the renderers for squid.conf and the ossbot-firewall iptables chains with --apply/--check (§11). Everything here is unit-tested without Docker; Docker-backed smoke tests run in FEAT-004. Depends on FEAT-001 (control flags, catalog API, snapshot) and FEAT-002 (gitcmd, package entrypoints).",
+  "status": "pending",
+  "steps": [
+    "Item 12: src/ossbot/dockerfilter/{__init__.py,main.py,rules.py} (stdlib + h11; listens /run/ossbot/docker-filter.sock root:ossdock 0660; forwards only allowlisted requests to /var/run/docker.sock; duplicate JSON keys rejected via object_pairs_hook; unknown non-zero keys -> 403 unknown_key:<path>; image digest allowlist from the config snapshot/versions.lock; create and start refused while killed or paused); console script ossbot-dockerfilter; tests/unit/dockerfilter/test_rules.py with an allow corpus (hand-built now, re-recorded in FEAT-004) and every deny case of DESIGN §22.1.",
+    "Item 13: src/ossbot/sandboxd/{main,app,jobs,profiles,networks,subnets,argv,keyscan,stagein,snapshot,probes,killwatch}.py and runtime/{base,docker_cli,fake}.py per §10.2-10.3, §10.6, §10.9 (catalog profile + list_models exempt from the gate; models validated against GET /v1/models/catalog cached 5 min; destroy only for terminal contributions); console script ossbot-sandboxd; tests test_argv.py (every assertion of §10.2, each variant passed through dockerfilter.rules), test_stagein_snapshot.py, test_probe_gate.py, test_models.py, test_keyscan.py.",
+    "Item 14: verify DESIGN §23 items 14 and 16 by web search (Docker 29 firewall backend/DOCKER-USER, embedded DNS on internal networks, copy-up ownership, archive PUT into created containers; squid 6 http_port/localport/src ACLs, interface limits) and write the ADR-0005 addendum. Then src/ossbot/sandbox_tools/{execd.py,exec_mcp.py}; sandbox/entrypoints/{fetch,kiro,exec,validate,snapshot,list_models,probe}.sh; sandbox/images/{full,llm,proxy}/Dockerfile (ubuntu:24.04 by digest, UID/GID 10001, fixed dirs with M2 owners/modes, OSSBOT_FORMAT_PATCH/OSSBOT_NUMSTAT rendered from gitcmd, kiro-cli tarball sha256 from versions.lock in llm only); sandbox/kiro/settings/{cli.json,permissions.yaml}; sandbox/probes/*.md; sandbox/fixtures/probe-repo/ plus a tar build step preserving symlinks; sandbox/proxy/squid.conf.j2; src/ossbot/ctl/render.py (squid from egress.yaml snapshot, dns_nameservers from /etc/resolv.conf; iptables OSSBOT-IN/OSSBOT-OUT/OSSBOT-FWD + ip6tables exactly as §11.4, --apply and --check); scripts/bin/ossbot-firewall wrapper. Tests: test_execd.py, test_exec_mcp.py, test_kiro_settings.py, test_gitcmd_image_env.py, tests/unit/ctl/test_render.py (golden squid + iptables renders).",
+    "Item 15: run the FEAT verification, set status completed, record findings (Docker/squid facts, exact rendered rule order, anything FEAT-004 provisioning must know), commit locally."
+  ],
+  "acceptance_criteria": [
+    "DEV pytest -m unit passes: every allow-corpus request accepted and every deny-corpus mutation refused by dockerfilter.rules; every sandboxd argv variant passes the filter; KIRO_API_KEY only for research/agent-llm/catalog; /tmp exec only for fetch/validate/agent-exec/package; agent-llm has no task or snapshot mount",
+    "Probe gate: no row / other digest / ids-pass under trust_mode=all -> 423; all passed -> accepted; list_models exempt only in catalog (AC 26 logic)",
+    "execd rejects final-component symlinks (ELINK), symlinked parents outside the repo (EPATH), TOCTOU swaps, writes into .git/.kiro//run/exec//io; relay exposes exactly four tools and refuses a symlinked socket",
+    "Rendered iptables and squid configs match the golden files derived from DESIGN §11.3-11.4; ruff/mypy/lint-imports/shellcheck clean"
+  ],
+  "verification": [
+    "wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m unit",
+    "DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec bash -c 'shellcheck sandbox/entrypoints/*.sh scripts/bin/*'",
+    "git status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "task-ossbot-v1",
+  "task_description": "Implement ossbot v1 per the APPROVED docs/DESIGN.md (rev 4) and ADR-0001..0018, sequenced by docs/PLAN.md: an autonomous, isolated (dedicated WSL distro 'ossbot', confined to the repo folder), Telegram-gated OSS-contribution system. Phase 1 (FEAT-001..004): gatekeeper safety core (state machine, two-tap message-bound approvals, kill/pause, audit, policy, rate limits, dry-run default ON), gatekeeper git TCB and submission, sandbox layer (Docker filter, sandboxd, split coder, egress allowlist), provisioning from zero with WSL confinement, services and kill switch end to end. Phase 2 (FEAT-005..008): decorated Telegram review UX and chat relay, runner pipeline with global model switch, Kiro V3 ACP provider fork + Hermes v0.22.2, backup/restore, README/AGENTS/SETUP, gitleaks hooks, CI, final verification. No real secrets exist: everything is verified with fakes; live checks are listed by ossctl doctor.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005", "FEAT-006", "FEAT-007", "FEAT-008"],
+  "phases": {
+    "phase1": {"title": "Phase 1: Safety core, sandbox isolation, provisioning foundation", "features": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"], "gate_file": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.json"},
+    "phase2": {"title": "Phase 2: Telegram UX, pipeline, Kiro and Hermes, model switch, open-source docs, hardening", "features": ["FEAT-005", "FEAT-006", "FEAT-007", "FEAT-008"], "gate_file": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase2.json"}
+  },
+  "blocked_reason": null
+}

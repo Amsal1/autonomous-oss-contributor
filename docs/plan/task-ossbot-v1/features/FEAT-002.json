@@ -1,0 +1,26 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Gatekeeper git TCB, submission and the deterministic Telegram decision path (PLAN.md items 8-11). Implements the single-source git commands (ossbot.common.gitcmd FORMAT_PATCH/NUMSTAT), the package.sh/unbundle.sh entrypoints exactly as DESIGN §9.11/§9.8/§9.13, gatekeeper package verification and artifact derivation from per-rev mirrors (§12.5, §12.5a, I6, I12) including round-5 NIT R5-N1 (bundle copied with O_NOFOLLOW into gatekeeper-private work dir), operator import (§9.13), submission with control_checkpoint before each write, identity check and dry-run 'would' payloads, read-only restart reconciliation, and the gatekeeper-owned Telegram front-end: update authorization (§14.2), opaque single-use message-bound callback tokens, Approve -> mode-stating Confirm two-tap, Reject, and the safety commands /status /pause /resume /kill /dryrun /help with a minimal escaped card (PLAN Decision 7). Depends on FEAT-001.",
+  "status": "pending",
+  "steps": [
+    "Item 8: verify DESIGN §23 item 19 on the distro's git 2.43 (git commit --trailer, interpret-trailers --parse, bundle create with a named ref, patch-id --stable, every FORMAT_PATCH/NUMSTAT flag, scoped protocol.file.allow=always last -c wins) and record in the ADR-0014 addendum; write src/ossbot/common/gitcmd.py, src/ossbot/sandbox_tools/numstat2json.py, sandbox/entrypoints/package.sh and unbundle.sh (--no-recurse-submodules on bundle fetches, R5-N1); tests/unit/entrypoints/test_unbundle_script.py runs the real scripts in fix_round and import modes.",
+    "Item 9: src/ossbot/gatekeeper/{gitops.py,derive.py,imports.py} and the /package, /package-ts, /import, /import-bundle handlers in api/contributions.py per §12.5 steps 1-8, §12.5a and §9.13. R5-N1: open /srv/ossbot/artifacts/<cid>/<rev>/change.bundle with O_NOFOLLOW, require S_ISREG and <= 50 MB, copy to /srv/ossbot/gatekeeper/work/<cid>-r<rev>.bundle (0600), sha256 the copy, run list-heads/verify/fetch only on the copy (paths injectable for tests). Tests: test_package_verify.py (every §22.1 case with production GIT_ENV/GIT_ARGS/BUNDLE_FETCH_ARGS, the real package.sh, plus 'directory at artifact path -> 422 bundle_invalid'), test_gitops_args.py, test_import.py, test_claim_live.py.",
+    "Item 10: github_writer.py (fork/push via GIT_ASKPASS fd helper/PR/comment; import-linter contract: only submit.py imports it), submit.py (immutable snapshot, binding recheck, GET /user login == profile.github_login else kill, X-OAuth-Scopes public_repo, control_checkpoint incl. R4-N2 dry-run mode check before steps 4-6, retries 2/8/30 s, 422 reconcile, interruption -> SUBMIT_FAILED interrupted, missing GITHUB_WRITE_TOKEN -> refused no_write_token per PLAN Decision 5), reconcile.py (§12.5 table, reads only), §12.6 live checks; telegram/{bot.py,auth.py,handlers.py,keyboards.py,escape.py,cards.py,commands/registry.py,commands/builtin.py} (python-telegram-bot 22.x, HTTPXRequest proxy http://10.212.0.2:3150, disabled when TELEGRAM_BOT_TOKEN absent or profile.telegram.user_id == 0); tests/fakes/fake_github.py (respx) and fake_telegram.py; tests test_submit.py (all M5/R4-N2 cases), test_live_checks.py, test_import_contracts.py, tests/telegram/test_handlers.py (approve->confirm happy path; foreign user, group chat, wrong message id, replayed, expired, killed, superseded), tests/telegram/test_escape.py (hypothesis).",
+    "Item 11: run the FEAT verification, set status completed, record findings (e.g. git version facts, any API shape decisions later FEATs reuse), commit locally."
+  ],
+  "acceptance_criteria": [
+    "DEV pytest -m \"unit or telegram\" passes including test_real_package_script_bundle, test_bundle_fetch_needs_scoped_override, test_numstat_pinned, test_patch_compare_tolerates_git_version, test_patch_mismatch_rejected, test_hostile_git_config_ignored, the R5-N1 directory case, and every AC 15 rejection",
+    "test_submit.py proves: dry-run makes zero write calls (AC 4), kill/pause between push and PR stops further writes (AC 29), restart reconciliation issues only GETs, resume never submits, a mid-submission dry-run toggle stops the next write",
+    "test_handlers.py proves AC 7: foreign user, group chat, wrong message id, replayed or expired token -> no state change, logged at WARNING; Confirm text states LIVE or DRY RUN computed at that moment",
+    "lint-imports proves only gatekeeper.submit imports gatekeeper.github_writer; ruff, mypy strict and shellcheck (package.sh, unbundle.sh) clean"
+  ],
+  "verification": [
+    "wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen pytest -m \"unit or telegram\"",
+    "DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports",
+    "wsl.exe -d ossbot -u root --cd /mnt/d/Work/autonomous-oss-contributor --exec shellcheck sandbox/entrypoints/package.sh sandbox/entrypoints/unbundle.sh",
+    "git status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
