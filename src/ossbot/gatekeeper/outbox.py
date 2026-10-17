@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Protocol
@@ -42,6 +43,10 @@ class OutboxRow:
     approval_id: str | None
     part_index: int | None
     attempts: int
+    dedupe_key: str | None = None
+
+
+OnSent = Callable[[OutboxRow, dict[str, Any]], Awaitable[None]]
 
 
 class Outbox:
@@ -80,6 +85,7 @@ class Outbox:
                 r["approval_id"],
                 r["part_index"],
                 r["attempts"],
+                r["dedupe_key"],
             )
             for r in rows
         ]
@@ -113,19 +119,28 @@ class Outbox:
 
 
 class OutboxWorker:
-    def __init__(self, outbox: Outbox, sender: Sender) -> None:
+    """``on_sent`` sees each delivered row with the Bot API result (card message ids, §14.4)."""
+
+    def __init__(self, outbox: Outbox, sender: Sender, on_sent: OnSent | None = None, batch: int = 20) -> None:
         self.outbox = outbox
         self.sender = sender
+        self.on_sent = on_sent
+        self.batch = batch
 
     async def run_once(self) -> int:
         sent = 0
-        for row in self.outbox.due():
+        for row in self.outbox.due(self.batch):
             try:
-                await self.sender.send(row.method, row.payload)
+                result = await self.sender.send(row.method, row.payload)
             except SendError as exc:
                 log.warning("outbox send failed: %s", exc, extra={"event": "outbox_retry"})
                 self.outbox.mark_retry(row, exc)
                 continue
             self.outbox.mark_sent(row)
             sent += 1
+            if self.on_sent is not None:
+                try:
+                    await self.on_sent(row, result)
+                except Exception:
+                    log.exception("outbox on_sent hook failed", extra={"event": "outbox_hook_failed"})
         return sent

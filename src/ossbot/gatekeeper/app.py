@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Protocol
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -28,6 +28,7 @@ from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.contributions import ContributionRefused
 from ossbot.gatekeeper.control import ControlConflict
 from ossbot.gatekeeper.models_admin import ModelSetError
+from ossbot.gatekeeper.packaging import prune_retention
 from ossbot.gatekeeper.state_machine import TransitionError
 
 log = logging.getLogger(__name__)
@@ -115,11 +116,22 @@ async def housekeeping_once(ctx: AppContext) -> None:
     ctx.control.reconcile()
     ctx.approvals.expire_due()
     ctx.state_machine.sweep_expired()
+    prune_retention(ctx)
 
 
-def create_app(ctx: AppContext, *, housekeeping: bool = True) -> FastAPI:
+class Service(Protocol):
+    async def start(self) -> None: ...
+    async def stop(self) -> None: ...
+
+
+def create_app(ctx: AppContext, *, housekeeping: bool = True, services: Sequence[Service] = ()) -> FastAPI:
+    """``services`` start in order inside the lifespan (restart reconciliation first, then the
+    Telegram front-end, so no callback can execute before every ``executing`` row is resolved)."""
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        for service in services:
+            await service.start()
         task: asyncio.Task[None] | None = None
         if housekeeping:
 
@@ -135,6 +147,11 @@ def create_app(ctx: AppContext, *, housekeeping: bool = True) -> FastAPI:
         yield
         if task is not None:
             task.cancel()
+        for service in reversed(services):
+            try:
+                await service.stop()
+            except Exception:
+                log.exception("service stop failed", extra={"event": "service_stop_failed"})
 
     app = FastAPI(title="ossbot gatekeeper", version="1", lifespan=lifespan, docs_url=None, redoc_url=None,
                   openapi_url=None)  # fmt: skip

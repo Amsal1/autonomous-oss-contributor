@@ -52,7 +52,7 @@ async def dry_run(
     request: Request, body: DryRunRequest, caller: Annotated[Caller, Depends(require(OP))]
 ) -> ControlView:
     c = ctx(request)
-    c.control.set_dry_run(body.enabled, caller.actor)
+    c.reissue_cards(c.control.set_dry_run(body.enabled, caller.actor), caller.actor)
     if not body.enabled:
         c.operator_fyi("DRY-RUN OFF", caller.peer.uid, caller.peer.pid)
     return c.control.view()

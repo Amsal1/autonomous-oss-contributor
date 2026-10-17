@@ -35,12 +35,15 @@ class RateDecision:
         return "ok" if self.allowed else f"rate_limited:{self.counter}"
 
 
-def used_in_window(conn: sqlite3.Connection, clock: Clock, kind: OutboundKind) -> int:
+def used_in_window(
+    conn: sqlite3.Connection, clock: Clock, kind: OutboundKind, exclude_action_id: str | None = None
+) -> int:
+    """``exclude_action_id``: the action being submitted (it is ``executing`` itself at submit time)."""
     since = to_iso(clock.now() - WINDOW)
     row = conn.execute(
         "SELECT COUNT(*) FROM outbound_actions WHERE kind = ? AND status IN ('executing','done')"
-        " AND executed_at IS NOT NULL AND executed_at > ?",
-        (kind, since),
+        " AND executed_at IS NOT NULL AND executed_at > ? AND id IS NOT ?",
+        (kind, since, exclude_action_id),
     ).fetchone()
     return int(row[0])
 
@@ -71,18 +74,20 @@ async def check(
     kind: OutboundKind,
     upstream: str,
     open_pr_counter: OpenPrCounter | None = None,
+    *,
+    exclude_action_id: str | None = None,
 ) -> RateDecision:
     if kind == "push_update":
         return RateDecision(True, None, 0, None)  # bounded by watch_rounds_max instead
     if kind == "comment":
-        used = used_in_window(conn, clock, "comment")
+        used = used_in_window(conn, clock, "comment", exclude_action_id)
         return RateDecision(used < limits.comments_per_24h, "comments_per_24h", used, limits.comments_per_24h)
     if kind == "issue_claim":
-        used = used_in_window(conn, clock, "issue_claim")
+        used = used_in_window(conn, clock, "issue_claim", exclude_action_id)
         return RateDecision(
             used < limits.issue_claims_per_24h, "issue_claims_per_24h", used, limits.issue_claims_per_24h
         )
-    used = used_in_window(conn, clock, "open_pr")
+    used = used_in_window(conn, clock, "open_pr", exclude_action_id)
     if used >= limits.prs_per_24h:
         return RateDecision(False, "prs_per_24h", used, limits.prs_per_24h)
     if open_pr_counter is None:
@@ -92,8 +97,8 @@ async def check(
     executing = int(
         conn.execute(
             "SELECT COUNT(*) FROM outbound_actions o JOIN contributions c ON c.id = o.cid"
-            " WHERE o.kind = 'open_pr' AND o.status = 'executing' AND c.upstream = ?",
-            (upstream,),
+            " WHERE o.kind = 'open_pr' AND o.status = 'executing' AND c.upstream = ? AND o.id IS NOT ?",
+            (upstream, exclude_action_id),
         ).fetchone()[0]
     )
     total = open_count + executing

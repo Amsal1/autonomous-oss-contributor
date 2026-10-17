@@ -1,16 +1,17 @@
-"""Contribution endpoints (DESIGN §12.2). Package/import logic lands in FEAT-002 (501 until then)."""
+"""Contribution endpoints (DESIGN §12.2): reads, worker creation/transitions, /package (§12.5), import (§9.13)."""
 
 from __future__ import annotations
 
 import re
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from ossbot.common.schemas import (
     ContributionCreate,
     ImportRequest,
+    PackageRequest,
     PackageTsRequest,
     State,
     TransitionRequest,
@@ -18,14 +19,12 @@ from ossbot.common.schemas import (
 )
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
+from ossbot.gatekeeper.imports import Importer, ImportInvalid
+from ossbot.gatekeeper.packaging import Packager, PackageRefused, gitleaks_scan
 from ossbot.gatekeeper.state_machine import Actor
 
 router = APIRouter(prefix="/v1")
 CID_PATTERN = r"^c_[0-9A-Z]{10}$"
-
-
-def _not_yet(feature: str) -> JSONResponse:
-    return JSONResponse(status_code=501, content={"error": "not_implemented", "detail": f"{feature} lands in FEAT-002"})
 
 
 def _check_cid(cid: str) -> None:
@@ -60,18 +59,26 @@ async def create_contribution(
     return {"cid": cid}
 
 
-@router.post("/contributions/import")
+@router.post("/contributions/import", status_code=201)
 async def import_contribution(
     request: Request, body: ImportRequest, caller: Annotated[Caller, Depends(require(Role.OPERATOR))]
-) -> JSONResponse:
-    return _not_yet("operator import")
+) -> Any:
+    c = ctx(request)
+    try:
+        cid = Importer(c, c.gitops).import_bundle(body, caller.actor)
+    except ImportInvalid as exc:
+        return JSONResponse(status_code=422, content={"error": f"import_invalid:{exc.rule}", "detail": str(exc)})
+    c.operator_fyi("IMPORT", caller.peer.uid, caller.peer.pid)
+    return {"cid": cid}
 
 
 @router.get("/contributions/{cid}/import-bundle")
 async def import_bundle(
     request: Request, cid: str, caller: Annotated[Caller, Depends(require(Role.WORKER))]
-) -> JSONResponse:
-    return _not_yet("import-bundle")
+) -> Response:
+    _check_cid(cid)
+    c = ctx(request)
+    return Response(content=Importer(c, c.gitops).download(cid), media_type="application/octet-stream")
 
 
 @router.post("/contributions/{cid}/transition")
@@ -86,8 +93,17 @@ async def transition(
 
 
 @router.post("/contributions/{cid}/package")
-async def package(request: Request, cid: str, caller: Annotated[Caller, Depends(require(Role.WORKER))]) -> JSONResponse:
-    return _not_yet("package verification")
+async def package(
+    request: Request, cid: str, body: PackageRequest, caller: Annotated[Caller, Depends(require(Role.WORKER))]
+) -> JSONResponse:
+    _check_cid(cid)
+    c = ctx(request)
+    packager = Packager(c, c.gitops, scanner=c.secret_scanner or gitleaks_scan)
+    try:
+        result = packager.package(cid, body, caller.actor)
+    except PackageRefused as exc:
+        return JSONResponse(status_code=exc.status, content={"error": exc.code, "detail": exc.detail})
+    return JSONResponse(status_code=result.status, content=result.body)
 
 
 @router.post("/contributions/{cid}/package-ts")

@@ -57,9 +57,7 @@ async def create_action(
              "pending_approval", to_iso(c.clock.now())),
         )  # fmt: skip
         c.audit.append(caller.actor, "action_requested", {"action_id": action_id, "kind": body.kind}, body.cid)
-        approval_id = c.approvals.create(
-            action_id, tg_chat_id=c.telegram_chat_id, body_parts_total=1, actor=caller.actor
-        )
+        approval_id = c.create_approval(action_id, caller.actor)
     c.on_approval_created(approval_id)
     return {"action_id": action_id, "approval_id": approval_id}
 

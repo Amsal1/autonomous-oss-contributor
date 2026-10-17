@@ -14,15 +14,18 @@ from ossbot.common.paths import Paths
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler
-from ossbot.gatekeeper.approvals import ApprovalService, ArtifactSource
+from ossbot.gatekeeper.approvals import ApprovalService, ArtifactSource, Invalidated
 from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.authz import Role, interactive_ancestry
 from ossbot.gatekeeper.config_snapshot import SnapshotManager
 from ossbot.gatekeeper.contributions import ContributionService
 from ossbot.gatekeeper.control import ControlService
+from ossbot.gatekeeper.derive import GitArtifacts
+from ossbot.gatekeeper.gitops import GitOps
 from ossbot.gatekeeper.models_admin import ModelsAdmin
 from ossbot.gatekeeper.outbox import Outbox
 from ossbot.gatekeeper.state_machine import StateMachine
+from ossbot.gatekeeper.telegram import cards
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +46,9 @@ class AppContext:
     anomaly: AnomalyHandler
     models: ModelsAdmin
     anchors: AnchorClient
+    gitops: GitOps
     kiro_key_sha256: str | None = None
+    secret_scanner: Callable[[bytes], list[str]] | None = None  # None = gitleaks (packaging.gitleaks_scan)
     on_approval_created: Callable[[str], None] = field(default=lambda approval_id: None)
 
     @property
@@ -53,6 +58,34 @@ class AppContext:
     @property
     def telegram_chat_id(self) -> int:
         return self.config.profile.telegram.user_id
+
+    def create_approval(self, action_id: str, actor: str) -> str:
+        """New pending approval; ``body_parts_total`` from the card renderer. Caller fires the card
+        hook (``on_approval_created``) after its transaction commits."""
+        return self.approvals.create(
+            action_id,
+            tg_chat_id=self.telegram_chat_id,
+            body_parts_total=cards.part_count(self.conn, action_id),
+            actor=actor,
+        )
+
+    def reissue_cards(self, invalidated: list[Invalidated], actor: str) -> list[str]:
+        """Fresh cards for actions whose approvals a dry-run toggle or a reload invalidated (§12.4)."""
+        created: list[str] = []
+        with db.transaction(self.conn):
+            for action_id in dict.fromkeys(i.action_id for i in invalidated):
+                row = db.one(
+                    self.conn,
+                    "SELECT o.status, c.state FROM outbound_actions o JOIN contributions c ON c.id = o.cid"
+                    " WHERE o.id = ?",
+                    (action_id,),
+                )
+                if row is None or row["status"] != "pending_approval":
+                    continue
+                created.append(self.create_approval(action_id, actor))
+        for approval_id in created:
+            self.on_approval_created(approval_id)
+        return created
 
     def notify(self, text: str) -> None:
         """FYI/alert to the owner's private chat via the outbox (dropped while Telegram is unset)."""
@@ -84,13 +117,19 @@ def build_context(
     clock: Clock | None = None,
     conn: sqlite3.Connection | None = None,
     artifacts: ArtifactSource | None = None,
+    gitops: GitOps | None = None,
 ) -> AppContext:
-    """Create every service. The config snapshot is loaded separately (``snapshots.load_at_start``)."""
+    """Create every service. The config snapshot is loaded separately (``snapshots.load_at_start``).
+
+    Without ``artifacts`` the approval binding re-derives from the gatekeeper's mirrors
+    (``derive.GitArtifacts``); tests that do not exercise git pass a stand-in."""
     clock = clock or SystemClock()
     if conn is None:
         paths.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = db.connect(paths.db_path)
     db.migrate(conn)
+    gitops = gitops or GitOps(paths)
+    artifacts = artifacts or GitArtifacts(gitops, conn)
     audit = AuditLog(conn, clock)
     outbox = Outbox(conn, clock)
     holder: dict[str, SnapshotManager] = {}
@@ -126,6 +165,7 @@ def build_context(
         anomaly=AnomalyHandler(conn, clock, audit, control, notify),
         models=ModelsAdmin(paths.config_dir / "models.yaml", conn, clock, audit),
         anchors=AnchorClient(paths.anchor_sock),
+        gitops=gitops,
         kiro_key_sha256=os.environ.get("KIRO_KEY_SHA256") or None,
     )
     ctx_ref["ctx"] = ctx

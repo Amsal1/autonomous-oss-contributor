@@ -15,3 +15,8 @@ GitHub documents that fine-grained PATs cannot contribute to public repos where 
 
 ## Consequences
 Classic PAT is broad across Amsal1's public repos; mitigated by the gatekeeper being the only holder, proxy-limited egress, and policy. **Verify:** `md.amsalkhan@gmail.com` is verified on `Amsal1` and not linked to `<work-login>`; `X-OAuth-Scopes`; fine-grained PAT limitation still current.
+
+## Implementation addendum (FEAT-002, 2026-10-17)
+- Checked on docs.github.com (REST `repos/forks`): `POST /repos/{owner}/{repo}/forks` accepts body `name` (new name for the fork) and `default_branch_only`, answers 202 and forks asynchronously (wait up to 5 minutes). The gatekeeper sends `{name, default_branch_only: true}` and polls `GET /repos/<login>/<name>` every 3 s for up to 5 min. Docs now show `X-GitHub-Api-Version: 2026-03-10`; the gatekeeper pins `2022-11-28`, which stays supported for at least 24 months after its successor (re-check in FEAT-008).
+- Gatekeeper reads (identity, live checks, reconciliation) and writes use the write token through proxy 3150 (`github_read.make_client`); only `gatekeeper.submit` can reach the write calls (import-linter, `unmatched_ignore_imports_alerting = error`).
+- `GET /user` login and `X-OAuth-Scopes` (`public_repo` or `repo`) and the live fork/push/PR behaviour remain **pending live probe (needs GITHUB_WRITE_TOKEN)**; until then every submit is refused with `no_write_token` (PLAN Decision 5).

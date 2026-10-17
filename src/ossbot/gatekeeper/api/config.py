@@ -33,5 +33,6 @@ async def reload(
             "changed_files": list(preview.changed_files),
         }
     snap, invalidated = c.snapshots.apply_reload(body.confirm_hash, caller.actor)
+    c.reissue_cards(invalidated, caller.actor)
     c.operator_fyi("CONFIG RELOAD", caller.peer.uid, caller.peer.pid)
     return {"applied": True, "hash": snap.hash, "invalidated_approvals": [i.approval_id for i in invalidated]}

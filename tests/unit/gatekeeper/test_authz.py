@@ -180,11 +180,12 @@ async def test_notify_rate_limited(ctx: AppContext) -> None:
         assert (await c.post("/v1/notify", json={"text": "hi"})).status_code == 202  # per caller
 
 
-async def test_not_yet_implemented_routes_are_501(ctx: AppContext) -> None:
+async def test_package_and_import_routes_are_implemented(ctx: AppContext) -> None:
+    """FEAT-002 replaced the 501 stubs: schema errors and state conflicts, never 501."""
     cid = insert_contribution(ctx, source="operator", issue_number=None)
     async with client(ctx, UID_WORKER) as c:
-        assert (await c.post(f"/v1/contributions/{cid}/package")).status_code == 501
-        assert (await c.get(f"/v1/contributions/{cid}/import-bundle")).status_code == 501
+        assert (await c.post(f"/v1/contributions/{cid}/package")).status_code == 400  # no body
+        assert (await c.get(f"/v1/contributions/{cid}/import-bundle")).status_code == 409  # not IMPORTED
 
 
 async def test_actions_create_pending_approval(ctx: AppContext) -> None:

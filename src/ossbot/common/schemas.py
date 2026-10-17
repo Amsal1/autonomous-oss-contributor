@@ -139,13 +139,42 @@ class PackageTsRequest(ApiModel):
     rev: Annotated[int, Field(ge=1, le=10_000)]
 
 
+SHA1_RE = r"^[0-9a-f]{40}$"
+SHA256_RE = r"^[0-9a-f]{64}$"
+BASE_REF_RE = r"^[A-Za-z0-9._/-]{1,100}$"
+PACKAGE_ARTIFACTS: tuple[str, ...] = ("change.bundle", "change.patch", "diffstat.json")
+PackageArtifactName = Literal["change.bundle", "change.patch", "diffstat.json"]
+
+
+class PackageRequest(ApiModel):
+    """``POST /v1/contributions/{id}/package`` (§12.2, §12.5). The kind is the gatekeeper's choice."""
+
+    rev: Annotated[int, Field(ge=1, le=10_000)]
+    artifact_dir: Annotated[str, Field(min_length=1, max_length=300)]
+    sha256s: dict[PackageArtifactName, Annotated[str, Field(pattern=SHA256_RE)]]
+    pr_title: Annotated[str, Field(min_length=1, max_length=256)] | None = None
+    pr_body: Annotated[str, Field(max_length=60000)] | None = None
+    claimed_head_sha: Annotated[str, Field(pattern=SHA1_RE)]
+    base_ref: Annotated[str, Field(pattern=BASE_REF_RE)]
+    base_sha: Annotated[str, Field(pattern=SHA1_RE)]
+    validation: dict[str, Any] = Field(default_factory=dict)
+    review: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("sha256s")
+    @classmethod
+    def _all_artifacts(cls, value: dict[str, str]) -> dict[str, str]:
+        if set(value) != set(PACKAGE_ARTIFACTS):
+            raise ValueError(f"sha256s must name exactly {list(PACKAGE_ARTIFACTS)}")
+        return value
+
+
 class ImportRequest(ApiModel):
-    """Operator import (M3): bundle bytes, never a path. Logic lands in FEAT-002."""
+    """Operator import (M3): bundle bytes, never a path (decoded <= 50 MB, body <= 70 MB)."""
 
     repo: Annotated[str, Field(pattern=REPO_RE)]
-    base_ref: Annotated[str, Field(pattern=r"^[\w./-]{1,100}$")]
+    base_ref: Annotated[str, Field(pattern=BASE_REF_RE)]
     base_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
-    bundle_b64: str
+    bundle_b64: Annotated[str, Field(min_length=4, max_length=70 * 1024 * 1024)]
     bundle_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     title: Annotated[str, Field(min_length=1, max_length=256)]
     body: Annotated[str, Field(max_length=60000)]

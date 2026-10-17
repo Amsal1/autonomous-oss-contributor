@@ -376,6 +376,13 @@ class ApprovalService:
 
     def use_token(self, token: str, purposes: tuple[str, ...], *, chat_id: int, message_id: int) -> sqlite3.Row:
         """Validate and (if single-use) consume a callback token. Caller holds a transaction."""
+        row = self.check_token(token, purposes, chat_id=chat_id, message_id=message_id)
+        if row["single_use"]:
+            self.conn.execute("UPDATE ui_tokens SET used_at = ? WHERE token = ?", (to_iso(self._now()), token))
+        return row
+
+    def check_token(self, token: str, purposes: tuple[str, ...], *, chat_id: int, message_id: int) -> sqlite3.Row:
+        """Every token rule of §14.2 without consuming the token (read-only)."""
         if not TOKEN_RE.match(token):
             raise ApprovalError("token_invalid")
         row = db.one(self.conn, "SELECT * FROM ui_tokens WHERE token = ?", (token,))
@@ -389,8 +396,6 @@ class ApprovalService:
             raise ApprovalError("token_expired")
         if row["tg_chat_id"] != chat_id or row["tg_message_id"] != message_id:
             raise ApprovalError("token_wrong_message")
-        if row["single_use"]:
-            self.conn.execute("UPDATE ui_tokens SET used_at = ? WHERE token = ?", (to_iso(self._now()), token))
         return row
 
     # --------------------------------------------------------------------- decisions
@@ -547,6 +552,19 @@ class ApprovalService:
         if error is not None:
             raise error
         return binding
+
+    def invalidate_one(self, approval_id: str, reason: str, actor: str) -> None:
+        """E.g. a live check failed at Confirm: this approval dies with its tokens."""
+        with db.transaction(self.conn):
+            row = self._approval(approval_id)
+            if row["status"] in OPEN_STATUSES:
+                self._mark_invalid(row, reason, actor)
+
+    def rotate_card_tokens(self, approval_id: str) -> dict[str, str]:
+        """After Cancel: every unused token of the card dies and a fresh card set is minted."""
+        with db.transaction(self.conn):
+            self._kill_tokens([approval_id])
+            return self.issue_card_tokens(approval_id)
 
     def reissue(self, cid: str, *, tg_chat_id: int, actor: str, body_parts_total: int = 1) -> list[str]:
         """``/approve <cid>``: old approvals and their tokens die, fresh approvals are created (N4)."""

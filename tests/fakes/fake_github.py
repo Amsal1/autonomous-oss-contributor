@@ -1,0 +1,165 @@
+"""In-memory fake of the GitHub REST API (respx router) plus a fake pusher.
+
+Every request is recorded; ``writes`` lists the non-GET ones, so tests can prove "zero writes"
+(dry-run, AC 4) and "reads only" (restart reconciliation). ``on_write`` lets a test flip the kill
+or pause flag right after a given write (AC 29).
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import httpx
+import respx
+
+from ossbot.gatekeeper.github_read import GitHubError, make_client
+
+API = "https://api.github.com"
+
+
+@dataclass
+class Recorded:
+    method: str
+    path: str
+    params: dict[str, str]
+    body: Any
+
+
+@dataclass
+class FakeGitHub:
+    login: str = "test-bot-login"
+    scopes: str = "public_repo"
+    repos: dict[str, dict[str, Any]] = field(default_factory=dict)
+    issues: dict[tuple[str, int], dict[str, Any]] = field(default_factory=dict)
+    comments: dict[tuple[str, int], list[dict[str, Any]]] = field(default_factory=dict)
+    pulls: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    refs: dict[tuple[str, str], str] = field(default_factory=dict)
+    requests: list[Recorded] = field(default_factory=list)
+    failures: dict[str, list[int]] = field(default_factory=dict)  # "POST /repos/x/y/pulls" -> statuses to return first
+    fork_visible_after: int = 0  # GETs of a new fork that still 404
+    on_write: Callable[[str], None] | None = None
+    next_number: int = 500
+    router: respx.MockRouter = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.router = respx.MockRouter(assert_all_called=False, base_url=API)
+        self.router.route().mock(side_effect=self._handle)
+
+    # ------------------------------------------------------------------ setup
+    def add_repo(self, full: str, **doc: Any) -> None:
+        self.repos[full.lower()] = {"full_name": full, "archived": False, "fork": False, **doc}
+
+    def add_issue(self, repo: str, number: int, **doc: Any) -> None:
+        self.issues[(repo.lower(), number)] = {"number": number, "state": "open", "assignees": [], **doc}
+
+    def add_pull(self, repo: str, **doc: Any) -> dict[str, Any]:
+        self.next_number += 1
+        pr = {"number": self.next_number, "state": "open", "title": "", "body": "", "merged_at": None,
+              "html_url": f"https://github.com/{repo}/pull/{self.next_number}", **doc}  # fmt: skip
+        self.pulls.setdefault(repo.lower(), []).append(pr)
+        return pr
+
+    def client(self, token: str | None = "ghp_fake_write_token") -> httpx.AsyncClient:
+        return make_client(token, transport=httpx.MockTransport(self.router.async_handler))
+
+    @property
+    def writes(self) -> list[Recorded]:
+        return [r for r in self.requests if r.method != "GET"]
+
+    # ---------------------------------------------------------------- handler
+    def _handle(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        params = dict(request.url.params)
+        body = json.loads(request.content) if request.content else None
+        self.requests.append(Recorded(request.method, path, params, body))
+        key = f"{request.method} {path}"
+        if self.failures.get(key):
+            status = self.failures[key].pop(0)
+            return httpx.Response(status, json={"message": "injected failure"})
+        response = self._dispatch(request.method, path, params, body)
+        if request.method != "GET" and response.status_code < 300 and self.on_write is not None:
+            self.on_write(key)
+        return response
+
+    def _dispatch(self, method: str, path: str, params: dict[str, str], body: Any) -> httpx.Response:
+        if path == "/user":
+            return httpx.Response(200, json={"login": self.login}, headers={"X-OAuth-Scopes": self.scopes})
+        if path == "/search/issues":
+            return httpx.Response(200, json={"total_count": 0, "items": []})
+        m = re.fullmatch(r"/repos/([^/]+/[^/]+)(/.*)?", path)
+        if m is None:
+            return httpx.Response(404, json={"message": "Not Found"})
+        repo, rest = m.group(1).lower(), m.group(2) or ""
+        if rest == "" and method == "GET":
+            doc = self.repos.get(repo)
+            if doc is not None and doc.get("_hidden", 0) > 0:
+                doc["_hidden"] -= 1
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json=doc) if doc else httpx.Response(404, json={"message": "Not Found"})
+        if rest == "/forks" and method == "POST":
+            name = body.get("name") or repo.split("/", 1)[1]
+            full = f"{self.login}/{name}"
+            self.add_repo(full, fork=True, parent={"full_name": self.repos[repo]["full_name"]},
+                          _hidden=self.fork_visible_after)  # fmt: skip
+            return httpx.Response(202, json=self.repos[full.lower()])
+        m2 = re.fullmatch(r"/issues/(\d+)(/comments)?", rest)
+        if m2:
+            number = int(m2.group(1))
+            if m2.group(2) is None:
+                issue = self.issues.get((repo, number))
+                return httpx.Response(200, json=issue) if issue else httpx.Response(404, json={})
+            if method == "POST":
+                comment = {"id": len(self.requests), "body": body["body"], "user": {"login": self.login},
+                           "html_url": f"https://github.com/{repo}/issues/{number}#c{len(self.requests)}",
+                           "created_at": "2026-10-17T12:00:00Z"}  # fmt: skip
+                self.comments.setdefault((repo, number), []).append(comment)
+                return httpx.Response(201, json=comment)
+            return httpx.Response(200, json=self.comments.get((repo, number), []))
+        if rest == "/pulls":
+            if method == "POST":
+                if any(p["head"]["label"] == body["head"] for p in self.pulls.get(repo, [])):
+                    errors = [{"message": "A pull request already exists"}]
+                    return httpx.Response(422, json={"message": "Validation Failed", "errors": errors})
+                owner, branch = body["head"].split(":", 1)
+                pr = self.add_pull(self.repos[repo]["full_name"], title=body["title"], body=body["body"],
+                                   user={"login": owner}, head={"label": body["head"], "ref": branch},
+                                   base={"ref": body["base"]})  # fmt: skip
+                return httpx.Response(201, json=pr)
+            items = self.pulls.get(repo, [])
+            if params.get("state", "open") != "all":
+                items = [p for p in items if p["state"] == params.get("state", "open")]
+            if "head" in params:
+                items = [p for p in items if p["head"]["label"] == params["head"]]
+            return httpx.Response(200, json=items)
+        m3 = re.fullmatch(r"/pulls/(\d+)", rest)
+        if m3:
+            pr = next((p for p in self.pulls.get(repo, []) if p["number"] == int(m3.group(1))), None)
+            return httpx.Response(200, json=pr) if pr else httpx.Response(404, json={})
+        m4 = re.fullmatch(r"/git/ref/heads/(.+)", rest)
+        if m4:
+            sha = self.refs.get((repo, m4.group(1)))
+            return httpx.Response(200, json={"object": {"sha": sha}}) if sha else httpx.Response(404, json={})
+        return httpx.Response(404, json={"message": "Not Found"})
+
+
+@dataclass
+class FakePusher:
+    """Stands in for ``GitPusher``: records the exact SHA pushed and updates the fake fork ref."""
+
+    gh: FakeGitHub
+    pushes: list[tuple[str, str, str]] = field(default_factory=list)
+    fail_with: list[GitHubError] = field(default_factory=list)
+
+    def push(self, mirror: Path, fork_repo: str, head: str, branch: str) -> None:
+        self.gh.requests.append(Recorded("PUSH", f"{fork_repo}:{branch}", {}, head))
+        if self.fail_with:
+            raise self.fail_with.pop(0)
+        self.pushes.append((fork_repo, head, branch))
+        self.gh.refs[(fork_repo.lower(), branch)] = head
+        if self.gh.on_write is not None:
+            self.gh.on_write("PUSH")

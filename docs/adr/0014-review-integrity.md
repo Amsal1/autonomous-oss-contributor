@@ -43,3 +43,19 @@ Design review H4, H6, M2, M4, M5, M12: in v1 the diff the human approved came fr
 
 ## Consequences
 More gatekeeper code (git plumbing, derivation) inside the TCB, covered by bare-repo unit tests including hostile git config and fabricated bases.
+
+## Implementation addendum (FEAT-002, 2026-10-17): DESIGN §23 item 19 on git 2.43.0
+Live probe in the `ossbot` distro (Ubuntu 24.04 `git 2.43.0`, the gatekeeper's git and the `sandbox-full` base image's git; both are the noble package), with `GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null` and the hardened `-c` flags:
+- `git commit --no-verify -F <file> --trailer "Signed-off-by: N <E>"` works; no `interpret-trailers` fallback is needed. `git interpret-trailers --parse` on `git log -1 --format=%B` prints exactly the `Signed-off-by:` line.
+- `git bundle create <f> refs/heads/ossbot-change ^<base>` writes a v2 bundle whose header is one prerequisite line `-<base> <subject>` and one ref line; `git bundle list-heads` prints exactly `<head> refs/heads/ossbot-change`. A bundle created from a detached HEAD lists only `<sha> HEAD` (M1 confirmed).
+- `bundle list-heads` and `bundle verify` work under `protocol.file.allow=never`; `verify` in a repo without the prerequisite fails with "Repository lacks these prerequisite commits".
+- A bundle fetch under `protocol.file.allow=never` fails with `fatal: transport 'file' not allowed`; the scoped `-c protocol.file.allow=always` placed after the `never` (last `-c` wins) succeeds, together with `transfer.fsckObjects=true` and `--no-recurse-submodules` (R4-M1 re-confirmed on 2.43).
+- R5-N1 confirmed: with the scoped `always`, `git fetch <directory>` fetches from that directory as a local repository. The gatekeeper therefore copies the bundle (opened component by component with `O_NOFOLLOW`, `S_ISREG`, at most 50 MB) into `/srv/ossbot/gatekeeper/work/<cid>-r<rev>.bundle` (0600), hashes the copy and runs `list-heads`/`verify`/`fetch` only on it.
+- Every flag of `FORMAT_PATCH` and `NUMSTAT` is accepted. `--no-signature` drops the `-- \n2.43.0` trailer that plain `format-patch` emits. With `diff.renames=false` a rename shows as a delete plus an add in numstat.
+- `git patch-id --stable` reads a patch from stdin with the working directory outside any repository.
+- Fetching the round base from `/work/repo/.git` by SHA with the scoped `always` works (the SHA is advertised as HEAD or `refs/ossbot/prev/r<rev>`).
+- The sandbox image and the gatekeeper run the same git package today; `test_patch_compare_tolerates_git_version` covers a future version skew (signature and trailing bytes only).
+
+Entrypoint interface decided here (used by sandboxd in FEAT-003): `package.sh --round-base <sha> --package-ts <iso> --name <name> --email <email>` and `unbundle.sh --mode fix_round|import --bundle-ref <ref> --checkout-sha <sha> --rev <n>`. Both read `/io/input`, write `/io/output/result.json` (`{"ok": bool, "error_class": str|null, ...}`) and exit non-zero on failure. `OSSBOT_FORMAT_PATCH`/`OSSBOT_NUMSTAT` must be set in the environment (baked into the image from `ossbot.common.gitcmd`); `OSSBOT_WORK`, `OSSBOT_IO`, `OSSBOT_PKG_ROOT` and `OSSBOT_NUMSTAT2JSON` only relocate the fixed paths for tests.
+
+Submission details decided here: the push_update fork-tip re-check at submit and the reconciliation read use `GET /repos/<fork>/git/ref/heads/<branch>` (a read) instead of a git fetch; a missing `GITHUB_WRITE_TOKEN` refuses the submit before step 0 (approval invalidated `no_write_token`, nothing consumed, contribution unchanged); the push uses `https://<login>@github.com/<fork>.git` and an askpass helper that reads the token from an inherited memfd, so the token never appears in argv, URL, environment or logs.

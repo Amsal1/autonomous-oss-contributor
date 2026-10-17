@@ -21,10 +21,15 @@ from ossbot.common.config import ConfigError
 from ossbot.common.logging import setup_logging
 from ossbot.common.paths import Paths
 from ossbot.common.redact import Redactor
-from ossbot.gatekeeper.app import create_app
+from ossbot.gatekeeper.app import Service, create_app
 from ossbot.gatekeeper.authz import PeerCredH11Protocol, resolve_role_map
-from ossbot.gatekeeper.context import build_context
+from ossbot.gatekeeper.context import AppContext, build_context
+from ossbot.gatekeeper.github_read import GitHubReader, make_client
 from ossbot.gatekeeper.policy import PolicyStartupError
+from ossbot.gatekeeper.reconcile import Reconciler, ReconcileService
+from ossbot.gatekeeper.submit import make_submitter
+from ossbot.gatekeeper.telegram.bot import TelegramFrontend, build_application, telegram_enabled
+from ossbot.gatekeeper.telegram.handlers import Handlers
 
 log = logging.getLogger("ossbot.gatekeeper")
 SOCKET_GROUP = "ossapi"
@@ -56,6 +61,28 @@ def bind_socket(path: Path, group: str | None = SOCKET_GROUP) -> socket.socket:
     return sock
 
 
+def build_services(ctx: AppContext) -> list[Service]:
+    """Restart reconciliation (reads only) first, then the Telegram front-end if configured."""
+    write_token = os.environ.get("GITHUB_WRITE_TOKEN") or None
+    if write_token is None:
+        log.warning("no GITHUB_WRITE_TOKEN: every submit is refused (error_class=no_write_token)")
+    client = make_client(write_token)
+    submitter = make_submitter(ctx, client, write_token)
+    reconciler = Reconciler(ctx, GitHubReader(client))
+    services: list[Service] = [ReconcileService(reconciler)]
+    bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or None
+    if not telegram_enabled(ctx, bot_token):
+        log.warning("Telegram front-end disabled (awaiting TELEGRAM_BOT_TOKEN / profile.telegram.user_id)")
+        return services
+    assert bot_token is not None
+    handlers = Handlers(ctx, submitter.submit, submitter.preflight)
+    frontend = TelegramFrontend(ctx, build_application(bot_token, handlers))
+    submitter.retry_note = frontend.publisher.retry_note
+    reconciler.retry_note = frontend.publisher.retry_note
+    services.append(frontend)
+    return services
+
+
 def main() -> int:
     redactor = Redactor()
     for name in ("TELEGRAM_BOT_TOKEN", "GITHUB_WRITE_TOKEN", "OSSBOT_TOKEN_PEPPER", "HERMES_API_KEY"):
@@ -72,14 +99,10 @@ def main() -> int:
         return 2
     report = ctx.control.reconcile()
     log.info("control state %s (alerts: %s)", report.state, list(report.alerts), extra={"event": "started"})
-    if not os.environ.get("TELEGRAM_BOT_TOKEN") or ctx.telegram_chat_id == 0:
-        log.warning("Telegram front-end disabled (awaiting TELEGRAM_BOT_TOKEN / profile.telegram.user_id)")
-    if not os.environ.get("GITHUB_WRITE_TOKEN"):
-        log.warning("no GITHUB_WRITE_TOKEN: every submit is refused (error_class=no_write_token)")
     sock = bind_socket(paths.gatekeeper_sock)
     config = uvicorn.Config(
-        create_app(ctx), http=PeerCredH11Protocol, lifespan="on", log_config=None, access_log=False,
-        proxy_headers=False, server_header=False,
+        create_app(ctx, services=build_services(ctx)), http=PeerCredH11Protocol, lifespan="on", log_config=None,
+        access_log=False, proxy_headers=False, server_header=False,
     )  # fmt: skip
     uvicorn.Server(config).run(sockets=[sock])
     return 0

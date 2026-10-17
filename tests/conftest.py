@@ -21,6 +21,8 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ArtifactHashes
 from ossbot.gatekeeper.authz import Role
 from ossbot.gatekeeper.context import AppContext, build_context
+from ossbot.gatekeeper.gitops import Git, GitOps
+from tests.githarness import GitWorld, LocalRemote
 
 _ISSUES = itertools.count(1000)
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -44,8 +46,11 @@ TEST_ROLES: dict[int, Role] = {
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     for item in items:
-        if "/tests/unit/" in item.nodeid.replace("\\", "/") or item.nodeid.startswith("tests/unit/"):
+        node = item.nodeid.replace("\\", "/")
+        if "/tests/unit/" in node or node.startswith("tests/unit/"):
             item.add_marker(pytest.mark.unit)
+        elif "/tests/telegram/" in node or node.startswith("tests/telegram/"):
+            item.add_marker(pytest.mark.telegram)
 
 
 def make_repo(root: Path) -> Path:
@@ -96,6 +101,32 @@ def ctx(paths: Paths, clock: FakeClock, artifacts: FakeArtifacts) -> Iterator[Ap
 @pytest.fixture
 def conn(ctx: AppContext) -> sqlite3.Connection:
     return ctx.conn
+
+
+def fake_scanner(data: bytes) -> list[str]:
+    """Deterministic stand-in for gitleaks in unit tests (the real binary has its own test)."""
+    return ["gitleaks"] if b"FAKE_LEAK_" in data else []
+
+
+@pytest.fixture
+def remote() -> LocalRemote:
+    return LocalRemote()
+
+
+@pytest.fixture
+def world(tmp_path: Path, remote: LocalRemote) -> GitWorld:
+    return GitWorld(tmp_path / "world", remote)
+
+
+@pytest.fixture
+def gctx(paths: Paths, clock: FakeClock, remote: LocalRemote) -> Iterator[AppContext]:
+    """Context with the real git TCB (production GIT_ENV/GIT_ARGS), recording every git argv."""
+    ops = GitOps(paths, Git(home=paths.gatekeeper_dir / "githome", record=True), remote)
+    context = build_context(paths, TEST_ROLES, clock=clock, gitops=ops)
+    context.snapshots.load_at_start()
+    context.secret_scanner = fake_scanner
+    yield context
+    context.conn.close()
 
 
 def insert_contribution(
