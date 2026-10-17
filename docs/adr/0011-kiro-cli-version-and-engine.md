@@ -11,3 +11,6 @@ Kiro CLI 2.x ships two harnesses (V2 classic, V3). The release manifest listed 2
 
 ## Consequences
 Re-verify flags, tool ids, and engine behaviour when CLI 3.0 ships.
+
+## Implementation addendum (FEAT-001, 2026-10-17)
+- Re-fetched `desktop-release.q.us-east-1.amazonaws.com/latest/manifest.json`: latest is still **2.32.0**. Headless `2.32.0/kirocli-x86_64-linux.tar.gz` sha256 `05989f9bfe465b304e8d1b2dba50aec2b84fcc1deaa4c0773af3f539d6e0d312` (unchanged); also listed: `.tar.xz` `9d1527e4…08f3`, `.tar.zst` `81f95ec6…60ee`, musl variants. CLI 3.0 is not released yet; §23 item 12 stays open.

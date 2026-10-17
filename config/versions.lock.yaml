@@ -1,0 +1,54 @@
+# Pinned external versions and checksums. Edited by hand after web/live verification
+# (DESIGN §0, §23); provision.sh reads it, the 'images' step writes image digests (FEAT-004).
+# Format: plain nested mappings of scalars, 2-space indent (read by scripts/lib/common.sh lock_get).
+version: 1
+verified_at: "2026-10-17"
+
+uv:
+  version: "0.13.1"
+  url: "https://github.com/astral-sh/uv/releases/download/0.13.1/uv-x86_64-unknown-linux-gnu.tar.gz"
+  sha256: "eadd9d27c134ab5ac1ffd4473b97a741407f3ea238288f03121fc4deddf90220"
+  source: "GitHub releases API latest = 0.13.1 (2026-10-14); sha256 from the release .sha256 asset"
+
+gitleaks:
+  version: "8.30.1"
+  url: "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz"
+  sha256: "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb"
+  source: "GitHub releases API latest = v8.30.1 (2026-03-21); sha256 from gitleaks_8.30.1_checksums.txt"
+
+docker:
+  # DESIGN §0 pinned 5:29.8.2; the newest in download.docker.com noble/stable on 2026-10-17 is 29.9.1.
+  docker_ce: "5:29.9.1-1~ubuntu.24.04~noble"
+  docker_ce_cli: "5:29.9.1-1~ubuntu.24.04~noble"
+  containerd_io: "2.4.2-2~ubuntu.24.04~noble"
+  docker_buildx_plugin: "0.38.0-1~ubuntu.24.04~noble"
+  docker_compose_plugin: "5.6.0-1~ubuntu.24.04~noble"
+  source: "download.docker.com/linux/ubuntu/dists/noble/stable/binary-amd64/Packages (compose plugin major = 5)"
+
+kiro_cli:
+  version: "2.32.0"
+  manifest: "https://desktop-release.q.us-east-1.amazonaws.com/latest/manifest.json"
+  headless_tar_gz_url: "https://desktop-release.q.us-east-1.amazonaws.com/2.32.0/kirocli-x86_64-linux.tar.gz"
+  headless_tar_gz_sha256: "05989f9bfe465b304e8d1b2dba50aec2b84fcc1deaa4c0773af3f539d6e0d312"
+  source: "manifest latest = 2.32.0 re-fetched 2026-10-17 (CLI 3.0 not released yet)"
+
+hermes:
+  tag: "v0.22.2"
+  tag_object: "7b77e29eedd85a8497ce2821448dac7964dc46f6"
+  peeled_commit: "pending (FEAT-007)"
+  source: "GitHub releases API latest = v0.22.2 (2026-10-15); git/ref/tags/v0.22.2 -> annotated tag object above"
+
+kind:
+  version: "0.33.0"
+  sha256: "pending (recorded when installed, phase 2)"
+  source: "GitHub releases API latest = v0.33.0 (2026-08-26)"
+
+tofu:
+  version: "1.13.1"
+  sha256: "pending (recorded when installed, phase 2)"
+  source: "GitHub releases API latest = v1.13.1 (2026-10-01)"
+
+age:
+  version: "1.3.2"
+  sha256: "pending (recorded when installed, FEAT-008)"
+  source: "GitHub releases API latest = v1.3.2 (2026-08-29)"

@@ -18,3 +18,6 @@ Sandboxes need per-network egress control, Compose (stack validation), and kind.
 
 ## Consequences
 One more small root service to keep correct; it is deterministic and covered by allow/deny corpus tests. **Verify:** Docker 29 firewall backend on WSL kernel 6.18, `DOCKER-USER` presence, internal-network DNS with `--dns 127.0.0.1`, API request shapes emitted by the pinned CLI.
+
+## Implementation addendum (FEAT-001, 2026-10-17)
+- Verified on download.docker.com (noble/stable, amd64): newest `docker-ce`/`docker-ce-cli` is `5:29.9.1-1~ubuntu.24.04~noble` (DESIGN §0 said 29.8.2), `containerd.io` `2.4.2-2`, `docker-buildx-plugin` `0.38.0-1`, `docker-compose-plugin` `5.6.0-1` (compose major version 5). The pins in `config/versions.lock.yaml` are updated to these. The Docker install itself and the firewall-backend check stay in FEAT-004.
