@@ -1,5 +1,5 @@
 # ADR-0003: A deterministic gatekeeper is the only GitHub write-token holder and policy core
-Status: Accepted (revised in design rev 1 and rev 3) · Date: 2026-10-17 · Design: DESIGN.md §8, §9.2, §9.4, §12
+Status: Accepted (revised in design rev 1, rev 3 and rev 4) · Date: 2026-10-17 · Design: DESIGN.md §8, §9.2, §9.4, §12
 
 ## Context
 LLM sessions read hostile text (issues, comments, repo files, web pages). If any LLM-adjacent process can perform GitHub writes or decide approvals, prompt injection can publish under `Amsal1`.
@@ -16,6 +16,11 @@ A small Python service (`ossbot-gatekeeper`, Unix user `gatekeeper`) is the trus
 - M4: the state machine owns "an open PR is never orphaned". While `pr_number` is set, every requested move to `FAILED` or `ABANDONED` is redirected to `WATCHING` (`fix_round_failed:<class>`) and the task volume is kept. The only terminal exits are `MERGED`/`CLOSED` (worker, observed on GitHub) and `ABANDONED` through the human "Stop watching" button. `branch_moved` disables further automated fixes for that PR.
 - M5: submission is checkpointed against kill and pause before each write. An interrupted submission ends `SUBMIT_FAILED` and needs a fresh approval. `executing` actions are reconciled at start by reads only, and writes are never resumed automatically.
 - M6: one non-terminal contribution per issue, enforced by a partial unique index. Re-discovery is decided by deterministic rules in the gatekeeper's insert path: never after reject, merge or close; after a dry run only once dry-run is off; after failure or expiry only after a 7-day cooldown; after a repo-policy skip only once the human unlocks the repo.
+
+## Revision 4 amendments (design review round 4, R4-N2/R4-N3)
+- R4-N2: each submission checkpoint requires `running` and also `control_state.dry_run == snapshot.dry_run`. A dry-run toggle that lands mid-submission stops the next write, the same way a pause does: `interrupted`, `SUBMIT_FAILED`, "mode changed during submission", and a fresh approval is needed.
+- R4-N3: the closed API gains `POST /v1/models/catalog` (worker) for the runner's catalog upsert. It takes 1-200 entries, validates ids with the `--force` regex, has no `forced` field, and never changes `forced`.
+
 ## Alternatives
 - Let Hermes hold the token with "careful prompts": rejected (prompting is not a control).
 - Runner and gatekeeper in one process: rejected (runner parses large untrusted LLM output; keep the TCB small).

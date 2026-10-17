@@ -1,6 +1,6 @@
 # ADR-0017: Key-holding containers never mount attacker-writable paths; coder file I/O through execd; safety-probe gate
 
-Status: Accepted (design rev 2, amended rev 3) · Date: 2026-10-17 · Design: DESIGN.md §8.3 I5, §10.2, §10.4, §10.9 · Review: round 2 H1, M2, M3, M4; round 3 M2, M11, N6, N8
+Status: Accepted (design rev 2, amended rev 3 and rev 4) · Date: 2026-10-17 · Design: DESIGN.md §8.3 I5, §10.2, §10.4, §10.8, §10.9 · Review: round 2 H1, M2, M3, M4; round 3 M2, M11, N6, N8; round 4 N5
 
 ## Context
 
@@ -30,6 +30,20 @@ Revision 1 also wrote stage inputs and outputs under `/work` on attacker-writabl
 - M11: `list_models` is exempt from the gate. It runs only in the `catalog` profile: no prompt, agent, tools, inputs or repo, and `kiro_core`-only egress. Probes run with the models `resolve()` returns after the first catalog refresh. The first-start order is fixed (list_models → catalog → probes → jobs), so an empty catalog cannot deadlock the gate.
 - N8: the `coder_surface` probe also asserts that only the exact `TRUST_TOOLS` ids are called and that no Kiro Tool Search bridge id appears. If Kiro exposes a Tool Search setting, `cli.json` disables it.
 - M2: the snapshot helper writes the tree at the root of `ossbot-ro-<run_id>` (`/snap`), which research mounts at `/work/repo`.
+
+## Revision 4 amendments (design review round 4, R4-N5)
+
+- The Docker filter binds `Cmd` to `ossbot.profile`, so it is an independent backstop for the probe gate:
+  - `catalog` ⇒ `list_models`;
+  - `research` and `agent-llm` ⇒ `kiro`;
+  - `agent-exec` ⇒ `exec`;
+  - `snapshot` ⇒ `snapshot`;
+  - `probe` ⇒ `probe`;
+  - `fetch` ⇒ `fetch`, `validate` ⇒ `validate`, `package` ⇒ `package` or `unbundle`;
+  - `stage-in` ⇒ `/bin/true`;
+  - `stack` is refused.
+- `probe.sh` is also accepted in the other profiles for the smoke tests.
+- `KIRO_API_KEY` is accepted only for (research, kiro), (agent-llm, kiro) and (catalog, list_models), so `profile=catalog` + `kiro.sh` + key is refused.
 
 ## Alternatives
 
