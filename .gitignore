@@ -8,3 +8,11 @@ logs/
 __pycache__/
 .venv/
 node_modules/
+# local tool binaries (gitleaks.exe etc., downloaded and sha256-verified by scripts)
+tools/bin/
+# Windows-side local state: kill marker, .wslconfig backups/state
+.ossbot-local/
+# encrypted ossctl backup archives
+backups/
+# personal values (committed template: config/profile.example.yaml)
+config/profile.yaml

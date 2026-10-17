@@ -1,16 +1,16 @@
 # ADR-0009: Global model switch via config/models.yaml
-
-Status: Accepted · Date: 2026-10-17 · Design: DESIGN.md §16
+Status: Accepted (revised in design rev 1) · Date: 2026-10-17 · Design: DESIGN.md §15.2, §16
 
 ## Context
-New Kiro models appear often (catalog on 2026-10-17 includes Claude Opus 5.5, Sonnet 5.5, Fable 5.1 preview, GPT-5.6 tiers). One place must control which model each role uses. Kiro V3 headless continues with a warning if it cannot set the requested model.
+New Kiro models appear often (catalog on 2026-10-17 includes Claude Opus 5.5, Sonnet 5.5, Fable 5.1 preview, GPT-5.6 tiers). One place must control which model each role uses. Kiro V3 headless continues with a warning if it cannot set the requested model. V3 ACP changes the model per session with `session/set_config_option configId:"model"`.
 
 ## Decision
-- `config/models.yaml` (git-tracked) holds `default {model, effort}`, per-role entries (chat, planner, vetter, coder, reviewer, summarizer), `fallbacks`, catalog settings; reviewer has `require_distinct_from: coder`.
-- Every pipeline kiro-cli invocation passes `--model` and `--effort` explicitly, resolved fresh from the file (no restart). The chat role renders Hermes's provider args and the watchdog restarts Hermes on change.
-- Writers: `ossctl model set` and Telegram `/model` (confirm) both go through the gatekeeper, which rewrites the file atomically with ruamel.yaml (comments kept) and audits it.
-- Daily catalog job runs `kiro-cli chat --list-models --format json` in a sandbox and notifies new ids with "Set as default / role / Ignore" buttons.
+- `config/models.yaml` (git-tracked) holds `default {model, effort}`, per-role entries (chat, planner, vetter, coder, reviewer, summarizer), `fallbacks`, catalog settings; reviewer has `require_distinct_from: coder`. It is the one config file read live from the repo mount, because it only selects models.
+- Every pipeline kiro-cli invocation passes `--model` and `--effort`, resolved fresh (no restart).
+- Hermes's V3 ACP adapter compares the resolved chat model/effort before each turn and sends `set_config_option` on change, so the chat switch is live. Only the V2 fallback re-renders env and restarts Hermes.
+- Writers: `ossctl model set` and Telegram `/model` (confirm) through the gatekeeper, atomic ruamel.yaml rewrite (comments kept), audited. Ids must exactly match the catalog; `--force` (ossctl only) accepts a looser regex.
+- Daily catalog job (`kiro-cli chat --list-models --format json` in a sandbox) notifies new ids with "Set as default / role / Ignore".
 - The runner records the actual model from stream-json and flags mismatches.
 
 ## Consequences
-The file can be dirty in git after a Telegram switch; `--commit` option provided. **Verify:** list-models JSON schema and id spelling.
+The file can be dirty in git after a Telegram switch; `--commit` option provided. **Verify:** list-models JSON schema, id spelling, and the values advertised in the ACP `model` option.
