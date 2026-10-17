@@ -1,5 +1,5 @@
 # ADR-0001: Container runtime is Docker Engine inside the ossbot distro, behind a root API filter
-Status: Accepted (revised in design rev 1) · Date: 2026-10-17 · Design: DESIGN.md §7.4, §10.2, §10.8
+Status: Accepted (revised in design rev 1 and rev 2) · Date: 2026-10-17 · Design: DESIGN.md §7.4, §10.2, §10.8
 
 ## Context
 Sandboxes need per-network egress control, Compose (stack validation), and kind. Options on this laptop: `wslc.exe` (WSL Containers, GA 2026-09-29, no compose), Docker Desktop (not installed, not wanted), Docker Engine inside `ossbot`, Podman. The Docker socket is root-equivalent, and the sandbox daemon parses large untrusted outputs (design review M10).
@@ -10,6 +10,7 @@ Sandboxes need per-network egress control, Compose (stack validation), and kind.
 - The `docker` group has no members. sandboxd (`ossbox`) talks to `/run/ossbot/docker-filter.sock`, served by the root `ossbot-dockerfilter`, which forwards only template-conformant calls: labelled containers, named `ossbot-*` volumes without `DriverOpts`, internal `ossbot-t-*` networks, no binds, no privilege, fixed security options. Everything else (exec, build, image ops, update) gets 403.
 - Root-only operations (image builds, proxy container, kill enforcement, Phase 2 `ossbot-stack`) use the real socket as root.
 
+- (rev 2, M4) The filter's create check is a complete allowlist over `Config`, `HostConfig` and `NetworkingConfig`; any unlisted key with a non-zero value, and any duplicate JSON key, is rejected. It also includes profile-specific mount and env rules: no task or snapshot volume on `agent-llm`, `KIRO_API_KEY` only on key profiles. Archive PUT is allowed only into `stage-in` containers at `/in`. Readiness checks use inspect, never exec. Volume names include `ossbot-ro-*` (snapshot). The filter keeps running while killed and refuses every create.
 ## Alternatives
 - wslc: faster startup, but no compose, no per-network iptables hooks, no kind today. Revisit when compose lands.
 - Podman rootless: better default privilege, but pasta/slirp networking makes the proxy-only egress model and kind harder.

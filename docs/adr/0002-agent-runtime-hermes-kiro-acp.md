@@ -1,5 +1,5 @@
 # ADR-0002: Agent runtime is Hermes (narrowed role) with a vendored kiro-acp provider, V3 ACP primary
-Status: Accepted (revised in design rev 1) · Date: 2026-10-17 · Design: DESIGN.md §15
+Status: Accepted (revised in design rev 1 and rev 2) · Date: 2026-10-17 · Design: DESIGN.md §15
 
 ## Context
 The user wants a conversational agent on Telegram with memory and room for future integrations, using unlimited Kiro access through the official CLI only. MITM model routers (9router, OmniRoute) are rejected for ToS reasons. User decision (2026-10-17): Hermes uses Kiro **V3 ACP** as primary.
@@ -11,6 +11,7 @@ Live doc check (kiro.dev/docs/cli/v3/acp-migration, 2026-10-17): launch `kiro-cl
 - Provider: fork of `tobenwarrior/hermes-kiro-provider@02c4dd06585436751145961658a22b773f23a0ef` vendored at `vendor/hermes-kiro-provider/` (`UPSTREAM_COMMIT`, own history), with a separate V3 adapter beside the original V2 code.
 - V3 adapter: launch without v2 flags, cwd outside any repo, handlers registered before `session/new`, capability-gated optional calls, live model/effort switch from `config/models.yaml` via `set_config_option`, turn completion from the prompt response only, `session/load` on reconnect without resending prompts.
 - Permission requests are always answered by deterministic code with a reject option (or `cancelled`), never with consent metadata. Kiro-side deny rules for `hermes` stay as defence in depth.
+- (rev 2) Hermes's own tool surface is an allowlist (memory, todo, session_search, ossbot), enforced at runtime by the gatekeeper via `GET /v1/toolsets` with a kill on drift (ADR-0018). The `ossbot-chat` Kiro agent has only `web_search`/`web_fetch`. `~hermes/.kiro/settings/cli.json` disables knowledge and code intelligence. No auth option keeps the key away from the `hermes` uid; the control is that no model-reachable tool reads files or runs code.
 - Auth order, each proven by live probe: (a) `KIRO_API_KEY` with default auth; (b) `--auth-method=client`, shim answers `getAccessToken` from `hermes.env`, token never logged; (c) device-flow login as `hermes`.
 - Fallback 1: V2 ACP via the original plugin path. Fallback 2: per-turn `kiro-cli chat --v3 --no-interactive` provider. Last resort: replace Hermes behind the gatekeeper's `ChatBackend`.
 - Upstreaming the V3 adapter is the first candidate contribution, via `ossctl contribution import` and normal approval.

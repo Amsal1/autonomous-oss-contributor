@@ -16,3 +16,5 @@ tools/bin/
 backups/
 # personal values (committed template: config/profile.example.yaml)
 config/profile.yaml
+# gatekeeper atomic-write temp files (config/.models.yaml.tmp-<pid>)
+config/.*.tmp-*
