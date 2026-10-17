@@ -1,6 +1,6 @@
 # ADR-0017: Key-holding containers never mount attacker-writable paths; coder file I/O through execd; safety-probe gate
 
-Status: Accepted (design rev 2) · Date: 2026-10-17 · Design: DESIGN.md §8.3 I5, §10.2, §10.4, §10.9 · Review: round 2 H1, M2, M3, M4
+Status: Accepted (design rev 2, amended rev 3) · Date: 2026-10-17 · Design: DESIGN.md §8.3 I5, §10.2, §10.4, §10.9 · Review: round 2 H1, M2, M3, M4; round 3 M2, M11, N6, N8
 
 ## Context
 
@@ -23,6 +23,13 @@ Revision 1 also wrote stage inputs and outputs under `/work` on attacker-writabl
 - Deny lists also cover `/proc`, `/sys`, `/dev`, `/run`, `/etc` and `~/.kiro` as a second layer. `cli.json` turns off knowledge, code intelligence, delegate, subagent and workflows.
 - **Safety-probe gate.** sandboxd refuses Kiro jobs (423) until five live probes pass for the exact tuple `(kiro_cli_version, sandbox_llm_digest, agent_configs_sha256, settings_sha256, trust_mode)`. The probes are `research_deny`, `symlink`, `coder_surface`, `settings` and `workspace`. `--trust-all-tools` is an explicit snapshot setting and needs its own pass. Upgrades re-run the probes before switching.
 - The Docker filter enforces all of this structurally. It has a complete create allowlist, profile-specific mount rules (`agent-llm` gets no task or snapshot volume; `research` gets no task volume), and accepts archive PUT only for `stage-in` containers at `/in`.
+
+## Revision 3 amendments (design review round 3, M11/N6/N8)
+
+- N6: the probe tuple and the `safety_probes` primary key include `sandbox_full_digest`, because `snapshot.sh` and `ossbot-execd` live in `sandbox-full`. The tuple is now `(kiro_cli_version, sandbox_llm_digest, sandbox_full_digest, agent_configs_sha256, settings_sha256, trust_mode)`.
+- M11: `list_models` is exempt from the gate. It runs only in the `catalog` profile: no prompt, agent, tools, inputs or repo, and `kiro_core`-only egress. Probes run with the models `resolve()` returns after the first catalog refresh. The first-start order is fixed (list_models → catalog → probes → jobs), so an empty catalog cannot deadlock the gate.
+- N8: the `coder_surface` probe also asserts that only the exact `TRUST_TOOLS` ids are called and that no Kiro Tool Search bridge id appears. If Kiro exposes a Tool Search setting, `cli.json` disables it.
+- M2: the snapshot helper writes the tree at the root of `ossbot-ro-<run_id>` (`/snap`), which research mounts at `/work/repo`.
 
 ## Alternatives
 

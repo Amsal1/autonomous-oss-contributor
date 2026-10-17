@@ -1,5 +1,5 @@
 # ADR-0008: Kill switch and pause semantics
-Status: Accepted (revised in design rev 1 and rev 2) · Date: 2026-10-17 · Design: DESIGN.md §13
+Status: Accepted (revised in design rev 1, rev 2 and rev 3) · Date: 2026-10-17 · Design: DESIGN.md §12.5, §13
 
 ## Context
 Need `/kill` on Telegram and `scripts/kill.ps1` that works even with the bot down or the distro stopped, persisted across reboots until resume, plus anomaly auto-pause. Review H5: the v1 control dir (2770, group-writable) let non-human components delete flags. Review M13: killing a stopped distro booted it with services racing the flag.
@@ -21,6 +21,10 @@ Need `/kill` on Telegram and `scripts/kill.ps1` that works even with the bot dow
 - `kill.ps1` waits at most 30 s for the in-distro kill, then runs `wsl --terminate ossbot`. The marker is already written, so the next boot is killed.
 - Enforce-kill disconnects the proxy from each task network before removing it.
 - On start, the gatekeeper reconciles both `killed` and `paused` files into its DB state, never towards running.
+## Revision 3 amendments (design review round 3, M5/N4/N5)
+- M5: submission checks control state (`control_checkpoint()`) before every individual GitHub write: fork, push, PR call, and each retry. If a pause or kill landed, the action ends `failed` `interrupted` and the contribution `SUBMIT_FAILED`. Only a fresh two-tap approval (Retry, possible only after resume) can write again. On start, `executing` actions are reconciled by GitHub reads only. Resume never re-enters a write.
+- N4: `ossctl resume` uses the API when `/v1/health` answers. Otherwise (full kill) it does the TTY confirm and runs `sudo ossbot-resume`. `ossbot-resume` appends to `/srv/ossbot/logs/resume.log`, and the gatekeeper emits the audit event and Telegram FYI on its next start.
+- N5: the Docker filter refuses `containers/{id}/start` as well as create while `killed` or `paused` exists.
 
 ## Consequences
 Soft kill keeps a minimal network-facing gatekeeper (Telegram + GitHub via one proxy port); acceptable because every outbound path checks the flag. Refines the brief's "stop Hermes+gatekeeper" for Telegram kill only.

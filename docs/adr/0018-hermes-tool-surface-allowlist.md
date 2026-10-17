@@ -1,6 +1,6 @@
 # ADR-0018: Hermes tool surface: allowlisted toolsets with runtime verification and kill on drift
 
-Status: Accepted (design rev 2) · Date: 2026-10-17 · Design: DESIGN.md §8.4 T6, §15.1, §15.2 · Review: round 2 H2
+Status: Accepted (design rev 2, amended rev 3) · Date: 2026-10-17 · Design: DESIGN.md §8.4 T6, §15.1, §15.2 · Review: round 2 H2; round 3 M8, M9, N7
 
 ## Context
 
@@ -21,6 +21,12 @@ Meanwhile the `hermes` uid must be able to read `hermes.env` (Kiro key, API key)
   - Doctor runs the same check.
 - **Chat web research goes through Kiro, not Hermes.** The `ossbot-chat` Kiro agent has only `web_search` and `web_fetch`. Its revision-1 `read` tool is removed, so no model-reachable tool in the chat path reads local files or runs code.
 - **Auth, stated plainly.** No Kiro auth option keeps the key away from code running as `hermes`: (a) puts it in the environment, (b) has the shim read the file. The control is the absence of file and exec tools, not the auth method. The residual risk is a code bug in Hermes, its plugins, or kiro-cli. It is accepted, with a dedicated revocable key, egress only via 3141, no docker, no sudo, and a read-only repo.
+
+## Revision 3 amendments (design review round 3, M8/M9/N7)
+
+- M8: Hermes Tool Search (`tools.tool_search.enabled`, default `auto`) would defer `ossbot_*`, `session_search` and `todo_list` behind `tool_search`/`tool_describe`/`tool_call`. The model-visible surface would then differ from the verified one. The rendered config sets it `off` ([VERIFY] parsing and api_server behaviour). The runtime check forbids the three bridge tools explicitly, and a fake returning them must cause a kill.
+- N7: `/v1/toolsets` entries are parsed with `extra="ignore"` and require `name: str`, `enabled: bool` and `tools: list[str]`. Documented additive fields (`label`, `description`, `configured`) do not soft-kill the system.
+- M9: the Kiro side of the chat path gets the same fail-closed treatment as the Hermes side. The adapter's mode and tool gate and the root-run Hermes-side probe both have to pass before the relay is enabled (ADR-0002).
 
 ## Alternatives
 

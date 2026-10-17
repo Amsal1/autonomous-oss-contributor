@@ -1,5 +1,5 @@
 # ADR-0014: Review integrity: gatekeeper-derived artifacts, mode-bound approvals, config snapshots, audit anchors
-Status: Accepted · Date: 2026-10-17 · Design: DESIGN.md §7.9, §12.4, §12.5, §12.7, §14.4
+Status: Accepted (amended in design rev 2 and rev 3) · Date: 2026-10-17 · Design: DESIGN.md §7.9, §9.11, §9.13, §12.4, §12.5, §12.7, §14.4
 
 ## Context
 Design review H4, H6, M2, M4, M5, M12: in v1 the diff the human approved came from an attacker-writable sandbox volume; `base_sha` was not proven to be upstream history; dry-run state at approval time was not bound; title/body edits could be lost and submit could race package; security config was read from a Windows-writable mount; the audit chain could be recomputed by its own writer.
@@ -28,6 +28,10 @@ Design review H4, H6, M2, M4, M5, M12: in v1 the diff the human approved came fr
 - Title, body and comment text are normalized once at storage, so stored, hashed and posted bytes are identical.
 - `/approve` re-send rotates message-bound tokens in one transaction.
 - Approval cards exist for every public action kind (`comment`, `issue_claim`, `push_update`), with verbatim bytes and mode-stating confirm.
+## Revision 3 amendments (design review round 3, M1/M3/M7)
+- M1: the package job commits on the branch `ossbot-change` and bundles `refs/heads/ossbot-change ^<round_base>`. The gatekeeper accepts a bundle only if `git bundle list-heads` is exactly that one ref, and fetches it to `refs/ossbot/r<rev>`. A detached-HEAD bundle advertises only `HEAD`, which a `refs/heads/*` fetch ignores.
+- M7: one fixed format-patch command (`ossbot.common.gitcmd.FORMAT_PATCH`: `--no-signature --no-stat --full-index`, pinned diff config, no external diff or textconv) is used by both sides. The tamper check compares `git patch-id --stable` and the numstat set, not raw bytes, so a git-version difference is not an anomaly. `patch_sha256` hashes the gatekeeper's own output of that command.
+- M3: operator imports upload bundle bytes; the gatekeeper never opens a caller-named path. Before a contribution exists, it requires a single `refs/heads/*` head, prerequisites == `{base_sha}`, `base_sha` in upstream history, and the head descending from it. The imported change then goes through fetch, `unbundle`, validate, review, and the same package re-authoring and derived preview as every other change.
 
 ## Consequences
 More gatekeeper code (git plumbing, derivation) inside the TCB, covered by bare-repo unit tests including hostile git config and fabricated bases.
