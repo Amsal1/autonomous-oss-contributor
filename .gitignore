@@ -7,6 +7,10 @@ logs/
 *.log
 __pycache__/
 .venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 node_modules/
 # local tool binaries (gitleaks.exe etc., downloaded and sha256-verified by scripts)
 tools/bin/
