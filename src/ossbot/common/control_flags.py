@@ -112,8 +112,8 @@ def require_running(control_dir: Path, what: str) -> FlagState:
 # reason, actor, ts, timeout_s}. Separate from kill/pause: draining/down stop *new* work only
 # (running jobs may finish), never invalidate approvals, and kill always overrides them. Scope
 # ``distro`` (ossctl down / down.ps1) ends with the distro: the boot gate clears it at the next
-# start; scope ``workers`` (Telegram /down, FEAT-005) survives restarts until ``up``. An
-# unparseable file counts as ``down`` (fail closed: no new work).
+# start; scope ``workers`` (Telegram /down, PLAN item 47 / FEAT-009 over the item 42 root helper)
+# survives restarts until ``up``. An unparseable file counts as ``down`` (fail closed: no new work).
 LifecycleName = Literal["up", "draining", "down"]
 LifecycleScope = Literal["distro", "workers"]
 LIFECYCLE_FILE = "lifecycle"

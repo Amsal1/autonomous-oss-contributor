@@ -32,7 +32,7 @@ def token_of(data: str | None) -> str | None:
 
 
 def card_rows(kind: OutboundKind, tokens: dict[str, str]) -> Rows:
-    """Phase-1 minimal card keyboard (Decision 7); FEAT-005 adds the decorated rows."""
+    """Phase-1 minimal card keyboard (Decision 7); the S1 card rows arrive in PLAN item 45 (FEAT-009)."""
     return [[(APPROVE_LABEL[kind], tokens["approve"]), ("❌ Reject", tokens["reject"])]]
 
 

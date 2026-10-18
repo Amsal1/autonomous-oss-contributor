@@ -1,4 +1,4 @@
-"""Minimal approval cards (PLAN Decision 7; the decorated §14.4 renderer replaces ``render`` in FEAT-005).
+"""Minimal approval cards (PLAN Decision 7; the S1 card renderer replaces ``render`` in PLAN item 45, FEAT-009).
 
 Rendered only from gatekeeper-derived data in the DB (derived numstat, derived commit message,
 stored effective title/body). Message 1 is the card; messages 2..K+1 carry the bytes that will

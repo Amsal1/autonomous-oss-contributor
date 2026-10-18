@@ -257,7 +257,7 @@ class ApprovalService:
         self.limits = limits
         self.profile = profile
         self.artifacts: ArtifactSource = artifacts or NoArtifacts()
-        # derived/<cid>/<rev>/interdiff.json present and usable (the interdiff ships in PLAN item 44)
+        # derived/<cid>/<rev>/interdiff.json present and usable (the interdiff ships in PLAN item 45, FEAT-009)
         self.interdiff: Callable[[str, int], bool] = interdiff or (lambda cid, rev: False)
         self.on_disarmed: OnDisarmed = _no_disarm_hook
         # (kind, text) -> policy violations (policy.check_text with the current snapshot, wired by
