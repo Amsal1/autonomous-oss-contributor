@@ -2,6 +2,26 @@
 
 Results of the phase verification bars (docs/PLAN.md) and of the live checks of docs/plan/NOTE-live-secrets.md. Newest first. Secret values are never recorded here, only key names and outcomes.
 
+## Phase 1, after review round 2 (2026-10-18)
+
+Fixes for `docs/review-phase1.json` round 2: P1-6 (systemd-resolved masked; `ossbot-firewall --check` fails with `firewall_drift:resolved_ipc` while it is unmasked or listening; per-uid varlink + D-Bus probes; ADR-0005 addendum), P1-7 (`request_resume()` invalidates armed/confirmed while a kill flag exists; reconcile invalidates whenever it reads new offline `resume.log` lines), P1-8 (watchdog exempts only lifecycle `down` scope `distro`; scope `workers` keeps the health check and restarts the core units, never the stopped workers), P1-9 (`lifecycle.drain_timeout_s` capped at 120 to match the static unit/`down.ps1` values; longer drains per run via `--timeout`/`-Timeout`), P1-10 (app-deploy rsync with `--checksum --omit-dir-times`, itemized lines in the provision log, metadata-only items no longer trigger `uv sync` or restarts).
+
+| Phase 1 bar item | Result |
+|---|---|
+| `DEV ruff check` / `ruff format --check` / `mypy` / `lint-imports`; `ROOT shellcheck` (changed scripts) | clean / 177 formatted / 101 files no issues / 4 contracts kept / clean |
+| `DEV pytest -m "unit or telegram"` | 1541 passed, 11 deselected |
+| `ROOTDEV pytest -m sandbox` | 9 passed, 2 skipped (`needs_key`, Phase 2) |
+| `ROOT bash tests/system/*.sh` (10 scripts) | all exit 0, 213 PASS, 0 FAIL; `test_egress_per_uid.sh` 71 PASS incl. varlink + D-Bus `ResolveHostname` refused for all five service uids, resolved masked and inactive |
+| `tests\system\test_kill.ps1` | all checks passed |
+| `wsl --terminate ossbot` + `scripts\test-isolation.ps1` | PASS 13/13 |
+| `scripts\bootstrap.ps1` | first run: `app-deploy` (6 content items, itemized), `firewall` (masked systemd-resolved), `enable-start` changed; next run: every step `unchanged`. A touched source file now logs `.f..t...... <path>` and "metadata-only, no content change" with the step `unchanged` |
+| `ROOT docker version` / `docker compose version` | 29.9.1 / v5.6.0 |
+| `systemctl is-active` gatekeeper, dockerfilter, proxy, sandboxd, watchdog.timer | all active |
+| `ossbot-firewall --check` | 0 |
+| `ossctl doctor` (root, full) / `scripts\ossctl.ps1 doctor` | PASS 29, WARN 2, SKIP 3, exit 0 (new: `systemd-resolved masked` PASS; per-uid egress "no resolved IPC") |
+| `ossctl audit verify` | ok |
+| `gitleaks git --redact .` | no leaks |
+
 ## Phase 1, after review round 1 (2026-10-18)
 
 Fixes for `docs/review-phase1.json`: P1-1 (per-uid DNS refusal), P1-2 (kill invalidation on every kill path), P1-3 (CR-001 Phase 1 share, DESIGN §13.5), P1-4 (recorded for FEAT-005), P1-5 (exact token/callback regexes).

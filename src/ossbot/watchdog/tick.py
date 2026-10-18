@@ -4,7 +4,9 @@ Per tick, in order:
 
 1. permission invariants of §7.3 (``perms``): drift -> kill (soft) ``perm_drift``;
 2. ``ossbot-firewall --check`` (re-checked up to 3 x 3 s to ride out a Docker restart): drift ->
-   kill (soft) ``firewall_drift`` / ``firewall_drift:resolver_changed``;
+   kill (soft) ``firewall_drift`` / ``firewall_drift:resolver_changed`` /
+   ``firewall_drift:resolved_ipc`` (systemd-resolved unmasked or listening again, e.g. after an
+   apt upgrade);
 3. while killed: a running ``ossbot.sandbox=1`` container or an active unit the kill stops ->
    re-enforce (``ossbot-kill --enforce``) + alert;
 4. while running: gatekeeper ``/v1/health`` failing 4 consecutive ticks -> ``paused``
@@ -12,6 +14,9 @@ Per tick, in order:
 5. every 10th tick an audit anchor; every 120th tick (1 h) ``audit verify`` against the anchors
    -> kill on mismatch;
 6. while running only: units systemd gave up on (``failed``) are reset and started once.
+
+Lifecycle ``down`` (CR-001): scope ``distro`` skips 4 (health) and 6; scope ``workers`` keeps both
+for the gatekeeper, proxy and filter, which stay up, and only leaves the stopped workers alone.
 
 It never starts or restarts an ossbot unit while ``killed`` or ``paused`` exists. Everything it
 does is logged to ``/srv/ossbot/logs/watchdog.log`` (JSON lines) and the journal.
@@ -55,6 +60,8 @@ SOFT_KILL_UNITS = ("ossbot-runner.service", "ossbot-sandboxd.service", "ossbot-h
 FULL_KILL_UNITS = ("ossbot-gatekeeper.service", "ossbot-proxy.service")
 RESTARTABLE = ("ossbot-dockerfilter.service", "ossbot-gatekeeper.service", "ossbot-proxy.service",
                "ossbot-sandboxd.service")  # fmt: skip
+# Stopped by a workers-scope `ossctl down` (same set as ossbot.ctl.cli.WORKER_UNITS).
+WORKER_UNITS = ("ossbot-runner.service", "ossbot-hermes.service", "ossbot-sandboxd.service")
 
 
 @dataclass
@@ -121,7 +128,11 @@ def check_firewall(t: Tick) -> None:
         time.sleep(3)
         out = _run([FIREWALL, "--check"])
     if out.returncode != 0:
-        reason = "firewall_drift:resolver_changed" if "resolver_changed" in out.stderr else "firewall_drift"
+        reason = "firewall_drift"
+        for detail in ("resolver_changed", "resolved_ipc"):  # resolved_ipc: systemd-resolved unmasked (P1-6)
+            if detail in out.stderr:
+                reason = f"firewall_drift:{detail}"
+                break
         t.event("firewall_drift", detail=out.stderr.strip()[-500:])
         kill(t, reason)
 
@@ -175,8 +186,10 @@ def audit_check(t: Tick) -> None:
         kill(t, "audit_anchor_mismatch")
 
 
-def restart_failed(t: Tick) -> None:
+def restart_failed(t: Tick, skip: tuple[str, ...] = ()) -> None:
     for unit in RESTARTABLE:
+        if unit in skip:
+            continue
         if _run([SYSTEMCTL, "is-failed", "--quiet", unit]).returncode == 0:
             _run([SYSTEMCTL, "reset-failed", unit])
             _run([SYSTEMCTL, "start", "--no-block", unit])
@@ -207,10 +220,14 @@ def run_tick() -> Tick:
     flags = read_flags(CONTROL)
     lifecycle = read_lifecycle(CONTROL)
     down = lifecycle is not None and lifecycle.state == "down"
+    # CR-001: scope distro stops the gatekeeper on purpose; scope workers keeps it (and the proxy and
+    # filter) running, so health and restarts still apply to those, only the stopped workers are left
+    # alone (Phase 1 review P1-8).
+    distro_down = down and lifecycle is not None and lifecycle.scope == "distro"
     if flags.killed is not None:
         reenforce_kill(t, flags.killed.level)
         t.state["health_failures"] = 0
-    elif down:  # CR-001: `ossctl down` stops the units on purpose; that is not "unhealthy"
+    elif distro_down:  # `ossctl down` stopped the gatekeeper on purpose; that is not "unhealthy"
         t.state["health_failures"] = 0
         check_disk(t)
     elif flags.paused is None:
@@ -225,8 +242,8 @@ def run_tick() -> Tick:
             t.event("anchor_failed", error=str(exc))
     if count % VERIFY_EVERY == 0:
         audit_check(t)
-    if read_flags(CONTROL).running and not down:
-        restart_failed(t)
+    if read_flags(CONTROL).running and not distro_down:
+        restart_failed(t, skip=WORKER_UNITS if down else ())
     return t
 
 

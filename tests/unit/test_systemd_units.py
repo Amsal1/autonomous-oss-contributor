@@ -8,8 +8,10 @@ import re
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from ossbot.common.config import LifecyclePolicy
+from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S
 from ossbot.ctl import cli
 
 UNITS = Path(__file__).resolve().parents[2] / "systemd"
@@ -41,6 +43,18 @@ def test_sandboxd_drain_fits_its_stop_timeout() -> None:
     lines = [line.split("=", 1)[1] for line in text.splitlines() if line.startswith("Environment=")]
     env = dict(e.split("=", 1) for line in lines for e in line.split() if "=" in e)
     assert int(env["OSSBOT_DRAIN_TIMEOUT_S"]) + 30 <= _seconds(service["TimeoutStopSec"])
+
+
+def test_policy_drain_timeout_cannot_exceed_the_static_unit_values() -> None:
+    """P1-9: TimeoutStopSec, the sandboxd SIGTERM drain and the down.ps1 cut-off are static, so the
+    policy may not ask for a longer drain than they cover."""
+    assert LifecyclePolicy(drain_timeout_s=DEFAULT_DRAIN_TIMEOUT_S).drain_timeout_s == DEFAULT_DRAIN_TIMEOUT_S
+    with pytest.raises(ValidationError):
+        LifecyclePolicy(drain_timeout_s=DEFAULT_DRAIN_TIMEOUT_S + 1)
+    text = (UNITS / "ossbot-sandboxd.service").read_text(encoding="utf-8")
+    assert f"OSSBOT_DRAIN_TIMEOUT_S={DEFAULT_DRAIN_TIMEOUT_S}" in text
+    down_ps1 = (UNITS.parent / "scripts" / "down.ps1").read_text(encoding="utf-8")
+    assert f"else {{ {DEFAULT_DRAIN_TIMEOUT_S} }}" in down_ps1
 
 
 def test_workers_stop_before_gatekeeper_and_proxy() -> None:

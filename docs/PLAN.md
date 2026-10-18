@@ -180,6 +180,8 @@ Phase 1 acceptance criteria covered: 2, 6, 7, 9, 10, 11, 12 (key-free parts), 15
 
 Phase 1 review round 1 (`docs/review-phase1.md`) added to this phase: per-uid DNS refusal ahead of the `lo` ACCEPT (P1-1), kill invalidation on every kill path through reconcile (P1-2), and the Phase 1 share of `docs/plan/CR-001-lifecycle-up-down.md` (P1-3, DESIGN §13.5): lifecycle flag and gatekeeper API, sandboxd drain and crash recovery, `TimeoutStopSec`, `ossctl up|down|status`, `scripts/{up,down,status}.ps1`, boot-gate shutdown classification, watchdog sleep handling, Telegram poll tracking. The verification block above also runs `tests/system/test_lifecycle.sh` and `tests/system/test_crash_safety.sh` (both part of `tests/system/*.sh`) and `tests/sandbox/test_crash_safety.py`. The CR-001 remainder is assigned to Phase 2 below (FEAT-005, FEAT-006, FEAT-008) and tracked in `docs/VERIFICATION.md`.
 
+Phase 1 review round 2 added: systemd-resolved masked and checked by `ossbot-firewall --check`, with per-uid varlink/D-Bus probes (P1-6, ADR-0005 addendum); kill invalidation in the resume paths (P1-7); the watchdog's lifecycle exemption limited to scope `distro` (P1-8); `lifecycle.drain_timeout_s` capped at 120 (P1-9); content-only app-deploy changes with an itemized rsync log (P1-10).
+
 ---
 
 ## Phase 2: Telegram UX, pipeline, Kiro and Hermes, model switch, open-source docs, hardening

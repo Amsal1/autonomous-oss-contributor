@@ -140,9 +140,15 @@ class BackupPolicy(Strict):
 
 
 class LifecyclePolicy(Strict):
-    """CR-001 graceful down: running work gets ``drain_timeout_s``; ``up`` waits for health."""
+    """CR-001 graceful down: running work gets ``drain_timeout_s``; ``up`` waits for health.
 
-    drain_timeout_s: Annotated[int, Field(ge=10, le=3600)] = 120
+    ``drain_timeout_s`` is capped at 120 (= ``control_flags.DEFAULT_DRAIN_TIMEOUT_S``): the units'
+    ``TimeoutStopSec=150``, sandboxd's SIGTERM drain (``OSSBOT_DRAIN_TIMEOUT_S=120``) and the
+    ``down.ps1`` cut-off (120 + 90 s without ``-Timeout``) are static and sized for it (Phase 1
+    review P1-9). A longer drain is a per-run choice: ``ossctl down --timeout S`` / ``down.ps1
+    -Timeout S``."""
+
+    drain_timeout_s: Annotated[int, Field(ge=10, le=120)] = 120
     up_health_timeout_s: Annotated[int, Field(ge=10, le=900)] = 180
 
 

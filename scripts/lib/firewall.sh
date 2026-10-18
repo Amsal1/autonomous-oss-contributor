@@ -13,7 +13,27 @@ step_networks() {
   mark_changed "network ossbot-egress 10.212.0.0/24"
 }
 
+# Phase 1 review P1-6 (ADR-0005 addendum): systemd-resolved answers any uid over its 0666 varlink
+# socket and over D-Bus and sends the query upstream as systemd-resolve, which the owner-match
+# rules do not cover. Nothing here needs it: /etc/resolv.conf is the WSL file naming the resolver
+# directly and nsswitch is "files dns". Masked, it also cannot be D-Bus-activated.
+# 'ossbot-firewall --check' (every unit's ExecStartPre, the watchdog, doctor) fails while it is
+# not masked or still listening.
+mask_resolved() {
+  local unit=systemd-resolved.service
+  if [[ $(systemctl is-enabled "$unit" 2>/dev/null || true) != masked ]]; then
+    systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    systemctl mask "$unit" >/dev/null 2>&1 || die "systemctl mask $unit failed"
+    mark_changed "masked $unit (DNS for every uid over varlink/D-Bus)"
+  fi
+  if systemctl is-active --quiet "$unit"; then
+    systemctl stop "$unit" || die "systemctl stop $unit failed"
+    mark_changed "stopped $unit"
+  fi
+}
+
 step_firewall() {
+  mask_resolved
   # The renderer lives in the app venv (step app-deploy); ossbot-firewall is the thin root wrapper.
   ensure_file /opt/ossbot/bin/ossbot-firewall root root 0755 <"$OSSBOT_REPO/scripts/bin/ossbot-firewall"
   install_unit ossbot-firewall.service

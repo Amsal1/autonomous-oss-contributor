@@ -9,7 +9,9 @@ firewall: ``OSSBOT-IN``/``OSSBOT-OUT`` (+ ip6tables) for ``ossbot-firewall.servi
 ``host``) and ``OSSBOT-FWD`` in ``DOCKER-USER`` for ``ossbot-firewall-docker.service`` (part
 ``docker``). ``--apply`` flushes and refills each chain and leaves exactly one jump at position
 1 of its parent; ``--check`` compares chain contents (order included) and jump positions and
-exits 1 on any drift, including a changed resolver (``firewall_drift:resolver_changed``).
+exits 1 on any drift, including a changed resolver (``firewall_drift:resolver_changed``) and,
+for the host part, a systemd-resolved that is not masked or still listening
+(``firewall_drift:resolved_ipc``, Phase 1 review P1-6).
 
 Usage (root): ``python -I -m ossbot.ctl.render firewall --apply|--check|--print [--part P]`` and
 ``python -I -m ossbot.ctl.render squid [--out PATH] [--hermes-login]``.
@@ -21,6 +23,7 @@ import argparse
 import ipaddress
 import os
 import pwd
+import socket
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
@@ -50,6 +53,8 @@ SERVICE_USERS = ("ossrunner", "hermes", "gatekeeper", "ossbox", "ossnobody")
 DEFAULT_TEMPLATE = Path("/opt/ossbot/app/sandbox/proxy/squid.conf.j2")
 DEFAULT_SQUID_OUT = Path("/etc/ossbot/proxy/squid.conf")
 DEFAULT_SNAPSHOT_ROOT = Path("/srv/ossbot/config-snapshot")
+RESOLVED_UNIT_LINK = Path("/etc/systemd/system/systemd-resolved.service")
+RESOLVED_VARLINK = Path("/run/systemd/resolve/io.systemd.Resolve")
 
 
 class RenderError(ValueError):
@@ -348,6 +353,29 @@ def check(chains: Iterable[Chain], ns: str) -> list[str]:
     return problems
 
 
+def resolved_ipc_problems(unit_link: Path = RESOLVED_UNIT_LINK, varlink: Path = RESOLVED_VARLINK) -> list[str]:
+    """systemd-resolved must be masked and not listening (Phase 1 review P1-6).
+
+    It answers any uid over its 0666 varlink socket and over D-Bus, then queries upstream as
+    ``systemd-resolve``, which the owner-match rules of OSSBOT-OUT do not cover: a DNS channel past
+    squid. Nothing in the distro needs it (resolv.conf names the WSL resolver directly)."""
+    problems: list[str] = []
+    try:
+        masked = os.readlink(unit_link) == "/dev/null"
+    except OSError:
+        masked = False
+    if not masked:
+        problems.append("firewall_drift:resolved_ipc systemd-resolved is not masked")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(2.0)
+            sock.connect(str(varlink))
+        problems.append("firewall_drift:resolved_ipc systemd-resolved varlink socket accepts connections")
+    except OSError:
+        pass
+    return problems
+
+
 def resolve_uids() -> dict[str, str]:
     out = {}
     for name in SERVICE_USERS:
@@ -404,6 +432,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ossbot-firewall: applied {len(chains)} chains (resolver {ns})")
             return 0
         problems = check(chains, ns)
+        if args.part in ("host", "all"):
+            problems.extend(resolved_ipc_problems())
         for problem in problems:
             print(f"ossbot-firewall --check: {problem}", file=sys.stderr)
         return 1 if problems else 0

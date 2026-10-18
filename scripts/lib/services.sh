@@ -44,14 +44,30 @@ step_app_deploy() {
   done
   # The wheel metadata names docs/DESIGN.md as the readme; ship it so the build is reproducible.
   sources+=(docs/DESIGN.md)
-  local out
+  local out content line n=0
   # --relative keeps sandbox/proxy and docs/DESIGN.md at the same relative paths; .venv is protected.
-  out=$(cd "$OSSBOT_REPO" && rsync -a --relative --delete --itemize-changes --chown=root:root \
-    --chmod=D0755,F0644 --exclude '__pycache__/' --exclude '*.pyc' --filter 'P /.venv/' \
+  # --checksum + --omit-dir-times: a touched file or a directory whose mtime moved (pytest creating
+  # or removing an excluded __pycache__/) is not a deploy change (Phase 1 review P1-10).
+  out=$(cd "$OSSBOT_REPO" && rsync -a --relative --delete --checksum --omit-dir-times --itemize-changes \
+    --chown=root:root --chmod=D0755,F0644 --exclude '__pycache__/' --exclude '*.pyc' --filter 'P /.venv/' \
     "${sources[@]}" "$OSSBOT_APP/")
   if [[ -n $out ]]; then
-    mark_changed "rsync to $OSSBOT_APP ($(wc -l <<<"$out") items)"
-    OSSBOT_APP_CHANGED=1
+    # Itemized lines go to the provision log so every change is traceable.
+    while IFS= read -r line; do
+      n=$((n + 1))
+      if ((n <= 200)); then log "  rsync: $line"; fi
+    done <<<"$out"
+    ((n <= 200)) || log "  rsync: ... $((n - 200)) more item(s)"
+    # Content changes only: deletions, new entries (+), checksum (c) or size (s) differences and
+    # local changes such as a symlink target (Y = c). Time/permission/owner-only items are metadata.
+    content=$(awk '/^\*deleting/ || substr($1, 1, 1) == "c" || substr($1, 3) ~ /\+/ ||
+      substr($1, 3, 1) == "c" || substr($1, 4, 1) == "s"' <<<"$out")
+    if [[ -n $content ]]; then
+      mark_changed "rsync to $OSSBOT_APP ($(wc -l <<<"$content") content items, $n itemized)"
+      OSSBOT_APP_CHANGED=1
+    else
+      log "  rsync: $n metadata-only item(s), no content change (no uv sync, no restarts)"
+    fi
   fi
   if [[ $OSSBOT_APP_CHANGED == 1 || ! -x $OSSBOT_APP/.venv/bin/ossbot-gatekeeper ]]; then
     (cd "$OSSBOT_APP" && UV_PROJECT_ENVIRONMENT="$OSSBOT_APP/.venv" UV_CACHE_DIR=/var/cache/ossbot-uv \

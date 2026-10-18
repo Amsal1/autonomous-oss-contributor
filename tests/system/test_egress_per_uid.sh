@@ -2,7 +2,8 @@
 # DESIGN §22.6 test_egress_per_uid.sh / §11.4: the uid x port matrix. Each service uid reaches only
 # its own proxy port (runner 3140, hermes 3141, gatekeeper 3150), no uid gets direct TCP 443 or
 # UDP 53, and through its port only its categories pass (others: CONNECT 403). Root and ossadmin
-# are unrestricted; 3128 refuses the host side of the bridge.
+# are unrestricted; 3128 refuses the host side of the bridge. No uid resolves through
+# systemd-resolved IPC (varlink, D-Bus): the unit is masked (Phase 1 review P1-6).
 # shellcheck source=tests/system/lib.sh disable=SC1091,SC2317
 source "$(dirname "$0")/lib.sh"
 require_running
@@ -29,6 +30,18 @@ else:
     s = socket.create_connection((sys.argv[1], 53), 3); s.sendall(len(q).to_bytes(2, "big") + q)
 assert s.recv(512)' "$2" "$3"
 }
+varlink() {  # varlink USER -> exit 0 when systemd-resolved answers ResolveHostname over varlink (P1-6)
+  as "$1" python3 -I -c '
+import json, socket
+q = {"method": "io.systemd.Resolve.ResolveHostname", "parameters": {"name": "example.com"}}
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5)
+s.connect("/run/systemd/resolve/io.systemd.Resolve"); s.sendall(json.dumps(q).encode() + b"\0")
+assert s.recv(65536)'
+}
+dbus() {  # dbus USER -> exit 0 when systemd-resolved answers ResolveHostname over D-Bus (P1-6)
+  as "$1" busctl --system --timeout=5 call org.freedesktop.resolve1 /org/freedesktop/resolve1 \
+    org.freedesktop.resolve1.Manager ResolveHostname isit 0 example.com 2 0
+}
 mapfile -t RESOLVERS < <(awk '$1 == "nameserver" && $2 ~ /^[0-9.]+$/ {print $2}' /etc/resolv.conf)
 RESOLVERS+=(127.0.0.53)
 connect() {  # connect USER PORT URL -> prints the CONNECT status code
@@ -50,7 +63,14 @@ for u in ossrunner hermes gatekeeper ossbox ossnobody; do
       refuse "$u -> resolver $ns:53/$proto gets no answer" dns "$u" "$ns" "$proto"
     done
   done
+  refuse "$u -> systemd-resolved varlink ResolveHostname gets no answer" varlink "$u"
+  refuse "$u -> systemd-resolved D-Bus ResolveHostname gets no answer" dbus "$u"
 done
+# P1-6: the resolved IPC refusals hold because the unit is masked, not by chance.
+check "busctl present (the D-Bus probes above are real)" test -x /usr/bin/busctl
+check "systemd-resolved is masked" test "$(systemctl is-enabled systemd-resolved.service 2>/dev/null)" = masked
+refuse "systemd-resolved is not active" systemctl is-active --quiet systemd-resolved.service
+check "ossbot-firewall --check passes (includes the resolved check)" /opt/ossbot/bin/ossbot-firewall --check
 # Control: the resolver itself works (root is unrestricted), so the refusals above are real.
 check "root -> resolver ${RESOLVERS[0]}:53/udp answers" dns root "${RESOLVERS[0]}" udp
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import socket
 from pathlib import Path
 
 import pytest
@@ -150,6 +151,24 @@ def test_resolver_change_detected() -> None:
     assert not render.resolver_drift(_listing(render.firewall_plan(NS, UIDS)["host"][0], UIDS), NS)
     new = render.firewall_plan(NS, UIDS)["host"][0]
     assert render.check_chain(new, listing, "-A INPUT -j OSSBOT-IN\n")
+
+
+def test_resolved_ipc_check_requires_mask_and_closed_varlink(tmp_path: Path) -> None:
+    """P1-6: systemd-resolved is a DNS channel past OSSBOT-OUT unless masked and not listening."""
+    link, sock_path = tmp_path / "systemd-resolved.service", tmp_path / "vl"
+    problems = render.resolved_ipc_problems(link, sock_path)
+    assert problems == ["firewall_drift:resolved_ipc systemd-resolved is not masked"]
+    link.write_text("[Unit]\n")  # a real unit file (unmasked override) is not a mask
+    assert render.resolved_ipc_problems(link, sock_path) == problems
+    link.unlink()
+    link.symlink_to("/dev/null")
+    assert render.resolved_ipc_problems(link, sock_path) == []
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(sock_path))
+        listener.listen(1)
+        [problem] = render.resolved_ipc_problems(link, sock_path)
+    assert "resolved_ipc" in problem and "varlink" in problem
+    assert render.resolved_ipc_problems(link, sock_path) == []  # a stale socket file without listener
 
 
 def test_nameservers_from_resolv_conf(tmp_path: Path) -> None:

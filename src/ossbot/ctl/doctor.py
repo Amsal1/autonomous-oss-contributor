@@ -245,6 +245,45 @@ def _dns_answers(user: str, server: str, proto: str) -> bool:
     return out.stdout.startswith("answer")
 
 
+_VARLINK_RESOLVE = (
+    "import json,socket,sys\n"
+    "q = {'method': 'io.systemd.Resolve.ResolveHostname', 'parameters': {'name': 'example.com'}}\n"
+    "try:\n"
+    " s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(5); s.connect(sys.argv[1])\n"
+    " s.sendall(json.dumps(q).encode() + b'\\0')\n"
+    " print('answer' if s.recv(65536) else 'none')\n"
+    "except OSError as e: print('none', e.errno)\n"
+)
+BUSCTL_RESOLVE = [
+    "/usr/bin/busctl", "--system", "--timeout=5", "call", "org.freedesktop.resolve1", "/org/freedesktop/resolve1",
+    "org.freedesktop.resolve1.Manager", "ResolveHostname", "isit", "0", "example.com", "2", "0",
+]  # fmt: skip
+
+
+def _resolved_ipc_answers(user: str) -> list[str]:
+    """P1-6: systemd-resolved IPC channels that answer ``user`` (varlink and D-Bus)."""
+    from ossbot.ctl.render import RESOLVED_VARLINK  # noqa: PLC0415
+
+    out = []
+    varlink = _run(["/usr/bin/python3", "-I", "-c", _VARLINK_RESOLVE, str(RESOLVED_VARLINK)], timeout=10, user=user)
+    if varlink.stdout.startswith("answer"):
+        out.append(f"{user}->systemd-resolved varlink")
+    if _run(BUSCTL_RESOLVE, timeout=10, user=user).returncode == 0:
+        out.append(f"{user}->systemd-resolved D-Bus")
+    return out
+
+
+def check_resolved() -> Result:
+    """P1-6: systemd-resolved masked and not listening (also part of ``ossbot-firewall --check``)."""
+    from ossbot.ctl.render import resolved_ipc_problems  # noqa: PLC0415
+
+    problems = [p.removeprefix("firewall_drift:resolved_ipc ") for p in resolved_ipc_problems()]
+    return Result(
+        PASS if not problems else FAIL, "systemd-resolved masked", "; ".join(problems) or "masked, varlink closed",
+        "provision step firewall (systemctl mask systemd-resolved)",
+    )  # fmt: skip
+
+
 def dns_probe_targets() -> list[str]:
     """Every resolv.conf nameserver plus the systemd-resolved stub address (P1-1)."""
     from ossbot.ctl.render import RenderError, nameservers  # noqa: PLC0415
@@ -270,9 +309,11 @@ def check_uid_probes() -> Result:
             for proto in ("udp", "tcp"):
                 if _dns_answers(user, server, proto):
                     problems.append(f"{user}->{server}:53/{proto} (direct DNS)")
+        problems.extend(_resolved_ipc_answers(user))
     return Result(
-        PASS if not problems else FAIL, "per-uid egress", "; ".join(problems) or "only owned ports, no direct DNS"
-    )
+        PASS if not problems else FAIL, "per-uid egress",
+        "; ".join(problems) or "only owned ports, no direct DNS, no resolved IPC",
+    )  # fmt: skip
 
 
 def _connect_code(user: str, port: int, url: str) -> str:
@@ -506,7 +547,7 @@ def check_lock_drift() -> Result:
 def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps: list[Callable[[], Result | Iterable[Result]]] = [
         check_mounts, check_default_user, check_users, check_perms, check_docker,
-        filter_deny_probe, check_firewall,
+        filter_deny_probe, check_firewall, check_resolved,
     ]  # fmt: skip
     if not quick:
         steps += [check_uid_probes, check_proxy_denies]

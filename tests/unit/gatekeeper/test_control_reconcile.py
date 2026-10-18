@@ -139,6 +139,45 @@ def test_root_written_soft_kill_while_running_invalidates_armed_and_confirmed(ct
     assert status(ctx, armed) == "invalidated"
 
 
+def test_root_kill_then_request_resume_before_any_reconcile_invalidates(ctx: AppContext) -> None:
+    """P1-7: a root kill resumed via /resume or ossctl resume inside one housekeeping tick."""
+    armed, confirm_token, confirmed = _armed_and_confirmed(ctx)
+    write_flag(ctx.paths.killed_flag, {"level": "soft", "reason": "ossbot-kill", "actor": "root"})
+    ctx.control.request_resume("tg:4242")  # no reconcile ran in between
+    assert status(ctx, armed) == status(ctx, confirmed) == "invalidated"
+    [event] = events(ctx, "resume_requested")
+    assert set(event["invalidated"]) == {armed, confirmed}
+    # the enforcer removes the flags; the next reconcile resumes and the token stays dead
+    ctx.paths.killed_flag.unlink()
+    ctx.paths.resume_request.unlink()
+    assert ctx.control.reconcile().state == "running"
+    with pytest.raises(ApprovalError):
+        confirm(ctx, confirm_token, message_id=11)
+
+
+def test_request_resume_from_pause_keeps_approvals(ctx: AppContext) -> None:
+    armed, _, confirmed = _armed_and_confirmed(ctx)
+    ctx.control.pause("p", "tg:4242")
+    ctx.control.request_resume("tg:4242")
+    assert status(ctx, armed) == "armed" and status(ctx, confirmed) == "confirmed"
+
+
+def test_root_kill_then_offline_resume_before_any_reconcile_invalidates(ctx: AppContext) -> None:
+    """P1-7: kill flag written and removed (ossbot-resume --offline) between two reconciles."""
+    armed, confirm_token, confirmed = _armed_and_confirmed(ctx)
+    sent: list[str] = []
+    ctx.control.notify = sent.append
+    ctx.paths.resume_log.write_text(json.dumps({"ts": "a", "via": "resume.ps1", "killed": "{}"}) + "\n")
+    report = ctx.control.reconcile()
+    assert report.state == "running" and report.offline_resumes == 1
+    assert status(ctx, armed) == status(ctx, confirmed) == "invalidated"
+    with pytest.raises(ApprovalError):
+        confirm(ctx, confirm_token, message_id=11)
+    assert any("Offline resume observed: 2 armed/confirmed" in s for s in sent)
+    [event] = events(ctx, "control_reconciled")
+    assert set(event["invalidated"]) == {armed, confirmed}
+
+
 def test_full_kill_flag_found_at_startup_invalidates(ctx: AppContext) -> None:
     armed, confirm_token, confirmed = _armed_and_confirmed(ctx)
     write_flag(ctx.paths.killed_flag, {"level": "full", "reason": "kill.ps1", "actor": "root", "ts": "t"})

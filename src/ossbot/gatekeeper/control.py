@@ -230,8 +230,15 @@ class ControlService:
         if row["state"] == "running" and flags.running:
             raise ControlConflict("already running")
         with db.transaction(self.conn):
+            invalidated: list[Invalidated] = []
+            if flags.killed is not None:
+                # A root-written kill resumed before the next housekeeping tick never reaches
+                # reconcile: apply §12.4 here, before the enforcer removes the flag (P1-7).
+                invalidated = self.approvals.invalidate_armed_confirmed("killed", actor)
             write_flag(self.paths.resume_request, {"actor": actor, "reason": reason, "ts": to_iso(self.clock.now())})
-            self.audit.append(actor, "resume_requested", {"reason": reason})
+            self.audit.append(
+                actor, "resume_requested", {"reason": reason, "invalidated": [i.approval_id for i in invalidated]}
+            )
         self._resume_pending = True
 
     def set_dry_run(self, enabled: bool, actor: str) -> list[Invalidated]:
@@ -311,11 +318,23 @@ class ControlService:
             row = self._row()
             flags = self.flags()
             resumed_by_enforcer = (self._resume_pending or offline > 0) and flags.running
+            if offline and flags.killed is None:
+                # An offline resume (ossbot-resume) may have removed a root-written kill flag before
+                # any reconcile saw it (P1-7): treat the resume.log line as evidence of that kill.
+                gone = self.approvals.invalidate_armed_confirmed("killed", "resume_log")
+                if gone:
+                    self.audit.append(
+                        "system",
+                        "control_reconciled",
+                        {"state": "resumed_offline", "invalidated": [i.approval_id for i in gone]},
+                    )
+                    fyis.append(f"🛑 Offline resume observed: {len(gone)} armed/confirmed approval(s) invalidated")
             if flags.killed is not None:
                 # §12.4 "kill invalidates armed|confirmed": a flag written by root (watchdog,
                 # ossbot-kill/kill.ps1, boot gate) bypasses kill(), so invalidate here, in the same
-                # transaction. Idempotent: nothing can be armed while the flag is present, so a
-                # repeated reconcile finds nothing; a newer flag after a quick resume is covered too.
+                # transaction. Repeated reconciles normally find nothing: the Telegram handler refuses
+                # Approve while killed (ApprovalService.approve itself has no running check, so an
+                # approval armed through another path is invalidated on the next tick).
                 invalidated = self.approvals.invalidate_armed_confirmed("killed", "flag")
                 if row["state"] != "killed":
                     self._set("killed", flags.killed.reason, "flag")
