@@ -1,84 +1,79 @@
-# Phase 1 review (round 3): safety core, sandbox isolation, provisioning foundation
+# Phase 1 review (round 4): egress and DNS surface
 
-Round 3 checks the round-2 fixes (commit 381848e) on top of the whole Phase 1 diff since 7624a0c. All five round-2 findings are closed. systemd-resolved is masked and `ossbot-firewall --check` fails closed if it comes back (P1-6). Both resume paths invalidate armed approvals (P1-7). The watchdog's `down` exemption is scoped (P1-8), the drain timeout is capped at 120 (P1-9), and app-deploy now changes only on content (P1-10). Every bar command passes when I re-run it. A new probe of the squid allowlist found two problems in the rendered `squid.conf`, and both defeat the egress allowlist for the confined callers.
+Round 4 reviews commit 109711f, the fix for round 3's P1-11/P1-12. It also covers the whole egress and DNS surface as recorded in the new threat table in `docs/VERIFICATION.md`. Both round-3 findings are closed in the template, the golden, the render tests and the live meter evidence, and the same pass also closed IPv6 `INPUT` and `0.0.0.0/8`. The 30-row table misses one channel that none of its layers can see: `AF_VSOCK` (Hyper-V sockets) from the VM to the Windows host.
 
-Watch for: squid lets an IP-literal CONNECT through any `dstdomain` category whose name matches the IP's PTR record, a full allowlist bypass for anyone who controls a reverse zone (confirmed: throwaway squid 6.14 from the pinned proxy image tunnels to the IP without `-n` and returns 403 with it). Squid also resolves every requested hostname, including ones it is about to deny, because the global `deny denied_dst` runs before the category checks. That gives every caller, including the `llm` and `fetch` sandbox pools, a DNS exfiltration channel past the allowlist (confirmed: live OSSBOT-IN DNS counters rise on 403'd CONNECTs via 3150 and 3128).
+Watch for: any confined service uid can open hvsocket connections to the Windows host (confirmed: as `hermes`, `AF_VSOCK` connects to CID 2 on ports 50000, 50002 and 50005 succeed). iptables owner rules, the WSL NAT and the Hyper-V VM firewall all filter IP traffic on the vNIC, and this traffic is not IP. Nothing in the units restricts the socket family. What sits behind those ports (WSL service channels, possibly the drvfs Plan 9 server or the DNS tunnel) is not traced. Either would be an uncontrolled path from a confined uid to a host process that has full network and disk access.
 
 **Verdict**: NEEDS_CHANGES
 
 ## High-level view
 
-With direct DNS and resolved closed, the proxy is the only path left from a confined caller to a resolver. Its ACL order makes squid do the lookups for the caller. The PTR match turns an IP the attacker owns into an "allowed" host, for example by setting its reverse name to `runtime.us-east-1.kiro.dev` for the coder pool or `pypi.org` for the fetch pool. The early `dst` deny resolves names that no category allows.
+With every name ACL `-n`, IP literals denied ahead of every allow, and `!denied_dst` as the last term of each allow line, squid resolves a name only after the port, the source pool and the category have matched. The meter's positive control (hermes's `web_public` lookup must be counted) is what makes its zero counts evidence of P1-11/P1-12 closure.
 
-Both fixes stay in the renderer and template, and they keep DESIGN §11.3's resolved-IP deny for allowed names. Render `-n` on every `dstdomain` ACL. Then evaluate `denied_dst` only after a request has matched an allowed category. Neither the system tests nor doctor probe the proxy's own lookups today, which is why every bar item passes.
+Every DNS and IP row in the table has a control and a probe. The design assumes the network stack is the only way out of the VM, and on WSL2 it is not. `AF_VSOCK` reaches the host directly, it needs no capability, and the moby default seccomp profile blocks it only inside containers. The fix is cheap: `RestrictAddressFamilies=` on every non-root ossbot unit, a probe, and a threat-table row.
+
+The remaining items are hardening. `denied_dst` lacks a few special-purpose ranges. The host-listener probe exempts every port on the resolver address and does not allowlist loopback listeners, even though every service uid may reach `lo`. The threat table does not record the attacker-tenant channel through allowed SaaS endpoints. A skipped Hyper-V check is counted as a PASS.
 
 <details>
-<summary>Issues (2)</summary>
+<summary>Issues (5)</summary>
 
-1. **P1-11 HIGH: PTR-based allowlist bypass in squid `dstdomain`** (`sandbox/proxy/squid.conf.j2:31,33`; golden `tests/unit/ctl/golden/squid.conf`). An IP-literal CONNECT is allowed when the IP's reverse name matches a category, so any caller can tunnel to an attacker IP whose PTR names an allowed host. Render `-n` on every `dstdomain` ACL (categories and `denied_domains`). Add a render test asserting it, and add a system/sandbox probe: an IP-literal CONNECT per port and pool returns 403 with no proxy DNS packet. Record the decision in an ADR-0005 addendum.
-2. **P1-12 HIGH: squid resolves denied hostnames (DNS exfiltration via the proxy)** (`sandbox/proxy/squid.conf.j2:34,39,43`). The global `http_access deny denied_dst` forces a forward lookup of every requested name before the port/pool/category rules. Callers without `web_public` (3140 runner, 3150 gatekeeper, 3128 `fetch` and `llm` pools) can therefore push arbitrary labels to the internet through 403'd requests. Move the resolved-IP deny behind the category match, e.g. `http_access allow port_X src_Y cat_Z !denied_dst` per rule, or a fast `deny !<union of the port's categories>` ahead of `deny denied_dst`. Add a probe: a random-label CONNECT per port and pool leaves the OSSBOT-IN proxy-DNS counter (or the squid ipcache) unchanged. Add a render test that no `dst` ACL is evaluated before a category ACL, and an ADR-0005 addendum.
+1. **P1-13 HIGH: unfiltered `AF_VSOCK` path from confined uids to the Windows host**: add `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` to every non-root ossbot unit (gatekeeper, sandboxd, and the Phase 2 runner/hermes templates; drop `AF_NETLINK` where it is not needed). Assert it in `tests/unit/test_systemd_units.py`, add a per-unit-context and per-pool vsock probe to `test_egress_surface.sh`, and add a threat-table row and an ADR-0005 addendum. Identify what listens on host ports 50000/50002/50005, and if one is the drvfs Plan 9 server, record what it means for ADR-0007.
+2. **NIT `denied_dst` special-purpose ranges**: add `198.18.0.0/15` (the fake-IP range of common Windows VPN/proxy clients), `192.0.0.0/24`, `224.0.0.0/4` and `240.0.0.0/4` so a `web_public` name cannot point squid at them.
+3. **NIT host-listener probe too permissive**: limit the resolver exemption to `<NS>:53` and turn the loopback check into an allowlist of the expected listeners. Every service uid reaches any `lo` port, so an unexpected loopback listener should fail the test, not pass it.
+4. **NIT attacker-tenant channel not in the threat table**: add a row for "allowed SaaS host, attacker's own account" (llm pool `kiro_core` with the sandbox Kiro key, runner `github_read`, fetch `storage.googleapis.com`/`ghcr.io`). Mark it as an accepted residual of CONNECT-only matching and name the mitigations (key scope, rotation, no secrets in fetch).
+5. **NIT Hyper-V SKIP counted as PASS**: `test_egress_surface.sh` reports the unapplied-layer case through `pass "SKIP …"`, so "313 PASS" does not show whether row 30 ran enforced. Count SKIPs separately in `lib.sh` (or record the row-30 outcome in VERIFICATION.md).
 
 </details>
 
 <details>
 <summary>Details</summary>
 
-### Squid matches IP-literal CONNECTs through the PTR name (P1-11, HIGH, confirmed)
+### Hyper-V sockets bypass every egress layer (P1-13, HIGH, confirmed reachability)
 
-The template renders `acl cat_<name> dstdomain <hosts>` and `acl denied_domains dstdomain ...` with no flags (`squid.conf.j2:31,33`; live `/etc/ossbot/proxy/squid.conf:34-44`). When the request target is an IP and the IP string does not match, squid's `dstdomain` does a reverse lookup and matches the PTR name. The resolver does not forward-confirm the PTR, and the reverse zone belongs to whoever controls the IP. Reviewer probe with the pinned proxy image (`ossbot/proxy@sha256:24c4…`, squid 6.14), on throwaway `--network none` containers with `hosts_file` mapping `203.0.113.10 api.github.com` and `acl cat dstdomain api.github.com` / `http_access allow cat`:
+The threat table's rows assume that a confined process can only leave the VM over IP: owner rules in `OSSBOT-OUT` (IPv4 and IPv6), the `lo` ACCEPT with port 53 refused, the Hyper-V VM firewall on the vNIC. WSL2 also gives the guest Hyper-V sockets to the host (`AF_VSOCK`, host CID 2). This is how WSL's init, interop, drvfs and DNS tunnelling talk to the Windows side. netfilter never sees these sockets, the Hyper-V firewall filters only the virtual NIC, and an unprivileged process can create them. ADR-0007 already notes that the interop handler "failed on its vsock", so the transport is live in this distro. Reviewer spot-check, one command, as a confined service uid:
 
 ```
-dstdomain (as rendered, no -n):
-  CONNECT 203.0.113.10 -> HTTP/1.1 503 Service Unavailable
-  log: ... TCP_TUNNEL/503 0 CONNECT 203.0.113.10:443 - HIER_DIRECT/203.0.113.10 -
-dstdomain -n:
-  CONNECT 203.0.113.10 -> HTTP/1.1 403 Forbidden
-  log: ... TCP_DENIED/403 3393 CONNECT 203.0.113.10:443 - HIER_NONE/- text/html
+wsl -d ossbot -u root -- runuser -u hermes -- python3 -I -c '... socket(AF_VSOCK).connect((2, p)) for p in 50000..50010'
+{50000: 'OPEN', 50001: 'timeout', 50002: 'OPEN', 50003: 'timeout', 50004: 'timeout',
+ 50005: 'OPEN', 50006..50010: 'timeout'}
 ```
 
-The 503 is squid trying to open the tunnel, which fails only because the probe container has no network. On the live proxy, an IP-literal CONNECT via 3150 made two DNS packets leave through the OSSBOT-IN proxy-DNS ACCEPT (counter 10 → 12), so the reverse lookup also happens in production. `denied_dst` does not help, because the attacker IP is public. The exposure follows `rules` (`squid.conf:53-67`). `pool_llm` (agent with the sandbox Kiro key, reading untrusted repo content) gets out through any `cat_kiro_core` name. `pool_fetch` (runs untrusted install and build steps) gets out through any `pkg_*` or `github_read` name. The runner (3140) and gatekeeper (3150) are exposed through their categories. The split coder and the per-profile allowlist (bar (a): egress allowlist fail-closed) rest on these ACLs. With `-n` the ACL never converts between IP and name, so an IP literal matches only an IP entry, and the categories contain none.
+Three host listeners accept connections from `hermes`. The same holds for gatekeeper (GitHub PAT, Telegram token), sandboxd and the Phase 2 runner, because none of the units restricts address families (`git grep RestrictAddressFamilies` finds nothing). I did not trace which WSL services own these ports, and that sets the impact. Possible: a listener is WSL's drvfs Plan 9 server. Then a confined uid could attach Windows paths directly and get around ADR-0007's `automount=false` confinement. Possible: a listener carries the DNS tunnel. Then this is the P1-1/P1-6/P1-12 channel again, without port 53. In every case it is an unfiltered channel from an identity that reads untrusted content (hermes, the runner) to a host process outside every ossbot control. Even the cheapest reading of the impact gives an attack surface on a privileged Windows service.
 
-### Every requested hostname is resolved, even when it is denied (P1-12, HIGH, confirmed)
+Sandbox containers are likely not affected. The filter forces `Runtime: runc` and `SecurityOpt == ["no-new-privileges"]`, so the moby default seccomp profile applies, and that profile refuses `socket(AF_VSOCK)`. No probe shows this, though. The proxy container falls in the same "likely" bucket.
 
-`http_access deny denied_dst` (`squid.conf.j2:39`) is a `dst` ACL, so squid has to resolve the request's hostname to evaluate it. It sits above the per-port/pool allow rules (`:43`), so the lookup happens for every request that is not on `denied_domains`. Live probe as uid `gatekeeper` through 3150, three CONNECTs to `rv3-<random>.example.com:443`, all answered `403 Forbidden`. The OSSBOT-IN `udp dpt:53` ACCEPT from `10.212.0.2` went from 4 to 10 packets (A + AAAA per name). One CONNECT to port 3128 from the host side, which `deny port_sandbox src_host` refuses two rules later, moved it from 12 to 14. The 3128 ordering is the same for every sandbox pool, so a process in the `llm` or `fetch` pool can stream data as DNS labels to an authoritative server it controls, with every request "denied". This is the same channel class as P1-1 and P1-6, one layer up. The callers with `web_public` (`pool_research`, hermes 3141) may resolve anything by design. For the rest, a name that matches no category must not be resolved. The resolved-IP deny that DESIGN §11.3 asks for ("by resolved IP, `dst` ACL") still applies once the name is allowed. Squid evaluates the ACLs of one `http_access` line left to right and stops at the first mismatch. So `allow port_X src_Y cat_Z !denied_dst` resolves only names that already matched `cat_Z`, and so does a fast `deny !cat_union_X` placed before the `dst` deny.
+The fix is a systemd property on each non-root unit, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` (plus `AF_NETLINK` where glibc's `AI_ADDRCONFIG` needs it). The renderers and the Phase 2 unit templates for runner and hermes should carry it as an invariant, and `test_systemd_units.py` should assert it. The live check has to run in the unit's context, for example the unit's `Seccomp:` and the `systemctl show -p RestrictAddressFamilies` value, plus a vsock connect from a `systemd-run` transient unit with the same properties. A connect under plain `runuser` would still succeed and prove nothing. Add a pool-side vsock probe to `POOL_SCRIPT` as well. Sessions outside units (`runuser`, `wsl -u ossnobody`) remain unrestricted. They need root or the owner's console, and the threat table should record them as such.
 
-The current probes miss this because they check only that the confined callers get 403 and that direct DNS is refused. They never check whether the proxy resolved anything. The OSSBOT-IN proxy-DNS counter is a cheap, deterministic signal for the system test (`test_egress_per_uid.sh` / `test_proxy_dns.sh`): read it, send a random-label CONNECT and an IP-literal CONNECT per port and per pool, and expect it unchanged. `ossctl doctor` can do the same for the host ports.
+### `denied_dst` range gaps (NIT)
 
-### Verification evidence (re-run by the reviewer, 2026-10-18 09:00-09:40 +07)
+`always_denied.cidrs` covers RFC1918, CGNAT, link-local, loopback and `0.0.0.0/8`. It does not cover `198.18.0.0/15`. Fake-IP VPN/proxy clients on Windows (Clash, Surge-style TUN modes) hand out addresses in that range, and the WSL NAT forwards to them. With such a client running on the laptop, a `web_public` name resolving into the range would reach the Windows client through squid. `192.0.0.0/24`, `224.0.0.0/4` and `240.0.0.0/4` are cheap to add alongside it. IPv4-mapped AAAA answers are already handled, because squid stores IPv4 as v4-mapped, so `::ffff:127.0.0.1` matches `127.0.0.0/8`.
 
-| Bar item | Result |
-|---|---|
-| round-2 findings P1-6..P1-10 | closed: resolved `masked`, varlink refused, varlink + D-Bus `ResolveHostname` refused for all five uids; resume paths invalidate (and `ossbot-resume:48` still refuses a request older than the kill flag); `distro_down` exemption with `restart_failed(skip=WORKER_UNITS)`; `drain_timeout_s le=120`; first bootstrap after the full test run all `unchanged` |
-| `DEV pytest -m "unit or telegram"` | 1541 passed, 11 deselected |
-| `DEV ruff check` / `ruff format --check` / `mypy` / `lint-imports` | clean / 177 formatted / 101 files no issues / 4 contracts kept |
-| `ROOTDEV pytest -m sandbox` | 9 passed, 2 skipped (`needs_key` live Kiro probes, Phase 2) |
-| `ROOT bash tests/system/*.sh` (10 scripts) | all exit 0, 213 PASS, 0 FAIL |
-| `scripts\bootstrap.ps1` (run twice) | both runs: every step `unchanged` (kiro/hermes `skipped (phase 2)`, Hyper-V WARN not elevated, doctor --quick PASS 25 WARN 2 SKIP 3) |
-| `wsl --terminate ossbot` + `scripts\test-isolation.ps1` | PASS 13/13 |
-| `systemctl is-active` gatekeeper, dockerfilter, proxy, sandboxd, watchdog.timer (+ boot-gate, firewall x2) | all active (after the isolation test's WSL restart) |
-| `docker version` / `docker compose version` | 29.9.1 / v5.6.0 |
-| `ossctl doctor` (root, full) | PASS 29, WARN 2, SKIP 3, FAIL 0, exit 0. Live GitHub/Telegram checks PASS (secrets exist). WARNs: runner-owned catalog (FEAT-006) and not-yet-run safety probes (Kiro jobs refused until they pass) |
-| `gitleaks git --redact` | no leaks |
-| personal values outside `docs/` | none: `git grep` for the owner's name/login/emails/IdC host found 0 hits. The only matches for `config/profile.yaml` values are generic (a category name, `us-east-1`) |
-| `git status --porcelain` | empty before this review's commit |
-| pushes | none: `origin/main` is still 3ccd9bc; 4d13e23 and 381848e are local only |
+### Host-listener probe (NIT)
 
-Bar (a) fails on P1-11 and P1-12 (egress allowlist fail-closed). Bars (b) to (e) pass.
+The awk filter in the "host surface" block drops every socket whose address equals `$NS`, on any port. It also accepts any `127.*`/`::1` listener. `OSSBOT-OUT` lets every service uid reach any port on `lo` (row 26), so the security-relevant question is which loopback listeners exist. The probe never asks it. Exempt only `<NS>:53`, and fail on any loopback listener that is not on an explicit list. That turns row 26's "future loopback service" residual into a test failure instead of a silent change.
+
+### Same-service, attacker-tenant channel (NIT, documentation)
+
+Row 7 records domain fronting as accepted. The more direct variant is not recorded: an allowed host that serves every tenant. A compromised llm pool can call `q.*.amazonaws.com`/`runtime.*.kiro.dev` with an attacker's own Kiro token, the runner can write to `api.github.com` with any token it gets, and the fetch pool can upload to an attacker's `storage.googleapis.com` bucket or `ghcr.io`. CONNECT-only matching cannot tell these apart from legitimate use, and that is a deliberate ADR-0005 trade-off. The table should still list it, with its mitigations: the sandbox Kiro key's scope and rotation, and no secrets in fetch/validate.
+
+### Hyper-V row evidence (NIT)
+
+When the Hyper-V layer is not applied, row 30's probe emits `pass "SKIP …"`, so the bar's "313 PASS, 0 FAIL" cannot distinguish an enforced row 30 from a skipped one. `scripts\ossctl.ps1 doctor` reports the layer applied, so it most likely ran enforced. The evidence log should say so explicitly, or `lib.sh` should count SKIPs separately.
 
 </details>
 
 <details>
 <summary>File map</summary>
 
-- `sandbox/proxy/squid.conf.j2`, `src/ossbot/ctl/render.py` (`render_squid`), `tests/unit/ctl/golden/squid.conf`, `tests/unit/ctl/test_render.py`: squid ACLs (P1-11, P1-12)
-- `tests/system/test_egress_per_uid.sh`, `tests/system/test_proxy_dns.sh`, `src/ossbot/ctl/doctor.py`: per-uid and proxy probes (extend for P1-11, P1-12)
-- `scripts/lib/firewall.sh`, `src/ossbot/ctl/render.py` (`resolved_ipc_problems`), `src/ossbot/ctl/doctor.py`: resolved masked and checked (P1-6, closed)
-- `src/ossbot/gatekeeper/control.py`: resume-path invalidation (P1-7, closed)
-- `src/ossbot/watchdog/tick.py`: scope-aware lifecycle exemption (P1-8, closed)
-- `src/ossbot/common/config.py`: drain timeout cap (P1-9, closed)
-- `scripts/lib/services.sh`: content-only app-deploy with itemized log (P1-10, closed)
-- `docs/{DESIGN,PLAN,VERIFICATION}.md`, `docs/adr/0005-sandbox-isolation-and-egress.md`: round-2 records
+- `sandbox/proxy/squid.conf.j2`, `tests/unit/ctl/golden/squid.conf`: `-n` name ACLs, `ip_literal` deny, `!denied_dst` last on each allow line, `pinger_enable off`, `visible_hostname` (P1-11/P1-12, closed)
+- `src/ossbot/ctl/render.py`: `IP_LITERAL_PATTERNS`, literal-only CIDRs, ip6tables `OSSBOT-IN`
+- `config/egress.yaml`: `0.0.0.0/8` added to `always_denied.cidrs` (NIT 2 extends it)
+- `scripts/lib/firewall.sh`, `tests/unit/ctl/golden/iptables.rules`: ip6tables `INPUT` jump enforced by `--check`
+- `tests/system/test_egress_surface.sh`: proxy-DNS meter and per-row probes (NITs 3 and 5; P1-13 probe goes here)
+- `tests/unit/ctl/test_render.py`: squid render invariants
+- `systemd/ossbot-gatekeeper.service`, `systemd/ossbot-sandboxd.service`, `tests/unit/test_systemd_units.py`: no `RestrictAddressFamilies` (P1-13)
+- `docs/VERIFICATION.md`, `docs/adr/0005-sandbox-isolation-and-egress.md`, `docs/DESIGN.md`: threat table, addenda (P1-13 row and NIT 4 go here)
 
-Full diff: `git -C d:\Work\autonomous-oss-contributor diff 7624a0caa7667aa02a4bccce76f820c5be1fc6f6..HEAD` (round-3 delta: `4d13e23..HEAD`)
+Full diff: `git -C d:\Work\autonomous-oss-contributor show 109711f`
 
 </details>

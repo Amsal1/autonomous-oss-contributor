@@ -1,20 +1,38 @@
 {
   "verdict": "CHANGES_REQUESTED",
-  "round": 3,
   "findings": [
     {
-      "id": "P1-11",
+      "id": "P1-13",
       "severity": "HIGH",
-      "where": "sandbox/proxy/squid.conf.j2:31,33; src/ossbot/ctl/render.py (render_squid); tests/unit/ctl/golden/squid.conf",
-      "title": "PTR-based allowlist bypass: squid dstdomain matches IP-literal CONNECTs through the reverse name",
-      "fix": "Render '-n' on every dstdomain ACL (categories and denied_domains) so an IP literal never matches a category by its PTR. Add a render test asserting -n on every dstdomain, a system/sandbox probe that an IP-literal CONNECT per port and per pool returns 403 with no proxy DNS packet, and an ADR-0005 addendum."
+      "confidence": "confirmed",
+      "title": "Unfiltered AF_VSOCK path from confined uids to the Windows host",
+      "where": "systemd/ossbot-gatekeeper.service, systemd/ossbot-sandboxd.service, Phase 2 runner/hermes unit templates; docs/VERIFICATION.md egress threat table",
+      "detail": "As uid hermes, AF_VSOCK connect to host CID 2 succeeds on ports 50000, 50002 and 50005. Hyper-V sockets bypass the iptables owner rules, the WSL NAT and the Hyper-V VM firewall, and no unit restricts address families. What the listeners are (possibly drvfs Plan 9 or the DNS tunnel) is not traced.",
+      "action": "Add RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 (+AF_NETLINK only if needed) to every non-root ossbot unit and the Phase 2 runner/hermes templates; assert it in tests/unit/test_systemd_units.py; probe vsock from the unit context (systemd-run with the same properties, unit Seccomp) and from each sandbox pool; add a threat-table row and ADR-0005 addendum; identify the host listeners and record any ADR-0007 impact."
     },
     {
-      "id": "P1-12",
-      "severity": "HIGH",
-      "where": "sandbox/proxy/squid.conf.j2:34,39,43",
-      "title": "Squid resolves every requested hostname, including denied ones (DNS exfiltration via the proxy for 3140, 3150 and the fetch/llm sandbox pools)",
-      "fix": "Evaluate the resolved-IP deny only after a category match: per rule 'http_access allow port_X src_Y cat_Z !denied_dst', or a fast 'deny !<union of the port/pool categories>' ahead of 'deny denied_dst'. Add a probe that a random-label CONNECT per port and per pool leaves the OSSBOT-IN proxy-DNS counter (or squid ipcache) unchanged, a render test that no dst ACL is evaluated before a category ACL, and an ADR-0005 addendum."
+      "id": "P1-N1",
+      "severity": "NIT",
+      "title": "denied_dst special-purpose ranges",
+      "action": "Add 198.18.0.0/15 (fake-IP range of Windows VPN/proxy clients), 192.0.0.0/24, 224.0.0.0/4 and 240.0.0.0/4 to always_denied.cidrs."
+    },
+    {
+      "id": "P1-N2",
+      "severity": "NIT",
+      "title": "Host-listener probe too permissive",
+      "action": "In test_egress_surface.sh exempt only <NS>:53, and turn the loopback check into an explicit allowlist, since every service uid can reach any lo port."
+    },
+    {
+      "id": "P1-N3",
+      "severity": "NIT",
+      "title": "Attacker-tenant channel through allowed SaaS hosts not in the threat table",
+      "action": "Add a row (llm pool kiro_core with an attacker token, runner github_read, fetch storage.googleapis.com/ghcr.io) as an accepted CONNECT-only residual with its mitigations."
+    },
+    {
+      "id": "P1-N4",
+      "severity": "NIT",
+      "title": "Hyper-V SKIP counted as PASS",
+      "action": "Count SKIPs separately in tests/system/lib.sh, or record explicitly in VERIFICATION.md that row 30 ran enforced."
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.md"
