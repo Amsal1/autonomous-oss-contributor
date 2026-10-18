@@ -128,6 +128,28 @@ class ProposalService:
             raise ProposalRefused(404, "not_found", cid)
         return row
 
+    def pacing(self) -> dict[str, Any]:
+        """``proposal.max_per_day`` over the last 24 h (first versions of autonomous items, §9.5b).
+
+        ``next_slot_at`` is when the oldest counted proposal leaves the window (None while slots
+        remain); the runner reads it to hold autonomous scouting instead of scouting into a 429.
+        """
+        now = self.ctx.clock.now()
+        cap = self.ctx.config.policy.proposal.max_per_day
+        created = [
+            str(r[0])
+            for r in self.conn.execute(
+                "SELECT p.created_at FROM proposals p JOIN contributions c ON c.id = p.cid"
+                " WHERE p.version = 1 AND c.source != 'user' AND p.created_at > ? ORDER BY p.created_at",
+                (to_iso(now - timedelta(days=1)),),
+            )
+        ]
+        remaining = max(0, cap - len(created))
+        next_slot = None
+        if remaining == 0 and 0 < cap <= len(created):
+            next_slot = to_iso(from_iso(created[len(created) - cap]) + timedelta(days=1))
+        return {"max_per_day": cap, "used": len(created), "remaining": remaining, "next_slot_at": next_slot}
+
     # ------------------------------------------------------------------- store
     def submit(self, cid: str, req: ProposalSubmit, actor: str) -> dict[str, Any]:
         ctx = self.ctx
@@ -162,14 +184,9 @@ class ProposalService:
                 if prop.kind in kinds.excluded_kinds or (kinds.allowed_kinds and prop.kind not in kinds.allowed_kinds):
                     raise ProposalRefused(422, "kind_filtered", prop.kind)
                 if current is None:
-                    day = to_iso(now - timedelta(days=1))
-                    count = self.conn.execute(
-                        "SELECT COUNT(*) FROM proposals p JOIN contributions c ON c.id = p.cid"
-                        " WHERE p.version = 1 AND c.source != 'user' AND p.created_at > ?",
-                        (day,),
-                    ).fetchone()[0]
-                    if count >= policy.proposal.max_per_day:
-                        raise ProposalRefused(429, "proposal_daily_cap", str(count))
+                    pacing = self.pacing()
+                    if pacing["remaining"] == 0:
+                        raise ProposalRefused(429, "proposal_daily_cap", str(pacing["next_slot_at"]))
             version = int(current or 0) + 1
             doc = prop.model_dump(by_alias=True)
             canonical = canonical_json(doc).decode("utf-8")

@@ -771,7 +771,7 @@ sandboxd creates volume `ossbot-task-<cid>` and runs the base image with it at `
 - Dependency prefetch with caches in `/work/cache`: `mise install` (if config), `go mod download`, `npm ci` / `pnpm install --frozen-lockfile` / `yarn install --immutable`, `uv sync` or `pip install -e .[test,dev]` into `/work/venv`, `./gradlew --no-daemon dependencies` (best effort), `tofu init -backend=false` / `terraform init -backend=false` in module dirs, `helm dependency build`. Prefetch failures are recorded, not fatal.
 - Record whether the repo contains `.kiro/`, `.amazonq/`, `AGENTS.md`, `.cursorrules`, `CLAUDE.md` (shown on the card as "repo has agent config"; inputs are still treated as untrusted).
 
-Output: `/io/output/fetch.json` (`base_sha`, `base_ref`, ecosystems, toolchain versions, prefetch results, agent-config flags).
+Output: `/io/output/fetch.json` (`base_sha`, `base_ref`, ecosystems, toolchain versions, prefetch results, agent-config flags, and `test_files`/`has_test_suite`: tracked paths matching a fixed test-path pattern, so the tests-required rule of §9.14 decides "the repo has a suite" deterministically, never from model output).
 
 ### 9.7 Plan (planner, profile `research`)
 
@@ -1485,7 +1485,9 @@ POST /v1/contributions/{id}/proposal    worker         {proposal, revises?, feed
                                                         above_ceiling | above_autonomous_max | kind_filtered | never_repo, 429 daily cap)
 GET  /v1/contributions/{id}/proposal    worker, operator ?version=  -> the stored proposal (+ pending Adjust/Smaller feedback)
 POST /v1/work {url, notes}              operator       (CR-004 Amendment B: GitHub issue/PR/repo URL of an enabled target; source='user')
-GET  /v1/discovery-prefs?repo=          operator, worker -> effective size preference and filters (+ rows)
+GET  /v1/discovery-prefs?repo=          operator, worker -> effective size preference and filters (+ rows, + pacing
+                                                        {max_per_day, used, remaining, next_slot_at}: the runner holds
+                                                        autonomous scouting until next_slot_at instead of scouting into a 429)
 PUT  /v1/discovery-prefs                operator       {scope, autonomous_max_class?, preferred_classes?, filters?} -> {undo_id}
 POST /v1/discovery-prefs/undo {undo_id} operator       (60 s; ceiling keys are refused by the writer, U13)
 POST /v1/contributions/{id}/stage-runs  worker         {stage, profile?, model?, effort?} -> {id, attempt} (9.3; 423 while paused,

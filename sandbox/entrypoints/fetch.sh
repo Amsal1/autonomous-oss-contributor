@@ -105,9 +105,16 @@ if [[ -f Cargo.toml ]]; then ECOS+=(rust); prefetch cargo cargo fetch; fi
 AGENT_CONFIG=()
 for f in .kiro .amazonq AGENTS.md .cursorrules CLAUDE.md; do [[ -e "$f" ]] && AGENT_CONFIG+=("$f"); done
 
-jq -n --arg base_sha "$HEAD_SHA" --arg base_ref "$BASE_REF" \
+# Test-suite detection for the tests-required rule (§9.14, AC 41): tracked paths that look like
+# tests or test-runner config. Deterministic, so the review backstop never trusts model output
+# for "this repo has no suite". Same pattern as ossbot.runner.stages.common.TEST_PATH_RE.
+TEST_RE='(^|/)(tests?|specs?|__tests__|testing)/|(^|/)test_[^/]*\.py$|_test\.[A-Za-z0-9]+$|\.(test|spec)\.[A-Za-z0-9]+$|(^|/)(pytest\.ini|conftest\.py|jest\.config\.[A-Za-z]+|vitest\.config\.[A-Za-z]+|karma\.conf\.js|phpunit\.xml(\.dist)?)$'
+TEST_FILES="$("${G[@]}" ls-files -z | tr '\0' '\n' | grep -Ec "$TEST_RE" || true)"
+[[ "$TEST_FILES" =~ ^[0-9]+$ ]] || TEST_FILES=0
+
+jq -n --arg base_sha "$HEAD_SHA" --arg base_ref "$BASE_REF" --argjson test_files "$TEST_FILES" \
   --arg ecos "${ECOS[*]:-}" --arg prefetch "${PREFETCH[*]:-}" --arg agent "${AGENT_CONFIG[*]:-}" \
-  '{base_sha: $base_sha, base_ref: $base_ref,
+  '{base_sha: $base_sha, base_ref: $base_ref, test_files: $test_files, has_test_suite: ($test_files > 0),
     ecosystems: ($ecos | split(" ") | map(select(. != ""))),
     prefetch: ($prefetch | split(" ") | map(select(. != "") | split("=") | {(.[0]): (.[1] | tonumber)}) | add // {}),
     agent_config: ($agent | split(" ") | map(select(. != "")))}' >"$OUT/fetch.json"

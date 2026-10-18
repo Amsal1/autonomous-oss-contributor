@@ -1,0 +1,75 @@
+"""Stage outcomes other than success, and the one place sandboxd answers become them.
+
+* ``StageFailed``: the stage cannot finish (item -> FAILED, stage run ``failed``).
+* ``Interrupted``: stop now, re-queue later (kill, pause, drain, down, host sleep, a sandbox job
+  cut by a drain timeout or a sandboxd crash, sandboxd unreachable). Stage run ``interrupted``;
+  the gatekeeper allows 3 re-queues per stage (§9.3, CR-001).
+* ``Deferred``: not now and not counted (daily cap, waiting for a claim, the probe gate); stage run
+  ``cancelled``.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from datetime import datetime
+from typing import Any, Protocol
+
+from ossbot.runner.sbx_client import SbxError
+
+INTERRUPTED = "interrupted"  # sandboxd's job error_class after a drain timeout or crash recovery
+PROBE_GATE = "safety_probe_missing"  # sandboxd's 423 for a Kiro job before the probes passed (§10.9)
+
+
+class StageFailed(RuntimeError):
+    """A stage cannot finish; ``error_class`` goes to the transition evidence and the stage run."""
+
+    def __init__(self, error_class: str, message: str = "") -> None:
+        super().__init__(f"{error_class}: {message}" if message else error_class)
+        self.error_class = error_class[:64]
+
+
+class Interrupted(RuntimeError):
+    """The stage must stop now and be re-queued later (kill, pause, drain, down, host sleep)."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class Deferred(RuntimeError):
+    """Not now, without counting as an interrupt (daily cap, waiting for a claim); run cancelled."""
+
+
+class ProbesNotReady(Deferred):
+    """sandboxd refused a Kiro job: the safety probes have not passed for the current tuple (M11)."""
+
+
+class CapReached(Deferred):
+    """``proposal.max_per_day`` is used up; autonomous scouting waits until ``until``."""
+
+    def __init__(self, until: datetime | None) -> None:
+        super().__init__("proposal_daily_cap")
+        self.until = until
+
+
+class JobRunner(Protocol):
+    def run(self, spec: dict[str, Any], *, tick: Callable[[], None] | None = None) -> dict[str, Any]: ...
+
+
+def sandbox_run(sbx: JobRunner, spec: dict[str, Any], tick: Callable[[], None] | None) -> dict[str, Any]:
+    """Run one sandbox job; sandboxd stops and outages become ``Interrupted``/``ProbesNotReady``.
+
+    The returned job may still be ``failed`` for a real failure; the caller turns that into
+    ``StageFailed`` with its own error class.
+    """
+    try:
+        done = sbx.run(spec, tick=tick)
+    except SbxError as exc:
+        if exc.status == 423 and exc.code == PROBE_GATE:
+            raise ProbesNotReady(PROBE_GATE) from exc
+        if exc.status in {423, 503}:  # paused/killed/draining/down, or sandboxd restarting
+            raise Interrupted(f"sandboxd {exc.status} {exc.code}") from exc
+        raise
+    if done.get("state") == "failed" and done.get("error_class") == INTERRUPTED:
+        raise Interrupted(f"sandbox job {spec.get('run_id')} interrupted")
+    return done

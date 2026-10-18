@@ -23,9 +23,7 @@ CLAIM_BODY = (
 
 
 def _claim(sc: StageContext, c: dict[str, Any]) -> None:
-    cid = str(c["id"])
-    if c.get("issue_number") is None:
-        raise Deferred("claim_without_issue")
+    cid = str(c["id"])  # the gatekeeper's guard applies only to items with an issue
     if sc.load(cid).get("claim_requested"):
         raise Deferred("waiting_for_claim")
     login = sc.config().profile.github_login

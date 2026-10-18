@@ -41,6 +41,14 @@ def events(text: str, model: str = "claude-opus-5.5") -> bytes:
     return ("\n".join(json.dumps(x) for x in lines) + "\n").encode()
 
 
+def fetch_json(spec: dict[str, Any], out: Path, *, has_test_suite: bool = True) -> int:
+    """What fetch.sh writes (the scout clone and the build clone)."""
+    doc = {"base_sha": "1" * 40, "base_ref": "main", "ecosystems": ["node"], "test_files": 12 if has_test_suite else 0,
+           "has_test_suite": has_test_suite}  # fmt: skip
+    (out / "fetch.json").write_text(json.dumps(doc))
+    return 0
+
+
 @dataclass
 class FakeSbx:
     """Stand-in for sandboxd: ``handlers[entrypoint]`` or ``handlers["kiro:<role>"]`` write outputs."""
@@ -50,12 +58,23 @@ class FakeSbx:
     jobs: list[dict[str, Any]] = field(default_factory=list)
     cancelled: list[str] = field(default_factory=list)
     refuse: dict[str, tuple[int, str]] = field(default_factory=dict)  # entrypoint -> (status, code)
+    interrupt: set[str] = field(default_factory=set)  # entrypoints sandboxd cuts (drain timeout / crash)
+    probes_passed: bool = True
+    probes_pass_on_run: bool = True
+    probe_runs: list[dict[str, str]] = field(default_factory=list)
+    calls: list[str] = field(default_factory=list)  # M11 order: list_models, probes_status, probes_run, kiro:<role>
 
     def run(self, spec: dict[str, Any], *, tick: Callable[[], None] | None = None, poll_s: float = 0) -> dict[str, Any]:
+        key = f"kiro:{spec['args']['role']}" if spec["entrypoint"] == "kiro" else spec["entrypoint"]
+        self.calls.append(key)
+        if spec["entrypoint"] == "kiro" and not self.probes_passed:
+            raise SbxError(423, "safety_probe_missing")
         if spec["entrypoint"] in self.refuse:
             status, code = self.refuse[spec["entrypoint"]]
             raise SbxError(status, code)
         self.jobs.append(spec)
+        if spec["entrypoint"] in self.interrupt:
+            return {"run_id": spec["run_id"], "state": "failed", "artifact_dir": None, "error_class": "interrupted"}
         if tick is not None:
             try:
                 tick()
@@ -64,8 +83,7 @@ class FakeSbx:
                 raise
         out = self.root / spec["cid"] / "runs" / spec["run_id"]
         out.mkdir(parents=True, exist_ok=True)
-        key = f"kiro:{spec['args']['role']}" if spec["entrypoint"] == "kiro" else spec["entrypoint"]
-        handler = self.handlers.get(key)
+        handler = self.handlers.get(key) or (fetch_json if key == "fetch" else None)
         code = handler(spec, out) if handler is not None else 0
         state = "succeeded" if code == 0 else "failed"
         return {"run_id": spec["run_id"], "state": state, "artifact_dir": str(out) if code == 0 else None,
@@ -83,7 +101,14 @@ class FakeSbx:
         self.handlers[f"kiro:{role}"] = handler
 
     def probes_status(self) -> dict[str, Any]:
-        return {"all_passed": True}
+        self.calls.append("probes_status")
+        return {"all_passed": self.probes_passed}
+
+    def probes_run(self, models: dict[str, str]) -> dict[str, Any]:
+        self.calls.append("probes_run")
+        self.probe_runs.append(models)
+        self.probes_passed = self.probes_pass_on_run
+        return {"results": {}}
 
     def cancel(self, run_id: str) -> None:
         self.cancelled.append(run_id)

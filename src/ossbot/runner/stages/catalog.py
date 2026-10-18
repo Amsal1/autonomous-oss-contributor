@@ -9,6 +9,7 @@ FYIs (one summary on the first fill).
 from __future__ import annotations
 
 from ossbot.common.models import parse_list_models
+from ossbot.runner.errors import sandbox_run
 from ossbot.runner.llm import StageFailed, new_run_id
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.stages.common import artifact
@@ -21,10 +22,13 @@ def run(sc: StageContext) -> list[str]:
     sc.gate.check(STAGE)
     spec = {"run_id": new_run_id(STAGE), "cid": CATALOG_CID, "profile": "catalog", "entrypoint": "list_models",
             "args": {}, "repo_mode": "none", "inputs": {}, "timeout_s": 120}  # fmt: skip
-    done = sc.sbx.run(spec, tick=lambda: sc.gate.check(STAGE))
+    done = sandbox_run(sc.sbx, spec, lambda: sc.gate.check_running(STAGE))
     if done.get("state") != "succeeded":
         raise StageFailed(str(done.get("error_class") or "list_models_failed"))
-    entries = parse_list_models(artifact(done, "models.json").read_bytes())
+    try:
+        entries = parse_list_models(artifact(done, "models.json").read_bytes())
+    except ValueError as exc:  # untrusted tool output
+        raise StageFailed("list_models_invalid", str(exc)[:200]) from exc
     if not entries:
         raise StageFailed("catalog_empty")
     payload = [e.model_dump(exclude_none=True) for e in entries]

@@ -2,7 +2,8 @@
 
 VALIDATED -> REVIEWING -> REVIEW_PASSED | REVISE | REVIEW_REJECTED. Separate Kiro session, by default
 a model distinct from the coder's (``require_distinct_from``). The tests rule is also enforced
-deterministically: when the repo has a test suite and the change touches no test path, a "pass"
+deterministically: when the repo has a test suite (``fetch.json`` ``has_test_suite``, detected from
+the tracked paths, never from model output) and the change touches no test path, a "pass"
 becomes a self-review rejection of this round (``revise`` while review rounds remain, else
 ``reject``) unless the change is docs-only or config-only. The reason is kept for the card.
 """
@@ -17,7 +18,7 @@ from ossbot.common.size import path_matches
 from ossbot.runner import prompts
 from ossbot.runner.outputs import SCHEMA_HINTS, Finding, ReviewVerdict
 from ossbot.runner.pipeline import StageContext, StageRun
-from ossbot.runner.stages.common import issue_text, owner_notes
+from ossbot.runner.stages.common import has_test_suite, issue_text, owner_notes
 
 STAGE = "review"
 DIFF_PATH_RE = re.compile(r"^diff --git a/(\S+) b/(\S+)$", re.MULTILINE)
@@ -70,10 +71,7 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         result = sc.kiro().invoke(cid, "reviewer", ReviewVerdict, text, {"change.diff": diff},
                                   timeout_s=1200, schema_hint=SCHEMA_HINTS["reviewer"])  # fmt: skip
         run_.model_actual = result.model_actual
-    try:
-        has_suite = bool(sc.gk.proposal(cid)["proposal"].get("tests"))
-    except Exception:  # noqa: BLE001 - operator imports have no proposal: assume a suite
-        has_suite = True
+    has_suite = has_test_suite(notes.get("fetch"))  # fetch.json of the build clone, never model output
     verdict = enforce_tests(result.value, changed_paths(diff), test_globs=list(policy.size.test_globs),
                             has_suite=has_suite, rounds_left=int(c.get("review_rounds") or 0) <
                             policy.limits.max_review_rounds)  # fmt: skip

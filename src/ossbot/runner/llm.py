@@ -19,21 +19,16 @@ from pydantic import BaseModel
 
 from ossbot.common.models import Catalog, ModelsFile, ModelUnavailable, ResolvedModel
 from ossbot.runner import output_parse, prompts
+from ossbot.runner.errors import StageFailed, sandbox_run
 from ossbot.runner.gk_client import Gatekeeper
 from ossbot.runner.sbx_client import Sandbox
 
+__all__ = ["ROLE_PROFILE", "Kiro", "LlmResult", "StageFailed", "as_prompt", "new_run_id"]
 ROLE_PROFILE: dict[str, tuple[str, str]] = {  # role -> (sandboxd profile, repo_mode)
     "vetter": ("research", "none"), "scout": ("research", "snapshot"), "planner": ("research", "snapshot"),
     "reviewer": ("research", "snapshot"), "summarizer": ("research", "none"), "coder": ("coder", "rw"),
 }  # fmt: skip
-
-
-class StageFailed(RuntimeError):
-    """A stage cannot finish; ``error_class`` goes to the transition evidence and the stage run."""
-
-    def __init__(self, error_class: str, message: str = "") -> None:
-        super().__init__(f"{error_class}: {message}" if message else error_class)
-        self.error_class = error_class[:64]
+Check = Callable[[Any], str | None]  # deterministic check of a parsed answer: None = fine, else the reason
 
 
 def new_run_id(stage: str) -> str:
@@ -95,7 +90,7 @@ class Kiro:
             "args": {"role": role, "prompt_file": prompt_file, "model": model.model, "effort": model.effort},
             "inputs": inputs, "timeout_s": timeout_s,
         }  # fmt: skip
-        job = self.sbx.run(spec, tick=self.tick)
+        job = sandbox_run(self.sbx, spec, self.tick)
         if job.get("state") != "succeeded":
             raise StageFailed(str(job.get("error_class") or "kiro_failed"), f"{role} job {run_id}")
         artifact = Path(str(job["artifact_dir"])) if job.get("artifact_dir") else None
@@ -114,19 +109,30 @@ class Kiro:
         *,
         timeout_s: int = 1200,
         schema_hint: str = "",
+        check: Check | None = None,
     ) -> LlmResult[T]:
+        """``check`` adds a deterministic rule on top of the schema; a violation gets the same
+        single repair retry as an invalid answer."""
         model = self.resolve(role)
         files = files or {}
+
+        def parse(answer: str) -> T:
+            value = output_parse.parse_model(answer, out_model)
+            reason = check(value) if check is not None else None
+            if reason is not None:
+                raise output_parse.OutputInvalid(reason)
+            return value
+
         output, run_id, artifact = self._once(cid, role, model, text, files, timeout_s)
         runs = [run_id]
         try:
-            value = output_parse.parse_model(output.text, out_model)
+            value = parse(output.text)
         except output_parse.OutputInvalid as exc:  # one repair retry, then the stage fails
             repair = text + "\n\n" + output_parse.repair_prompt(exc.reason, schema_hint)
             output, run_id, artifact = self._once(cid, role, model, repair, files, timeout_s)
             runs.append(run_id)
             try:
-                value = output_parse.parse_model(output.text, out_model)
+                value = parse(output.text)
             except output_parse.OutputInvalid as again:
                 raise StageFailed("output_invalid", again.reason[:200]) from again
         mismatch = output.model_mismatch or (output.model_actual is not None and output.model_actual != model.model)

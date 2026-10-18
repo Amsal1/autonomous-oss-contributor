@@ -108,6 +108,11 @@ class Gatekeeper:
         doc: dict[str, Any] = self._call("GET", "/v1/discovery-prefs", params={"repo": repo} if repo else None)
         return dict(doc["effective"])
 
+    def pacing(self) -> dict[str, Any]:
+        """``proposal.max_per_day`` state: ``remaining`` and ``next_slot_at`` (§9.5b)."""
+        doc: dict[str, Any] = self._call("GET", "/v1/discovery-prefs")
+        return dict(doc["pacing"])
+
     # --------------------------------------------------------------- stage runs
     def stage_open(self, cid: str, stage: str, **fields: Any) -> dict[str, Any]:
         body = {"stage": stage, **{k: v for k, v in fields.items() if v is not None}}

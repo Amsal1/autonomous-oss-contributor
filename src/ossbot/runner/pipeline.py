@@ -1,8 +1,10 @@
 """Stage execution core (DESIGN §9.1, §9.3, §13.4, §13.5 CR-001).
 
-* ``Gate.check`` runs ``require_running`` and ``require_up`` before every stage and at every
-  heartbeat: kill, pause, draining and down stop scheduling, and a running stage is interrupted
-  (its sandbox job cancelled) and re-queued on ``up`` from the last completed stage (max 3).
+* ``Gate.check`` runs ``require_running`` and ``require_up`` before every stage: kill, pause,
+  draining and down start nothing new. At every heartbeat only kill and pause are checked
+  (``Gate.check_running``): a drain lets running work finish (§13.5); sandboxd refuses the next
+  job of a multi-job stage while draining, and that refusal, like a job sandboxd cut at the drain
+  timeout, interrupts the stage, which is re-queued on ``up`` (max 3).
 * ``StageRun`` opens the gatekeeper ``stage_runs`` row (refused there too while stopped), heartbeats
   every 15 s, enforces the stage timeout on the monotonic clock and treats a wall-clock gap of more
   than 300 s beyond the monotonic one as a host sleep (interrupted, not failed).
@@ -23,11 +25,14 @@ from ossbot.common.config import ConfigBundle
 from ossbot.common.control_flags import Blocked, NotUp, require_running, require_up
 from ossbot.common.models import ModelsFile
 from ossbot.common.schemas import STAGE_ENTRYPOINTS
+from ossbot.runner.errors import Deferred, Interrupted, StageFailed
 from ossbot.runner.github_read import GitHubRead
 from ossbot.runner.gk_client import Gatekeeper, GkError
-from ossbot.runner.llm import Kiro, StageFailed
+from ossbot.runner.llm import Kiro
 from ossbot.runner.sbx_client import Sandbox
 
+__all__ = ["HEARTBEAT_S", "SLEEP_GAP_S", "STAGE_TIMEOUT_S", "Clocks", "Deferred", "Gate", "Interrupted",
+           "StageContext", "StageFailed", "StageRun"]  # fmt: skip
 log = logging.getLogger(__name__)
 HEARTBEAT_S = 15.0
 SLEEP_GAP_S = 300.0
@@ -36,18 +41,6 @@ STAGE_TIMEOUT_S: dict[str, int] = {
     "validate": 2700, "review": 1200, "package": 600, "watch": 900, "catalog": 300, "import": 1800,
 }  # fmt: skip
 assert set(STAGE_TIMEOUT_S) == set(STAGE_ENTRYPOINTS), "every runner stage has a timeout"
-
-
-class Interrupted(RuntimeError):
-    """The stage must stop now and be re-queued later (kill, pause, drain, down, host sleep)."""
-
-    def __init__(self, reason: str) -> None:
-        super().__init__(reason)
-        self.reason = reason
-
-
-class Deferred(RuntimeError):
-    """Not now, without counting as an interrupt (daily cap, waiting for a claim); run cancelled."""
 
 
 @dataclass
@@ -66,6 +59,13 @@ class Gate:
             require_running(self.control_dir, what)
             require_up(self.control_dir, what)
         except (Blocked, NotUp) as exc:
+            raise Interrupted(str(exc)) from exc
+
+    def check_running(self, stage: str) -> None:
+        """Heartbeat check: kill and pause stop running work; draining/down do not (§13.5)."""
+        try:
+            require_running(self.control_dir, f"stage:{stage}")
+        except Blocked as exc:
             raise Interrupted(str(exc)) from exc
 
     def open(self, stage: str) -> bool:
@@ -160,7 +160,7 @@ class StageRun:
         self.last_m, self.last_w = now_m, now_w
         if slept > SLEEP_GAP_S:
             raise Interrupted(f"host slept {int(slept)} s")
-        self.sc.gate.check(self.stage)
+        self.sc.gate.check_running(self.stage)
         if now_m - self.started_m > self.timeout_s:
             raise StageFailed("timeout", f"{self.stage} > {self.timeout_s} s")
         if now_m - self.last_beat >= HEARTBEAT_S and self.run_id is not None:

@@ -14,6 +14,7 @@ from ossbot.common.config import REPO_RE
 from ossbot.common.schemas import PrefsUndo, PrefsUpdate
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
+from ossbot.gatekeeper.proposals import ProposalService
 
 router = APIRouter(prefix="/v1")
 
@@ -24,8 +25,9 @@ async def get_prefs(
     caller: Annotated[Caller, Depends(require(Role.OPERATOR, Role.WORKER))],
     repo: Annotated[str | None, Query(pattern=REPO_RE)] = None,
 ) -> dict[str, Any]:
-    prefs = ctx(request).discovery_prefs
-    return {"effective": prefs.effective(repo).as_dict(), "rows": prefs.rows()}
+    c = ctx(request)
+    prefs = c.discovery_prefs
+    return {"effective": prefs.effective(repo).as_dict(), "rows": prefs.rows(), "pacing": ProposalService(c).pacing()}
 
 
 @router.put("/discovery-prefs")

@@ -230,9 +230,10 @@ class StateMachine:
         if from_ is S.PROPOSAL_APPROVED and to is S.FETCHING:
             # CR-004: the claim guard sits behind gate 1 (vet found assignment required, or
             # proposal.claim_comment is on); dry-run applies to the claim like any public write.
+            # A repo- or PR-level 👤 item has no issue to claim, so the guard does not apply.
             vetting = json.loads(row["vetting_json"] or "{}")
             required = bool(vetting.get("requires_claim_comment") or vetting.get("requires_assignment"))
-            if required or self.claim_comment():
+            if (required or self.claim_comment()) and row["issue_number"] is not None:
                 statuses = ["done"] + (["dry_run_done"] if db.current_dry_run(self.conn) else [])
                 found = self.conn.execute(
                     "SELECT 1 FROM outbound_actions WHERE cid = ? AND kind = 'issue_claim' AND status IN"

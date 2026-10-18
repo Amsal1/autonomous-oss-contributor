@@ -18,6 +18,7 @@ from ossbot.common.uds import uds_client
 
 DEFAULT_SOCK = Path("/run/ossbot/sandboxd.sock")
 FINAL = frozenset({"succeeded", "failed", "cancelled"})
+PROBES_TIMEOUT_S = 5400.0
 
 
 class SbxError(RuntimeError):
@@ -32,9 +33,11 @@ class Sandbox:
     def __init__(self, client: httpx.Client | None = None, sock: Path = DEFAULT_SOCK) -> None:
         self.client = client or uds_client(sock, timeout=httpx.Timeout(60.0, connect=5.0))
 
-    def _call(self, method: str, path: str, body: Any = None) -> Any:
+    def _call(self, method: str, path: str, body: Any = None, timeout: float | None = None) -> Any:
         try:
-            resp = self.client.request(method, path, json=body)
+            resp = self.client.request(
+                method, path, json=body, timeout=timeout if timeout is not None else httpx.USE_CLIENT_DEFAULT
+            )
         except httpx.HTTPError as exc:
             raise SbxError(503, "sandboxd_unreachable", type(exc).__name__) from exc
         if resp.status_code >= 400:
@@ -68,7 +71,8 @@ class Sandbox:
         return doc
 
     def probes_run(self, models: dict[str, str]) -> dict[str, Any]:
-        doc: dict[str, Any] = self._call("POST", "/v1/probes/run", {"models": models})
+        # five real sessions, run synchronously by sandboxd (each job up to 900 s)
+        doc: dict[str, Any] = self._call("POST", "/v1/probes/run", {"models": models}, timeout=PROBES_TIMEOUT_S)
         return doc
 
     def run(

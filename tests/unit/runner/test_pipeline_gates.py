@@ -43,7 +43,7 @@ def test_no_stage_starts_past_the_gate(sc: StageContext, ctx: AppContext, stage:
     assert runs(ctx, cid) == []
 
 
-@pytest.mark.parametrize("how", ["paused", "killed", "draining"])
+@pytest.mark.parametrize("how", ["paused", "killed"])
 def test_heartbeat_interrupts_a_running_stage(sc: StageContext, ctx: AppContext, how: str) -> None:
     cid = insert_contribution(ctx, State.SCOUTING)
 
@@ -55,6 +55,17 @@ def test_heartbeat_interrupts_a_running_stage(sc: StageContext, ctx: AppContext,
     with pytest.raises(Interrupted):
         body()
     assert runs(ctx, cid) == [("scout", "interrupted")]
+
+
+def test_a_drain_lets_the_running_stage_finish(sc: StageContext, ctx: AppContext) -> None:
+    """§13.5: draining/down stop new work only; the running stage completes."""
+    cid = insert_contribution(ctx, State.SCOUTING)
+    with StageRun(sc, cid, "scout") as run:
+        stop(ctx, "draining")
+        run.tick()
+    assert runs(ctx, cid) == [("scout", "succeeded")]
+    with pytest.raises(Interrupted), StageRun(sc, cid, "scout"):  # but no new stage starts
+        raise AssertionError("must not run")
 
 
 def test_heartbeat_every_15s_and_success(sc: StageContext, ctx: AppContext) -> None:
