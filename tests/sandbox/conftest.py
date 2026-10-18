@@ -35,6 +35,8 @@ from ossbot.sandboxd.runtime.docker_cli import FILTER_SOCKET, DockerCliRuntime
 from ossbot.sandboxd.subnets import SubnetAllocator
 
 CONTROL = Path("/var/lib/ossbot/control")
+LIVE_DB = Path("/srv/ossbot/sandboxd/sandboxd.db")  # ossbot.sandboxd.db.DEFAULT_DB of the live sandboxd
+LIVE_HEADROOM = 128  # lowest /28s of each pool left to the live sandboxd (its allocator takes the lowest free)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
@@ -123,21 +125,46 @@ def proxy_ip_on(network: str) -> str:
 
 def reserve_live_subnets(store: Store, clock: SystemClock) -> int:
     """The test JobService has its own subnet table; the live sandboxd's per-task networks (the
-    runner is active since FEAT-006) must not be handed out again ("Pool overlaps")."""
+    runner is active since FEAT-006) must not be handed out again ("Pool overlaps"): every subnet
+    in the live allocation table (read-only) and every live ``ossbot-t-*`` network."""
     import ipaddress
 
     from ossbot.common.clock import to_iso
     from ossbot.sandboxd.profiles import POOLS
     from ossbot.sandboxd.subnets import PREFIX
 
+    rows = 0
+    # Headroom: both allocators hand out the lowest free /28, so the test's own networks would take
+    # the next ones the live sandboxd allocates (a live kiro smoke during this suite hit "Pool
+    # overlaps"). The test store reserves the first LIVE_HEADROOM of every pool for the live side.
+    one_profile_per_pool = {pool: profile for profile, pool in POOLS.items()}
+    with store.tx() as conn:
+        for pool, profile in one_profile_per_pool.items():
+            for idx in range(LIVE_HEADROOM):
+                conn.execute("INSERT OR IGNORE INTO subnets (profile, idx, cid, allocated_at, pool)"
+                             " VALUES (?, ?, ?, ?, ?)",
+                             (profile, idx, f"live-headroom-{idx}", to_iso(clock.now()), pool))  # fmt: skip
+    if LIVE_DB.exists():  # allocated live but with no network right now (released smoke/probe, re-created later)
+        import sqlite3
+
+        live = sqlite3.connect(f"file:{LIVE_DB}?mode=ro", uri=True, timeout=10)
+        try:
+            taken = live.execute("SELECT profile, idx, pool FROM subnets").fetchall()
+        finally:
+            live.close()
+        with store.tx() as conn:
+            for n, (profile, idx, pool) in enumerate(taken):
+                conn.execute("INSERT OR IGNORE INTO subnets (profile, idx, cid, allocated_at, pool)"
+                             " VALUES (?, ?, ?, ?, ?)",
+                             (profile, idx, f"live-db-{n}", to_iso(clock.now()), pool))  # fmt: skip
+                rows += 1
     names = subprocess.run(["/usr/bin/docker", "network", "ls", "-q", "--filter", "name=ossbot-t-"],
                            capture_output=True, text=True, check=True).stdout.split()  # fmt: skip
     if not names:
-        return 0
+        return rows
     out = subprocess.run(["/usr/bin/docker", "network", "inspect", "--format",
                           "{{range .IPAM.Config}}{{.Subnet}} {{end}}", *names],
                          capture_output=True, text=True, check=True).stdout.split()  # fmt: skip
-    rows = 0
     with store.tx() as conn:
         for n, subnet in enumerate(out):
             net = ipaddress.IPv4Network(subnet, strict=False)
