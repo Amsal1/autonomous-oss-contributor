@@ -133,3 +133,12 @@ def test_scheduler_starts_nothing_while_stopped(sc: StageContext, ctx: AppContex
     insert_contribution(ctx, State.DISCOVERED)
     stop(ctx, "paused")
     assert Scheduler(sc, synchronous=True).tick().skipped == "stopped"
+
+
+def test_an_unexpected_crash_still_closes_the_stage_run(sc: StageContext, ctx: AppContext) -> None:
+    """error_class must match the gatekeeper's lowercase pattern, or the run would stay running."""
+    cid = insert_contribution(ctx, State.PLANNING)
+    with pytest.raises(KeyError), StageRun(sc, cid, "plan"):
+        raise KeyError("x")
+    row = ctx.conn.execute("SELECT status, error_class FROM stage_runs WHERE cid = ?", (cid,)).fetchone()
+    assert tuple(row) == ("failed", "internal:keyerror")

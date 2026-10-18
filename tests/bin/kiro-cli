@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Stub ``kiro-cli`` for the e2e suites (DESIGN §22.4). Never talks to a network.
+
+* ``kiro-cli chat --list-models --format json`` prints ``{"models": [...]}`` from
+  ``OSSBOT_STUB_MODELS`` (comma list) or a fixed default.
+* ``kiro-cli chat --v3 --no-interactive --agent ossbot-<role> --model <m> --effort <e>
+  --trust-tools=... --output-format stream-json`` reads the prompt on stdin and prints canned
+  stream-json: a ``session`` event with the model, then one ``assistant_message`` with the next
+  answer for the role from ``$OSSBOT_STUB_ANSWERS/<role>.json`` (a JSON list of strings; the last
+  one repeats; a counter lives in ``<role>.n``). The prompt is appended to ``<role>.prompts`` so
+  tests can assert what the role was shown (e.g. untrusted wrapping of injection text).
+* Same flags as ``sandbox/entrypoints/kiro.sh``; unknown roles or a missing answer exit 3.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+DEFAULT_MODELS = "claude-opus-5.5,claude-sonnet-5,claude-sonnet-5.5,claude-haiku-4.5,claude-opus-5"
+ROLES = {"vetter", "scout", "planner", "reviewer", "summarizer", "coder"}
+
+
+def flag(argv: list[str], name: str) -> str | None:
+    for i, arg in enumerate(argv):
+        if arg == name and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith(name + "="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def main(argv: list[str]) -> int:
+    if argv[:1] != ["chat"]:
+        print("stub kiro-cli: only 'chat' is supported", file=sys.stderr)
+        return 2
+    if "--list-models" in argv:
+        models = os.environ.get("OSSBOT_STUB_MODELS", DEFAULT_MODELS).split(",")
+        print(json.dumps({"models": [{"model_id": m, "name": m} for m in models if m]}))
+        return 0
+    agent, model = flag(argv, "--agent") or "", flag(argv, "--model") or ""
+    role = agent.removeprefix("ossbot-")
+    if role not in ROLES or "--v3" not in argv or flag(argv, "--output-format") != "stream-json":
+        print(f"stub kiro-cli: bad invocation {argv}", file=sys.stderr)
+        return 3
+    prompt = sys.stdin.read()
+    base = Path(os.environ["OSSBOT_STUB_ANSWERS"])
+    answers_file = base / f"{role}.json"
+    if not answers_file.is_file():
+        print(f"stub kiro-cli: no canned answer for {role}", file=sys.stderr)
+        return 3
+    answers = json.loads(answers_file.read_text(encoding="utf-8"))
+    counter = base / f"{role}.n"
+    n = int(counter.read_text()) if counter.exists() else 0
+    counter.write_text(str(n + 1))
+    with (base / f"{role}.prompts").open("a", encoding="utf-8") as fh:
+        fh.write(prompt + "\n\x1e\n")
+    text = answers[min(n, len(answers) - 1)]
+    print(json.dumps({"type": "session", "model": model}))
+    print(json.dumps({"type": "assistant_message", "content": text}))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

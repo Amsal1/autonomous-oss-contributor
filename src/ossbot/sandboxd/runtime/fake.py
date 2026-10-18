@@ -118,7 +118,7 @@ class FakeRuntime:
         body = {"Name": name, "Driver": "bridge", "Internal": internal, "Labels": labels, "IPAM": ipam, "Options": {}}
         self._filter(rules.Request("POST", "/v1.52/networks/create", {}, json.dumps(body).encode()))
         if name in self.networks:
-            raise RuntimeFailure(f"network {name} exists")
+            raise RuntimeFailure(f"network with name {name} already exists")  # Docker's wording
         self.networks[name] = subnet
 
     def remove_network(self, name: str) -> None:

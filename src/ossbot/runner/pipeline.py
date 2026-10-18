@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -183,7 +184,9 @@ class StageRun:
         elif isinstance(exc, StageFailed):
             status, error_class = "failed", exc.error_class
         else:
-            status, error_class = "failed", f"internal:{type(exc).__name__}"[:64]
+            status, error_class = "failed", f"internal:{type(exc).__name__}"
+        if error_class is not None:  # the gatekeeper accepts ^[a-z0-9_:.-]{1,64}$ only
+            error_class = re.sub(r"[^a-z0-9_:.-]", "_", error_class.lower())[:64] or "error"
         try:
             self.sc.gk.stage_update(self.run_id, status=status, error_class=error_class,
                                     model_actual=self.model_actual,

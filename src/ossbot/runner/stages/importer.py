@@ -27,5 +27,5 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         inputs = write_inputs(sc, cid, STAGE, {"import.bundle": data})
         args = {"mode": "import", "bundle_ref": str(c["import_head_ref"]), "checkout_sha": str(c["base_sha"]),
                 "rev": 1}  # fmt: skip
-        job(sc, cid, STAGE, "package", "unbundle", args, "rw", inputs=inputs)
+        job(sc, cid, STAGE, "package", "unbundle", args, "rw", inputs=inputs, timeout_s=600)  # package max 900 s
     sc.transition(cid, "FETCHED", "IMPLEMENTED", {"reason": "operator_import"})

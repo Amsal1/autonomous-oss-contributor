@@ -21,6 +21,7 @@ from ossbot.runner.stages.common import issue_text, job, owner_notes
 
 STAGE = "implement"
 ENTRY = ("PLANNED", "VALIDATION_FAILED", "REVISE", "CHANGES_REQUESTED")
+UNBUNDLE_TIMEOUT_S = 600  # the package profile allows at most 900 s (sandboxd PROFILE_MAX_TIMEOUT)
 
 
 def _unbundle(sc: StageContext, c: dict[str, Any]) -> None:
@@ -28,7 +29,8 @@ def _unbundle(sc: StageContext, c: dict[str, Any]) -> None:
     cid, rev = str(c["id"]), int(c["artifact_rev"])
     bundle = sc.inputs_root.parent.parent / "artifacts" / cid / str(rev) / "change.bundle"
     args = {"mode": "fix_round", "bundle_ref": "refs/heads/ossbot-change", "checkout_sha": c["head_sha"], "rev": rev}
-    job(sc, cid, "implement", "package", "unbundle", args, "rw", inputs={"change.bundle": str(bundle)})
+    job(sc, cid, "implement", "package", "unbundle", args, "rw", inputs={"change.bundle": str(bundle)},
+        timeout_s=UNBUNDLE_TIMEOUT_S)  # fmt: skip
 
 
 def feedback(sc: StageContext, c: dict[str, Any]) -> list[str]:

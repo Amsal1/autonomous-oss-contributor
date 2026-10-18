@@ -306,7 +306,7 @@ class Scheduler:
             self.fail(sc, cid, f"sbx_{exc.code}")
         except Exception as exc:  # pragma: no cover - logged, the item fails rather than looping
             log.exception("stage crashed for %s", cid, extra={"event": "stage_crashed", "cid": cid})
-            self.fail(sc, cid, f"internal:{type(exc).__name__}")
+            self.fail(sc, cid, f"internal:{type(exc).__name__}".lower())
 
     def fail(self, sc: StageContext, cid: str, error_class: str) -> None:
         try:
