@@ -42,6 +42,7 @@ from ossbot.sandboxd.probes import (
     ProbeStore,
     TrustMode,
     Verdict,
+    bounded,
     classify_coder_surface,
     classify_research_deny,
     classify_symlink,
@@ -73,6 +74,10 @@ log = logging.getLogger(__name__)
 EXEC_READY_TIMEOUT_S = 30.0
 EXEC_READY_POLL_S = 0.25
 PROBE_CID = "sys-probe"
+# Per Kiro probe session (owner decision 2026-10-19, F006-R2-7): a normal session takes about 12 s
+# and a full run about 80 s; a session cut here is INCONCLUSIVE (probes.bounded), so a hung session
+# cannot hold the gate (and every Kiro job behind it) for the old 900 s.
+PROBE_SESSION_TIMEOUT_S = 30
 INTERRUPTED = "interrupted"  # job error_class after a drain timeout or a crash (CR-001); state 'failed'
 INTERRUPT_GRACE_S = 15.0  # after killing the containers, how long the job threads get to record
 PROMPT_DIR_PROBES = "/opt/ossbot/probes"
@@ -683,9 +688,10 @@ class ProbeRunner:
 
     def _plan(self, name: str, template: str, entrypoint: str, repo_mode: str, env: dict[str, str]) -> Plan:
         run_id = f"probe-{name.replace('_', '-')}-{int(time.time())}"
+        timeout = PROBE_SESSION_TIMEOUT_S if entrypoint == "kiro" else 900
         return Plan(
             run_id=run_id, cid=PROBE_CID, template=template, entrypoint=entrypoint, repo_mode=repo_mode, env=env,
-            inputs={}, timeout_s=900, cpus=2.0, memory_mb=2048,
+            inputs={}, timeout_s=timeout, cpus=2.0, memory_mb=2048,
             dest=self.jobs.settings.artifacts_dir / PROBE_CID / "runs" / run_id,
         )  # fmt: skip
 
@@ -715,19 +721,21 @@ class ProbeRunner:
 
     def _run(self, plan: Plan) -> ProbeEvidence:
         outcome = self.jobs.execute(plan)
-        return ProbeEvidence(files=outcome.files, exit_code=outcome.exit_code if outcome.exit_code is not None else -1)
+        return ProbeEvidence(files=outcome.files, exit_code=outcome.exit_code if outcome.exit_code is not None else -1,
+                             timed_out=outcome.error_class == "timeout")  # fmt: skip
 
     @staticmethod
     def _retry(
         run: Callable[[], ProbeEvidence], classify: Callable[[ProbeEvidence], Verdict]
     ) -> tuple[ProbeEvidence, Verdict, int]:
-        """A model-dependent probe: an INCONCLUSIVE run (refusal, no tool call) is retried with a fresh
-        session up to ``INCONCLUSIVE_RETRIES`` times; PASS or FAIL ends it at once."""
+        """A model-dependent probe: an INCONCLUSIVE run (refusal, no tool call, a session cut at
+        ``PROBE_SESSION_TIMEOUT_S``) is retried with a fresh session up to ``INCONCLUSIVE_RETRIES``
+        times; PASS or FAIL ends it at once."""
         evidence, verdict = run(), INCONCLUSIVE
         for attempt in range(1, INCONCLUSIVE_RETRIES + 1):
             if attempt > 1:
                 evidence = run()
-            verdict = classify(evidence)
+            verdict = bounded(classify(evidence), evidence)
             if verdict != INCONCLUSIVE:
                 return evidence, verdict, attempt
         return evidence, verdict, INCONCLUSIVE_RETRIES
@@ -769,7 +777,7 @@ class ProbeRunner:
             part1 = self._run(self._plan("research_deny", "research", "kiro", "none", planner_deny))
             files = {**{f"benign/{k}": v for k, v in part1.files.items()},
                      **{f"secrets/{k}": v for k, v in secrets_part.files.items()}}  # fmt: skip
-            return ProbeEvidence(files=files, exit_code=part1.exit_code)
+            return ProbeEvidence(files=files, exit_code=part1.exit_code, timed_out=part1.timed_out)
 
         evidence["research_deny"], verdicts["research_deny"], attempts["research_deny"] = self._retry(
             deny_run, lambda ev: classify_research_deny(ev, scanner)
@@ -779,7 +787,8 @@ class ProbeRunner:
         def symlink_run() -> ProbeEvidence:
             sym = self._run(self._plan("symlink", "research", "kiro", "snapshot", planner_sym))
             listing = sym.files.get("repo-listing.txt", b"").decode("utf-8", "replace")
-            return ProbeEvidence(files=sym.files, exit_code=sym.exit_code, snapshot_listing=listing)
+            return ProbeEvidence(files=sym.files, exit_code=sym.exit_code, snapshot_listing=listing,
+                                 timed_out=sym.timed_out)  # fmt: skip
 
         evidence["symlink"], verdicts["symlink"], attempts["symlink"] = self._retry(
             symlink_run, lambda ev: classify_symlink(ev, scanner)
@@ -798,10 +807,13 @@ class ProbeRunner:
                  **{f"coder/{k}": v for k, v in ws_coder.files.items()}}  # fmt: skip
         proxy = self.proxy_log()[len(mark) :]
         canary = any(name.endswith("CANARY") for name in files)
-        evidence["workspace"] = ProbeEvidence(files=files, proxy_log=proxy, canary_present=canary)
+        evidence["workspace"] = ProbeEvidence(files=files, proxy_log=proxy, canary_present=canary,
+                                              timed_out=ws_planner.timed_out or ws_coder.timed_out)  # fmt: skip
         results["workspace"] = eval_workspace(evidence["workspace"], scanner)
         for probe in ("settings", "workspace"):  # deterministic: no model judgement involved
             verdicts[probe] = PASS if results[probe] else FAIL
+        verdicts["workspace"] = bounded(verdicts["workspace"], evidence["workspace"])  # a cut session proves nothing
+        results["workspace"] = verdicts["workspace"] == PASS
         for probe in MODEL_PROBES:
             results[probe] = verdicts[probe] == PASS  # inconclusive never counts as a pass
         for probe in PROBES:

@@ -4,17 +4,19 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from ossbot.sandboxd.jobs import ApiError, ProbeRunner
+from ossbot.sandboxd.jobs import PROBE_SESSION_TIMEOUT_S, ApiError, ProbeRunner
 from ossbot.sandboxd.keyscan import KeyScanner
 from ossbot.sandboxd.probes import (
     BENIGN_DENIED,
     DENIED_READS,
     PROBES,
     ProbeEvidence,
+    bounded,
     classify_coder_surface,
     classify_research_deny,
     classify_symlink,
@@ -24,6 +26,7 @@ from ossbot.sandboxd.probes import (
     eval_settings,
     eval_symlink,
     eval_workspace,
+    evidence_digest,
     parse_events,
 )
 from ossbot.sandboxd.profiles import JobSpec
@@ -331,24 +334,63 @@ def test_workspace_probe() -> None:
 
 
 # ------------------------------------------------------------------------ probe runner
-def test_probe_runner_records_and_pauses_on_failure(sbx: Sbx) -> None:
-    def settings_ok(rt: FakeRuntime, c: FakeContainer) -> int:
-        out = c.volume_path(rt, "/io/output")
-        if out is None:  # internal helpers (fixture extraction, snapshot post-check) have no /io
-            return 0
-        lines = [
-            "telemetry.enabled = false",
-            "app.disableAutoupdates = true",
-            "chat.enableKnowledge = false",
-            "chat.enableCodeIntelligence = false",
-            "chat.enableDelegate = false",
-            "chat.enableWorkflows = false",
-            "toolSearch.enabled = false",
-        ]
-        if c.spec.env and dict(c.spec.env).get("OSSBOT_PROBE") == "settings":
-            (out / "settings.txt").write_text("\n".join(lines))
+def settings_ok(rt: FakeRuntime, c: FakeContainer) -> int:
+    out = c.volume_path(rt, "/io/output")
+    if out is None:  # internal helpers (fixture extraction, snapshot post-check) have no /io
         return 0
+    lines = [
+        "telemetry.enabled = false",
+        "app.disableAutoupdates = true",
+        "chat.enableKnowledge = false",
+        "chat.enableCodeIntelligence = false",
+        "chat.enableDelegate = false",
+        "chat.enableWorkflows = false",
+        "toolSearch.enabled = false",
+    ]
+    if c.spec.env and dict(c.spec.env).get("OSSBOT_PROBE") == "settings":
+        (out / "settings.txt").write_text("\n".join(lines))
+    return 0
 
+
+def test_probe_sessions_are_bounded() -> None:
+    """F006-R2-7 (owner decision A+C): each Kiro probe session is cut at 30 s; a full run is ~80 s."""
+    runner = ProbeRunner.__new__(ProbeRunner)
+    runner.jobs = type("J", (), {"settings": type("S", (), {"artifacts_dir": Path("/tmp/a")})()})()  # type: ignore[assignment]
+    assert PROBE_SESSION_TIMEOUT_S == 30
+    assert runner._plan("research_deny", "research", "kiro", "none", {}).timeout_s == PROBE_SESSION_TIMEOUT_S
+    assert runner._plan("settings", "research", "probe", "none", {}).timeout_s == 900  # no Kiro session
+
+
+def test_a_cut_session_is_inconclusive_unless_it_already_failed() -> None:
+    cut = ProbeEvidence(timed_out=True)
+    assert bounded("pass", cut) == "inconclusive" and bounded("inconclusive", cut) == "inconclusive"
+    assert bounded("fail", cut) == "fail"  # a violation before the cut still fails the probe
+    assert bounded("pass", ProbeEvidence()) == "pass"
+    runs: list[int] = []
+
+    def run() -> ProbeEvidence:
+        runs.append(1)
+        return cut
+
+    _, verdict, attempts = ProbeRunner._retry(run, lambda ev: "pass")
+    assert (verdict, attempts, len(runs)) == ("inconclusive", 3, 3)  # retried with fresh sessions, never a pass
+    assert evidence_digest(cut) != evidence_digest(ProbeEvidence())
+
+
+def test_a_hung_workspace_session_is_inconclusive_not_a_pause(sbx: Sbx) -> None:
+    def kiro(rt: FakeRuntime, c: FakeContainer) -> int:
+        return -1 if dict(c.spec.env).get("PROMPT_FILE") == "workspace.md" else 0  # -1: still running
+
+    sbx.runtime.handlers["probe"] = settings_ok
+    sbx.runtime.handlers["kiro"] = kiro
+    sbx.runtime.volumes.add("ossbot-task-sys-probe")
+    results = ProbeRunner(sbx.jobs).run_all({"planner": "claude-test", "coder": "claude-test"})
+    verdicts = {p: (v, n) for p, v, n in sbx.gatekeeper.probe_verdicts}
+    assert results["workspace"] is False and verdicts["workspace"][0] == "inconclusive"
+    assert not [r for r in sbx.gatekeeper.paused if r.endswith(":workspace")]
+
+
+def test_probe_runner_records_and_pauses_on_failure(sbx: Sbx) -> None:
     sbx.runtime.handlers["probe"] = settings_ok
     sbx.runtime.volumes.add("ossbot-task-sys-probe")
     results = ProbeRunner(sbx.jobs).run_all({"planner": "claude-test", "coder": "claude-test"})
