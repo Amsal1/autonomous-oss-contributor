@@ -38,6 +38,7 @@ class FakeGatekeeper:
     states: dict[str, str] = field(default_factory=dict)
     paused: list[str] = field(default_factory=list)
     probe_results: list[tuple[str, str, bool, str]] = field(default_factory=list)
+    probe_verdicts: list[tuple[str, str | None, int]] = field(default_factory=list)
     catalog_calls: int = 0
 
     def catalog(self) -> list[dict[str, Any]]:
@@ -50,8 +51,10 @@ class FakeGatekeeper:
     def contribution_state(self, cid: str) -> str | None:
         return self.states.get(cid)
 
-    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str) -> None:
+    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str, *,
+                     verdict: str | None = None, attempts: int = 1) -> None:  # fmt: skip
         self.probe_results.append((probe_key, probe, passed, evidence_sha256))
+        self.probe_verdicts.append((probe, verdict, attempts))
 
 
 @dataclass

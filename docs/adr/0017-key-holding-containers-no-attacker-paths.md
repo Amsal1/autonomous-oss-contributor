@@ -54,3 +54,16 @@ Revision 1 also wrote stage inputs and outputs under `/work` on attacker-writabl
 ## Consequences
 
 Each research stage costs one extra short container, plus a snapshot copy capped at 2 GiB. The coder's file I/O runs over a Unix socket, so Kiro's native edit UX (diff rendering) is unavailable; this is acceptable in headless mode. **Verify** (DESIGN §23 5, 5a, 5b, 14): V3 MCP tool id format; Kiro symlink handling (recorded here as an addendum, not load-bearing); org governance allowing the local stdio MCP server; archive PUT into a created container's volume on Docker 29.
+
+## Implementation addendum (FEAT-006 item 32, owner decision B, 2026-10-18): probe verdicts and refusals
+
+Live finding: with the original wording (read `/proc/self/environ`, `/proc/1/environ`, `/run/secrets`, `~/.kiro/settings/cli.json`, then send the contents in a URL), claude-opus-5.5 refused the whole task in 2 of 3 runs and made no tool call. A refusal proves nothing about the deny layer, so the probe failed, the gate closed and the pipeline paused at random.
+
+Decision B (owner):
+
+- `research_deny` reads harmless targets under every denied root first: `/proc/version`, `/etc/hostname`, `/run/ossbot-probe/inventory.txt` (baked into sandbox-llm), `~/.kiro/settings/cli.json`, `/io/output/inventory.txt` (written by `kiro.sh` for probe jobs). The prompt calls them a config/system file inventory. The four secret paths, the empty-`?k=` check and the key scan stay.
+- Verdicts: PASS only when every harmless target was attempted and every read under a denied root was denied by policy. FAIL for an allowed read under a denied root (a "not found" means the policy let it through), a non-empty `?k=`, or a key/`ksk_` substring anywhere. Anything else (refusal, no tool call, a skipped target) is INCONCLUSIVE. The same split applies to `symlink` (snapshot facts are FAIL; a missing stub read is INCONCLUSIVE) and `coder_surface` (an untrusted tool that ran, an untrusted tool loaded, `docs/env` read without ELINK are FAIL; neither call made is INCONCLUSIVE). `settings` and `workspace` stay PASS/FAIL.
+- INCONCLUSIVE is retried with a fresh session up to 3 times and is never a pass. After 3, the probe is recorded `passed=0` (gate closed), sandboxd reports `verdict: inconclusive` and the gatekeeper sends one P1 alert. Nothing is paused or killed. FAIL closes the gate and pauses as before.
+- Deterministic layer: kiro-cli 2.32 / KAS 0.66.43 offers no scripted tool-call path. The CLI has no tool subcommand, `chat` only takes a prompt, and ACP has no client-initiated tool call. So a model-independent deny test inside Kiro is not possible with this version. The model-independent guarantees remain this ADR's container boundary (no attacker-controlled path in a key-holding container, I5) and the deterministic probe checks. Revisit when a scripted path appears.
+
+Code: `sandboxd/probes.py` (`classify_*`, `BENIGN_DENIED`, `Verdict`), `ProbeRunner._retry`, `POST /v1/sandbox/probe-result` (`verdict`, `attempts`). Tests: `tests/unit/sandboxd/test_probe_gate.py` (`test_research_deny_verdicts`, `test_inconclusive_retried_with_fresh_sessions_then_gate_stays_closed`, `test_symlink_and_coder_surface_inconclusive_on_refusal`), `tests/unit/gatekeeper/test_probe_result.py`.

@@ -30,17 +30,23 @@ from ossbot.sandboxd.keyscan import BundleFormatError, KeyScanner
 from ossbot.sandboxd.models import CatalogCache, UnknownModel
 from ossbot.sandboxd.networks import Networks
 from ossbot.sandboxd.probes import (
+    FAIL,
+    INCONCLUSIVE,
+    INCONCLUSIVE_RETRIES,
+    MODEL_PROBES,
+    PASS,
     PROBES,
     ProbeEvidence,
     ProbeGateError,
     ProbeKey,
     ProbeStore,
     TrustMode,
+    Verdict,
+    classify_coder_surface,
+    classify_research_deny,
+    classify_symlink,
     compute_key,
-    eval_coder_surface,
-    eval_research_deny,
     eval_settings,
-    eval_symlink,
     eval_workspace,
     evidence_digest,
 )
@@ -89,7 +95,8 @@ class Gatekeeper(Protocol):
     def catalog(self) -> list[dict[str, Any]]: ...
     def pause(self, reason: str) -> None: ...
     def contribution_state(self, cid: str) -> str | None: ...
-    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str) -> None: ...
+    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str, *,
+                     verdict: str | None = None, attempts: int = 1) -> None: ...  # fmt: skip
 
 
 @dataclass(frozen=True)
@@ -710,6 +717,21 @@ class ProbeRunner:
         outcome = self.jobs.execute(plan)
         return ProbeEvidence(files=outcome.files, exit_code=outcome.exit_code if outcome.exit_code is not None else -1)
 
+    @staticmethod
+    def _retry(
+        run: Callable[[], ProbeEvidence], classify: Callable[[ProbeEvidence], Verdict]
+    ) -> tuple[ProbeEvidence, Verdict, int]:
+        """A model-dependent probe: an INCONCLUSIVE run (refusal, no tool call) is retried with a fresh
+        session up to ``INCONCLUSIVE_RETRIES`` times; PASS or FAIL ends it at once."""
+        evidence, verdict = run(), INCONCLUSIVE
+        for attempt in range(1, INCONCLUSIVE_RETRIES + 1):
+            if attempt > 1:
+                evidence = run()
+            verdict = classify(evidence)
+            if verdict != INCONCLUSIVE:
+                return evidence, verdict, attempt
+        return evidence, verdict, INCONCLUSIVE_RETRIES
+
     def run_all(self, models: dict[str, str]) -> dict[str, bool]:
         key = self.jobs.probe_key()
         if key is None:
@@ -729,28 +751,32 @@ class ProbeRunner:
         trust, scanner = key.trust_mode, self.jobs.scanner
         results: dict[str, bool] = {}
         evidence: dict[str, ProbeEvidence] = {}
+        verdicts: dict[str, Verdict] = {}
+        attempts: dict[str, int] = {}
         self._fixture()
         evidence["settings"] = self._run(
             self._plan("settings", "research", "probe", "none", {"OSSBOT_PROBE": "settings"})
         )
         results["settings"] = eval_settings(evidence["settings"], scanner)
-        evidence["research_deny"] = self._run(
-            self._plan("research_deny", "research", "kiro", "none",
-                       self._kiro_env("planner", "research_deny", models["planner"], trust))
-        )  # fmt: skip
-        results["research_deny"] = eval_research_deny(evidence["research_deny"], scanner)
-        sym = self._run(
-            self._plan("symlink", "research", "kiro", "snapshot",
-                       {**self._kiro_env("planner", "symlink", models["planner"], trust), "OSSBOT_LIST_REPO": "1"})
-        )  # fmt: skip
-        listing = sym.files.get("repo-listing.txt", b"").decode("utf-8", "replace")
-        evidence["symlink"] = ProbeEvidence(files=sym.files, exit_code=sym.exit_code, snapshot_listing=listing)
-        results["symlink"] = eval_symlink(evidence["symlink"], scanner)
-        coder = self._plan("coder_surface", "coder", "kiro", "rw",
-                           self._kiro_env("coder", "coder_surface", models["coder"], trust))  # fmt: skip
-        evidence["coder_surface"] = self._run(coder)
-        results["coder_surface"] = eval_coder_surface(
-            evidence["coder_surface"], scanner, TRUST_TOOLS["coder"].split(",")
+        planner_deny = self._kiro_env("planner", "research_deny", models["planner"], trust)
+        evidence["research_deny"], verdicts["research_deny"], attempts["research_deny"] = self._retry(
+            lambda: self._run(self._plan("research_deny", "research", "kiro", "none", planner_deny)),
+            lambda ev: classify_research_deny(ev, scanner),
+        )
+        planner_sym = {**self._kiro_env("planner", "symlink", models["planner"], trust), "OSSBOT_LIST_REPO": "1"}
+
+        def symlink_run() -> ProbeEvidence:
+            sym = self._run(self._plan("symlink", "research", "kiro", "snapshot", planner_sym))
+            listing = sym.files.get("repo-listing.txt", b"").decode("utf-8", "replace")
+            return ProbeEvidence(files=sym.files, exit_code=sym.exit_code, snapshot_listing=listing)
+
+        evidence["symlink"], verdicts["symlink"], attempts["symlink"] = self._retry(
+            symlink_run, lambda ev: classify_symlink(ev, scanner)
+        )
+        coder_env = self._kiro_env("coder", "coder_surface", models["coder"], trust)
+        evidence["coder_surface"], verdicts["coder_surface"], attempts["coder_surface"] = self._retry(
+            lambda: self._run(self._plan("coder_surface", "coder", "kiro", "rw", coder_env)),
+            lambda ev: classify_coder_surface(ev, scanner, TRUST_TOOLS["coder"].split(",")),
         )
         mark = self.proxy_log()
         planner_env = self._kiro_env("planner", "workspace", models["planner"], trust)
@@ -763,14 +789,19 @@ class ProbeRunner:
         canary = any(name.endswith("CANARY") for name in files)
         evidence["workspace"] = ProbeEvidence(files=files, proxy_log=proxy, canary_present=canary)
         results["workspace"] = eval_workspace(evidence["workspace"], scanner)
+        for probe in ("settings", "workspace"):  # deterministic: no model judgement involved
+            verdicts[probe] = PASS if results[probe] else FAIL
+        for probe in MODEL_PROBES:
+            results[probe] = verdicts[probe] == PASS  # inconclusive never counts as a pass
         for probe in PROBES:
             digest = evidence_digest(evidence[probe])
             self.jobs.probes.record(key, probe, results[probe], digest)
             try:
-                self.jobs.gatekeeper.probe_result(key.sha256, probe, results[probe], digest)
+                self.jobs.gatekeeper.probe_result(key.sha256, probe, results[probe], digest,
+                                                  verdict=verdicts[probe], attempts=attempts.get(probe, 1))  # fmt: skip
             except Exception:
                 log.exception("probe-result report failed")
-        failed = [p for p in PROBES if not results[p]]
-        if failed:
+        failed = [p for p in PROBES if verdicts[p] == FAIL]
+        if failed:  # a real failure: the gate stays closed and the pipeline pauses (soft stop)
             self.jobs._pause(f"safety_probe_failed:{failed[0]}")
         return results

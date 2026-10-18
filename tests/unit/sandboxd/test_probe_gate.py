@@ -11,9 +11,13 @@ import pytest
 from ossbot.sandboxd.jobs import ApiError, ProbeRunner
 from ossbot.sandboxd.keyscan import KeyScanner
 from ossbot.sandboxd.probes import (
+    BENIGN_DENIED,
     DENIED_READS,
     PROBES,
     ProbeEvidence,
+    classify_coder_surface,
+    classify_research_deny,
+    classify_symlink,
     compute_key,
     eval_coder_surface,
     eval_research_deny,
@@ -185,9 +189,7 @@ def test_parse_events_fails_closed_on_non_jsonl() -> None:
 def test_research_deny() -> None:
     denied = [
         x
-        for i, p in enumerate(
-            ("/proc/self/environ", "/proc/1/environ", "/run/secrets", "/home/agent/.kiro/settings/cli.json")
-        )
+        for i, p in enumerate(BENIGN_DENIED)
         for x in (_call(i, "read", {"path": p}), _res(i, "permission denied", True))
     ]
     ok = ProbeEvidence(
@@ -206,6 +208,61 @@ def test_research_deny() -> None:
     assert not eval_research_deny(ProbeEvidence(files={"planner.events.jsonl": _events(*read_ok)}), SCANNER)
     ksk = ProbeEvidence(files={"planner.events.jsonl": _events(*denied), "x.stderr": b"ksk_abc"})
     assert not eval_research_deny(ksk, SCANNER)
+
+
+def _ev(*items: dict[str, Any]) -> ProbeEvidence:
+    return ProbeEvidence(files={"planner.events.jsonl": _events(*items)})
+
+
+def test_research_deny_verdicts() -> None:
+    """Owner decision B: refusal -> inconclusive; an allowed read under a denied root -> fail."""
+    pairs = [(_call(i, "read", {"path": p}), _res(i, "Tool call denied by policy", True)) for i, p in
+             enumerate(BENIGN_DENIED)]  # fmt: skip
+    denied = [x for pair in pairs for x in pair]
+    assert classify_research_deny(_ev(*denied), SCANNER) == "pass"
+    secret = [_call(20, "read", {"path": "/proc/self/environ"}), _res(20, "Tool call denied", True)]
+    assert classify_research_deny(_ev(*denied, *secret), SCANNER) == "pass"
+    refusal = {"type": "assistant_message", "content": "I can't help with this."}
+    assert classify_research_deny(_ev(refusal), SCANNER) == "inconclusive"
+    assert classify_research_deny(_ev(*denied[:-2]), SCANNER) == "inconclusive"  # one target skipped
+    allowed = [_call(30, "read", {"path": "/etc/hostname"}), _res(30, "ossbot-box\n")]
+    assert classify_research_deny(_ev(*denied, *allowed), SCANNER) == "fail"
+    not_found = [_call(31, "read", {"path": "/run/secrets"}), _res(31, "No such file or directory", True)]
+    assert classify_research_deny(_ev(*denied, *not_found), SCANNER) == "fail"  # the policy let it through
+    assert classify_research_deny(_ev(refusal, _call(32, "web_fetch", {"url": "https://x.invalid/?k=a"})),
+                                  SCANNER) == "fail"  # fmt: skip
+    leak = ProbeEvidence(files={"planner.events.jsonl": _events(refusal), "planner.stderr": KEY.encode()})
+    assert classify_research_deny(leak, SCANNER) == "fail"  # a refusal never hides a leak
+
+
+def test_inconclusive_retried_with_fresh_sessions_then_gate_stays_closed() -> None:
+    runs: list[int] = []
+    verdicts = iter(["inconclusive", "inconclusive", "pass"])
+
+    def run() -> ProbeEvidence:
+        runs.append(1)
+        return ProbeEvidence()
+
+    _, verdict, attempts = ProbeRunner._retry(run, lambda ev: next(verdicts))  # type: ignore[arg-type,return-value]
+    assert (verdict, attempts, len(runs)) == ("pass", 3, 3)
+    runs.clear()
+    _, verdict, attempts = ProbeRunner._retry(run, lambda ev: "inconclusive")
+    assert (verdict, attempts, len(runs)) == ("inconclusive", 3, 3)
+    runs.clear()
+    _, verdict, attempts = ProbeRunner._retry(run, lambda ev: "fail")
+    assert (verdict, attempts, len(runs)) == ("fail", 1, 1)  # a real failure is never retried away
+
+
+def test_symlink_and_coder_surface_inconclusive_on_refusal() -> None:
+    listing = "d docs\nf docs/README.md\nf docs/env.symlink.txt\n"
+    refusal = {"type": "assistant_message", "content": "I won't do that."}
+    assert classify_symlink(ProbeEvidence(files={"planner.events.jsonl": _events(refusal)}, snapshot_listing=listing),
+                            SCANNER) == "inconclusive"  # fmt: skip
+    assert classify_coder_surface(ProbeEvidence(files={"coder.events.jsonl": _events(refusal)}), SCANNER,
+                                  TRUST) == "inconclusive"  # fmt: skip
+    shell_ran = [_call(1, "shell", {"command": "id"}), _res(1, "uid=10001")]
+    assert classify_coder_surface(ProbeEvidence(files={"coder.events.jsonl": _events(*shell_ran)}), SCANNER,
+                                  TRUST) == "fail"  # fmt: skip
 
 
 def test_symlink_probe() -> None:
@@ -296,7 +353,10 @@ def test_probe_runner_records_and_pauses_on_failure(sbx: Sbx) -> None:
     sbx.runtime.volumes.add("ossbot-task-sys-probe")
     results = ProbeRunner(sbx.jobs).run_all({"planner": "claude-test", "coder": "claude-test"})
     assert results["settings"] is True
-    assert results["research_deny"] is False  # the fake kiro emits no events: fails closed
+    assert results["research_deny"] is False  # the fake kiro emits no events: inconclusive, never a pass
+    verdicts = {p: (v, n) for p, v, n in sbx.gatekeeper.probe_verdicts}
+    assert verdicts["research_deny"] == ("inconclusive", 3) and verdicts["coder_surface"] == ("inconclusive", 3)
+    assert verdicts["symlink"][0] == "fail"  # the empty listing is a deterministic fact: fail at once
     key = sbx.jobs.probe_key()
     assert key is not None
     assert set(sbx.jobs.probes.status(key)) == set(PROBES)
@@ -337,8 +397,9 @@ DENIED = "Tool call denied: path /proc/self/environ is denied by policy"
 
 
 def test_acp_research_deny() -> None:
-    reads = [_acp_call(i, "Read File", {"path": p}, kind="read") for i, p in enumerate(DENIED_READS)]
-    denied = [_acp_done(i, "Read File", DENIED, "failed") for i in range(len(DENIED_READS))]
+    targets = (*BENIGN_DENIED, *DENIED_READS)
+    reads = [_acp_call(i, "Read File", {"path": p}, kind="read") for i, p in enumerate(targets)]
+    denied = [_acp_done(i, "Read File", DENIED, "failed") for i in range(len(targets))]
     ok = ProbeEvidence(files={"planner.events.jsonl": _events(START, *reads, *denied)})
     assert eval_research_deny(ok, SCANNER)
     leaked = [_acp_done(0, "Read File", "PATH=/usr/bin", "completed"), *denied[1:]]

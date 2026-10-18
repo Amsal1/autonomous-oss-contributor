@@ -70,6 +70,10 @@ async def probe_result(
     c = ctx(request)
     with db.transaction(c.conn):
         c.audit.append(caller.actor, "safety_probe_result", body.model_dump())
+    if body.verdict == "inconclusive":  # P1, not a kill: the gate stays closed until a real pass
+        c.notify(f"🚨 P1 safety probe {body.probe} inconclusive: the model refused or made no tool call"
+                 f" ({body.attempts} tries). Kiro jobs stay blocked until the probes pass; nothing was"
+                 " killed. Re-run: ossctl doctor --probes")  # fmt: skip
 
 
 @router.post("/discovery-requests", status_code=201)

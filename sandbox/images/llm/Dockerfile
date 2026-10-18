@@ -59,7 +59,10 @@ COPY --chown=0:0 --chmod=0444 sandbox/kiro/settings/cli.json sandbox/kiro/settin
 COPY --chown=0:0 --chmod=0444 .kiro/agents/ /opt/ossbot/kiro/agents/
 COPY --chown=0:0 --chmod=0444 prompts/ /opt/ossbot/prompts/
 COPY --chown=0:0 --chmod=0444 sandbox/probes/ /opt/ossbot/probes/
-RUN chmod 0755 /opt/ossbot/kiro/agents /opt/ossbot/prompts /opt/ossbot/probes
+RUN chmod 0755 /opt/ossbot/kiro/agents /opt/ossbot/prompts /opt/ossbot/probes \
+ && install -d -o 0 -g 0 -m 0755 /run/ossbot-probe \
+ && printf 'ossbot research_deny fixture: a harmless file under the denied /run root\n' \
+      >/run/ossbot-probe/inventory.txt && chmod 0444 /run/ossbot-probe/inventory.txt
 
 USER 10001:10001
 WORKDIR /

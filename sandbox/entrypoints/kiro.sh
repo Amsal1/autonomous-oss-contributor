@@ -49,6 +49,9 @@ if [[ -d "$ENGINE/kas" ]]; then
   done
 fi
 
+# research_deny probe target under the denied /io/output root (a harmless file; reads must be denied).
+[[ "$PROMPT_DIR" == /opt/ossbot/probes ]] && printf 'inventory\n' >"$OUT/inventory.txt"
+
 if [[ "${OSSBOT_LIST_REPO:-}" == 1 ]]; then
   find /work/repo -mindepth 1 -printf '%y %P\n' | LC_ALL=C sort >"$OUT/repo-listing.txt"
 fi

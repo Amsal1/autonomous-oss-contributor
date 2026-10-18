@@ -362,6 +362,9 @@ class ProbeResult(ApiModel):
     probe: Annotated[str, Field(pattern=r"^[a-z0-9_]{1,64}$")]
     passed: bool
     evidence_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    # FEAT-006 (owner decision B): a model refusal is "inconclusive", never a pass and never a kill
+    verdict: Literal["pass", "fail", "inconclusive"] | None = None
+    attempts: Annotated[int, Field(ge=1, le=10)] = 1
 
 
 # ------------------------------------------------------------------------------ models

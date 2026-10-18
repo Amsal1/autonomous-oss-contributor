@@ -111,7 +111,8 @@ class SandboxdGatekeeper:
         row = db.one(self.ctx.conn, "SELECT state FROM contributions WHERE id = ?", (cid,))
         return None if row is None else str(row["state"])
 
-    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str) -> None:
+    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str, *,
+                     verdict: str | None = None, attempts: int = 1) -> None:  # fmt: skip
         pass
 
 

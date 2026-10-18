@@ -74,8 +74,10 @@ class GatekeeperClient:
             state = resp.json().get("state")
         return state if isinstance(state, str) else None
 
-    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str) -> None:
-        body = {"probe_key": probe_key, "probe": probe, "passed": passed, "evidence_sha256": evidence_sha256}
+    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str, *,
+                     verdict: str | None = None, attempts: int = 1) -> None:  # fmt: skip
+        body = {"probe_key": probe_key, "probe": probe, "passed": passed, "evidence_sha256": evidence_sha256,
+                "verdict": verdict, "attempts": attempts}  # fmt: skip
         with self._client() as c:
             c.post("/v1/sandbox/probe-result", json=body).raise_for_status()
 

@@ -59,7 +59,8 @@ class NoGatekeeper:
     def contribution_state(self, cid: str) -> str | None:
         return None
 
-    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str) -> None:
+    def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str, *,
+                     verdict: str | None = None, attempts: int = 1) -> None:  # fmt: skip
         return None
 
 
