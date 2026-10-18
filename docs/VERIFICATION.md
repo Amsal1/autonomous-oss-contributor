@@ -28,6 +28,7 @@ Recorded by FEAT-006 (pipeline backend), 2026-10-18 about 02:20-03:45 +07. Every
 | Write token, read-only (DES-V-17 part) | `ossctl doctor` (full) | `GitHub write token: HTTP 200 login Amsal1 scopes [public_repo]` (no `repo`, `workflow` or `admin:*`). Read token: `HTTP 200 login Amsal1`. No write was made |
 | Kiro smoke, round 2 | `ossctl kiro smoke` | `answer: pong`, `model_actual: claude-haiku-4.5`, 8.1 s |
 | targets verify, hardened unit | `ossctl targets verify` (firewall `--check` first, then the transient ossrunner unit with the runner's hardening) | 73 enabled targets: 73 PASS, 0 WARN, 0 FAIL, 33 s |
+| Probe duration, owner decision A + C (F006-R2-7) | redeploy with the 30 s per-session bound, then `ossctl doctor --probes`; `ROOTDEV pytest -m "sandbox or e2e_docker"`; second redeploy | All five PASS on tuple `654f751d194a`, no session cut. The whole doctor run took 77 s, inside the accepted target of about 80 s (DESIGN §10.9 "Duration", TRACEABILITY PRB-4). Root suites 13 passed, the second redeploy reported every step `unchanged`, and runner, sandboxd, gatekeeper and proxy are `active`. Hermetic bar after this change: 2477 passed, 13 deselected |
 | Hermetic bar and lint, round 2 fixes | `DEV pytest -m "unit or telegram or acp or e2e"`; lint gate; gitleaks | 2474 passed, 13 deselected; ruff, format (282 files), mypy (146 files) and lint-imports (5 contracts) clean; gitleaks 103 commits, no leaks |
 
 ## Phase 1 rework (FEAT-005, 2026-10-18)
