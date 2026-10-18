@@ -128,4 +128,9 @@
   <text class="note" x="440" y="760">• Each message ≤ 3,900 escaped chars; ≤ 2 buttons</text>
   <text class="note" x="440" y="776">  per row; labels ≤ 20; callback_data 24 bytes.</text>
   <text class="note" x="440" y="794">• Merged and closed summaries also feed the digest.</text>
+  <text class="note b" x="440" y="822">Card keyboards per kind (CR-003 §12.4.1)</text>
+  <text class="note" x="440" y="840">• comment / claim: Approve &amp; Post · Reject / Edit text</text>
+  <text class="note" x="440" y="856">  (edit_comment prompt; no explorer). push_update:</text>
+  <text class="note" x="440" y="872">  Approve &amp; Push · Reject fix / Explore · Files / Request</text>
+  <text class="note" x="440" y="888">  changes. View buttons are multi-use; decisions single-use.</text>
 </svg>

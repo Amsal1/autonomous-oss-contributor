@@ -126,6 +126,8 @@
   <text class="note" x="440" y="720">• A tap on any old token: toast "Superseded: content</text>
   <text class="note" x="440" y="736">  or mode changed since this card; review the new card."</text>
   <text class="note" x="440" y="754">• "⬇️ Show current" re-sends the live card at the</text>
-  <text class="note" x="440" y="770">  bottom via reissue() (N4); drafts survive.</text>
-  <text class="note" x="440" y="800">Keyboard: 3 rows × 2 · labels ≤ 20 · 24-byte data.</text>
+  <text class="note" x="440" y="770">  bottom via reissue() (N4); drafts survive; the</text>
+  <text class="note" x="440" y="786">  expiry is kept; every open card of the cid is re-sent</text>
+  <text class="note" x="440" y="802">  (toast "Re-sent 2 cards"). Retry after ⌛ = fresh 72 h.</text>
+  <text class="note" x="440" y="832">Keyboard: 3 rows × 2 · labels ≤ 20 · 24-byte data.</text>
 </svg>

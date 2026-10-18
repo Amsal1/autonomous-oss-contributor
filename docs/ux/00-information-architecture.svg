@@ -121,27 +121,30 @@
   <text class="note" x="860" y="286">3 reply to an open prompt → that input (even "/…")</text>
   <text class="note" x="860" y="302">· 4 "/cmd" → registry · 5 reply to card/file/body/</text>
   <text class="note" x="860" y="318">proposal → comment or plan adjust · 6 GitHub link</text>
-  <text class="note" x="860" y="334">→ 🔗 [🛠 Work on this] · 7 Reviews text → Hermes +</text>
-  <text class="note" x="860" y="350">[📝 Use as comment] · 8 rest → Hermes (topic).</text>
-  <text class="note" x="860" y="368">Authorization never depends on the topic (U10).</text>
-  <text class="note b" x="860" y="398">Menu button and scopes</text>
-  <text class="note" x="860" y="416">• MenuButtonCommands; setMyCommands only for</text>
-  <text class="note" x="860" y="432">  BotCommandScopeChat(owner); Default = empty.</text>
-  <text class="note" x="860" y="450">• Re-set on state change (killed hides /settings;</text>
-  <text class="note" x="860" y="466">  down/draining add /up). Commands 1–32 [a-z0-9_]; ossbot</text>
-  <text class="note" x="860" y="482">  descriptions ≤ 60 chars; ≤ 100 commands.</text>
-  <text class="note" x="860" y="500">• Every argument has an inline picker; typed</text>
-  <text class="note" x="860" y="516">  arguments are validated the same way.</text>
-  <text class="note b" x="860" y="546">Sound per topic</text>
-  <text class="note" x="860" y="564">Control: P0 loud, rest silent · Reviews: P1 loud,</text>
-  <text class="note" x="860" y="580">≤ 2 new cards/hour · OSS feed: silent · Assistant:</text>
-  <text class="note" x="860" y="596">normal replies. Quiet hours make P1 silent; P0</text>
-  <text class="note" x="860" y="612">is never silenced (U7).</text>
-  <text class="note b" x="860" y="642">Limits used</text>
-  <text class="note" x="860" y="660">Topic names ≤ 48 chars (limit 128); icon colours</text>
-  <text class="note" x="860" y="676">from the 6 allowed values; thread "not found" →</text>
-  <text class="note" x="860" y="692">re-create once, then flat mode.</text>
-  <text class="note" x="860" y="710">getMe().allows_users_to_create_topics false →</text>
-  <text class="note" x="860" y="726">doctor warns; /new still creates topics itself.</text>
-  <text class="note" x="860" y="744">Replies go to the originating topic (§4.1).</text>
+  <text class="note" x="860" y="334">→ 🔗 [🛠 Work on this] · 7 Reviews text → answer under</text>
+  <text class="note" x="860" y="350">"🤖 Assistant · answer to your message", quoted, only</text>
+  <text class="note" x="860" y="366">[📝 Use as comment] · 8 Control/feed text → answered</text>
+  <text class="note" x="860" y="382">in 💬 Assistant · 9 rest → Hermes (topic). Unsolicited</text>
+  <text class="note" x="860" y="398">Hermes messages: Assistant/user topics only (U12).</text>
+  <text class="note" x="860" y="414">Authorization never depends on the topic (U10).</text>
+  <text class="note b" x="860" y="444">Menu button and scopes</text>
+  <text class="note" x="860" y="462">• MenuButtonCommands; setMyCommands only for</text>
+  <text class="note" x="860" y="478">  BotCommandScopeChat(owner); Default = empty.</text>
+  <text class="note" x="860" y="496">• Re-set on state change (killed hides /settings;</text>
+  <text class="note" x="860" y="512">  down/draining add /up). Commands 1–32 [a-z0-9_]; ossbot</text>
+  <text class="note" x="860" y="528">  descriptions ≤ 60 chars; ≤ 100 commands.</text>
+  <text class="note" x="860" y="546">• Every argument has an inline picker; typed</text>
+  <text class="note" x="860" y="562">  arguments are validated the same way.</text>
+  <text class="note b" x="860" y="592">Sound per topic</text>
+  <text class="note" x="860" y="610">Control: P0 loud, rest silent · Reviews: P1 loud,</text>
+  <text class="note" x="860" y="626">≤ 2 new cards/hour · OSS feed: silent · Assistant:</text>
+  <text class="note" x="860" y="642">normal replies. Quiet hours make P1 silent; P0</text>
+  <text class="note" x="860" y="658">is never silenced (U7).</text>
+  <text class="note b" x="860" y="688">Limits used</text>
+  <text class="note" x="860" y="706">Topic names ≤ 48 chars (limit 128); icon colours</text>
+  <text class="note" x="860" y="722">from the 6 allowed values; thread "not found" →</text>
+  <text class="note" x="860" y="738">re-create once, then flat mode.</text>
+  <text class="note" x="860" y="756">getMe().allows_users_to_create_topics false →</text>
+  <text class="note" x="860" y="772">doctor warns; /new still creates topics itself.</text>
+  <text class="note" x="860" y="790">Replies go to the originating topic (§4.1).</text>
 </svg>

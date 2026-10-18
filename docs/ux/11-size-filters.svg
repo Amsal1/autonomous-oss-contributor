@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1680" height="900" viewBox="0 0 1680 900" role="img" aria-labelledby="title desc">
   <title id="title">ossbot mockup: /size and /filters pickers, and user-directed work from a pasted GitHub link</title>
-  <desc id="desc">Left phone: the /size message shows the autonomous size preference, preferred classes, that user requests ignore it, per-repo overrides, the read-only hard ceiling, the overrun mode and recent merge rates, with class buttons xs to xl, Preferred and Per repo buttons, and the Undo row after a change. Middle phone: /filters page 1 of 3 with ten kind toggles in five rows and a pager row with More, Undo and Labels, plus a preview of page 2 with label toggles and the validation tier. Right phone: a pasted GitHub issue link answered by a link card with Work on this and Dismiss, the card after Work on this showing that scouting started and that the item is requested by you, and a refusal card for a repository that bans AI-assisted contributions.</desc>
+  <desc id="desc">Left phone: the /size message shows the autonomous size preference, preferred classes, that user requests ignore it, per-repo overrides, the read-only hard ceiling, the overrun mode and recent merge rates, with class buttons xs to xl, Preferred and Per repo buttons, and the Undo row after a change. Middle phone: /filters page 1 of 4 with ten kind toggles in five rows and a pager row with PRs, Undo and Labels, a preview of page 2 with label toggles and the validation tier, and a summary of page 3 (age and activity, with labels that name their filter) and page 4 (languages and open PRs per repo). Right phone: a pasted GitHub issue link answered by a link card with Work on this and Dismiss, the card after Work on this showing that scouting started and that the item is requested by you, and a refusal card for a repository that bans AI-assisted contributions.</desc>
   <style>
     .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:11.5px;fill:#111}
     .b{font-weight:700}
@@ -108,7 +108,7 @@
 
   <rect x="460" y="170" width="300" height="56" rx="16" fill="#ffffff"/>
   <text class="t b" x="472" y="189">🧰 Discovery filters · autonomous only</text>
-  <text class="t" x="472" y="205"><tspan class="b">1/3 Kinds</tspan> · ✅ = the bot may propose this kind</text>
+  <text class="t" x="472" y="205"><tspan class="b">1/4 Kinds</tspan> · ✅ = the bot may propose this kind</text>
   <text class="t" x="472" y="221">👤 /work ignores filters.</text>
 
   <rect x="460" y="232" width="148" height="30" rx="10" fill="#5f7d64"/>
@@ -132,15 +132,15 @@
   <rect x="612" y="368" width="148" height="30" rx="10" fill="#8d9c8c"/>
   <text class="btn" x="686" y="387">⬜ Crypto/security</text>
   <rect x="460" y="402" width="97" height="30" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="508" y="421">◀ More</text>
+  <text class="btn" x="508" y="421">◀ PRs</text>
   <rect x="561" y="402" width="98" height="30" rx="10" fill="#5f7d64"/>
   <text class="btn" x="610" y="421">↩️ Undo</text>
   <rect x="663" y="402" width="97" height="30" rx="10" fill="#5f7d64"/>
   <text class="btn" x="711" y="421">Labels ▶</text>
 
-  <text class="ghost" x="460" y="454">↓ Labels ▶ — the same message, page 2/3</text>
+  <text class="ghost" x="460" y="454">↓ Labels ▶ — the same message, page 2/4</text>
   <rect x="460" y="462" width="300" height="40" rx="16" fill="#ffffff"/>
-  <text class="t b" x="472" y="481">🧰 Discovery filters · 2/3 Labels and tier</text>
+  <text class="t b" x="472" y="481">🧰 Discovery filters · 2/4 Labels and tier</text>
   <text class="t" x="472" y="496">Require any of these labels · validation tier</text>
   <rect x="460" y="508" width="148" height="30" rx="10" fill="#5f7d64"/>
   <text class="btn" x="534" y="527">✅ good first issue</text>
@@ -163,12 +163,14 @@
   <rect x="561" y="644" width="98" height="30" rx="10" fill="#5f7d64"/>
   <text class="btn" x="610" y="663">↩️ Undo</text>
   <rect x="663" y="644" width="97" height="30" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="711" y="663">More ▶</text>
-  <text class="ghost" x="460" y="694">Page 3 More: issue age [30 d] [90 d] [✅ 180 d] / [365 d]</text>
-  <text class="ghost" x="460" y="707">[Any] · maintainer activity [Any] [✅ 30 d] [90 d] ·</text>
-  <text class="ghost" x="460" y="720">languages (from profile) · open PRs/repo [✅ 1] [2] [3].</text>
-  <text class="ghost" x="460" y="740">Each tap applies now, is audited, FYI'd silently in</text>
-  <text class="ghost" x="460" y="753">📈 OSS feed, and Undo restores the last value (60 s).</text>
+  <text class="btn" x="711" y="663">Age ▶</text>
+  <text class="ghost" x="460" y="690">Page 3/4 Age and activity: [Age 30 d] [Age 90 d]</text>
+  <text class="ghost" x="460" y="703">[✅ Age 180 d] / [Age 365 d] [Age any] / [Active any]</text>
+  <text class="ghost" x="460" y="716">[✅ Active 30 d] / [Active 90 d] / [◀ Labels] [↩️ Undo] [PRs ▶]</text>
+  <text class="ghost" x="460" y="729">Page 4/4 Languages and PRs: profile languages, 2 per row</text>
+  <text class="ghost" x="460" y="742">(≤ 6) / [✅ 1 open PR] [2 open PRs] [3 open PRs] / pager.</text>
+  <text class="ghost" x="460" y="760">Each tap applies now, is audited, FYI'd silently in</text>
+  <text class="ghost" x="460" y="773">📈 OSS feed, and Undo restores the last value (60 s).</text>
 
   <rect x="450" y="800" width="370" height="70" fill="#ffffff"/>
   <rect x="462" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
@@ -250,9 +252,9 @@
   <text class="note b" x="1280" y="252">Telegram constraints</text>
   <text class="note" x="1280" y="270">• /size: 4 rows; 3 per row only when every label</text>
   <text class="note" x="1280" y="286">  is ≤ 12 chars ("✅ m ≤250" = 8).</text>
-  <text class="note" x="1280" y="304">• /filters: ≤ 5 toggle rows + 1 pager row per</text>
-  <text class="note" x="1280" y="320">  page; 2 per row (labels > 12); longest label</text>
-  <text class="note" x="1280" y="336">  "⬜ Breaking change" = 17 ≤ 24.</text>
+  <text class="note" x="1280" y="304">• /filters: 4 pages, ≤ 5 toggle rows + 1 pager row</text>
+  <text class="note" x="1280" y="320">  each; 3 per row only if all ≤ 12 ("✅ Age 365 d" =</text>
+  <text class="note" x="1280" y="336">  11; "✅ Active 30 d" = 13 → 2/row); max 17 ≤ 24.</text>
   <text class="note" x="1280" y="354">• Single-button rows ≤ 64 ("⬜ Any label (no</text>
   <text class="note" x="1280" y="370">  label required)" = 32).</text>
   <text class="note" x="1280" y="388">• Every button is a 24-byte token; kind and label</text>

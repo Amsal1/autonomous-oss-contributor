@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="900" viewBox="0 0 840 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup: /queue with gate 2 and gate 1 sections, Open buttons, sort toggles and pager</title>
+  <desc id="desc">One phone in the Control topic. The user sends /queue; the bot answers with a ranked list of pending items: a section Gate 2 PR previews with a fix for an open PR, an issue claim and a PR preview, and a section Gate 1 proposals with two autonomous proposals. Numbered Open buttons, three per row, then a sort row with Oldest first and By priority, then a pager. Below, the toast after tapping Open 3 says two cards were re-sent, and the re-sent card keeps its original expiry. Notes explain the order, the re-send semantics and the Telegram limits.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#111}
+    .b{font-weight:700}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#fff;font-weight:600;text-anchor:middle}
+    .dis{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#e9ede8;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .dry{fill:#0d47a1;font-weight:700}
+    .ghost{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#3f5a3f}
+  </style>
+
+  <!-- ============ PHONE ============ -->
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">08:40</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">🚦 Control · bot</text>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="320" y="130" width="70" height="30" rx="14" fill="#e1ffc7"/>
+  <text class="t" x="334" y="150">/queue</text>
+
+  <!-- queue message -->
+  <rect x="40" y="170" width="300" height="270" rx="16" fill="#ffffff"/>
+  <text class="t b" x="52" y="190">📥 Queue · 7 pending · page 1/2</text>
+  <text class="s" x="52" y="206">sorted 🎯 by priority · tap Open to re-send a card</text>
+  <text class="t b" x="52" y="230">Gate 2 · PR previews (3)</text>
+  <text class="t" x="52" y="249">1. 🔁 Fix for PR #5678 · langfuse</text>
+  <text class="s" x="66" y="263">maintainer asked · expires in 1 day</text>
+  <text class="t" x="52" y="281">2. 🙋 Claim langfuse #1234 · c_01JABC</text>
+  <text class="s" x="66" y="295">expires in 2 days</text>
+  <text class="t" x="52" y="313">3. 🧩 PR preview c_01JABC r2 · s · langfuse</text>
+  <text class="s" x="66" y="327">🧪 DRY RUN · expires in 2 days</text>
+  <text class="t b" x="52" y="351">Gate 1 · proposals (4)</text>
+  <text class="t" x="52" y="370">4. 💡 Proposal v2 · ollama #889 · xs</text>
+  <text class="s" x="66" y="384">expires in 2 days</text>
+  <text class="t" x="52" y="402">5. 💡 Proposal v1 · opentofu #2210 · s</text>
+  <text class="s" x="66" y="416">expires in 3 days</text>
+  <text class="s" x="330" y="432" text-anchor="end">08:40</text>
+
+  <!-- keyboard -->
+  <rect x="40" y="446" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="465">📥 Open 1</text>
+  <rect x="141" y="446" width="98" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="465">📥 Open 2</text>
+  <rect x="243" y="446" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="465">📥 Open 3</text>
+  <rect x="40" y="480" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="499">📥 Open 4</text>
+  <rect x="192" y="480" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="499">📥 Open 5</text>
+  <rect x="40" y="514" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="533">⬆️ Oldest first</text>
+  <rect x="192" y="514" width="148" height="30" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="266" y="533">✅ 🎯 By priority</text>
+  <rect x="40" y="548" width="97" height="30" rx="10" fill="#a9b5a8"/>
+  <text class="dis" x="88" y="567">◀</text>
+  <rect x="141" y="548" width="98" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="567">1/2 ▾</text>
+  <rect x="243" y="548" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="567">▶</text>
+
+  <!-- after Open 3 -->
+  <text class="ghost" x="40" y="600">↓ after 📥 Open 3 (c_01JABC has two open cards)</text>
+  <rect x="48" y="608" width="284" height="30" rx="12" fill="#2b2b2b" fill-opacity="0.88"/>
+  <text class="btn" x="190" y="628" style="font-weight:500">Re-sent 2 cards</text>
+  <text class="ghost" x="40" y="660">In ✅ Reviews, at the bottom (old cards → "moved to a newer</text>
+  <text class="ghost" x="40" y="673">message"); the claim and the PR card, each with its own</text>
+  <text class="ghost" x="40" y="686">kept expiry:</text>
+  <rect x="40" y="694" width="300" height="92" rx="16" fill="#ffffff" stroke="#9fb39a" stroke-dasharray="4 3"/>
+  <text class="t" x="52" y="714"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r2</text>
+  <text class="t dry" x="52" y="732">🧪 DRY RUN — nothing is published</text>
+  <text class="s" x="52" y="750">… same card, fresh tokens (N4) …</text>
+  <text class="t" x="52" y="770">⏳ Approval expires <tspan class="b">in 2 days</tspan> (unchanged)</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ NOTES ============ -->
+  <text class="note nh" x="440" y="58">/queue · approvals waiting on you (CR-003 §5.13)</text>
+  <text class="note b" x="440" y="86">Order</text>
+  <text class="note" x="440" y="104">• Gate 2 section first, then Gate 1; numbering runs</text>
+  <text class="note" x="440" y="120">  across both. Within a gate: (class_rank, expires_at,</text>
+  <text class="note" x="440" y="136">  −target_priority, created_at).</text>
+  <text class="note" x="440" y="154">• Classes: 0 someone waiting · 1 claims and 👤 items ·</text>
+  <text class="note" x="440" y="170">  2 other fixes, ceiling · 3 PR previews, rescope,</text>
+  <text class="note" x="440" y="186">  skills · 4 autonomous proposals · 5 other comments.</text>
+  <text class="note" x="440" y="204">• ⬆️ Oldest first: expires_at ascending per gate</text>
+  <text class="note" x="440" y="220">  (stable under re-sends); ✅ marks the active sort.</text>
+  <text class="note b" x="440" y="250">Open (re-send)</text>
+  <text class="note" x="440" y="268">• reissue(cid, keep_expiry=True): the approval is</text>
+  <text class="note" x="440" y="284">  re-created with its expires_at kept, so the item</text>
+  <text class="note" x="440" y="300">  keeps its place here and the 72 h window doesn't</text>
+  <text class="note" x="440" y="316">  restart (§12.4 delta 7).</text>
+  <text class="note" x="440" y="334">• Every open card of that contribution is re-sent:</text>
+  <text class="note" x="440" y="350">  toast "Re-sent 2 cards"; an armed one returns to S1.</text>
+  <text class="note" x="440" y="368">• Proposals: ProposalApprovals.reissue, same rule.</text>
+  <text class="note" x="440" y="386">• Expired items are not listed; their S12 card has</text>
+  <text class="note" x="440" y="402">  🔁 Retry (a fresh 72 h approval).</text>
+  <text class="note" x="440" y="420">• Open never approves anything (N4).</text>
+  <text class="note b" x="440" y="450">Telegram constraints</text>
+  <text class="note" x="440" y="468">• Classic HTML; text ≤ 1,500 chars; 5 items per page;</text>
+  <text class="note" x="440" y="484">  each line ≤ 120 escaped chars, repo names middle-</text>
+  <text class="note" x="440" y="500">  ellipsized, untrusted titles defused (U8).</text>
+  <text class="note" x="440" y="518">• 4 rows: 3 per row when every label ≤ 12 chars</text>
+  <text class="note" x="440" y="534">  ("📥 Open 5" = 8); the sort row has 2 ("✅ 🎯 By</text>
+  <text class="note" x="440" y="550">  priority" = 15 ≤ 24).</text>
+  <text class="note" x="440" y="568">• Pager [◀] [1/2 ▾] [▶]; a disabled end is a</text>
+  <text class="note" x="440" y="584">  DisabledButton (10.3) or omitted.</text>
+  <text class="note" x="440" y="602">• Every callback_data is "t:" + 22 chars = 24 bytes</text>
+  <text class="note" x="440" y="618">  (limit 64). Open tokens carry {cid, rev, action_id};</text>
+  <text class="note" x="440" y="634">  the queue message itself carries no Approve (U3).</text>
+  <text class="note" x="440" y="652">• Toast via answerCallbackQuery: limit 200, ossbot</text>
+  <text class="note" x="440" y="668">  ≤ 180.</text>
+  <text class="note" x="440" y="686">• Sent in the originating topic (here 🚦 Control);</text>
+  <text class="note" x="440" y="702">  re-sent cards go to ✅ Reviews.</text>
+  <text class="note b" x="440" y="732">Loudness (unchanged)</text>
+  <text class="note" x="440" y="750">• ≤ loud_cards_per_hour (2) new cards with sound;</text>
+  <text class="note" x="440" y="766">  autonomous proposals always silent; a re-send from</text>
+  <text class="note" x="440" y="782">  Open is silent (you asked for it).</text>
+</svg>

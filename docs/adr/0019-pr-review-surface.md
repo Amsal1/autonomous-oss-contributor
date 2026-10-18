@@ -1,5 +1,5 @@
 # ADR-0019: PR review surface: native Telegram explorer by default, private GitHub review mirror as the opt-in rich layer
-Status: Proposed (CR-003), revision 2 after design review round 1 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, CR-004 · Addendum A (Telegram client library) is the content of the planned ADR-0020
+Status: Proposed (CR-003), revision 3 after design review rounds 1 and 2 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, CR-004 · Addendum A (Telegram client library) is the content of the planned ADR-0020
 
 ## Context
 Amsal reviews almost every candidate on his phone. Today's review surface (DESIGN §14.4) is one card, the verbatim PR body and commit message in `<pre>` parts, a diff paged through `editMessageText`, and a `.patch` file. It is safe, but on a phone it is flat. It has no per-file navigation, no way to comment on a line, and no "what changed since my last review".
@@ -115,6 +115,9 @@ stateDiagram-v2
   Live --> Merged
   Live --> Closed
   Ready --> Stale: any invalidation (dry-run toggle, reload, new rev, edit, expiry)
+  Armed --> Stale: kill / dry-run toggle / reload / edit / new rev (Confirm token dies with the approval)
+  Delivering --> Stale: kill / dry-run toggle / reload / edit / new rev (no Approve is ever minted)
+  Stale --> Delivering: Show current / Retry (new approval via reissue(), expiry kept per action, CR-003 §12.4 delta 7)
   Stale --> [*]
 ```
 
@@ -142,7 +145,7 @@ Queue and priority (CR-003 §5.13): pending approvals sort by `(class_rank, expi
 4. Autonomous proposals (gate 1), ordered by CR-004's rank score; promoted to class 2 within 6 h of expiry.
 5. Other comments.
 
-At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; the rest are sent silently and counted on the dashboard.
+At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; the rest are sent silently and counted on the dashboard. `/queue` (mockup `12-queue.svg`) lists Gate 2 items, then Gate 1 items, with numbered Open buttons. Opening an item re-sends its card with the expiry kept, so the item keeps its place in the list.
 
 ## Option C, normative details
 - **Repo:** `profile.yaml review_mirror.repo` (e.g. `Amsal1/ossbot-review`). The user creates it, with a README on `main`.
@@ -186,15 +189,24 @@ At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; 
   - Backups never include mirror state.
 
 ## Option A, normative summary
-- **Card:** classic HTML, ≤ 3,900 escaped characters, with the existing two-phase keyboard. The keyboard is regrouped:
-  - Row 1: Approve, Reject.
-  - Row 2: Explore, Files.
-  - Row 3: Request changes, Edit text.
-  - Row 4: mirror URL, only when enabled. When the mirror push lands after the card was sent, row 4 is added with `editMessageReplyMarkup` re-using the **same** callback tokens already on the card (nothing is minted or rotated); an armed card gets it when it returns to S1.
-  - Revised cards: row 2 is Explore, Interdiff (Interdiff replaces Files).
+- **Card:** classic HTML, ≤ 3,900 escaped characters, with the existing two-phase keyboard. The keyboard is regrouped per action kind (CR-003 §12.4.1):
+  - `open_pr`:
+    - Row 1: Approve, Reject.
+    - Row 2: Explore, Files. On revised cards, Interdiff replaces Files.
+    - Row 3: Request changes, Edit text.
+    - Row 4: mirror URL, only when enabled. When the mirror push lands after the card was sent, row 4 is added with `editMessageReplyMarkup` re-using the **same** callback tokens already on the card (nothing is minted or rotated). An armed card gets it when it returns to S1.
+  - `push_update`: Approve & Push, Reject fix / Explore, Files / Request changes.
+  - `comment` and `issue_claim`: Approve & Post, Reject / Edit text. Edit text opens the comment edit prompt directly. There is no explorer, because the verbatim body is the whole content.
+  - Decision buttons are single-use. View buttons (Explore, Files, Interdiff, Edit text) are **multi-use** until the approval ends, so they work however often they are tapped.
   - Tests and logs move into the explorer.
   - Approve exists only on the card, never in explorer or file views.
-- **Explorer and file messages:** sent as replies to the card, so tapping the quote header jumps back. One file-view message per `(cid, rev)`; Prev/Next edit it in place and a file picker jumps. Their tokens are multi-use navigation tokens (24 h, message-bound) with `approval_id = NULL` and `{cid, rev}` in their argument, so a Cancel or a re-sent card never kills them (CR-003 §12.4). Model-authored text is always labelled 🤖 and quoted. Gatekeeper-verified facts carry ✅ and no label.
+- **Explorer and file messages** (only for `open_pr` and `push_update`):
+  - They are sent as replies to the card, so tapping the quote header jumps back.
+  - There is one file-view message per `(cid, rev)`. Prev/Next edit it in place, and a file picker jumps between files.
+  - Their tokens are multi-use navigation tokens (24 h, message-bound) with `approval_id = NULL` and `{cid, rev, action_id}` in their argument. They resolve the current approval of **their own outbound action**, which stays unambiguous when a claim or a drafted comment is open beside the PR. So a Cancel or a re-sent card never kills them (CR-003 §12.2, §12.4).
+  - After Confirm, they stay usable read-only.
+  - Model-authored text is always labelled 🤖 and quoted. Gatekeeper-verified facts carry ✅ and no label.
+- **Re-sending a card** (Show card, Show current, `/queue → Open`, `/approve`) uses `reissue()` and keeps each approval's expiry. It re-sends every open card of the contribution (CR-003 §5.2, §12.4 deltas 5 and 7).
 - **Comments:**
   - A reply to a file message becomes a comment on that file.
   - A `quote` resolves to lines by searching the quoted text in that page's diff text. Ties are broken by `position`. An ambiguous match opens a line picker. No match anchors the comment to the file only.
@@ -210,7 +222,7 @@ At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; 
   - `ossbot-review-<cid>-r<rev>.html` is rendered with Jinja2 autoescape from derived data only. It has inline CSS and no script. Its CSP is `default-src 'none'; style-src 'unsafe-inline'; img-src data:`. It works in iOS Quick Look, Android Chrome or Files, and desktop browsers. **[VERIFY]** how Telegram opens it on Amsal's phone.
 
 ## Consequences
-- **Good:** the default needs no setup and no new exposure. Phone review gets per-file navigation, line comments, interdiffs and test evidence. The approval code path keeps its rules (token format and checks, binding, Confirm sentences); the UI needs six bounded deltas, each tested, listed in CR-003 §12.4. The richest layer (C) reuses GitHub's mature mobile reviewer, with no inbound path and a token that cannot write anywhere else.
+- **Good:** the default needs no setup and no new exposure. Phone review gets per-file navigation, line comments, interdiffs and test evidence. The approval code path keeps its rules (token format and checks, binding, Confirm sentences); the UI needs nine bounded deltas, each tested, listed in CR-003 §12.4. The richest layer (C) reuses GitHub's mature mobile reviewer, with no inbound path and a token that cannot write anywhere else.
 - **Costs:**
   - Raw Bot API calls for 10.1–10.3 features, behind a typed adapter (`telegram/rawapi.py`, pydantic models), until PTB v23 ships typed support. This was chosen over switching libraries (Addendum A): it keeps lenient decoding on the safety-critical polling path and costs no migration.
   - Two renderers (rich and classic) with property tests.
@@ -291,3 +303,11 @@ The gatekeeper is the only Telegram poller (ADR-0004). One `getUpdates` stream c
 - **Finding 22 (mirror graph, late URL row):** addressed in Option C (`H'` parent `B'`) and Option A (row 4 via `editMessageReplyMarkup` with the same tokens).
 - **Finding 1 (token core) and finding 3 (base-moved interdiff):** reflected in the state diagram (confirm-expiry disarm), Option A (kit tokens with `approval_id NULL`) and the interdiff summary; the normative text is CR-003 §12.4 and §5.7.
 - **CR-004 (orchestrator-relayed user requirement):** the review flow now starts at the proposal card (S0), and the queue classes and size behaviour follow CR-004 Amendment B (overrun highlighted, not blocked; `RESCOPE_REQUIRED` only with `reapprove`; ceiling-hit card).
+
+## Responses to design review round 2
+The normative fixes are in CR-003 (§21 maps each of the 22 findings). This ADR changes where the decision text depends on them:
+- **Finding 20 (state diagram):** addressed. The diagram adds `Armed --> Stale` and `Delivering --> Stale`, with their causes (kill, dry-run toggle, reload, edit, new rev). It also adds `Stale --> Delivering` for a re-sent card, which keeps its expiry.
+- **Findings 1 and 2 (card buttons, several open actions):** reflected in Option A. Keyboards are per action kind, view buttons are multi-use, the explorer exists only for patch-carrying kinds, and view tokens resolve their own outbound action (`action_id`).
+- **Finding 3 (re-sends reset the TTL):** reflected in Option A and the queue paragraph. Re-sends keep the expiry, so `/queue` order is stable (CR-003 §12.4 delta 7).
+- **Finding 22 (queue mockup):** the queue paragraph points to the new `docs/ux/12-queue.svg`.
+- **Findings 4–19 and 21:** none of them changes this ADR's decision (A by default, C opt-in, B deferred, Serverless and Telegraph rejected for review content). Their fixes are CR-003-only.

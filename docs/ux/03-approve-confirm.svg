@@ -135,8 +135,8 @@
   <text class="note" x="860" y="346">  colour repeats it (primary blue / danger red).</text>
   <text class="note" x="860" y="364">• "Reviewed …" comes from tg_views opens; it is</text>
   <text class="note" x="860" y="380">  informational and never gates Confirm.</text>
-  <text class="note" x="860" y="398">• Unsent draft-review comments are listed; on</text>
-  <text class="note" x="860" y="414">  Confirm they are marked discarded.</text>
+  <text class="note" x="860" y="398">• Unsent comments are counted (re-rendered, same</text>
+  <text class="note" x="860" y="414">  tokens, if one arrives while armed); Confirm discards.</text>
   <text class="note" x="860" y="432">• Cancel → S1 with rotated tokens ("Cancelled; nothing</text>
   <text class="note" x="860" y="448">  was submitted."). No tap in 5 min → housekeeping</text>
   <text class="note" x="860" y="464">  disarm_expired(): pending again, S1, fresh tokens.</text>
@@ -149,11 +149,15 @@
   <text class="note" x="860" y="600">• "in 5 minutes" is &lt;tg-time format="r"&gt;.</text>
   <text class="note" x="860" y="618">• URL buttons (Open PR) and copy_text (Copy</text>
   <text class="note" x="860" y="634">  link, ≤ 256) need no token.</text>
-  <text class="note b" x="860" y="664">Other action kinds</text>
-  <text class="note" x="860" y="684">push_update: "Confirm: LIVE — push 1 commit to</text>
-  <text class="note" x="860" y="700">PR #5678 (langfuse/langfuse) as Amsal1."</text>
-  <text class="note" x="860" y="718">comment / claim: "Confirm: LIVE — post comment</text>
-  <text class="note" x="860" y="734">on langfuse/langfuse#1234 as Amsal1."</text>
-  <text class="note" x="860" y="752">skill / proposal start: local change, "dry-run does</text>
-  <text class="note" x="860" y="768">not apply" (mockups 08 and 10).</text>
+  <text class="note b" x="860" y="664">Other action kinds (ApprovalService.confirm_text)</text>
+  <text class="note" x="860" y="684">push_update: "Confirm: LIVE — push to PR #5678 on</text>
+  <text class="note" x="860" y="700">langfuse/langfuse as Amsal1 (author Amsal Khan).</text>
+  <text class="note" x="860" y="716">Expires in 5 min."</text>
+  <text class="note" x="860" y="734">comment: "Confirm: LIVE — comment on langfuse/</text>
+  <text class="note" x="860" y="750">langfuse#1234 as Amsal1 (author Amsal Khan). …"</text>
+  <text class="note" x="860" y="768">issue_claim: "Confirm: LIVE — claim issue langfuse/</text>
+  <text class="note" x="860" y="784">langfuse#1234 as Amsal1 (author Amsal Khan). …"</text>
+  <text class="note" x="860" y="802">The frozen code wins over DESIGN §14.4a wording.</text>
+  <text class="note" x="860" y="820">skill / proposal start: local change, "dry-run does</text>
+  <text class="note" x="860" y="836">not apply" (mockups 08 and 10).</text>
 </svg>

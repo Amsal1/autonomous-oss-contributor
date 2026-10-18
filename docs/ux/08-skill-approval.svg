@@ -125,4 +125,8 @@
   <text class="note" x="440" y="780">  shown, marked "n/a: local change" (S3).</text>
   <text class="note" x="440" y="798">• SkillApprovals has its own confirm_text; the PR</text>
   <text class="note" x="440" y="814">  kinds' Confirm sentences are untouched.</text>
+  <text class="note" x="440" y="832">• Rows in skill_approvals (id s_ + 10); refused while</text>
+  <text class="note" x="440" y="848">  paused or killed; tier switch → "tier_changed".</text>
+  <text class="note" x="440" y="866">• A reply to this card or a part → Hermes in 💬</text>
+  <text class="note" x="440" y="882">  Assistant ("Re: skill …"), never a review comment.</text>
 </svg>

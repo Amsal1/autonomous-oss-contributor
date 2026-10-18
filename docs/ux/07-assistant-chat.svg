@@ -183,4 +183,11 @@
   <text class="note" x="860" y="688">• Topics: each user topic is its own Hermes</text>
   <text class="note" x="860" y="704">  session (tg-&lt;uid&gt;-t&lt;thread_id&gt;); /new adds one.</text>
   <text class="note" x="860" y="722">• Flat mode: 🤖 header on every assistant message.</text>
+  <text class="note b" x="860" y="750">Answers outside this topic (U6, §4.4 rules 7–8)</text>
+  <text class="note" x="860" y="768">• ✅ Reviews: classic, first line "🤖 Assistant · answer</text>
+  <text class="note" x="860" y="784">  to your message", whole body in a quote, ≤ 3,500 then</text>
+  <text class="note" x="860" y="800">  "full answer in 💬 Assistant"; only [📝 Use as comment].</text>
+  <text class="note" x="860" y="818">• 🚦 Control / 📈 OSS feed text is answered here, with</text>
+  <text class="note" x="860" y="834">  "↪️ from 🚦 Control: …"; there: "🤖 Answered in 💬</text>
+  <text class="note" x="860" y="850">  Assistant". Here (Assistant, your topics): full render.</text>
 </svg>

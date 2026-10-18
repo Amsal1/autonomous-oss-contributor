@@ -202,4 +202,10 @@
   <text class="note" x="860" y="734">  [🧭 Explore] [🗑 Drop].</text>
   <text class="note" x="860" y="752">• Ceiling: config-only (U13); Re-check re-runs only</text>
   <text class="note" x="860" y="768">  the deterministic size check after /reload.</text>
+  <text class="note" x="860" y="786">• Overrun % = round(100 × (code − est) / est), code =</text>
+  <text class="note" x="860" y="802">  added + deleted code: (172 − 48) / 48 → +258%. est 0</text>
+  <text class="note" x="860" y="818">  → "est 0 code"; ⚠️ when code > est × (1 + tolerance)</text>
+  <text class="note" x="860" y="834">  or the measured class is larger.</text>
+  <text class="note" x="860" y="852">• Never… → [🚫 This repo] [🚫 Kind: Bug] (≤ 24); the</text>
+  <text class="note" x="860" y="868">  confirm names the kind in full.</text>
 </svg>

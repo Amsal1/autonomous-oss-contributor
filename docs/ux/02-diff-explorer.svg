@@ -168,8 +168,8 @@
   <text class="note b" x="860" y="124">Explorer (one message, edited in place)</text>
   <text class="note" x="860" y="142">1 Summary · 2 Why · 3 Signals · 4 Risk · 5 Files</text>
   <text class="note" x="860" y="158">6 Diff · 7 Tests · 8 Self-review · 9 PR text</text>
-  <text class="note" x="860" y="176">• nav tokens: multi-use, 24 h, message-bound,</text>
-  <text class="note" x="860" y="192">  24-byte callback_data; ≤ 3 per row.</text>
+  <text class="note" x="860" y="176">• nav tokens: multi-use, 24 h, message-bound, bound</text>
+  <text class="note" x="860" y="192">  to this action_id; read-only after Confirm.</text>
   <text class="note b" x="860" y="220">File view (one message per r2, edited in place)</text>
   <text class="note" x="860" y="238">• Rich: pre language="diff", details for hunks</text>
   <text class="note" x="860" y="254">  &gt; 60 lines; ≤ 30,000 chars / ≤ 450 blocks;</text>
@@ -178,12 +178,13 @@
   <text class="note" x="860" y="304">  "language-diff"&gt; pages ≤ 3,500 chars.</text>
   <text class="note" x="860" y="322">• ◀ Prev / Next ▶ edit this message to the other</text>
   <text class="note" x="860" y="338">  file; 📂 1/3 swaps in a file picker (≤ 8/page).</text>
-  <text class="note b" x="860" y="366">Comments</text>
-  <text class="note" x="860" y="384">• Reply + manual quote (is_manual): searched in the</text>
-  <text class="note" x="860" y="400">  page text → path + lines (+/context = new side);</text>
-  <text class="note" x="860" y="416">  ties by position; ambiguous → line picker.</text>
-  <text class="note" x="860" y="434">• 💬 Comment → hunk picker → ForceReply</text>
-  <text class="note" x="860" y="450">  (placeholder ≤ 60 chars, text ≤ 4,000).</text>
+  <text class="note" x="860" y="354">  Open reuses it while &lt; 20 msgs in this topic since.</text>
+  <text class="note b" x="860" y="376">Comments</text>
+  <text class="note" x="860" y="392">• Reply + manual quote (is_manual): searched in the</text>
+  <text class="note" x="860" y="408">  page text → path + lines (+/context = new side);</text>
+  <text class="note" x="860" y="424">  ties by position; ambiguous → line picker.</text>
+  <text class="note" x="860" y="440">• 💬 Comment → hunk picker → ForceReply (≤ 4,000);</text>
+  <text class="note" x="860" y="456">  after Confirm: "Submitted: comment on the PR instead."</text>
   <text class="note b" x="860" y="480">Draft review (reply to card, edited in place)</text>
   <rect x="860" y="490" width="370" height="98" rx="14" fill="#ffffff" stroke="#c9d3c4"/>
   <text class="t b" x="872" y="510">📝 Draft review · c_01JABC r2 · 2 comments</text>
