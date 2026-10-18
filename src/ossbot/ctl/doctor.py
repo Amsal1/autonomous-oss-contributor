@@ -126,6 +126,11 @@ def check_mounts() -> list[Result]:
     interop = list(Path("/proc/sys/fs/binfmt_misc").glob("WSLInterop*"))
     out.append(Result(PASS if not interop else FAIL, "interop", "WSLInterop binfmt absent" if not interop
                       else "WSLInterop binfmt registered", "systemctl start ossbot-nointerop"))  # fmt: skip
+    # WSL's interop sockets (/run/WSL/<pid>_interop, 0777) stay root-only (egress threat table).
+    run_wsl = Path("/run/WSL")
+    mode = run_wsl.stat().st_mode & 0o777 if run_wsl.is_dir() else 0
+    out.append(Result(PASS if not mode & 0o077 else FAIL, "interop sockets", f"/run/WSL mode {mode:o}",
+                      "systemctl restart ossbot-nointerop"))  # fmt: skip
     return out
 
 

@@ -184,6 +184,8 @@ Phase 1 review round 2 added: systemd-resolved masked and checked by `ossbot-fir
 
 Phase 1 review round 3 added: `-n` on every squid name ACL, IP-literal targets denied on every port, and the resolved-IP deny moved to the end of each allow line, so squid resolves only names the caller may reach (P1-11, P1-12, ADR-0005 addendum). `0.0.0.0/8` was added to the always-denied set, the pinger is off and `visible_hostname` is set. The systematic egress pass added ip6tables `OSSBOT-IN` (no IPv6 from containers to host services) and `tests/system/test_egress_surface.sh`, which is part of `tests/system/*.sh` above. Its threat table is in `docs/VERIFICATION.md`.
 
+Phase 1 review round 4 added: `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` on every non-root unit, so no `AF_VSOCK` to the Windows host (P1-13, ADR-0005 and ADR-0007 addenda). `tests/unit/test_systemd_units.py` asserts it for every `ossbot-*.service` with a non-root `User=`, so the FEAT-006 runner unit and the FEAT-007 hermes unit must carry the line or the hermetic suite fails, and `test_egress_surface.sh` probes them once they are loaded. `/run/WSL` (interop sockets) is root-only via `ossbot-nointerop.service`. `always_denied.cidrs` gained `198.18.0.0/15`, `192.0.0.0/24`, `224.0.0.0/4` and `240.0.0.0/4`. The host-listener probe is an explicit allowlist, and `tests/system/lib.sh` counts SKIPs separately (`skip`).
+
 ---
 
 ## Phase 2: Telegram UX, pipeline, Kiro and Hermes, model switch, open-source docs, hardening

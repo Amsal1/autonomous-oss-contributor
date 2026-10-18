@@ -98,12 +98,16 @@ wsl_apply() {
 
 # Verified live on WSL 3.0.3 (ADR-0007 addendum): with [interop] enabled=false the WSLInterop
 # binfmt entry is still registered at boot (handler /init, which then fails on the vsock), so a PE
-# file does not fail with ENOEXEC. A boot-time oneshot removes the entry.
+# file does not fail with ENOEXEC. A boot-time oneshot removes the entry. It also closes WSL's
+# interop sockets (/run/WSL/<pid>_interop, mode 0777) to every non-root uid (egress threat table,
+# ADR-0007 addendum): with interop disabled the host never answers them, and now no service uid
+# can even connect.
 wsl_nointerop() {
   ensure_file /etc/systemd/system/ossbot-nointerop.service root root 0644 <<'EOF'
-# Managed by ossbot scripts/lib/wsl.sh (DESIGN §7.2): no Windows binfmt handler in this distro.
+# Managed by ossbot scripts/lib/wsl.sh (DESIGN §7.2): no Windows binfmt handler in this distro,
+# and WSL's interop sockets under /run/WSL are root-only.
 [Unit]
-Description=ossbot: remove the WSLInterop binfmt_misc entry (interop disabled)
+Description=ossbot: remove the WSLInterop binfmt_misc entry, close /run/WSL (interop disabled)
 DefaultDependencies=no
 After=systemd-binfmt.service proc-sys-fs-binfmt_misc.mount
 Before=sysinit.target ossbot-boot-gate.service
@@ -111,7 +115,7 @@ Before=sysinit.target ossbot-boot-gate.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/bin/sh -c 'for f in /proc/sys/fs/binfmt_misc/WSLInterop*; do [ -e "$f" ] && echo -1 >"$f"; done; exit 0'
+ExecStart=/bin/sh -c 'for f in /proc/sys/fs/binfmt_misc/WSLInterop*; do [ -e "$f" ] && echo -1 >"$f"; done; [ -d /run/WSL ] && chmod 0700 /run/WSL; exit 0'
 
 [Install]
 WantedBy=sysinit.target
@@ -127,6 +131,10 @@ EOF
     echo -1 >"$f"
     mark_changed "removed binfmt entry ${f##*/}"
   done
+  if [[ -d /run/WSL && $(stat -c %a /run/WSL) != 700 ]]; then
+    chmod 0700 /run/WSL
+    mark_changed "chmod 0700 /run/WSL"
+  fi
 }
 
 wsl_check() {
@@ -146,6 +154,10 @@ wsl_check() {
   [[ -e /mnt/c ]] && { printf 'wsl check: FAIL /mnt/c exists\n'; return 1; }
   if compgen -G '/proc/sys/fs/binfmt_misc/WSLInterop*' >/dev/null; then
     printf 'wsl check: FAIL WSLInterop binfmt entry registered\n'
+    return 1
+  fi
+  if [[ -d /run/WSL && $(stat -c %a /run/WSL) != 700 ]]; then
+    printf 'wsl check: FAIL /run/WSL (interop sockets) is not root-only\n'
     return 1
   fi
   [[ -d $OSSBOT_MOUNT/scripts/lib ]] || { printf 'wsl check: FAIL repo content not visible\n'; return 1; }

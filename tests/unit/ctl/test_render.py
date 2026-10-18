@@ -334,6 +334,9 @@ def test_squid_pinger_off_and_cidrs_validated() -> None:
     text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE)
     assert "pinger_enable off\n" in text  # no ICMP helper (it could not open a raw socket anyway)
     assert "0.0.0.0/8" in _acls(text)["denied_dst"]  # a name resolving to 0.0.0.0 reaches squid's own lo
+    # fake-IP range of Windows VPN/proxy clients (via the WSL NAT), IETF, multicast, reserved
+    for cidr in ("198.18.0.0/15", "192.0.0.0/24", "224.0.0.0/4", "240.0.0.0/4"):
+        assert cidr in _acls(text)["denied_dst"], cidr
     bundle = _bundle()
     denied = bundle.egress.always_denied.model_copy(update={"cidrs": ["10.0.0.0/8 all"]})
     egress = bundle.egress.model_copy(update={"always_denied": denied})

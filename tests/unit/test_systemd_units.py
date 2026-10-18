@@ -57,6 +57,23 @@ def test_policy_drain_timeout_cannot_exceed_the_static_unit_values() -> None:
     assert f"else {{ {DEFAULT_DRAIN_TIMEOUT_S} }}" in down_ps1
 
 
+NON_ROOT = [p for p in SERVICES if _unit(p)["Service"].get("User", "root") != "root"]
+
+
+def test_non_root_units_are_known() -> None:
+    """The restriction test below must not pass vacuously; Phase 2 runner/hermes units join it."""
+    assert {"ossbot-gatekeeper.service", "ossbot-sandboxd.service"} <= {p.name for p in NON_ROOT}
+
+
+@pytest.mark.parametrize("path", NON_ROOT, ids=lambda p: p.name)
+def test_non_root_units_restrict_address_families(path: Path) -> None:
+    """P1-13: AF_VSOCK reaches the Windows host (WSL init, the drvfs Plan 9 server) past every IP
+    layer, so every non-root unit may open only unix and IP sockets."""
+    text = path.read_text(encoding="utf-8")
+    lines = [line for line in text.splitlines() if line.startswith("RestrictAddressFamilies=")]
+    assert lines == ["RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"]
+
+
 def test_workers_stop_before_gatekeeper_and_proxy() -> None:
     after = _unit(UNITS / "ossbot-sandboxd.service")["Unit"]["After"].split()
     assert "ossbot-gatekeeper.service" in after and "ossbot-proxy.service" in after  # stop = reverse order

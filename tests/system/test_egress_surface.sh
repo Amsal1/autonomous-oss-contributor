@@ -5,8 +5,10 @@
 #          sandbox pool (a raw-table string match counts the proxy's queries for a fresh random
 #          label and every PTR query), IP literals denied on every port, names resolving to a
 #          denied range refused, the rendered config uses -n on every name ACL
-#   ICMP / raw / IPv6 / direct IP from sandboxes and service uids; the host's listeners;
-#   the proxy netns; the Hyper-V layer (root's non-80/443 egress), SKIP when not applied.
+#   ICMP / raw / IPv6 / direct IP from sandboxes and service uids; the host's listeners (explicit
+#   allowlist); the proxy netns; AF_VSOCK to the Windows host per unit context and per pool, and
+#   the WSL interop sockets (P1-13); the Hyper-V layer (root's non-80/443 egress), a counted SKIP
+#   when not applied.
 # shellcheck source=tests/system/lib.sh disable=SC1091,SC2317,SC2016
 source "$(dirname "$0")/lib.sh"
 require_running
@@ -90,7 +92,7 @@ if getent ahostsv4 localtest.me 2>/dev/null | grep -q '^127\.'; then
   expect "hermes via 3141 -> localtest.me (resolves to 127.0.0.1) denied by denied_dst" 403 \
     "$(connect hermes 3141 https://localtest.me/)"
 else
-  pass "SKIP localtest.me does not resolve to 127.0.0.1 here (resolved-IP deny probe not run)"
+  skip "localtest.me does not resolve to 127.0.0.1 here (resolved-IP deny probe not run)"
 fi
 
 # ----------------------------------------------------------------- sandbox pools (3128)
@@ -129,6 +131,13 @@ def udp53(host):
         q = b"\x12\x34\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x07example\x03com\x00\x00\x01\x00\x01"
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3); s.sendto(q, (host, 53)); s.recv(512); return "answer"
     return res(go)
+def vsock():  # P1-13: Hyper-V socket to the Windows host (CID 2; 50002 = WSL drvfs Plan 9 server)
+    try:
+        s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+    except OSError as exc:
+        return f"errno{exc.errno}"
+    s.settimeout(3)
+    return "created:" + res(lambda: (s.connect((2, 50002)), "open")[1])
 v6 = [l.split()[-1] for l in open("/proc/net/if_inet6")] if __import__("os").path.exists("/proc/net/if_inet6") else []
 gw = open("/proc/net/route").read().split("\n")[1:]
 print("direct443=" + tcp("1.1.1.1", 443))
@@ -139,6 +148,7 @@ print("v6ifaces=" + (",".join(sorted(set(v6) - {"lo"})) or "none"))
 print("v6direct=" + tcp("2606:4700:4700::1111", 443, socket.AF_INET6))
 print("defaultroute=" + ("yes" if any(l.split()[1:2] == ["00000000"] for l in gw if l.strip()) else "no"))
 print("hostports=" + ",".join(tcp("10.212.0.2", p) for p in (3140, 3141, 3150)))
+print("vsock=" + vsock())
 PY
 '
 declare -A POOL_LABEL=() POOL_OUT=()
@@ -177,6 +187,8 @@ for pool in fetch research llm; do
   expect "pool $pool -> no default route (internal network)" no "$(field "$pool" defaultroute)"
   hp=$(field "$pool" hostports)
   if [[ -n $hp && $hp != *open* ]]; then pass "pool $pool -> 10.212.0.2:3140/3141/3150 unreachable ($hp)"; else fail "pool $pool -> host proxy ports: '$hp'"; fi
+  vs=$(field "$pool" vsock)
+  if [[ $vs == errno* ]]; then pass "pool $pool -> socket(AF_VSOCK) refused by the default seccomp profile ($vs)"; else fail "pool $pool -> AF_VSOCK: '$vs'"; fi
 done
 
 # ------------------------------------------------- the meter: no lookup for denied requests
@@ -210,6 +222,10 @@ expect "proxy netns: ip_forward" 0 "$(nsenter -t "$pid" -n sysctl -n net.ipv4.ip
 expect "proxy netns: IPv6 only on lo" "lo" "$(nsenter -t "$pid" -n awk '{print $6}' /proc/net/if_inet6 | sort -u | tr '\n' ' ' | xargs)"
 expect "proxy: no capabilities (no raw sockets, pinger inert)" 0000000000000000 \
   "$(awk '/^CapEff/ {print $2}' "/proc/$pid/status")"
+# The proxy image has no interpreter to open a socket with; it runs under the same default seccomp
+# profile that refuses AF_VSOCK in the pools above (no seccomp= override in SecurityOpt).
+expect "proxy: seccomp filter active" 2 "$(awk '/^Seccomp:/ {print $2}' "/proc/$pid/status")"
+expect "proxy: no seccomp override" '["no-new-privileges"]' "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' ossbot-proxy)"
 
 # ------------------------------------------------------------------ service uids: ICMP, IPv6
 icmp_uid() {  # icmp_uid USER -> exit 0 when an ICMP echo to 1.1.1.1 gets a reply
@@ -230,16 +246,69 @@ done
 check "ip6tables INPUT jumps to OSSBOT-IN first" test "$(ip6tables -w -S INPUT | sed -n 2p)" = "-A INPUT -j OSSBOT-IN"
 refuse "host has no global IPv6 route" bash -c 'ip -6 route show default | grep -q .'
 
+# ------------------------------------------------- non-IP channels to the Windows host (P1-13)
+# Hyper-V sockets (AF_VSOCK, host CID 2) bypass iptables, the WSL NAT and the Hyper-V firewall.
+# Host listeners (WSL source, lxinitshared.h): 50000 init, 50002 drvfs Plan 9 server (answers a
+# 9P2000.L Tversion), 50005 crash dumps. Every non-root unit carries RestrictAddressFamilies; the
+# probe runs in a transient unit with the unit's own user and restriction, since a plain runuser
+# session is not restricted (that is the control).
+VSOCK_PY='
+import socket, sys
+try:
+    s = socket.socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+except OSError as exc:
+    print(f"errno{exc.errno}"); sys.exit(0)
+s.settimeout(3)
+try:
+    s.connect((2, 50002)); print("open")
+except socket.timeout:
+    print("timeout")
+except OSError as exc:
+    print(f"connect-errno{exc.errno}")'
+units=()
+for unit in ossbot-gatekeeper ossbot-sandboxd ossbot-runner ossbot-hermes; do
+  [[ $(systemctl show -p LoadState --value "$unit.service") == loaded ]] && units+=("$unit")
+done
+for unit in "${units[@]}"; do
+  user=$(systemctl show -p User --value "$unit.service")
+  raf=$(systemctl show -p RestrictAddressFamilies --value "$unit.service")
+  expect "$unit: RestrictAddressFamilies (unit context, sorted)" "AF_INET AF_INET6 AF_UNIX" \
+    "$(tr ' ' '\n' <<<"$raf" | sort | xargs)"
+  mainpid=$(systemctl show -p MainPID --value "$unit.service")
+  if [[ $mainpid != 0 ]]; then
+    expect "$unit: running process is under a seccomp filter (MainPID $mainpid)" 2 "$(awk '/^Seccomp:/ {print $2}' "/proc/$mainpid/status")"
+  else
+    fail "$unit: not running"
+  fi
+  got=$(systemd-run --quiet --wait --pipe --collect -p User="$user" -p RestrictAddressFamilies="$raf" \
+    -p NoNewPrivileges=yes -p SystemCallArchitectures=native /usr/bin/python3 -I -c "$VSOCK_PY" 2>&1 </dev/null)
+  expect "$unit context ($user): socket(AF_VSOCK) refused" errno97 "$got"
+done
+expect "control: an unrestricted hermes session reaches host CID 2:50002 over AF_VSOCK" open \
+  "$(as hermes python3 -I -c "$VSOCK_PY" 2>&1)"
+# WSL interop sockets (/run/WSL/<pid>_interop, 0777): ossbot-nointerop makes /run/WSL root-only.
+check "/run/WSL is root-only (0700)" test "$(stat -c %a /run/WSL)" = 700
+isock=$(find /run/WSL -maxdepth 1 -type s -name '*_interop' -print -quit)
+if [[ -n $isock ]]; then
+  for u in ossrunner hermes gatekeeper ossbox ossnobody; do
+    refuse "$u -> WSL interop socket $isock refused (EACCES)" as "$u" python3 -I -c \
+      'import socket, sys; socket.socket(socket.AF_UNIX).connect(sys.argv[1])' "$isock"
+  done
+else
+  skip "no /run/WSL/*_interop socket present (interop connect probe not run)"
+fi
+
 # --------------------------------------------------------------------------- host surface
-# A service on a wildcard or bridge address would be reachable from the bridges but for OSSBOT-IN
-# (IPv4 by source, IPv6 by interface). Defense in depth: none exists. UDP sockets on ephemeral
-# ports are client sockets (systemd-timesyncd's NTP query binds 0.0.0.0:<ephemeral> while syncing).
+# Every service uid may reach any lo port (OSSBOT-OUT row 26) and a wildcard or bridge listener
+# would be reachable from the bridges but for OSSBOT-IN, so every listener must be on this list:
+# the WSL resolver (port 53 only; refused to service uids by OSSBOT-OUT) and chronyd's loopback
+# command port. UDP sockets on ephemeral ports are client sockets (an NTP query while syncing).
 read -r eph _ </proc/sys/net/ipv4/ip_local_port_range
-bad=$(ss -H -ltnu | awk -v ns="$NS" -v eph="$eph" '{a=$5; port=a; sub(/^.*:/, "", port)
-  sub(/:[^:]*$/, "", a); gsub(/[][]/, "", a); sub(/%.*/, "", a)
+LISTEN_OK=" udp/$NS:53 tcp/$NS:53 udp/127.0.0.1:323 udp/[::1]:323 "
+bad=$(ss -H -ltnu | awk -v ok="$LISTEN_OK" -v eph="$eph" '{port=$5; sub(/^.*:/, "", port)
   if ($1 == "udp" && port + 0 >= eph + 0) next
-  if (a !~ /^127\./ && a != "::1" && a != ns) print $1 " " $5}')
-if [[ -z $bad ]]; then pass "host listeners: only loopback and the WSL resolver"; else fail "host listeners on non-loopback addresses: $bad"; fi
+  if (index(ok, " " $1 "/" $5 " ") == 0) print $1 " " $5}')
+if [[ -z $bad ]]; then pass "host listeners: only the allowlist ($LISTEN_OK)"; else fail "host listeners not on the allowlist: $bad"; fi
 check "nsswitch hosts: files dns only" grep -Eq '^hosts:[[:space:]]+files dns[[:space:]]*$' /etc/nsswitch.conf
 for p in nscd unscd sssd dnsmasq unbound bind9 avahi-daemon libnss-resolve libnss-mdns; do
   refuse "no caching/forwarding resolver or nss DNS module: $p" bash -c "dpkg-query -W -f='\${Status}' $p 2>/dev/null | grep -q 'install ok installed'"
@@ -259,7 +328,7 @@ tcp_root 1.1.1.1 853 >/dev/null 2>&1 && open=$((open + 1))
 udp53_root >/dev/null 2>&1 && open=$((open + 1))
 icmp_root >/dev/null 2>&1 && open=$((open + 1))
 if ((open == 3)); then
-  pass "SKIP Hyper-V firewall not applied (optional layer, DESIGN 7.8): root reaches 1.1.1.1 on 853/tcp, 53/udp, ICMP"
+  skip "Hyper-V firewall not applied (optional layer, DESIGN 7.8): root reaches 1.1.1.1 on 853/tcp, 53/udp, ICMP"
 else
   refuse "Hyper-V: root -> 1.1.1.1:853/tcp blocked" tcp_root 1.1.1.1 853
   refuse "Hyper-V: root -> 1.1.1.1:53/udp blocked" udp53_root

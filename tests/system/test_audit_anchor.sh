@@ -19,12 +19,18 @@ refuse "ossnobody cannot connect to the anchor socket" as ossnobody python3 -I -
 import socket
 s = socket.socket(socket.AF_UNIX); s.connect("/run/ossbot/anchor.sock")'
 
-# Every 10th tick: set the counter to 9, run one tick.
+# Every 10th tick: set the counter to 9, run one tick. The timer is held meanwhile: a timer tick
+# already running would write its own counter over the 9 (seen as a flake in the round-4 bar).
 state=/var/lib/ossbot/watchdog.json
+systemctl stop ossbot-watchdog.timer
+# shellcheck disable=SC2016  # expanded by the inner bash
+wait_for 30 bash -c '[[ $(systemctl show -p ActiveState --value ossbot-watchdog.service) != activating ]]' ||
+  fail "a watchdog tick did not finish"
 before=$(wc -l <"$log")
 jq -c '.tick = 9' "$state" >"$state.new" && mv "$state.new" "$state"
 watchdog_tick
 check "watchdog tick 10 appended an anchor" test "$(wc -l <"$log")" -eq $((before + 1))
+systemctl start ossbot-watchdog.timer
 
 check "audit-anchors.log is append-only (lsattr a)" bash -c "lsattr -d '$log' | awk '{print \$1}' | grep -q a"
 refuse "truncation refused" truncate -s 0 "$log"

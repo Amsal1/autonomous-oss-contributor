@@ -33,6 +33,9 @@ CapabilityBoundingSet=
 RestrictSUIDSGID=yes
 LockPersonality=yes
 SystemCallArchitectures=native
+# P1-13: no AF_VSOCK (Hyper-V sockets to the Windows host: WSL init, the drvfs Plan 9 server,
+# crash dumps; netfilter and the Hyper-V firewall never see them), no AF_NETLINK, no AF_PACKET.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
 WantedBy=multi-user.target

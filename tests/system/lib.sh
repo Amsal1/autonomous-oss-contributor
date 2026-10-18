@@ -11,12 +11,15 @@ CONTROL=/var/lib/ossbot/control
 GK_SOCK=/run/ossbot/gatekeeper.sock
 FILTER_SOCK=/run/ossbot/docker-filter.sock
 FAILURES=0
+SKIPS=0
 TEST_NAME=$(basename "${BASH_SOURCE[1]:-$0}" .sh)
 
 [[ $EUID -eq 0 ]] || { echo "$TEST_NAME: run as root" >&2; exit 2; }
 
 pass() { printf 'PASS %s: %s\n' "$TEST_NAME" "$*"; }
 fail() { printf 'FAIL %s: %s\n' "$TEST_NAME" "$*"; FAILURES=$((FAILURES + 1)); }
+# skip DESCRIPTION: a check that did not run (counted apart from PASS, reported by finish)
+skip() { printf 'SKIP %s: %s\n' "$TEST_NAME" "$*"; SKIPS=$((SKIPS + 1)); }
 # check DESCRIPTION CMD...: pass when CMD succeeds
 check() { local d=$1; shift; if "$@" >/dev/null 2>&1; then pass "$d"; else fail "$d"; fi; }
 # refuse DESCRIPTION CMD...: pass when CMD fails
@@ -74,6 +77,10 @@ finish() {
     printf '%s: %d check(s) FAILED\n' "$TEST_NAME" "$FAILURES"
     exit 1
   fi
-  printf '%s: all checks passed\n' "$TEST_NAME"
+  if ((SKIPS)); then
+    printf '%s: all checks passed, %d SKIPPED (not run)\n' "$TEST_NAME" "$SKIPS"
+  else
+    printf '%s: all checks passed\n' "$TEST_NAME"
+  fi
   exit 0
 }
