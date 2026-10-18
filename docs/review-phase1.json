@@ -1,0 +1,42 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "round": 1,
+  "findings": [
+    {
+      "id": "P1-1",
+      "severity": "HIGH",
+      "where": "src/ossbot/ctl/render.py:200,204 (OSSBOT-OUT '-o lo -j ACCEPT'); tests/system/test_egress_per_uid.sh:15,35; src/ossbot/ctl/doctor.py:239",
+      "title": "Service uids can query the WSL resolver 10.255.255.254 on lo: open DNS exfiltration channel (violates DESIGN 11.4 'No user gets direct UDP 53')",
+      "fix": "Render per-uid REJECT for UDP and TCP 53 to every resolv.conf nameserver (and 127.0.0.53 if present) before the '-o lo' ACCEPT for ossrunner/hermes/gatekeeper/ossbox/ossnobody (or restrict the lo ACCEPT to -d 127.0.0.0/8); update --check normalization and tests/unit/ctl/golden/iptables.rules; add UDP+TCP resolver probes per uid to test_egress_per_uid.sh and the doctor per-uid egress check; record in an ADR-0005 addendum."
+    },
+    {
+      "id": "P1-2",
+      "severity": "MEDIUM",
+      "where": "src/ossbot/gatekeeper/control.py:238 (reconcile); kill flag writers src/ossbot/watchdog/tick.py:95, scripts/bin/ossbot-kill, scripts/bin/ossbot-boot-gate",
+      "title": "Kills that bypass the gatekeeper (watchdog, ossbot-kill/kill.ps1, boot gate) do not invalidate armed|confirmed approvals (DESIGN 12.4)",
+      "fix": "In ControlService.reconcile(), when a kill flag is observed that control_state has not yet recorded (state != killed or newer flag ts), call approvals.invalidate_armed_confirmed('killed', 'flag') in the same transaction (also at startup) and send an FYI; add test_control_reconcile.py cases for a root-written soft flag while running and a full flag found at startup, asserting the armed approval is invalidated and its confirm token dead."
+    },
+    {
+      "id": "P1-3",
+      "severity": "MEDIUM",
+      "where": "docs/plan/CR-001-lifecycle-up-down.md (user change request, uncommitted); src/ossbot/gatekeeper/control.py, src/ossbot/sandboxd/jobs.py, systemd/*.service, scripts/, src/ossbot/ctl/cli.py, docs/DESIGN.md",
+      "title": "CR-001 graceful lifecycle up/draining/down (distinct from kill) is not implemented",
+      "fix": "Phase 1: lifecycle state in the gatekeeper control model (kill overrides), sandboxd drain (no new jobs, drain timeout default 120 s configurable, rest marked interrupted), TimeoutStopSec >= drain+30 s on every ossbot unit with gatekeeper/proxy stopped last, scripts/up.ps1, down.ps1 [-Timeout] [-All], status.ps1, ossctl up|down|status, in-flight public writes never auto-resumed (SUBMIT_FAILED interrupted + fresh-approval Retry), crash-safety e2e that SIGKILLs services and a sandbox mid-job (no duplicate writes), sleep/hibernate monotonic-time handling, fake-Bot-API long-poll reconnect test. Commit the CR file with the implementation and update DESIGN.md (7.5, 7.6, 13). Deferred to Phase 2 and recorded explicitly in PLAN.md: stage re-queue on up (FEAT-006 runner), Telegram /drain /undrain /down /up (FEAT-005), README/SETUP/AGENTS 'Daily use' and lifecycle invariants (FEAT-008)."
+    },
+    {
+      "id": "P1-4",
+      "severity": "NIT",
+      "where": "src/ossbot/gatekeeper/approvals.py:273 (set_text_override)",
+      "title": "Human title/body edits are stored without policy.check_text",
+      "fix": "No Phase 1 caller; FEAT-005 Edit title/body must run policy.check_text (confidentiality floor, secrets, disclosure, lengths) before storing an override."
+    },
+    {
+      "id": "P1-5",
+      "severity": "NIT",
+      "where": "src/ossbot/gatekeeper/telegram/keyboards.py:10 (CALLBACK_RE), src/ossbot/common/ids.py:19 (TOKEN_RE)",
+      "title": "Callback/token regexes use '$' with re.match and accept a trailing newline",
+      "fix": "Use fullmatch (or \\Z) so the 14.2 format check is exact; fails closed today because the DB lookup misses."
+    }
+  ],
+  "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.md"
+}
