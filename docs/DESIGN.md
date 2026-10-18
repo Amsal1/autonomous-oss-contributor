@@ -321,7 +321,7 @@ Interop disabled means Linux cannot start Windows processes. Windows-to-Linux (`
 | `ossnobody` (1001) | Default WSL login user | none | world-readable files | own home |
 | `ossadmin` (1000) | Human shell (explicit `-u ossadmin`), owns drvfs mount | sudo, osscfg, ossapi | everything via sudo | repo (owner) |
 | `gatekeeper` (system) | Gatekeeper service | osscfg, ossart, osscontrol (owner of control dir) | `gatekeeper.env`, artifacts | `/srv/ossbot/gatekeeper` (0700), `/srv/ossbot/config-snapshot` (0755), `/var/lib/ossbot/control`, repo (via osscfg) |
-| `ossrunner` (system) | Runner service | ossapi, ossart, osscontrol, osssbx | `runner.env`, config snapshot, artifacts | `/srv/ossbot/runner` |
+| `ossrunner` (system) | Runner service | ossapi, ossart, osscontrol, osssbx | `runner.env`, config snapshot, artifacts (group `ossart`: the artifacts root is setgid 2750 and sandboxd re-groups each staged tree) | `/srv/ossbot/runner` (`ossrunner:osssbx 0710`; `inputs/` `2750` so sandboxd can stage the job inputs, `state/` `0700`) |
 | `ossbox` (system) | Sandbox daemon | ossapi, ossart, osscontrol, ossdock | `sandboxd.env`, config snapshot | `/srv/ossbot/artifacts`, `/srv/ossbot/sandboxd` |
 | `hermes` (system, real home) | Hermes gateway + kiro-acp shim | ossapi | own home, `hermes.env` | `/home/hermes` only |
 

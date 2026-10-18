@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import threading
 import time
@@ -490,8 +491,24 @@ class JobService:
         if plan.dest.exists():
             shutil.rmtree(plan.dest)
         shutil.move(str(staging), str(plan.dest))
+        self._share(plan.dest)
         outcome.logs = logs
         return outcome
+
+    def _share(self, dest: Path) -> None:
+        """Artifacts are read by the runner and the gatekeeper through group ``ossart`` (§7.3): the
+        staged tree was created in sandboxd's private staging dir, so its group follows the
+        artifacts root (a rename keeps the old group). Files stay 0640, directories 0750."""
+        root = self.settings.artifacts_dir
+        try:
+            gid = root.stat().st_gid
+            paths = [p for p in dest.parents if root in p.parents] + [dest, *dest.rglob("*")]
+            for path in paths:
+                st = path.lstat()
+                if st.st_gid != gid and not path.is_symlink():
+                    os.chown(path, -1, gid)
+        except OSError as exc:
+            log.warning("artifacts not shared with group ossart: %s", exc, extra={"event": "artifacts_share"})
 
     def _exit_code(self, name: str) -> int:
         try:

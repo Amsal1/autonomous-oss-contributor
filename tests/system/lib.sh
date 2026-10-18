@@ -53,7 +53,7 @@ units_active() {
 }
 
 PHASE1_UNITS=(ossbot-boot-gate ossbot-firewall ossbot-firewall-docker ossbot-dockerfilter ossbot-gatekeeper
-  ossbot-proxy ossbot-sandboxd ossbot-watchdog.timer)
+  ossbot-proxy ossbot-sandboxd ossbot-runner ossbot-watchdog.timer)
 
 # resume_all: offline resume (the root helper) and wait until every Phase 1 unit is active again.
 resume_all() {

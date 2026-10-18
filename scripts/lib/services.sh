@@ -6,12 +6,12 @@ OSSBOT_APP=/opt/ossbot/app
 OSSBOT_UNIT_DIR=/etc/systemd/system
 OSSBOT_UNITS_CHANGED=0
 OSSBOT_APP_CHANGED=0
-# Phase 1 units, boot gate first (§18.2 "boot gate enabled first"). Runner and Hermes units arrive
-# with FEAT-006/007.
+# Units, boot gate first (§18.2 "boot gate enabled first"). The runner arrived with FEAT-006; the
+# Hermes unit arrives with FEAT-007.
 OSSBOT_ENABLE_UNITS=(
   ossbot-boot-gate.service ossbot-nointerop.service ossbot-firewall.service ossbot-firewall-docker.service
   ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service
-  ossbot-anchor.socket ossbot-killswitch.path ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer
+  ossbot-runner.service ossbot-anchor.socket ossbot-killswitch.path ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer
 )
 OSSBOT_BINS=(ossbot-firewall ossbot-boot-gate ossbot-kill ossbot-resume ossbot-proxy-run ossbot-egress-apply)
 
@@ -77,7 +77,7 @@ step_app_deploy() {
     mark_changed "uv sync --frozen --no-dev ($OSSBOT_APP/.venv)"
     OSSBOT_APP_CHANGED=1
   fi
-  "$OSSBOT_APP/.venv/bin/python" -I -c 'import ossbot.gatekeeper.main, ossbot.dockerfilter.main, ossbot.sandboxd.main, ossbot.ctl.cli, ossbot.watchdog.tick' \
+  "$OSSBOT_APP/.venv/bin/python" -I -c 'import ossbot.gatekeeper.main, ossbot.dockerfilter.main, ossbot.sandboxd.main, ossbot.runner.main, ossbot.ctl.cli, ossbot.watchdog.tick' \
     || die "deployed app does not import"
 }
 
@@ -207,7 +207,7 @@ step_enable_start() {
     ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-anchor.socket ossbot-killswitch.path
     ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer)
   case $level in
-    none) units+=(ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service) ;;
+    none) units+=(ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service ossbot-runner.service) ;;
     soft) units+=(ossbot-gatekeeper.service ossbot-proxy.service) ;;
   esac
   [[ $level == none ]] || warn "killed (level $level): not starting the units the kill stops"
@@ -215,7 +215,8 @@ step_enable_start() {
     # New code or units: restart the running services (dependency order; each re-checks the
     # firewall in ExecStartPre). The firewall units are one-shot appliers: step 'firewall' already
     # re-applied them on drift, and restarting them would stop every unit that Requires= them.
-    for u in ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service; do
+    for u in ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service \
+      ossbot-runner.service; do
       if systemctl is-active --quiet "$u"; then
         systemctl restart "$u" || die "restart $u failed"
         mark_changed "restarted $u"

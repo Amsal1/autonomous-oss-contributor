@@ -1,0 +1,41 @@
+# Runner (DESIGN §7.5, §9): the pipeline worker. Worker role on the gatekeeper socket, sandboxd
+# client, GitHub reads only through proxy 3140 with GITHUB_READ_TOKEN (runner.env). No write token,
+# no Kiro key, no Docker. Not started while killed; schedules nothing while paused, draining or down.
+[Unit]
+Description=ossbot runner (pipeline worker)
+ConditionPathExists=!/var/lib/ossbot/control/killed
+Requires=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service
+Wants=ossbot-gatekeeper.service ossbot-sandboxd.service ossbot-proxy.service
+After=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-gatekeeper.service ossbot-sandboxd.service ossbot-proxy.service
+[Service]
+# CR-001: running stages finish within the drain timeout (120 s); a stop past it leaves them
+# 'running' and the next start marks them interrupted and re-queues them (max 3 per stage).
+TimeoutStopSec=150
+Type=simple
+User=ossrunner
+Group=ossrunner
+# ossapi: gatekeeper.sock; osssbx: sandboxd.sock and runner/inputs; ossart: artifacts; osscontrol: flags.
+SupplementaryGroups=ossapi osssbx ossart osscontrol
+EnvironmentFile=/etc/ossbot/secrets/runner.env
+ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
+ExecStart=/opt/ossbot/app/.venv/bin/ossbot-runner
+Restart=on-failure
+RestartSec=10
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/ossbot/runner
+ReadOnlyPaths=/mnt/d/Work/autonomous-oss-contributor
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# P1-13: no AF_VSOCK, AF_NETLINK or AF_PACKET (Hyper-V sockets bypass netfilter).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# P1-14: io_uring creates sockets without socket(2); refused (EPERM) here and system-wide.
+SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
+[Install]
+WantedBy=multi-user.target

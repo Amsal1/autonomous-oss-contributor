@@ -17,9 +17,16 @@ gk_health() { [[ $(gk GET /v1/health | cut -d' ' -f1) == 200 ]]; }
 done_before=$(q "SELECT COUNT(*) FROM outbound_actions WHERE status IN ('done','dry_run_done')")
 audit_before=$(q "SELECT COUNT(*) FROM audit_events")
 
-systemctl kill --signal=SIGKILL ossbot-gatekeeper.service ossbot-sandboxd.service ossbot-dockerfilter.service
+systemctl kill --signal=SIGKILL ossbot-gatekeeper.service ossbot-sandboxd.service ossbot-dockerfilter.service \
+  ossbot-runner.service
 sleep 2
-check "units restarted by systemd after SIGKILL" wait_for 90 units_active ossbot-gatekeeper ossbot-sandboxd ossbot-dockerfilter
+check "units restarted by systemd after SIGKILL" wait_for 90 units_active ossbot-gatekeeper ossbot-sandboxd ossbot-dockerfilter \
+  ossbot-runner
+# Runner (FEAT-006): a stage run the killed runner left 'running' is marked interrupted at its next
+# start and re-queued (max 3); none may stay running with a stale heartbeat.
+stale_runs() { q "SELECT COUNT(*) FROM stage_runs WHERE status = 'running' AND heartbeat_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-120 seconds')"; }
+no_stale_runs() { [[ $(stale_runs) -eq 0 ]]; }
+check "no stage run left running by the killed runner" wait_for 90 no_stale_runs
 check "gatekeeper healthy again" wait_for 60 gk_health
 check "sandboxd healthy again" wait_for 60 sbx_health
 verify=$(gk GET /v1/audit/verify)

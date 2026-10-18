@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # DESIGN §22.6 test_firewall_failclosed.sh (M6): with OSSBOT-OUT flushed, a unit restart fails on
-# its ExecStartPre --check (the runner arrives in FEAT-006; sandboxd carries the same ExecStartPre),
+# its ExecStartPre --check (the runner and sandboxd carry the same ExecStartPre),
 # and the watchdog writes killed with reason firewall_drift. Re-apply + resume starts it again.
 # A Docker restart re-applies OSSBOT-FWD through ossbot-firewall-docker (PartOf=docker.service).
 # shellcheck source=tests/system/lib.sh disable=SC1091
@@ -9,12 +9,14 @@ require_running
 
 iptables -w -F OSSBOT-OUT
 refuse "firewall --check fails with OSSBOT-OUT flushed" /opt/ossbot/bin/ossbot-firewall --check
-refuse "systemctl restart ossbot-sandboxd fails" systemctl restart ossbot-sandboxd
-if journalctl -u ossbot-sandboxd -n 30 --no-pager -o cat | grep -q 'ossbot-firewall --check'; then
-  pass "start refused by the --check ExecStartPre (journal)"
-else
-  fail "journal of ossbot-sandboxd does not show the --check message"
-fi
+for unit in ossbot-runner ossbot-sandboxd; do
+  refuse "systemctl restart $unit fails" systemctl restart "$unit"
+  if journalctl -u "$unit" -n 30 --no-pager -o cat | grep -q 'ossbot-firewall --check'; then
+    pass "$unit start refused by the --check ExecStartPre (journal)"
+  else
+    fail "journal of $unit does not show the --check message"
+  fi
+done
 watchdog_tick
 reason=$(flag_reason)
 if [[ $reason == firewall_drift* ]]; then pass "watchdog killed ($reason)"; else fail "watchdog reason '$reason'"; fi

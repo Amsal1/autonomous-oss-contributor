@@ -63,7 +63,25 @@ NON_ROOT = [p for p in SERVICES if _unit(p)["Service"].get("User", "root") != "r
 
 def test_non_root_units_are_known() -> None:
     """The restriction test below must not pass vacuously; Phase 2 runner/hermes units join it."""
-    assert {"ossbot-gatekeeper.service", "ossbot-sandboxd.service"} <= {p.name for p in NON_ROOT}
+    assert {"ossbot-gatekeeper.service", "ossbot-sandboxd.service", "ossbot-runner.service"} <= {
+        p.name for p in NON_ROOT
+    }
+
+
+def test_runner_unit_is_wired_everywhere() -> None:
+    """FEAT-006 item 31: enabled by provisioning, stopped by the kill, resumed, watched by system tests."""
+    root = UNITS.parent
+    service = _unit(UNITS / "ossbot-runner.service")
+    assert service["Service"]["User"] == "ossrunner"
+    assert "ConditionPathExists=!/var/lib/ossbot/control/killed" in (UNITS / "ossbot-runner.service").read_text()
+    assert service["Service"]["ExecStartPre"] == "+/opt/ossbot/bin/ossbot-firewall --check"
+    services_sh = (root / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    enable = services_sh.split("OSSBOT_ENABLE_UNITS=(", 1)[1].split(")", 1)[0]
+    assert "ossbot-runner.service" in enable
+    assert "stop_units ossbot-runner.service" in (root / "scripts" / "bin" / "ossbot-kill").read_text()
+    assert "ossbot-runner.service" in (root / "scripts" / "bin" / "ossbot-resume").read_text()
+    lib = (root / "tests" / "system" / "lib.sh").read_text(encoding="utf-8")
+    assert "ossbot-runner" in lib.split("PHASE1_UNITS=(", 1)[1].split(")", 1)[0]
 
 
 @pytest.mark.parametrize("path", NON_ROOT, ids=lambda p: p.name)

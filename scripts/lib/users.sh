@@ -34,12 +34,17 @@ step_users() {
   # Directories (ext4).
   ensure_dir /srv/ossbot root root 0755
   ensure_dir /srv/ossbot/gatekeeper gatekeeper gatekeeper 0700
-  ensure_dir /srv/ossbot/runner ossrunner ossrunner 0700
+  # sandboxd (ossbox, group osssbx) stages the job inputs the runner writes (prompts, plan files):
+  # it may traverse runner/ and read runner/inputs/ (setgid, files 0640 by the unit's UMask), nothing else.
+  ensure_dir /srv/ossbot/runner ossrunner osssbx 0710
+  ensure_dir /srv/ossbot/runner/inputs ossrunner osssbx 2750
+  ensure_dir /srv/ossbot/runner/state ossrunner ossrunner 0700
   ensure_dir /srv/ossbot/sandboxd ossbox ossbox 0700
   # dockerd resets its data root to 0710 on every start; root:root 0710 is still root-only.
   ensure_dir /srv/ossbot/docker root root 0710
   ensure_dir /srv/ossbot/logs root ossart 0750
-  ensure_dir /srv/ossbot/artifacts ossbox ossart 0750
+  # setgid: per-contribution dirs inherit group ossart (runner and gatekeeper read the artifacts).
+  ensure_dir /srv/ossbot/artifacts ossbox ossart 2750
   ensure_dir /srv/ossbot/config-snapshot gatekeeper gatekeeper 0755
   ensure_dir /etc/ossbot root root 0755
   ensure_dir /etc/ossbot/secrets root root 0751
