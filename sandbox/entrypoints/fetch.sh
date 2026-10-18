@@ -40,6 +40,7 @@ mkdir -p "$OUT"
 [[ "$PREFETCH_ON" =~ ^[01]$ ]] || fail bad_args "OSSBOT_ARG_PREFETCH"
 # Every fetch starts from a fresh clone: a scout clone is not the build clone, a re-queued
 # fetch finds a partial clone, and a new version after a rescope finds the old build tree.
+cd "$WORK"  # the container may start inside /work/repo: never delete the working directory
 rm -rf "$REPO" "$SCOUT_MARK"
 
 mkdir -p "$REPO" "$WORK/cache" "$WORK/venv" "$WORK/.home"
