@@ -1,6 +1,6 @@
 # ADR-0020: Telegram client library: keep python-telegram-bot 22.8 with a typed Bot API 10.1–10.3 adapter; no Pillow in the gatekeeper
 
-Status: Proposed (CR-003) · Date: 2026-10-18 · Facts verified on the web on 2026-10-18 (sources below) · Design: CR-003 §1, §6.1, §6.5, §12.5, §14.1, §14.4 · Related: ADR-0004, ADR-0019 · Supersedes: ADR-0019 Addendum A (moved here unchanged in substance; ADR-0019 keeps a back-reference)
+Status: Proposed (CR-003), revision 2 after design review round 4 · Date: 2026-10-18 · Facts verified on the web on 2026-10-18 (sources below) · Design: CR-003 §1, §6.1, §6.5, §12.5, §14.1, §14.4 · Related: ADR-0004, ADR-0019 · Supersedes: ADR-0019 Addendum A (moved here unchanged in substance; ADR-0019 keeps a back-reference)
 
 ## Context
 The gatekeeper is the only Telegram poller (ADR-0004). One `getUpdates` long-polling stream carries Approve, Confirm, `/kill`, `/pause` and every assistant message, so the client library sits on the safety-critical path.
@@ -63,7 +63,7 @@ In priority order:
 - **No migration.** The Phase 1-reviewed transport, auth and tests stay as they are.
 - **Licence.** LGPL-3.0, used as an unmodified dependency, keeps every licence option open for ossbot.
 - **Bounded adapter.** The 10.1–10.3 surface CR-003 uses is about a dozen methods and fields. When PTB v23 ships typed 10.1+ support, the adapter's call sites switch to typed methods behind the same kit API, as a separate reviewed change.
-- **Update processing stays sequential.** The application keeps PTB's default `concurrent_updates` (one update at a time; `SimpleUpdateProcessor(max_concurrent_updates=1)` in the installed 22.8). Long work runs outside the update slot, under CR-003 §12.5's update-handler budget. That rule is library-independent, so it holds whichever library is used later.
+- **Update processing stays sequential.** The application keeps PTB's default `concurrent_updates` (one update at a time; `SimpleUpdateProcessor(max_concurrent_updates=1)` in the installed 22.8). Long work runs outside the update slot, under CR-003 §12.5's update-handler budget. Back-to-back processing means a message and a `/kill` from one `getUpdates` batch can cancel a spawned task before it starts, so the budget puts every task's cleanup (freeing its session, closing its `chat_turns` row) in the done callback registered by `Handlers.spawn`, which asyncio runs for every outcome. That rule, like the rest of the budget, is a property of asyncio and of sequential dispatch, not of PTB, so it holds whichever library is used later.
 - **Revisit triggers:**
   - PTB v23 is released: switch the adapter to typed calls.
   - PTB still lacks 10.1 support by 2027-04 **and** aiogram merges tolerant `getUpdates` (#1848 or an equivalent): re-run this evaluation.
@@ -91,6 +91,11 @@ In priority order:
 ## Verification items
 1. End to end: `stopped_message_generation` arrives through PTB 22.8 in `api_kwargs` and is accepted in `allowed_updates`. The PTB side is verified from source; CR-003 §17 item 3 covers the rest.
 2. Every `rawapi.py` request model is checked against the live Bot API reference at build time (fields, types and optionality, 10.3).
+
+## Responses to design review round 4
+- **Decision unchanged.** The review found the evaluation complete (every criterion scored, Pillow decided). The library stays python-telegram-bot 22.8 with the typed `rawapi.py` adapter; aiogram, pyTelegramBotAPI and an own client stay rejected; Pillow stays out of the gatekeeper.
+- **Finding 2 (task cancelled before it starts):** recorded under "Update processing stays sequential" above. The fix is in CR-003 §12.5 (`spawn(…, on_done)` and the session map) and does not depend on the library.
+- **Finding 3 (`command` task kind):** CR-003 §12.5 only; no library impact.
 
 ## Sources (accessed 2026-10-18)
 - PyPI JSON for python-telegram-bot, aiogram, pyTelegramBotAPI and Pillow (versions, upload dates, licence classifiers): https://pypi.org/project/python-telegram-bot/ , https://pypi.org/project/aiogram/ , https://pypi.org/project/pyTelegramBotAPI/ , https://pypi.org/project/Pillow/

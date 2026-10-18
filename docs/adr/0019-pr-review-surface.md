@@ -1,5 +1,5 @@
 # ADR-0019: PR review surface: native Telegram explorer by default, private GitHub review mirror as the opt-in rich layer
-Status: Proposed (CR-003), revision 4 after design review rounds 1–3 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, ADR-0020 (Telegram client library and Pillow, formerly Addendum A of this ADR), CR-004
+Status: Proposed (CR-003), revision 5 after design review rounds 1–4 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, ADR-0020 (Telegram client library and Pillow, formerly Addendum A of this ADR), CR-004
 
 ## Context
 Amsal reviews almost every candidate on his phone. Today's review surface (DESIGN §14.4) is one card, the verbatim PR body and commit message in `<pre>` parts, a diff paged through `editMessageText`, and a `.patch` file. It is safe, but on a phone it is flat. It has no per-file navigation, no way to comment on a line, and no "what changed since my last review".
@@ -215,6 +215,8 @@ At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; 
   - **Publishing.** It publishes every new card after the transaction commits.
   - **Eligibility.** An action is eligible when it is `pending_approval` and its contribution is in a state where the action can still be submitted. A re-send is refused while any approval of the contribution is `confirmed` ("Submitting… try again in a moment"); a re-send never invalidates a confirmed approval.
   - **Stale cards.** S12 "Show current" resolves by contribution (purpose `stale_show_current`), so after r3 is packaged it re-sends r3, and after proposal v2 it re-sends v2.
+  - **Proposal and skill cards** are re-sent through their own wrappers, `AppContext.reissue_proposal` and `AppContext.reissue_skill`, which publish every new card after the service's commit. The decision services themselves never publish (CR-003 §12.4.3).
+- **Redaction.** Every text a review view shows (issue text, logs, model claims, test tails) passes the one redactor before it is sent (CR-003 U14). The verbatim body, commit-message and comment parts, the `.patch` and the HTML diff's code are never altered, because they must equal what is published; they are only scanned, and a hit withholds the card (`render_failed`).
 - **Replies to `comment` and `issue_claim` cards** are not review comments. They open a confirm panel, "Replace the comment text with your reply?", whose Replace runs FEAT-005's `edit_comment` path (a new card; the old one goes stale `text_edited`). Review comments exist only for `open_pr` and `push_update` (CR-003 §4.4 rule 5).
 - **Comments:**
   - A reply to a file message becomes a comment on that file.
@@ -279,3 +281,10 @@ The normative fixes are in CR-003 (§22 maps all 16 findings). This ADR changes 
 - **Finding 6 (proposal Skip/Later/Never):** the diagram gains the `Declined` state, the reject call and the 10-minute Undo edge.
 - **User requirement (library ADR):** Addendum A is filed as ADR-0020, and this ADR keeps a back-reference.
 - **Findings 2 and 7–16:** they don't change this ADR's decision. Their fixes are CR-003-only.
+
+## Responses to design review round 4
+The normative fixes are in CR-003 (§23 maps all 8 findings). This ADR changes where its text depends on them:
+- **Finding 1 (redaction):** Option A states that review views are redacted (CR-003 U14) and that the verbatim publish bytes are scanned, never altered.
+- **Finding 6 (who publishes proposal and skill re-sends):** Option A names `AppContext.reissue_proposal` and `AppContext.reissue_skill` as the publishing wrappers.
+- **Findings 2–5, 7 and 8:** they don't change this ADR's decision (A by default, C opt-in, B deferred). Their fixes are CR-003-only; finding 2's update-handler change is recorded in ADR-0020 because that ADR owns the sequential-processing decision.
+- **Library decision:** still in [ADR-0020](0020-telegram-library.md) (formerly Addendum A of this ADR), unchanged.

@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="900" viewBox="0 0 1260 900" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="960" viewBox="0 0 1260 960" role="img" aria-labelledby="title desc">
   <title id="title">ossbot mockup: assistant chat with streaming, sources, follow-ups and a feature card</title>
-  <desc id="desc">Left phone: a question, the ephemeral streaming draft with a tool status line and the client Stop button, then the final rich answer with heading, bullets, code block, collapsed sources, model footer and three follow-up buttons. Right phone: a food photo acknowledged with a reaction, the nutrition feature card with a table, daily totals and Fix, Undo, Today buttons, and a phase-2 consent prompt for reverse image search.</desc>
+  <desc id="desc">Left phone: a question, the ephemeral streaming draft with a tool status line and the client Stop button, then the final rich answer with heading, bullets, code block, collapsed sources, model footer and three follow-up buttons. Notes add that every draft and answer is redacted, that a draft holds back its last word so no secret prefix shows, and that a turn cancelled before it starts is still closed. Right phone: a food photo acknowledged with a reaction, the nutrition feature card with a table, daily totals and Fix, Undo, Today buttons, and a phase-2 consent prompt for reverse image search.</desc>
   <style>
     .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
     .b{font-weight:700}
@@ -155,6 +155,11 @@
   <text class="note" x="860" y="170">  partial saved "⏹ Stopped by you"; a 2nd message mid-turn</text>
   <text class="note" x="860" y="186">  → "⏳ Still answering — tap ⏹ Stop or wait".</text>
   <text class="note" x="860" y="204">• Status line: tool names + domains only, never args.</text>
+  <text class="note" x="860" y="222">• U14: every draft and answer redacted; a draft holds</text>
+  <text class="note" x="860" y="238">  back its last word, so no secret prefix ever shows.</text>
+  <text class="note" x="860" y="256">• Cancelled before start (msg + /kill in one batch):</text>
+  <text class="note" x="860" y="272">  spawn's done callback frees the session, row "stopped".</text>
+  <g transform="translate(0 64)">
   <text class="note b" x="860" y="232">Rendering (U1)</text>
   <text class="note" x="860" y="250">• Hermes Markdown → our md2blocks → rich blocks of</text>
   <text class="note" x="860" y="266">  plain strings, skip_entity_detection = true. No</text>
@@ -191,4 +196,5 @@
   <text class="note" x="860" y="818">• 🚦 Control / 📈 OSS feed text is answered here, with</text>
   <text class="note" x="860" y="834">  "↪️ from 🚦 Control: …"; there: "🤖 Answered in 💬</text>
   <text class="note" x="860" y="850">  Assistant". Here (Assistant, your topics): full render.</text>
+  </g>
 </svg>

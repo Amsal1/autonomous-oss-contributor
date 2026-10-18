@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="840" height="900" viewBox="0 0 840 900" role="img" aria-labelledby="title desc">
   <title id="title">ossbot mockup: /queue with gate 2 and gate 1 sections, Open buttons, sort toggles and pager</title>
-  <desc id="desc">One phone in the Control topic. The user sends /queue; the bot answers with a ranked list of pending items: a section Gate 2 PR previews with a fix for an open PR, an issue claim and a PR preview, and a section Gate 1 proposals with two autonomous proposals. Numbered Open buttons, three per row, then a sort row with Oldest first and By priority, then a pager. Below, the toast after tapping Open 3 says two cards were re-sent, and the re-sent card keeps its original expiry. Notes explain the order, the re-send semantics and the Telegram limits.</desc>
+  <desc id="desc">One phone in the Control topic. The user sends /queue; the bot answers with a ranked list of pending items: a section Gate 2 approval cards with a fix for an open PR, an issue claim and a PR preview, and a section Gate 1 proposals with two autonomous proposals. Numbered Open buttons, three per row, then a sort row with Oldest first and By priority, then a pager. Below, the toast after tapping Open 3 says two cards were re-sent, and the re-sent card keeps its original expiry. Notes explain the order, the re-send semantics and the Telegram limits.</desc>
   <style>
     .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#111}
     .b{font-weight:700}
@@ -33,7 +33,7 @@
   <rect x="40" y="170" width="300" height="270" rx="16" fill="#ffffff"/>
   <text class="t b" x="52" y="190">📥 Queue · 7 pending · page 1/2</text>
   <text class="s" x="52" y="206">sorted 🎯 by priority · tap Open to re-send a card</text>
-  <text class="t b" x="52" y="230">Gate 2 · PR previews (3)</text>
+  <text class="t b" x="52" y="230">Gate 2 · approval cards (3)</text>
   <text class="t" x="52" y="249">1. 🔁 Fix for PR #5678 · langfuse</text>
   <text class="s" x="66" y="263">maintainer asked · expires in 1 day</text>
   <text class="t" x="52" y="281">2. 🙋 Claim langfuse #1234 · c_01JABC</text>
@@ -91,7 +91,7 @@
   <!-- ============ NOTES ============ -->
   <text class="note nh" x="440" y="58">/queue · approvals waiting on you (CR-003 §5.13)</text>
   <text class="note b" x="440" y="86">Order</text>
-  <text class="note" x="440" y="104">• Gate 2 section first, then Gate 1; numbering runs</text>
+  <text class="note" x="440" y="104">• Gate 2 (all cards) first, then Gate 1; numbering runs</text>
   <text class="note" x="440" y="120">  across both. Within a gate: (class_rank, expires_at,</text>
   <text class="note" x="440" y="136">  −target_priority, created_at).</text>
   <text class="note" x="440" y="154">• Classes: 0 someone waiting · 1 claims and 👤 items ·</text>
@@ -107,7 +107,7 @@
   <text class="note" x="440" y="334">• Every eligible open card of the contribution is re-sent:</text>
   <text class="note" x="440" y="350">  toast "Re-sent 2 cards"; an armed one returns to S1.</text>
   <text class="note" x="440" y="366">  A confirmed sibling → "Submitting… try again" instead.</text>
-  <text class="note" x="440" y="384">• Proposals: ProposalApprovals.reissue, same rule.</text>
+  <text class="note" x="440" y="384">• Proposals: AppContext.reissue_proposal, same rule.</text>
   <text class="note" x="440" y="402">• Expired items are not listed; their S12 card has</text>
   <text class="note" x="440" y="418">  🔁 Retry while still eligible (a fresh 72 h approval).</text>
   <text class="note" x="440" y="434">• Open never approves anything (N4).</text>
