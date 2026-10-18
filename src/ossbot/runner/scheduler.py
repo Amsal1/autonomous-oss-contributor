@@ -75,6 +75,7 @@ class Scheduler:
         self.probes_retry_at: datetime | None = None
         self.alerted: set[str] = set()  # one alert per episode (catalog_empty, model_unavailable)
         self.scout_hold_until: datetime | None = None  # proposal.max_per_day used up
+        self.swept_at_start = False
         self.last_discovery: datetime | None = None
         self.last_catalog: datetime | None = None
         self.refused: set[str] = set()
@@ -161,6 +162,14 @@ class Scheduler:
         sandbox job is noted): terminal items (§9.12) and items that have not
         passed Start work (only a scout clone left behind by a kill, crash or drain, §9.5a). Runs on
         every tick, also while stopped (cleanup only, nothing new starts). Returns the count."""
+        if not self.swept_at_start:  # once per process: leftovers of a crash or an older runner
+            try:
+                for c in self.sc.gk.contributions(limit=200):
+                    if str(c.get("state")) in TERMINAL:
+                        common.note_volume(self.sc, str(c["id"]), True)
+                self.swept_at_start = True
+            except GkError:
+                return 0
         noted = common.volume_cids(self.sc)
         if not noted:
             return 0
