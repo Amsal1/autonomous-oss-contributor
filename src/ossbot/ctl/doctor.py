@@ -324,7 +324,12 @@ def _connect_code(user: str, port: int, url: str) -> str:
 
 def check_proxy_denies() -> Result:
     code = _connect_code("gatekeeper", 3150, "https://example.com/")
-    return Result(PASS if code == "403" else FAIL, "proxy denies example.com", f"gatekeeper via 3150 -> CONNECT {code}")
+    # P1-11: an IP-literal target is denied before any name ACL (hermes has web_public, so 3141
+    # shows the explicit ip_literal deny rather than "no category matched").
+    literal = _connect_code("hermes", 3141, "https://203.0.113.7/")
+    ok = code == "403" and literal == "403"
+    detail = f"gatekeeper via 3150 -> example.com CONNECT {code}; hermes via 3141 -> 203.0.113.7 CONNECT {literal}"
+    return Result(PASS if ok else FAIL, "proxy denies example.com", detail)
 
 
 def check_images() -> list[Result]:

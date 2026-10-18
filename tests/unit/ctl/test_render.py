@@ -69,6 +69,7 @@ def test_parts_split_host_and_docker() -> None:
         ("iptables", "OSSBOT-IN", "INPUT"),
         ("iptables", "OSSBOT-OUT", "OUTPUT"),
         ("ip6tables", "OSSBOT-OUT", "OUTPUT"),
+        ("ip6tables", "OSSBOT-IN", "INPUT"),
         ("ip6tables", "OSSBOT-FWD", "FORWARD"),
     ]
     assert [(c.family, c.name, c.parent) for c in plan["docker"]] == [("iptables", "OSSBOT-FWD", "DOCKER-USER")]
@@ -195,14 +196,14 @@ def test_squid_listeners_and_classes() -> None:
     assert "http_access deny port_sandbox src_host\n" in text
     assert text.rstrip().endswith("http_access deny all")
     # research and hermes get web_public (= all) but only after every deny
-    allow_all = [i for i, line in enumerate(text.splitlines()) if line.endswith(" all") and "allow" in line]
-    first_deny = min(i for i, line in enumerate(text.splitlines()) if line.startswith("http_access deny denied"))
-    assert allow_all and min(allow_all) > first_deny
-    assert "http_access allow port_sandbox pool_research all\n" in text
-    assert "http_access allow port_hermes src_host all\n" in text
-    assert "http_access allow port_sandbox pool_llm cat_kiro_core\n" in text
+    allow_all = [i for i, line in enumerate(text.splitlines()) if " all " in line and "allow" in line]
+    last_deny = max(i for i, line in enumerate(text.splitlines()) if line.startswith("http_access deny port_sandbox"))
+    assert allow_all and min(allow_all) > last_deny
+    assert "http_access allow port_sandbox pool_research all !denied_dst\n" in text
+    assert "http_access allow port_hermes src_host all !denied_dst\n" in text
+    assert "http_access allow port_sandbox pool_llm cat_kiro_core !denied_dst\n" in text
     assert "pool_llm all" not in text and "pool_fetch all" not in text
-    assert "http_access allow port_gatekeeper src_host cat_gatekeeper\n" in text
+    assert "http_access allow port_gatekeeper src_host cat_gatekeeper !denied_dst\n" in text
     assert "port_gatekeeper src_host all" not in text and "port_runner src_host all" not in text
 
 
@@ -215,14 +216,14 @@ def test_squid_denied_by_default_and_inactive_categories_absent() -> None:
 
 def test_squid_hermes_login_window_adds_idc_hosts() -> None:
     text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, hermes_login=True)
-    assert "acl cat_kiro_idc_login dstdomain test-org.awsapps.com oidc.us-east-1.amazonaws.com" in text
-    assert "http_access allow port_hermes src_host cat_kiro_idc_login\n" in text
+    assert "acl cat_kiro_idc_login dstdomain -n test-org.awsapps.com oidc.us-east-1.amazonaws.com" in text
+    assert "http_access allow port_hermes src_host cat_kiro_idc_login !denied_dst\n" in text
 
 
 def test_squid_pkg_helm_from_targets_snapshot() -> None:
     text = render.render_squid(_bundle("  egress_extra: [charts.jetstack.io]"), "0" * 64, [NS], TEMPLATE)
-    assert "acl cat_pkg_helm dstdomain charts.jetstack.io\n" in text
-    assert "http_access allow port_sandbox pool_fetch cat_pkg_helm\n" in text
+    assert "acl cat_pkg_helm dstdomain -n charts.jetstack.io\n" in text
+    assert "http_access allow port_sandbox pool_fetch cat_pkg_helm !denied_dst\n" in text
 
 
 def test_squid_refuses_pool_sharing_profiles_with_different_categories() -> None:
@@ -237,3 +238,105 @@ def test_squid_refuses_pool_sharing_profiles_with_different_categories() -> None
 def test_squid_refuses_non_ip_nameserver() -> None:
     with pytest.raises(ValueError):
         render.render_squid(_bundle(), "0" * 64, ["evil.example"], TEMPLATE)
+
+
+# Phase 1 review P1-11 / P1-12 (ADR-0005 addendum): squid must never resolve a name, forward or
+# reverse, that the caller may not reach. Squid evaluates one http_access line left to right and
+# stops at the first mismatch, and only "slow" ACLs (dst, or a name ACL without -n) cause lookups.
+_SLOW_TYPES = {"dst", "dst_as", "srcdomain", "srcdom_regex"}
+_NAME_TYPES = {"dstdomain", "dstdom_regex"}
+
+
+def _acls(text: str) -> dict[str, list[str]]:
+    """ACL name -> [type, args...] of the rendered config."""
+    out: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        if line.startswith("acl "):
+            _, name, *rest = line.split()
+            assert name not in out, f"acl {name} defined twice"
+            out[name] = rest
+    return out
+
+
+def _lookup_acls(acls: dict[str, list[str]]) -> set[str]:
+    """ACLs whose evaluation can send a DNS query."""
+    slow = set()
+    for name, (kind, *args) in acls.items():
+        if kind in _SLOW_TYPES or (kind in _NAME_TYPES and "-n" not in args[:2]):
+            slow.add(name)
+    return slow
+
+
+def _access(text: str) -> list[tuple[str, list[str]]]:
+    return [(line.split()[1], line.split()[2:]) for line in text.splitlines() if line.startswith("http_access ")]
+
+
+@pytest.mark.parametrize("hermes_login", [False, True])
+def test_squid_name_acls_never_reverse_lookup(hermes_login: bool) -> None:
+    """P1-11: every dstdomain/dstdom_regex carries -n, so an IP-literal request is never matched
+    through its PTR name; the only lookup ACL left is the resolved-IP deny."""
+    text = render.render_squid(_bundle("  egress_extra: [charts.jetstack.io]"), "0" * 64, [NS], TEMPLATE,
+                               hermes_login=hermes_login)  # fmt: skip
+    acls = _acls(text)
+    names = {n: a for n, a in acls.items() if a[0] in _NAME_TYPES}
+    assert {n for n in names if n.startswith("cat_")} >= {"cat_kiro_core", "cat_github_read", "cat_pkg_helm"}
+    assert {"denied_domains", "ip_literal"} <= set(names)
+    for name, (_kind, *args) in names.items():
+        assert args[0] == "-n", name
+    assert _lookup_acls(acls) == {"denied_dst"}
+    assert acls["denied_dst"][0] == "dst"
+
+
+@pytest.mark.parametrize("hermes_login", [False, True])
+def test_squid_no_lookup_before_a_category_match(hermes_login: bool) -> None:
+    """P1-12: no deny line uses a lookup ACL, and on every allow line the resolved-IP deny comes
+    after the port, the source and the category, so only allowed names are ever resolved."""
+    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, hermes_login=hermes_login)
+    acls = _acls(text)
+    slow = _lookup_acls(acls)
+    lines = _access(text)
+    assert lines[-1] == ("deny", ["all"])
+    allows = [tokens for verdict, tokens in lines if verdict == "allow"]
+    assert allows
+    for verdict, tokens in lines:
+        if verdict == "deny":
+            assert not {t.lstrip("!") for t in tokens} & slow, tokens
+    for tokens in allows:
+        port, src, dst, *rest = tokens
+        assert port.startswith("port_") and (src == "src_host" or src.startswith("pool_")), tokens
+        assert dst == "all" or dst.startswith("cat_"), tokens
+        assert rest == ["!denied_dst"], tokens  # DESIGN §11.3: resolved-IP deny for every allowed name
+    first_allow = next(i for i, (verdict, _) in enumerate(lines) if verdict == "allow")
+    assert ("deny", ["ip_literal"]) in lines[:first_allow]
+
+
+_LITERALS = [
+    "203.0.113.7", "203.0.113.7.", "3405803783", "0xcb007107", "0xCB.0.0x71.07", "0313.0.0161.07", "127.1",
+    "10.1", "0", "::1", "2001:db8::7", "[2001:db8::7]", "::ffff:10.0.0.1", "fe80::1%eth0",
+]  # fmt: skip
+_NAMES = [
+    "api.github.com", "1password.com", "123.com", "0x00.net", "cafe.de", "1e100.net", "a.b", "100.64.example",
+    "runtime.us-east-1.kiro.dev", "10.in-addr.arpa",
+]  # fmt: skip
+
+
+def test_ip_literal_patterns_match_literals_only() -> None:
+    """squid matches dstdom_regex (POSIX ERE, -i) against the request host; Python re agrees on
+    these patterns. Every inet_aton/getaddrinfo numeric form is caught, no DNS name is."""
+    pats = [re.compile(p, re.IGNORECASE) for p in render.IP_LITERAL_PATTERNS]
+    for host in _LITERALS:
+        assert any(p.search(host) for p in pats), host
+    for host in _NAMES:
+        assert not any(p.search(host) for p in pats), host
+
+
+def test_squid_pinger_off_and_cidrs_validated() -> None:
+    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE)
+    assert "pinger_enable off\n" in text  # no ICMP helper (it could not open a raw socket anyway)
+    assert "0.0.0.0/8" in _acls(text)["denied_dst"]  # a name resolving to 0.0.0.0 reaches squid's own lo
+    bundle = _bundle()
+    denied = bundle.egress.always_denied.model_copy(update={"cidrs": ["10.0.0.0/8 all"]})
+    egress = bundle.egress.model_copy(update={"always_denied": denied})
+    with pytest.raises(ValueError):
+        render.render_squid(render.ConfigBundle(bundle.policy, bundle.targets, egress, bundle.profile), "x", [NS],
+                            TEMPLATE)  # fmt: skip

@@ -51,6 +51,10 @@ ip6tables -A OSSBOT-OUT -m owner --uid-owner ossnobody -p tcp --dport 53 -j DROP
 ip6tables -A OSSBOT-OUT -m owner --uid-owner ossnobody -o lo -j ACCEPT
 ip6tables -A OSSBOT-OUT -m owner --uid-owner ossnobody -j DROP
 ip6tables -C OUTPUT -j OSSBOT-OUT 2>/dev/null || ip6tables -I OUTPUT 1 -j OSSBOT-OUT
+ip6tables -N OSSBOT-IN 2>/dev/null || ip6tables -F OSSBOT-IN
+ip6tables -A OSSBOT-IN -i docker0 -j DROP
+ip6tables -A OSSBOT-IN -i br-+ -j DROP
+ip6tables -C INPUT -j OSSBOT-IN 2>/dev/null || ip6tables -I INPUT 1 -j OSSBOT-IN
 ip6tables -N OSSBOT-FWD 2>/dev/null || ip6tables -F OSSBOT-FWD
 ip6tables -A OSSBOT-FWD -i docker0 -j DROP
 ip6tables -A OSSBOT-FWD -o docker0 -j DROP

@@ -1,12 +1,18 @@
 # ossbot squid configuration (DESIGN §11.2-11.3). RENDERED by `ossbot.ctl.render squid`; do not edit.
 # Config snapshot: {{ snapshot_hash }}
 # CONNECT host matching only, no TLS interception. Callers: 3128 = sandboxes (profile by source
-# pool), 3140/3141/3150 = host uids via the bridge (src 10.212.0.1 only). Denies come first.
+# pool), 3140/3141/3150 = host uids via the bridge (src 10.212.0.1 only).
+# No DNS for a name the caller may not reach (ADR-0005 addendum, Phase 1 review P1-11/P1-12):
+# every name ACL is `-n` (never a reverse lookup), IP-literal targets are denied, every deny ahead
+# of the allows is a fast ACL, and the only `dst` ACL (resolved-IP deny) is evaluated last on an
+# allow line, after the port, the source and the category have matched.
 
 {% for l in listeners -%}
 http_port {{ l.bind }} name={{ l.name }}
 {% endfor %}
 dns_nameservers {{ nameservers | join(" ") }}
+pinger_enable off
+visible_hostname ossbot-proxy
 cache deny all
 via off
 forwarded_for delete
@@ -28,18 +34,19 @@ acl src_host src {{ host_src }}
 acl pool_{{ p.name }} src {{ p.cidr }}
 {% endfor %}
 {% for name, hosts in categories.items() -%}
-acl cat_{{ name }} dstdomain {{ hosts | join(" ") }}
+acl cat_{{ name }} dstdomain -n {{ hosts | join(" ") }}
 {% endfor -%}
-acl denied_domains dstdomain {{ denied_domains | join(" ") }}
+acl denied_domains dstdomain -n {{ denied_domains | join(" ") }}
+acl ip_literal dstdom_regex -n -i {{ ip_literal_patterns | join(" ") }}
 acl denied_dst dst {{ denied_cidrs | join(" ") }}
 
 http_access deny !Safe_ports
 http_access deny CONNECT !SSL_ports
 http_access deny denied_domains
-http_access deny denied_dst
+http_access deny ip_literal
 # 3128 serves only the task pools, never the host side of the bridge.
 http_access deny port_sandbox src_host
 {% for r in rules -%}
-http_access allow port_{{ r.port }} {{ r.src }} {{ r.dst }}
+http_access allow port_{{ r.port }} {{ r.src }} {{ r.dst }} !denied_dst
 {% endfor -%}
 http_access deny all

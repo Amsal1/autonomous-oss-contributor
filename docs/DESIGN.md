@@ -1206,7 +1206,9 @@ Squid `dstdomain` entries; a leading dot means the domain and all subdomains.
 | `pkg_helm` | per-target extras (e.g. `charts.jetstack.io`) in targets.yaml `egress_extra` (snapshot only) | fetch, validate |
 | `container_registries` (Phase 2) | `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`, `ghcr.io`, `pkg-containers.githubusercontent.com`, `quay.io`, `.quay.io`, `cdn.quay.io`, `registry.k8s.io`, `.pkg.dev`, `public.ecr.aws`, `gcr.io` | stack |
 | `web_public` | any host, minus denies below | research, hermes (3141) |
-| always denied | RFC1918, `100.64.0.0/10`, `169.254.0.0/16`, `127.0.0.0/8`, `::1`, `fc00::/7`, `fe80::/10` (by resolved IP, `dst` ACL), `.github.io`, `gist.github.com`, `uploads.github.com` | all |
+| always denied | RFC1918, `100.64.0.0/10`, `169.254.0.0/16`, `127.0.0.0/8`, `0.0.0.0/8`, `::1`, `fc00::/7`, `fe80::/10` (by resolved IP, `dst` ACL), `.github.io`, `gist.github.com`, `uploads.github.com`, IP-literal targets (any numeric IPv4 form, IPv6) | all |
+
+ACL evaluation (Phase 1 review P1-11/P1-12, ADR-0005 addendum): every name ACL is `dstdomain -n` / `dstdom_regex -n`, so squid never reverse-resolves an IP literal to match a category. The deny lines ahead of the allows use only fast ACLs. The resolved-IP deny is the last ACL of each allow line (`allow port_X <src> <category> !denied_dst`), so squid resolves only names the caller may reach. squid's own startup needs no lookup (`visible_hostname`), and its ICMP pinger is off.
 
 Learn mode: `ossctl egress learn --profile <p> --minutes 30` switches one profile to allow-all-and-log for one supervised run (operator, Telegram FYI, refused while dry-run is off), then prints hosts seen. Required once at implementation to pin the Kiro host set **[VERIFY]**.
 
@@ -1214,7 +1216,7 @@ Learn mode: `ossctl egress learn --profile <p> --minutes 30` switches one profil
 
 Every rule lives in an ossbot-owned chain, referenced by exactly one jump at position 1 of its parent chain. Re-applying flushes and refills the chain (`iptables -F OSSBOT-…`), so ordering is deterministic. `--check` compares the chain contents and jump positions.
 
-`ossbot-firewall.service` (before Docker): `OSSBOT-IN` and `OSSBOT-OUT`, plus ip6tables.
+`ossbot-firewall.service` (before Docker): `OSSBOT-IN` and `OSSBOT-OUT`, plus ip6tables: `OSSBOT-OUT` (the same uids, DNS `DROP` then `lo` ACCEPT then `DROP`), `OSSBOT-IN` (`-i docker0` and `-i br-+` DROP: no IPv6 from any container to a host service, egress threat table) and `OSSBOT-FWD` (no IPv6 forwarding on the Docker bridges).
 
 ```
 iptables -N OSSBOT-IN 2>/dev/null || iptables -F OSSBOT-IN
@@ -2656,6 +2658,7 @@ One container per profile via sandboxd with the `probe` entrypoint writing JSON:
 - `test_kill.ps1` (from Windows): `/kill` (fake Telegram injection via test hook) and `kill.ps1` → no `ossbot.sandbox=1` containers within 10 s, units stopped, gatekeeper 423 on outbound. Then two reboot cases (M5): (a) soft kill + `wsl --shutdown` + start → `killed.level == soft`, gatekeeper and proxy active in killed mode, runner/sandboxd/hermes inactive, `/status` answers; (b) `kill.ps1` + restart → `level == full`, only boot gate, `ossbot-firewall*`, watchdog and dockerfilter active (gatekeeper and proxy skipped by `ExecCondition`), dockerfilter refuses a create. `kill.ps1` with the distro stopped writes the marker and the next boot is killed with `level: full`. `kill.ps1` against a distro whose in-distro kill is made to hang (test hook `sleep 120`) returns within ~35 s after `wsl --terminate` (N8). `resume.ps1` clears flag and marker and starts the gatekeeper first, then proxy, sandboxd, runner, hermes.
 - `test_firewall_failclosed.sh` (M6): flush `OSSBOT-OUT` → `systemctl restart ossbot-runner` fails with the `--check` message; within 30 s the watchdog writes `killed` with reason `firewall_drift`; re-apply + resume → starts. Also: `systemctl restart docker` → `ossbot-firewall-docker` re-applies `OSSBOT-FWD` (PartOf).
 - `test_proxy_dns.sh` (M7): `docker exec ossbot-proxy getent hosts github.com` succeeds; a sandbox still cannot resolve `example.com`; the rendered `OSSBOT-IN` accept rule matches `/etc/resolv.conf`.
+- `test_egress_surface.sh` (Phase 1 review P1-11/P1-12, egress threat table in `docs/VERIFICATION.md`): per host port and per sandbox pool, random-label and IP-literal CONNECTs get 403, and a raw-table string-match meter shows that the proxy sent no DNS or PTR query for them. Hermes's `web_public` lookup is the meter control. It also covers ICMP, raw sockets, IPv6 and direct IP from sandboxes and service uids, the host listeners, the proxy netns, and the Hyper-V layer (root's non-80/443 egress blocked; SKIP when not applied).
 - `test_config_write.sh` (M8): gatekeeper `PUT /v1/models/coder` succeeds and leaves no temp file; `sudo -u ossrunner touch /mnt/d/Work/autonomous-oss-contributor/config/x` fails; the runner unit cannot write `config/` (`systemd-run --uid=ossrunner -p ReadOnlyPaths=… touch` → EROFS).
 - `test_audit_anchor.sh`: anchors appended every 5 min and on outbound write; `chattr +a` blocks truncation.
 - `test_hermes_install_hygiene.sh` (R4-N4), against a local mirror of the pinned tag: a symlink planted at `~hermes/.hermes/hermes-agent.prev` or at `~hermes/.hermes` → the step refuses before any write; a hermes process that survives the stop → refuses; a forced `uv sync` failure → `$D` is restored from `$D.prev` and Hermes starts on the old tree; the staging dir is root 0700 and empty afterwards.

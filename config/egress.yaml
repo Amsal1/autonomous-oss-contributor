@@ -29,5 +29,6 @@ host_callers:
   hermes: {port: 3141, categories: [kiro_core, kiro_idc_login, web_public]}
   gatekeeper: {port: 3150, categories: [gatekeeper]}
 always_denied:
-  cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, "::1/128", "fc00::/7", "fe80::/10"]
+  # 0.0.0.0/8: a name resolving to 0.0.0.0 would make squid connect to its own loopback.
+  cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 0.0.0.0/8, "::1/128", "fc00::/7", "fe80::/10"]
   domains: [.github.io, gist.github.com, uploads.github.com, checkpoint-api.hashicorp.com]

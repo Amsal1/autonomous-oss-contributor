@@ -182,6 +182,8 @@ Phase 1 review round 1 (`docs/review-phase1.md`) added to this phase: per-uid DN
 
 Phase 1 review round 2 added: systemd-resolved masked and checked by `ossbot-firewall --check`, with per-uid varlink/D-Bus probes (P1-6, ADR-0005 addendum); kill invalidation in the resume paths (P1-7); the watchdog's lifecycle exemption limited to scope `distro` (P1-8); `lifecycle.drain_timeout_s` capped at 120 (P1-9); content-only app-deploy changes with an itemized rsync log (P1-10).
 
+Phase 1 review round 3 added: `-n` on every squid name ACL, IP-literal targets denied on every port, and the resolved-IP deny moved to the end of each allow line, so squid resolves only names the caller may reach (P1-11, P1-12, ADR-0005 addendum). `0.0.0.0/8` was added to the always-denied set, the pinger is off and `visible_hostname` is set. The systematic egress pass added ip6tables `OSSBOT-IN` (no IPv6 from containers to host services) and `tests/system/test_egress_surface.sh`, which is part of `tests/system/*.sh` above. Its threat table is in `docs/VERIFICATION.md`.
+
 ---
 
 ## Phase 2: Telegram UX, pipeline, Kiro and Hermes, model switch, open-source docs, hardening

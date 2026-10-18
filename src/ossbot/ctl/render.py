@@ -55,6 +55,10 @@ DEFAULT_SQUID_OUT = Path("/etc/ossbot/proxy/squid.conf")
 DEFAULT_SNAPSHOT_ROOT = Path("/srv/ossbot/config-snapshot")
 RESOLVED_UNIT_LINK = Path("/etc/systemd/system/systemd-resolved.service")
 RESOLVED_VARLINK = Path("/run/systemd/resolve/io.systemd.Resolve")
+# Request hosts that are IP literals in any form getaddrinfo/inet_aton accepts (dotted, short,
+# decimal, octal, hex; IPv6 with or without brackets). POSIX ERE for squid `dstdom_regex -n -i`;
+# no DNS name can match (a TLD is never all-numeric, and no host name contains ':' or '[').
+IP_LITERAL_PATTERNS = (r"^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+)){0,3}\.?$", ":", r"^\[")
 
 
 class RenderError(ValueError):
@@ -160,7 +164,9 @@ def squid_context(
         "pools": pools,
         "categories": {k: v for k, v in cats.items() if k in referenced},
         "denied_domains": _dedupe(egress.always_denied.domains),
-        "denied_cidrs": list(egress.always_denied.cidrs),
+        "ip_literal_patterns": list(IP_LITERAL_PATTERNS),
+        # never render anything but literal networks into the dst ACL
+        "denied_cidrs": [str(ipaddress.ip_network(c, strict=True)) for c in egress.always_denied.cidrs],
         "rules": rules,
     }
 
@@ -227,11 +233,15 @@ def firewall_plan(ns: str, uids: Mapping[str, str] | None = None) -> dict[str, l
         ("-i", "docker0", "-j", "DROP"), ("-o", "docker0", "-j", "DROP"),
         ("-i", "br-+", "-j", "DROP"), ("-o", "br-+", "-j", "DROP"),
     )  # fmt: skip
+    # No IPv6 from any container to a host service (link-local on the bridges included); the IPv4
+    # counterpart is OSSBOT-IN by source subnet. Egress review: the IPv6 row of the threat table.
+    in6 = (("-i", "docker0", "-j", "DROP"), ("-i", "br-+", "-j", "DROP"))
     return {
         "host": [
             Chain("iptables", "OSSBOT-IN", "INPUT", host_in),
             Chain("iptables", "OSSBOT-OUT", "OUTPUT", tuple(out)),
             Chain("ip6tables", "OSSBOT-OUT", "OUTPUT", tuple(out6)),
+            Chain("ip6tables", "OSSBOT-IN", "INPUT", in6),
             Chain("ip6tables", "OSSBOT-FWD", "FORWARD", fwd6),
         ],
         "docker": [
