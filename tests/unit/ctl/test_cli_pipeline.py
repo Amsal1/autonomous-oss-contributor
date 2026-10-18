@@ -73,6 +73,40 @@ def test_targets_verify_rows() -> None:
     assert rows[1]["detail"].startswith("no push for")
 
 
+def test_targets_verify_unit_has_the_runner_hardening() -> None:
+    """F006-R2-9: the transient ossrunner unit carries every hardening line of ossbot-runner.service."""
+    unit = (Path(__file__).resolve().parents[3] / "systemd" / "ossbot-runner.service").read_text(encoding="utf-8")
+    keys = ("UMask", "NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "CapabilityBoundingSet",
+            "RestrictSUIDSGID", "LockPersonality", "SystemCallArchitectures", "RestrictAddressFamilies",
+            "SystemCallFilter", "SystemCallErrorNumber", "EnvironmentFile")  # fmt: skip
+    wanted = [ln for ln in unit.splitlines() if ln.split("=", 1)[0] in keys]
+    assert len(wanted) == len(keys)
+    argv = cli.targets_verify_argv()
+    props = [argv[i + 1] for i, arg in enumerate(argv) if arg == "-p"]
+    assert sorted(props) == sorted(wanted)
+    assert "--uid=ossrunner" in argv and argv[-2:] == ["-m", "ossbot.runner.verify_targets"]
+
+
+def test_targets_verify_refuses_when_the_firewall_check_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    ran: list[list[str]] = []
+
+    def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        ran.append(argv)
+        return subprocess.CompletedProcess(argv, 1, "", "egress rules missing")
+
+    monkeypatch.setattr(cli, "_require_root", lambda what: None)
+    monkeypatch.setattr(cli, "read_current", lambda root: ("h", {}))
+    monkeypatch.setattr(cli, "parse_bundle", lambda files: SimpleNamespace(targets=None))
+    monkeypatch.setattr("ossbot.common.config.all_targets", lambda targets: [])
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    result = CliRunner().invoke(cli.app, ["targets", "verify"])
+    assert result.exit_code != 0 and "firewall check failed" in result.output
+    assert ran == [[cli.FIREWALL_CHECK, "--check"]]  # the token is never used while the check fails
+
+
 RERUN_CASES = [({"symlink": True, "settings": True}, "PASS"), ({"symlink": True, "settings": False}, "FAIL"),
                ({}, "FAIL")]  # fmt: skip
 

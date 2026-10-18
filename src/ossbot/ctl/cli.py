@@ -594,6 +594,23 @@ def kiro_smoke(timeout: Annotated[int, typer.Option(help="job timeout in s")] = 
     raise typer.Exit(0 if report.get("answer") == "pong" else 1)
 
 
+FIREWALL_CHECK = "/opt/ossbot/bin/ossbot-firewall"
+# The hardening of systemd/ossbot-runner.service, for the transient unit of `targets verify`
+# (tests/unit/ctl/test_cli_pipeline.py compares the two).
+TARGETS_VERIFY_PROPERTIES = (
+    "EnvironmentFile=/etc/ossbot/secrets/runner.env", "UMask=0027", "NoNewPrivileges=yes", "ProtectSystem=strict",
+    "ProtectHome=yes", "PrivateTmp=yes", "CapabilityBoundingSet=", "RestrictSUIDSGID=yes", "LockPersonality=yes",
+    "SystemCallArchitectures=native", "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+    "SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register", "SystemCallErrorNumber=EPERM",
+)  # fmt: skip
+
+
+def targets_verify_argv() -> list[str]:
+    props = [arg for prop in TARGETS_VERIFY_PROPERTIES for arg in ("-p", prop)]
+    return ["/usr/bin/systemd-run", "--quiet", "--collect", "--wait", "--pipe", "--uid=ossrunner", "--gid=ossrunner",
+            *props, "/opt/ossbot/app/.venv/bin/python", "-m", "ossbot.runner.verify_targets"]  # fmt: skip
+
+
 @targets_app.command("verify")
 def targets_verify() -> None:
     """Read every enabled target with the fine-grained read token (root; runs as ossrunner via 3140)."""
@@ -606,11 +623,11 @@ def targets_verify() -> None:
     except (OSError, ValueError, ConfigError) as exc:
         _fail(f"no usable config snapshot ({exc}); ossctl config reload")
     repos = [t.repo for t in all_targets(bundle.targets) if t.enabled]
-    argv = ["/usr/bin/systemd-run", "--quiet", "--collect", "--wait", "--pipe", "--uid=ossrunner", "--gid=ossrunner",
-            "-p", "EnvironmentFile=/etc/ossbot/secrets/runner.env", "-p", "PrivateTmp=yes",
-            "/opt/ossbot/app/.venv/bin/python", "-m", "ossbot.runner.verify_targets"]  # fmt: skip
+    check = subprocess.run([FIREWALL_CHECK, "--check"], capture_output=True, text=True, timeout=60, check=False)
+    if check.returncode != 0:  # the runner unit's ExecStartPre: no read with the token while egress is open
+        _fail(f"firewall check failed (exit {check.returncode}): {check.stderr.strip()[-300:]}")
     req = json.dumps({"repos": repos, "stale_days": DiscoveryFilters().min_maintainer_activity_days})
-    proc = subprocess.run(argv, input=req, capture_output=True, text=True, timeout=900, check=False)
+    proc = subprocess.run(targets_verify_argv(), input=req, capture_output=True, text=True, timeout=900, check=False)
     try:
         doc = json.loads(proc.stdout.strip().splitlines()[-1])
     except (ValueError, IndexError):
