@@ -41,6 +41,7 @@ Model knowledge was stale. Everything below was checked against the live documen
 | General limits | | | Text 4,096 and caption 1,024 characters after entity parsing; `callback_data` 1–64 bytes; `answerCallbackQuery` text ≤ 200; about 1 message/s per chat; unfetched updates kept ≤ 24 h; bot download ≤ 20 MB, upload ≤ 50 MB |
 | Mini Apps | Phase-2 only (ADR-0019 B3) | Partial | Init data is verified by HMAC with the bot token **or** by Ed25519 `signature` with Telegram's public key (no token needed). `DeviceStorage` 5 MB per user; `SecureStorage` 10 items (Keychain/Keystore). Methods are refused from foreign origins since 2026-07-20 |
 | Telegram Serverless (2026-10-06) | **Rejected** for this bot | n/a | BotFather manages a webhook, and `getUpdates` is refused while a webhook is set. That breaks ADR-0004 (ADR-0019) |
+| Telegraph API (`api.telegra.ph`) | Opt-in public articles for long assistant answers only (§6.8) | n/a (plain HTTPS) | Pages are **public to anyone with the URL**. The page path is derived from the title and date (`Title-MM-DD`), so URLs are guessable unless the title carries randomness. Methods: `createAccount` (returns an `access_token`), `createPage`, `editPage`, `getPage` (no token), `getViews`, `revokeAccessToken`. There is **no delete**: blanking via `editPage` is the only option. Content ≤ 64 KB; title 1–256 characters. Tags: `a aside b blockquote br code em figcaption figure h3 h4 hr i iframe img li ol p pre s strong u ul video`. The only attributes are `href` and `src`, so there is no syntax highlighting, no tables and no collapsible blocks. Pages open as Instant View inside Telegram |
 
 Prior art:
 - `SanNw/opencode-telegram` keeps the agent server on loopback. It tunnels only an authenticated Bridge, protected by Telegram-signed init data, an owner check and a P-256 trusted-device key, and its HTML previews are static and sandboxed.
@@ -65,6 +66,7 @@ ossbot keeps the owner-only rule and the static, script-free previews. It does *
 - **D14 Kill.** Typed `/kill` stays immediate. The dashboard 🛑 button needs a second tap within 10 s.
 - **D15 Offline signal.** The pinned dashboard's relative `<tg-time>` keeps ageing on the client while the laptop is off. On a graceful `down` the bot's short description says it is offline. On reconnect, pending updates are processed with their age shown.
 - **D16 Component kit.** All rendering goes through `ossbot.gatekeeper.telegram.ui`: card, list, pager, confirm, picker, progress, toast, doc, rich builder. Features register through an entry-point registry.
+- **D17 Telegraph articles** (user suggestion, evaluated in §6.8). Off by default (`telegraph.enabled: false`). When enabled, `📖 Open as article` is offered **per message** only on eligible assistant answers, and publishing needs a tap plus a confirm tap. The gatekeeper publishes through a new egress category, after secret and personal-data scans. Telegraph is never used for review content, digests, images, health or nutrition data, or anything else. There is **no automatic publishing**: a length threshold only decides whether the button is offered. This overrides the "automatic above a threshold" option, because a public, undeletable publication must be a deliberate act, and rich messages already show answers up to 32,768 characters in the chat.
 
 ## 3. Safety invariants
 Unchanged and binding (DESIGN I1–I9, ADR-0004, ADR-0014):
@@ -85,8 +87,9 @@ New in this CR. Each invariant names the layer that enforces it:
 | U6 | **Model-authored text is labelled.** Planner rationale, risk claims, self-review, "coder says" and Hermes text are prefixed 🤖 and shown in a quote. Gatekeeper-verified facts carry ✅ and no 🤖 | `telegram/ui/kit.py` `claim()` vs `fact()` | Prompt injection must not look like verification |
 | U7 | **P0 alerts are never silenced** by quiet hours, `/quiet` or `/notify` | `telegram/notify.py` | Safety |
 | U8 | **Bot-command links in untrusted classic text are defused.** U+2060 WORD JOINER goes after `/` when a letter follows. This is display only and is never applied to bytes that will be published (those are always in `<pre>`) | `escape.defuse_commands` | A tap on a link like "/dryrun" inside a Hermes answer would send that command |
-| U9 | **Opt-in surfaces stay off until confirmed.** The mirror and the phase-2 Mini App are enabled only through `config/telegram.yaml` plus a human-confirmed `/reload`, plus a passing doctor probe | config snapshot (DESIGN §7.9) | Security-relevant config never changes silently |
+| U9 | **Opt-in surfaces stay off until confirmed.** The mirror, Telegraph articles and the phase-2 Mini App are enabled only through `config/telegram.yaml` plus a human-confirmed `/reload`, plus a passing doctor probe | config snapshot (DESIGN §7.9) | Security-relevant config never changes silently |
 | U10 | **Topic routing never changes authorization.** Every update still needs `from.id == owner`, `chat.type == private` and `chat.id == owner`. `message_thread_id` decides presentation and routing only | `telegram/auth.py` (unchanged) | |
+| U11 | **Nothing is published to the web except approved GitHub actions and explicitly confirmed Telegraph articles.** An article can be created only by the gatekeeper, from an eligible `chat_answer` view (§6.8), after a publish tap and a confirm tap, and after the secret and personal-data scans pass. LLM components can't reach Telegraph at all (`telegra.ph`, `api.telegra.ph` and `edit.telegra.ph` are always denied for them) | `gatekeeper/telegraph.py` (the only module importing `telegraph_writer.py`, import-linter) + egress categories | The publish is public and irreversible, and its token stays with the deterministic component |
 
 ## 4. Information architecture
 
@@ -528,6 +531,42 @@ Features are registered in the gatekeeper (§12.3). Hermes calls the plugin tool
   ```
   The first use per provider asks for consent once: "This sends the photo (EXIF stripped) to <provider>. Allow?" `[Allow once] [Always] [Cancel]`.
 
+### 6.8 Long-form content: Telegraph articles vs the other options (D17)
+Long content has four possible homes. The decision is per content type:
+
+| Content | In-chat rich message (≤ 32,768 characters) | `.md`/`.html` document | Telegraph article (Instant View) | Mini App (phase 2) |
+|---|---|---|---|---|
+| Long Hermes answers, research write-ups | **Default** | `answer.md` when the answer is > 3 parts | **Opt-in per message** when eligible (below) | No |
+| Daily/weekly digest | **Default** | No | **No**: holds pending approvals, vetting state and personal stats | No |
+| PR review content (cards, explorer, diffs, body, commit message, interdiff, vetting and maintainer notes, test logs) | Default (ADR-0019 A) | `.patch` + `.html` | **Never**: pre-approval and unreleased content; no highlighting, tables or details; 64 KB cap | Phase 2 only (ADR-0019 B3) |
+| Images, health and nutrition data, feature cards, skill text | Default | No | **Never** | No |
+
+**Eligibility.** The gatekeeper adds `[📖 Open as article]` to a `chat_answer` view only when **all** of these hold:
+- `telegraph.enabled`;
+- the answer is ≥ `telegraph.offer_min_chars` (default 1,500) and ≤ `max_content_kb` (60 KB) once converted;
+- the turn had no attachments;
+- the turn made no `memory`, `session_search` or `ossbot_*` tool calls (they may carry personal or OSS data);
+- the answer is not in a feature topic or in ✅ Reviews.
+
+The user's question is never included. Only the answer text is published, plus the source links.
+
+**Flow** (two taps, like any outward action):
+1. `📖 Open as article` (token `article_publish`, bound to the answer message, 24 h) edits the button row to a confirm panel: "Publish as a public Telegraph page? Anyone with the link can read it; Telegraph can't delete pages — Unpublish only blanks it." `[📖 Publish](danger) [↩️ Cancel]`. The confirm token is single-use, 5 min.
+2. On Confirm, the gatekeeper:
+   - rebuilds the content from the stored answer (`chat_turns`, not from the callback);
+   - runs the scans: policy secret patterns, its own secret values, the Kiro key hash check, `gitleaks stdin`, the confidentiality floor and denylist (ADR-0015), and the profile's personal values (email, phone, real name). There is no override; a hit gives "Not published: the answer contains <class>";
+   - converts `md2blocks` output to Telegraph nodes. Only `p h3 h4 ul ol li pre code blockquote b i s u hr br` are used, and `a` with http(s) `href` only. No `img`, `iframe`, `video` or `figure`, so no remote media or tracking. Tables become `pre` text;
+   - calls `createPage` with title = the first heading (or the first 60 characters) + ` · ` + 8 random base32 characters, which makes the path unguessable. `author_name` and `author_url` are empty by default (`telegraph.author_name` is optional), so no identity is attached.
+3. A reply to the answer: `📖 <b>Published</b> · <title> · public link, not deletable (only blanked)`, with link preview on (Instant View) and `[📖 Open ↗](url) [📋 Copy link] [🗑 Unpublish]`.
+4. **Unpublish** (confirm tap): `editPage` with title "Removed" and one paragraph "This page was removed by its author." The UI says plainly that cached copies, Instant View caches and anyone who opened it may still have the content.
+5. **`/articles`** lists the published pages from `telegraph_pages`, with Unpublish buttons.
+
+**Egress and secrets:**
+- New egress category `telegraph` = `api.telegra.ph` for the **gatekeeper only** (proxy port 3150).
+- `api.telegra.ph`, `edit.telegra.ph` and `telegra.ph` join `always_denied` for every other profile, in every egress mode. The API accepts writes as plain GETs (`createAccount` and `createPage` work with query strings), so a prompt-injected `web_fetch` could otherwise create accounts and publish. The HTTPS proxy filters by hostname, not by path, so the reader host can't be split from upload paths. The reasoning is the same as for `uploads.github.com` (CR-002). This amends CR-002's egress lists. Cost: research can't read Telegraph pages. **[VERIFY]** the full Telegraph host list.
+- `TELEGRAPH_ACCESS_TOKEN` lives in `gatekeeper.env` (0600). It is created by `ossctl telegraph setup`, which calls `createAccount` with `short_name: "ossbot"`. `revokeAccessToken` is available through `ossctl telegraph rotate`.
+- `telegraph_writer.py` hard-codes the base URL `https://api.telegra.ph/` and the methods `createPage`, `editPage` and `revokeAccessToken`. It is importable only by `gatekeeper/telegraph.py`.
+
 ## 7. Notifications
 
 ### 7.1 Priorities
@@ -610,6 +649,7 @@ Arguments are chosen with pickers (`Picker`, ≤ 8 options per page, ≤ 3 per r
 | `/memory` | personal | §6.6 | |
 | `/quiet` · `/notify` · `/digest` | personal | §7 | |
 | `/remind` | personal | List or cancel reminders (§13 item 3) | v1 integration |
+| `/articles` | read | Published Telegraph pages with `[🗑 Unpublish]` (confirm) | Only when `telegraph.enabled` (§6.8) |
 
 ### 8.2 Confirmation patterns
 - **Two-tap approval** (S1/S8) for every public action and for skill activation. Unchanged.
@@ -777,6 +817,7 @@ Token purposes added:
 - `chat_followup`, `chat_retry`, `chat_stop_fallback`, `use_as_comment`.
 - `quiet_set`, `notify_toggle`, `digest_set`, `settings_set`.
 - `feature_action`.
+- `article_publish` (24 h), `article_confirm` (single-use, 5 min), `article_unpublish` (§6.8).
 - `skill_approve`/`skill_confirm`/`skill_reject` (the approval machinery).
 - `mirror_open` is a URL button, so it needs no token.
 
@@ -813,6 +854,7 @@ v1 means it fits inside the existing architecture and is built with CR-003. v1.x
 | 15 | Inline mode (`@bot query` in other chats) | Ask Hermes from any chat | None | Owner-only (`from.id` filter); assistant answers only, never OSS data; off by default | Phase 2 |
 | 16 | Mini App review dashboard (ADR-0019 B3) | Full web diff viewer | Tailscale (Funnel) account | S4 rules: optional, read-only, Ed25519, no secrets, never approves | Phase 2 (only if A + C fall short) |
 | 17 | Weather/news line in the digest | Daily context | Open-Meteo (no key) | Read-only public API via Hermes | Phase 2 |
+| 18 | Telegraph articles for long assistant answers (§6.8, D17) | Instant View reading of long write-ups | `TELEGRAPH_ACCESS_TOKEN` (gatekeeper) | Public and undeletable: opt-in per message, two taps, scans, eligibility rules, gatekeeper-only egress (U11) | v1.x, off by default |
 
 ## 14. Implementation
 
@@ -838,6 +880,7 @@ Python stack, unchanged and locked: Python 3.12, python-telegram-bot 22.8 (raw `
 | `src/ossbot/gatekeeper/packaging.py`, `derive.py` | Call `interdiff.py`; retention amendment (§5.7) |
 | `src/ossbot/common/gitcmd.py` | `INTERDIFF`, `RANGE_DIFF`, mirror plumbing argv constants |
 | `src/ossbot/gatekeeper/review_mirror.py`, `review_mirror_writer.py` | **New**, opt-in (ADR-0019 C); import-linter contract "only review_mirror imports review_mirror_writer" |
+| `src/ossbot/gatekeeper/telegraph.py`, `telegraph_writer.py` | **New**, opt-in (§6.8). Import-linter: only `telegraph` imports `telegraph_writer`; egress category `telegraph` (gatekeeper only); `config/egress.yaml` `always_denied` += `telegra.ph`, `api.telegra.ph`, `edit.telegra.ph` for every other profile |
 | `src/ossbot/gatekeeper/features/{__init__,registry}.py` | **New** registry (§12.3); `api/features.py` route `POST /v1/features/{feature}/cards` (role hermes) |
 | `src/ossbot/gatekeeper/api/notify.py` | Optional `priority` (P1/P2 only from Hermes; P0 is never accepted from Hermes) |
 | `hermes/plugins/ossbot/` | Tools `ossbot_feature_card`, `ossbot_reminder_create`; follow-up instruction text |
@@ -879,6 +922,8 @@ CREATE TABLE review_mirror (
   tree_equal INTEGER NOT NULL, pushed_at TEXT, closed_at TEXT, last_error TEXT, PRIMARY KEY (cid, rev));
 CREATE TABLE reminders (id TEXT PRIMARY KEY, due_at TEXT NOT NULL, text TEXT NOT NULL, created_by TEXT NOT NULL,
   thread_id INTEGER, fired_at TEXT, cancelled_at TEXT);
+CREATE TABLE telegraph_pages (path TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL, turn_id INTEGER NOT NULL,
+  content_sha256 TEXT NOT NULL, published_at TEXT NOT NULL, unpublished_at TEXT);   -- audit event on publish/unpublish
 ```
 `ui_tokens.purpose` is free text (the comment in `0001_init.sql` lists the purposes), so no CHECK constraint changes. The new purposes are listed in §12.2.
 
@@ -898,10 +943,11 @@ CREATE TABLE reminders (id TEXT PRIMARY KEY, due_at TEXT NOT NULL, text TEXT NOT
   effects: {merged: null}      # message_effect_id, [VERIFY]
   attachments: {max_mb: 20, album_window_s: 1.5}
   review_mirror: {enabled: false, poll_pending_s: 60, poll_other_s: 600}
+  telegraph: {enabled: false, offer_min_chars: 1500, max_content_kb: 60, author_name: ""}   # §6.8; never automatic
   features: {enabled: []}
   ```
 - **`config/profile.yaml`** (personal, gitignored): `telegram.timezone`, `telegram.quiet_hours`, `review_mirror.repo`.
-- **Secrets:** `GITHUB_REVIEW_MIRROR_TOKEN` (optional) in `gatekeeper.env`.
+- **Secrets:** `GITHUB_REVIEW_MIRROR_TOKEN` and `TELEGRAPH_ACCESS_TOKEN` (both optional) in `gatekeeper.env`.
 
 ### 14.4 python-telegram-bot gaps (raw `do_api_request`)
 
@@ -949,6 +995,10 @@ Everything else is PTB-native: topics, `style`, reactions, effects, scopes, pins
 | Digest stats read | Error | Digest sent without stats | "stats unavailable" | WARNING |
 | Feature card POST | Validation error | 422 to the plugin | Nothing (Hermes may answer in text) | INFO |
 | Feature card POST | > 30/h | 429 to the plugin | Nothing | WARNING |
+| Telegraph publish | Scan hit (secret / key / confidentiality / personal value) | No: nothing is sent | "Not published: the answer contains <class>" | WARNING (class only, never the match) |
+| Telegraph publish | Token missing / `ACCESS_TOKEN_INVALID` | Feature off until `ossctl telegraph setup` | "Article publishing is not set up" | WARNING |
+| Telegraph publish | Network / 5xx / `ok:false` other | Retried 2× (2, 8 s), then given up | "Publish failed (<error>)", with Retry (fresh confirm) | WARNING |
+| Telegraph unpublish | Any error | Retry button | "Unpublish failed; the page is still public" | ERROR |
 | `setMyCommands` / `setMyShortDescription` | Any error | Retried at the next state change | Stale menu or description | WARNING |
 
 ### 14.6 External input validation
@@ -970,6 +1020,7 @@ Everything else is PTB-native: topics, `style`, reactions, effects, scopes, pins
 | Follow-ups block | optional | ≤ 3 items; label ≤ 40; text ≤ 200; no hidden characters; not starting with `/`; no approval words | Item dropped |
 | Feature payload | yes | The feature's pydantic model (`extra="forbid"`; bounded numbers, e.g. protein 0–500 g; strings ≤ 200) | 422 |
 | `ossbot_reminder_create` | yes | `due_at` in the future, ≤ 365 d; text ≤ 500; ≤ 50 active | 422 |
+| Telegraph article content | n/a (gatekeeper-built) | From the stored `chat_turns` answer only; eligibility rules (§6.8); title 1–256 characters (≤ 80 + suffix used); converted nodes ≤ 60 KB (API limit 64 KB); tag and attribute allowlist; `href` http(s) only | Button not offered, or publish refused with the reason |
 | Mirror review/comment JSON | n/a | `user.login == profile.github_login`; body ≤ 65,536; `path` ∈ the rev's numstat; `line` int ≥ 1; `commit_id` == current `H'` else `outdated` | Ignored + WARNING |
 | `config/telegram.yaml` | yes | Strict schema; times `HH:MM`; weekly `Mon..Sun HH:MM`; numbers within ranges (`loud_cards_per_hour` 0–20, intervals ≥ the minimums in §11.4) | Snapshot load or reload refused (existing) |
 | `profile.yaml telegram.timezone` / `quiet_hours` | optional | IANA zone (`zoneinfo`); `HH:MM-HH:MM` (may wrap midnight) | Start refused with a message (consistent with the profile rules) |
@@ -991,6 +1042,7 @@ Everything else is PTB-native: topics, `style`, reactions, effects, scopes, pins
 - `test_mirror_tree.py`: sparse `B'`/`H'` in bare repos; the integrity check catches a tampered blob; `.ossbot-review/` collision refused.
 - `test_mirror_writer_scope.py`: any URL outside the mirror raises.
 - `test_feature_registry.py`: the import-linter contract and schema enforcement.
+- `test_telegraph.py`: eligibility, scans, node allowlist, random title suffix, unpublish.
 
 **Telegram** (fake Bot API, `-m telegram`):
 - golden cards S1/S6/S8/S12 in LIVE and DRY RUN for every action kind, plus the skill card;
@@ -1028,6 +1080,7 @@ Everything else is PTB-native: topics, `style`, reactions, effects, scopes, pins
 - **M2** (extends FEAT-005 item 23, FEAT-007): chat streaming via drafts and Stop, md2blocks, sources and footer, follow-ups, media UX, `/new` `/title` `/memory`.
 - **M3:** rich views for explorer, file, interdiff, tests and assistant (behind `auto`); digest; status card S10/S11; reminders (§13 item 3).
 - **M4** (opt-in): review mirror (ADR-0019 C) + `ossctl review-mirror`.
+- **v1.x:** Telegraph articles (§6.8; off by default, with `ossctl telegraph setup|rotate`).
 - **Phase 2:** feature registry consumers (nutrition log first), §13 v1.x and phase-2 items, Mini App (only if needed).
 
 Docs and AGENTS.md updates ship with M1. DESIGN §14 is updated to point here, and DESIGN §12.5 retention is amended.
@@ -1064,7 +1117,15 @@ Docs and AGENTS.md updates ship with M1. DESIGN §14 is updated to point here, a
     - the enable probe refuses a token whose foreign-write probe returns 422;
     - a GitHub Approve review never changes an approval.
 25. `config/telegram.yaml` rejects unknown keys and out-of-range values. `review_mirror.enabled: true` takes effect only after a confirmed `/reload` and a passing `ossctl review-mirror enable`.
-26. The import-linter contracts hold: features and chat do not import the approval, submit, writer or control modules, and only `review_mirror` imports `review_mirror_writer`.
+26. The import-linter contracts hold: features and chat do not import the approval, submit, writer or control modules; only `review_mirror` imports `review_mirror_writer`; only `telegraph` imports `telegraph_writer`.
+27. Telegraph (with a fake API):
+    - with `telegraph.enabled: false` no `📖` button exists;
+    - when enabled, the button appears only on eligible `chat_answer` views. It never appears on cards, explorer, file, digest, feature, Reviews-topic or attachment turns, or on turns that used memory, session_search or ossbot tools;
+    - publishing needs the publish tap and the confirm tap;
+    - an answer containing a secret pattern, the Kiro key, a confidentiality-floor string or the profile email is refused with nothing sent;
+    - the published nodes use only the allowlisted tags, and the title ends with the random suffix;
+    - Unpublish calls `editPage` with the removal text.
+28. Egress: `telegra.ph`, `api.telegra.ph` and `edit.telegra.ph` get 403 from every profile except the gatekeeper's `telegraph` category, in every egress mode, including `open`.
 
 ## 16. Out of scope
 - Building the Mini App (ADR-0019 B), Telegram Serverless, webhooks and any inbound component.
@@ -1075,6 +1136,7 @@ Docs and AGENTS.md updates ship with M1. DESIGN §14 is updated to point here, a
 - Multi-user support, groups and channels.
 - Implementing a specific reverse-image-search provider (needs a user decision, CR-002), calendar, and the other phase-2 items in §13.
 - Changing the approval/token core, the binding, or the Confirm sentences (S1, S2).
+- Automatic Telegraph publishing, and Telegraph for any content type other than eligible assistant answers (§6.8).
 
 ## 17. Items to verify at implementation
 Check by web search or live probe; record results in VERIFICATION.md or the ADR-0019 addendum.
@@ -1092,6 +1154,11 @@ Check by web search or live probe; record results in VERIFICATION.md or the ADR-
    - whether code-span URLs create cross-references;
    - the push protection error shape.
 10. Whether the GitHub Notifications API accepts fine-grained tokens (§13 item 7).
+11. Telegraph:
+    - the full host list used by the API and the web editor (`api.telegra.ph`, `edit.telegra.ph`, `telegra.ph`, and any upload host);
+    - that Instant View opens for `telegra.ph` links in the user's clients;
+    - current anonymous-upload behaviour;
+    - whether Telegram now offers any deletion path. The documented API (2016, still current) has none.
 
 ## 18. Mockups (`docs/ux/`)
 SVG phone screens (390 × 844 frame) with a constraints panel on each. Labels, rows, lengths and token sizes follow §11.4.
@@ -1124,4 +1191,5 @@ SVG phone screens (390 × 844 frame) with a constraints panel on each. Labels, r
 - GitHub Mobile (review pull requests, edit files): https://docs.github.com/en/get-started/using-github/github-mobile
 - Cloudflare Quick Tunnels (temporary, testing only, no SSE): https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
 - Tailscale Funnel (`ts.net` names, ports 443/8443/10000, relays don't decrypt): https://tailscale.com/docs/features/tailscale-funnel
+- Telegraph API (methods, no delete, `access_token`, 64 KB content, tag and attribute allowlist, Instant View): https://telegra.ph/api
 
