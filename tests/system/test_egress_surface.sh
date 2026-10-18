@@ -13,6 +13,11 @@
 # shellcheck source=tests/system/lib.sh disable=SC1091,SC2317,SC2016
 source "$(dirname "$0")/lib.sh"
 require_running
+# The DNS meter rows below need a mode where hermes and research have web_public but the llm pool
+# does not: egress mode research (§11.5). The other two modes are probed near the end; the trap
+# restores whatever mode the test found.
+save_egress_mode
+set_egress_mode research || { echo "$TEST_NAME: could not switch to egress mode research" >&2; restore_egress_mode; exit 2; }
 
 PROXY=10.212.0.2
 RAW=OSSBOT-TDNS-$$
@@ -36,6 +41,7 @@ cleanup() {
     sysctl -q -w kernel.io_uring_disabled=2
     systemctl start ossbot-watchdog.timer
   fi
+  restore_egress_mode
 }
 trap cleanup EXIT
 
@@ -89,8 +95,19 @@ raw_connect() {  # raw_connect USER PORT TARGET -> status line of a hand-written
   as "$1" timeout 15 bash -c 'exec 3<>"/dev/tcp/$1/$2"; printf "CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n" "$3" "$3" >&3
     head -n 1 <&3 | cut -d" " -f2' _ "$PROXY" "$2" "$3" 2>/dev/null || true
 }
-for target in gist.github.com.:443 GIST.GitHub.COM:443 x.github.io.:443 example.com:8443 example.com:22; do
+# CR-002: GitHub Pages and gists are github_user_content for hermes (and research) in every mode.
+for target in gist.github.com.:443 GIST.GitHub.COM:443 x.github.io.:443 gist.githubusercontent.com:443; do
+  expect "hermes via 3141 -> raw CONNECT $target allowed (github_user_content)" 200 "$(raw_connect hermes 3141 "$target")"
+done
+# Telegraph is a public publishing channel no LLM caller may reach (CR-003 U11); uploads.github.com
+# a write endpoint; non-443 CONNECT is refused.
+for target in telegra.ph:443 api.telegra.ph.:443 EDIT.Telegra.PH:443 uploads.github.com:443 example.com:8443 example.com:22; do
   expect "hermes via 3141 -> raw CONNECT $target denied" 403 "$(raw_connect hermes 3141 "$target")"
+done
+for spec in ossrunner:3140 gatekeeper:3150; do
+  for target in x.github.io.:443 gist.github.com:443 telegra.ph:443; do
+    expect "${spec%%:*} via ${spec##*:} -> raw CONNECT $target denied" 403 "$(raw_connect "${spec%%:*}" "${spec##*:}" "$target")"
+  done
 done
 # Cache manager requests are denied before any allow line (round 5 NIT), so web_public's `all`
 # never decides them (and squid does not resolve the host).
@@ -118,6 +135,9 @@ echo "label=$(connect "https://$LABEL.example.com/")"
 echo "ipv4=$(connect "https://203.0.113.$OCTET/")"
 echo "ipv6=$(connect "https://[2001:db8::$OCTET]/")"
 echo "control=$(connect "$CONTROL_URL")"
+echo "ghio=$(connect "https://github.github.io/")"
+echo "gist=$(connect "https://gist.githubusercontent.com/")"
+echo "telegraph=$(connect "https://telegra.ph/")"
 python3 -I - <<"PY"
 import socket
 def res(fn):
@@ -192,6 +212,14 @@ for pool in fetch research llm; do
   expect "pool $pool -> IPv4 literal denied" 403 "$(field "$pool" ipv4)"
   expect "pool $pool -> IPv6 literal denied" 403 "$(field "$pool" ipv6)"
   expect "pool $pool -> its own category still allowed (${CONTROL_URL[$pool]})" 200 "$(field "$pool" control)"
+  if [[ $pool == research ]]; then
+    expect "pool research -> github.github.io allowed (github_user_content)" 200 "$(field "$pool" ghio)"
+    expect "pool research -> gist.githubusercontent.com allowed (github_user_content)" 200 "$(field "$pool" gist)"
+  else
+    expect "pool $pool -> github.github.io denied (no github_user_content)" 403 "$(field "$pool" ghio)"
+    expect "pool $pool -> gist.githubusercontent.com denied" 403 "$(field "$pool" gist)"
+  fi
+  expect "pool $pool -> telegra.ph denied (always_denied)" 403 "$(field "$pool" telegraph)"
   expect_not "pool $pool -> direct 1.1.1.1:443 fails" open "$(field "$pool" direct443)"
   expect_not "pool $pool -> ICMP echo to 1.1.1.1 gets no reply" reply "$(field "$pool" icmp)"
   expect_not "pool $pool -> raw socket refused (no CAP_NET_RAW)" open "$(field "$pool" raw)"
@@ -242,6 +270,50 @@ expect "proxy: no capabilities (no raw sockets, pinger inert)" 0000000000000000 
 # profile that refuses AF_VSOCK in the pools above (no seccomp= override in SecurityOpt).
 expect "proxy: seccomp filter active" 2 "$(awk '/^Seccomp:/ {print $2}' "/proc/$pid/status")"
 expect "proxy: no seccomp override" '["no-new-privileges"]' "$(docker inspect -f '{{json .HostConfig.SecurityOpt}}' ossbot-proxy)"
+
+# ------------------------------------------------------------- egress modes (DESIGN §11.5)
+# Each mode through the root path (flag -> ossbot-egress.path -> ossbot-egress-apply -> proxy
+# restart, test networks re-attached). What untrusted code and the trusted writers reach never
+# changes; hermes/research gain web_public outside allowlist, the llm pool only in open.
+MODE_SCRIPT='
+connect() { curl -s -o /dev/null --max-time 15 -w "%{http_connect}" -x http://proxy:3128 "$1" 2>/dev/null || true; }
+echo "web=$(connect https://example.com/) ghio=$(connect https://github.github.io/) telegraph=$(connect https://telegra.ph/)"'
+mode_pool() {  # mode_pool POOL -> "web=.. ghio=.. telegraph=.." from a container in POOL's test network
+  docker run --rm --network "ossbot-t-egresstest-$1-$$" --dns 127.0.0.1 --dns-search . --user 10001:10001 \
+    --cap-drop ALL --security-opt no-new-privileges --read-only "ossbot/sandbox-full@$FULL" bash -c "$MODE_SCRIPT" 2>&1
+}
+for mode in allowlist open research; do
+  if ! set_egress_mode "$mode"; then
+    fail "egress mode $mode: not applied within 90 s (journalctl -u ossbot-egress-apply)"
+    continue
+  fi
+  pass "egress mode $mode applied (running proxy rendered for $mode)"
+  check "egress mode $mode: ossbot-firewall --check passes" /opt/ossbot/bin/ossbot-firewall --check
+  web=403; [[ $mode != allowlist ]] && web=200
+  llm=403; [[ $mode == open ]] && llm=200
+  expect "egress mode $mode: hermes via 3141 -> example.com" "$web" "$(connect hermes 3141 https://example.com/)"
+  expect "egress mode $mode: hermes via 3141 -> x.github.io allowed in every mode" 200 "$(raw_connect hermes 3141 x.github.io.:443)"
+  expect "egress mode $mode: hermes via 3141 -> telegra.ph denied" 403 "$(raw_connect hermes 3141 telegra.ph:443)"
+  for spec in ossrunner:3140 gatekeeper:3150; do
+    expect "egress mode $mode: ${spec%%:*} via ${spec##*:} -> example.com denied" 403 \
+      "$(connect "${spec%%:*}" "${spec##*:}" https://example.com/)"
+    expect "egress mode $mode: ${spec%%:*} via ${spec##*:} -> x.github.io denied" 403 \
+      "$(raw_connect "${spec%%:*}" "${spec##*:}" x.github.io.:443)"
+  done
+  for pool in fetch research llm; do
+    [[ " ${NETS[*]} " == *" ossbot-t-egresstest-$pool-$$ "* ]] || continue
+    out=$(mode_pool "$pool")
+    got() { sed -n "s/.*$1=\([0-9]*\).*/\1/p" <<<"$out" | head -n 1; }
+    case $pool in
+      fetch) want_web=403 want_ghio=403 ;;
+      research) want_web=$web want_ghio=200 ;;
+      llm) want_web=$llm want_ghio=$llm ;;  # web_public covers github.io; no github_user_content
+    esac
+    expect "egress mode $mode: pool $pool -> example.com" "$want_web" "$(got web)"
+    expect "egress mode $mode: pool $pool -> github.github.io" "$want_ghio" "$(got ghio)"
+    expect "egress mode $mode: pool $pool -> telegra.ph denied" 403 "$(got telegraph)"
+  done
+done
 
 # ------------------------------------------------------------------ service uids: ICMP, IPv6
 icmp_uid() {  # icmp_uid USER -> exit 0 when an ICMP echo to 1.1.1.1 gets a reply

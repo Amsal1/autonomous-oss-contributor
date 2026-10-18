@@ -6,7 +6,16 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from ossbot.common.schemas import ControlView, DownRequest, DrainRequest, DryRunRequest, ReasonRequest, UpRequest
+from ossbot.common.schemas import (
+    ControlView,
+    DownRequest,
+    DrainRequest,
+    DryRunRequest,
+    EgressModeRequest,
+    EgressModeView,
+    ReasonRequest,
+    UpRequest,
+)
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 
@@ -80,3 +89,21 @@ async def dry_run(
     if not body.enabled:
         c.operator_fyi("DRY-RUN OFF", caller.peer.uid, caller.peer.pid)
     return c.control.view()
+
+
+@router.get("/control/egress-mode")
+async def get_egress_mode(request: Request, caller: Annotated[Caller, Depends(require())]) -> EgressModeView:
+    c = ctx(request)
+    default = c.config.egress.mode_default
+    return EgressModeView(mode=c.control.egress_mode(default), default=default)
+
+
+@router.post("/control/egress-mode")
+async def set_egress_mode(
+    request: Request, body: EgressModeRequest, caller: Annotated[Caller, Depends(require(OP))]
+) -> EgressModeView:
+    """§11.5: ossctl asks for the TTY confirm first; root re-renders squid from the flag."""
+    c = ctx(request)
+    default = c.config.egress.mode_default
+    previous = c.control.set_egress_mode(body.mode, caller.actor, default)  # audits and FYIs
+    return EgressModeView(mode=c.control.egress_mode(default), default=default, previous=previous)

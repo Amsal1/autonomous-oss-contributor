@@ -12,9 +12,10 @@ After=ossbot-boot-gate.service docker.service ossbot-firewall.service ossbot-fir
 TimeoutStopSec=150
 Type=simple
 ExecCondition=/opt/ossbot/bin/ossbot-boot-gate --allow minimal
+# Render first (snapshot + the egress-mode flag, §11.5): --check compares the live conf with it.
+ExecStartPre=/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.render squid --out /etc/ossbot/proxy/squid.conf
 ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
 ExecStartPre=-/usr/bin/docker rm --force ossbot-proxy
-ExecStartPre=/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.render squid --out /etc/ossbot/proxy/squid.conf
 ExecStart=/opt/ossbot/bin/ossbot-proxy-run
 # squid waits shutdown_lifetime (30 s) on SIGTERM; it holds no state, so docker kills it after 2 s.
 ExecStop=/usr/bin/docker stop --time 2 ossbot-proxy

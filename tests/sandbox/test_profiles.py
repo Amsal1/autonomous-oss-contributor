@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+import re
+from pathlib import Path
+from typing import Any, Literal
 
 import pytest
 
 from tests.sandbox.conftest import Sandbox, proxy_ip_on
+
+Pool = Literal["fetch", "research", "llm"]
+SQUID_CONF = Path("/etc/ossbot/proxy/squid.conf")
 
 CID = "c_SMOKETEST1"
 PEER_CID = "c_SMOKETEST2"
@@ -31,9 +36,28 @@ def facts(sandbox: Sandbox, template: str, **kw: Any) -> dict[str, Any]:
     return _cache[key]
 
 
-def assert_common(f: dict[str, Any], networked: bool, web_public: bool = False) -> None:
-    """The 'All' bullet of §22.5. example.com through the proxy is 403 except for research, whose
-    egress includes web_public (§11.3: any host minus the always-denied set)."""
+def live_mode() -> str:
+    """The egress mode the live proxy was rendered for (header line of the rendered squid.conf)."""
+    match = re.search(r"^# Egress mode: (allowlist|research|open) ", SQUID_CONF.read_text(encoding="utf-8"), re.M)
+    assert match, f"{SQUID_CONF} names no egress mode (redeploy)"
+    return match.group(1)
+
+
+def expected_egress(pool: Pool, mode: str) -> tuple[bool, bool]:
+    """(web_public, github_user_content) of a source pool in an egress mode (DESIGN §11.3, §11.5):
+    research has github_user_content in every mode and web_public outside allowlist; the llm pool
+    (agent-llm, catalog) has web_public (which covers github.io and gists) only in open; fetch and
+    validate never get either."""
+    if pool == "research":
+        return mode != "allowlist", True
+    if pool == "llm":
+        return mode == "open", mode == "open"
+    return False, False
+
+
+def assert_common(f: dict[str, Any], networked: bool, pool: Pool = "fetch") -> None:
+    """The 'All' bullet of §22.5. example.com through the proxy is 403 unless the pool has
+    web_public in the live egress mode (§11.3: any host minus the always-denied set)."""
     assert f["uid"] == 10001
     assert int(f["cap_eff"], 16) == 0
     assert f["root_writable"] is False
@@ -47,13 +71,18 @@ def assert_common(f: dict[str, Any], networked: bool, web_public: bool = False) 
     assert not [n for n in f["env_names"] if n.startswith(("GITHUB", "TELEGRAM"))]
     assert f["kiro_direct"] != "open"
     if networked:
-        assert f["proxy_example"]["connect"] == ("200" if web_public else "403")
+        mode = live_mode()
+        web, user_content = expected_egress(pool, mode)
+        assert f["proxy_example"]["connect"] == ("200" if web else "403"), (pool, mode)
         assert f["noproxy_example"]["curl_exit"] != 0
         assert all(v != "open" for v in f["host_ports"].values()), f["host_ports"]
         # proxy:3140/3141/3150 through the task-network alias: unreachable, refused or 403 (N10)
         for port, res in f["alias_ports"].items():
             assert res["connect"] in {"000", "403"}, (port, res)
-        assert f["gist"]["connect"] == "403"
+        # CR-002: github.io and gists for research in every mode; never for fetch/validate
+        for key in ("gist", "gist_raw", "ghio"):
+            assert f[key]["connect"] == ("200" if user_content else "403"), (key, pool, mode, f[key])
+        assert f["telegraph"]["connect"] == "403", (pool, mode)  # always denied (CR-003 U11)
     else:
         assert f["interfaces"] == ["lo"]
 
@@ -77,8 +106,9 @@ def test_fetch_validate(sandbox: Sandbox, peer_ip: str, template: str) -> None:
 
 def test_research(sandbox: Sandbox) -> None:
     f = facts(sandbox, "research")
-    assert_common(f, networked=True, web_public=True)
-    assert f["github"]["connect"] == "200"  # web_public; no token present
+    assert_common(f, networked=True, pool="research")
+    web = expected_egress("research", live_mode())[0]
+    assert f["github"]["connect"] == ("200" if web else "403")  # via web_public only; no token present
     assert f["home"] == "/home/agent" and f["home_writable"] is True
     assert f["tmp_exec"] != 0  # noexec /tmp in key-holding profiles (M2)
     assert f["work_entries"] in EMPTY_WORK
@@ -87,8 +117,9 @@ def test_research(sandbox: Sandbox) -> None:
 def test_agent_llm_and_catalog(sandbox: Sandbox) -> None:
     for template, cid in (("catalog", "sys-catalog"),):
         f = facts(sandbox, template, cid=cid)
-        assert_common(f, networked=True)
-        assert f["github"]["connect"] == "403"
+        assert_common(f, networked=True, pool="llm")
+        # no github_read for the llm pool; github.com only through web_public in egress mode open
+        assert f["github"]["connect"] == ("200" if expected_egress("llm", live_mode())[0] else "403")
         assert f["tmp_exec"] != 0
         assert f["mounts_task"] is False and f["mounts_ro"] is False
 
@@ -121,7 +152,7 @@ def test_symlink_snapshot_and_execd(sandbox: Sandbox) -> None:
     hostile = sandbox.run(sandbox.plan(SNAP_CID, "validate", repo_mode="rw", env={"OSSBOT_PROBE": "hostile"}))
     assert hostile.exit_code == 0, hostile.logs[-2000:]
     f = sandbox.smoke(SNAP_CID, "research", repo_mode="snapshot")
-    assert_common(f, networked=True, web_public=True)
+    assert_common(f, networked=True, pool="research")
     assert f["work_nonregular"] == []
     assert f["symlink_stub"] == "SYMLINK -> /proc/self/environ"
     assert f["docs_env_present"] is False
@@ -140,8 +171,8 @@ def test_symlink_snapshot_and_execd(sandbox: Sandbox) -> None:
     assert "direct=closed" in s_key
     # agent-llm (the key-holding half of the coder pair): no repo, no task/ro volume, noexec /tmp.
     llm = sandbox.smoke(SNAP_CID, "coder", repo_mode="rw")
-    assert_common(llm, networked=True)
-    assert llm["github"]["connect"] == "403"
+    assert_common(llm, networked=True, pool="llm")
+    assert llm["github"]["connect"] == ("200" if expected_egress("llm", live_mode())[0] else "403")
     assert llm["work_entries"] in EMPTY_WORK and llm["mounts_task"] is False and llm["mounts_ro"] is False
     assert llm["tmp_exec"] != 0
     assert llm["volume_modes"]["/run/exec"] is not None

@@ -74,6 +74,8 @@ def test_workers_down_keeps_health_and_restarts_only_the_core(calls: list[str]) 
          "firewall_drift:resolved_ipc"),
         ("ossbot-firewall --check: firewall_drift:io_uring kernel.io_uring_disabled is 0, expected 2",
          "firewall_drift:io_uring"),
+        ("ossbot-firewall --check: firewall_drift:squid_mode /etc/ossbot/proxy/squid.conf differs from the "
+         "render for egress mode allowlist", "firewall_drift:squid_mode"),
     ],
 )  # fmt: skip
 def test_firewall_drift_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str, reason: str) -> None:

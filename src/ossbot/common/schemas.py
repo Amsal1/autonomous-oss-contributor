@@ -132,6 +132,18 @@ class DryRunRequest(ApiModel):
     enabled: bool
 
 
+class EgressModeRequest(ApiModel):
+    """§11.5: ossctl egress mode <m> (TTY-confirmed); Telegram /egress is FEAT-009."""
+
+    mode: Literal["allowlist", "research", "open"]
+
+
+class EgressModeView(ApiModel):
+    mode: Literal["allowlist", "research", "open"]
+    default: Literal["allowlist", "research", "open"]
+    previous: Literal["allowlist", "research", "open"] | None = None
+
+
 class ReloadRequest(ApiModel):
     confirm_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
 

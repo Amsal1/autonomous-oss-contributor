@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from ossbot.common.control_flags import EGRESS_MODES, EgressMode
 from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
 from ossbot.common.yamlio import YamlError, safe_load
 
@@ -367,6 +368,12 @@ class AlwaysDenied(Strict):
     domains: list[Annotated[str, Field(pattern=HOST_RE)]]
 
 
+# Egress modes (§11.5, decision B3): a mode only ADDS categories, and only to this closed set of
+# grantees. fetch, validate, runner and gatekeeper are not keys, so data can never widen what
+# untrusted code (or the trusted writers) can reach; the renderer asserts the invariants on top.
+ModeGrantee = Literal["research", "hermes", "agent-llm", "catalog"]
+
+
 class EgressConfig(Strict):
     version: Literal[1]
     categories: dict[str, list[Annotated[str, Field(pattern=HOST_RE)]]]
@@ -374,15 +381,23 @@ class EgressConfig(Strict):
     sandbox_profiles: dict[SandboxProfileName, list[str]]
     host_callers: dict[HostCallerName, HostCaller]
     always_denied: AlwaysDenied
+    mode_default: EgressMode = "open"
+    modes: dict[EgressMode, dict[ModeGrantee, list[str]]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _references_exist(self) -> EgressConfig:
+        missing_modes = [m for m in EGRESS_MODES if m not in self.modes]
+        if missing_modes:
+            raise ValueError(f"modes must define every egress mode; missing {missing_modes}")
         known = set(self.categories) | {"web_public", "kiro_idc_login", "pkg_helm"}
         refs = [*self.denied_by_default]
         for cats in self.sandbox_profiles.values():
             refs.extend(cats)
         for caller in self.host_callers.values():
             refs.extend(caller.categories)
+        for grants in self.modes.values():
+            for cats in grants.values():
+                refs.extend(cats)
         unknown = sorted(set(refs) - known)
         if unknown:
             raise ValueError(f"unknown egress categories: {unknown}")

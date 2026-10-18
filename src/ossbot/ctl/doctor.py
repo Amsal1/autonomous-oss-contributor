@@ -340,8 +340,8 @@ def _connect_code(user: str, port: int, url: str) -> str:
 
 def check_proxy_denies() -> Result:
     code = _connect_code("gatekeeper", 3150, "https://example.com/")
-    # P1-11: an IP-literal target is denied before any name ACL (hermes has web_public, so 3141
-    # shows the explicit ip_literal deny rather than "no category matched").
+    # P1-11: an IP-literal target is denied before any name ACL (hermes has web_public in egress
+    # modes research and open, so 3141 shows the explicit ip_literal deny, not "no category matched").
     literal = _connect_code("hermes", 3141, "https://203.0.113.7/")
     ok = code == "403" and literal == "403"
     detail = f"gatekeeper via 3150 -> example.com CONNECT {code}; hermes via 3141 -> 203.0.113.7 CONNECT {literal}"
@@ -450,6 +450,19 @@ def check_gatekeeper() -> Result:
         return Result(FAIL, "gatekeeper health", f"HTTP {health.status_code}")
     detail = f"state {control.get('state')}, dry_run {control.get('dry_run')}"
     return Result(PASS, "gatekeeper health", detail)
+
+
+def check_egress_mode() -> Result:
+    """§11.5: the active egress mode (the squid render for it is checked by ``firewall --check``)."""
+    try:
+        with uds_client(Paths.default().gatekeeper_sock, timeout=httpx.Timeout(5.0)) as client:
+            resp = client.get("/v1/control/egress-mode")
+            data = resp.json() if resp.status_code == 200 else {}
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        return Result(FAIL, "egress mode", str(exc), "systemctl status ossbot-gatekeeper")
+    if not data:
+        return Result(FAIL, "egress mode", f"HTTP {resp.status_code}")
+    return Result(PASS, "egress mode", f"{data.get('mode')} (default {data.get('default')})")
 
 
 def _github_login(token: str) -> tuple[int, str, str]:
@@ -576,7 +589,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     if not quick:
         steps.append(check_proxy_dns)
     steps += [
-        check_firewall, check_gatekeeper, lambda: check_github(quick), lambda: check_telegram(quick),
+        check_firewall, check_gatekeeper, check_egress_mode, lambda: check_github(quick), lambda: check_telegram(quick),
         check_identity_snapshot, check_audit, check_disk, check_lock_drift,
     ]  # fmt: skip
     if probes:

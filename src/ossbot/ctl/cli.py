@@ -22,7 +22,7 @@ import httpx
 import typer
 
 from ossbot.common.config import ConfigError, LifecyclePolicy, parse_bundle
-from ossbot.common.control_flags import lifecycle_name, read_flags, read_lifecycle, write_flag
+from ossbot.common.control_flags import EGRESS_MODES, lifecycle_name, read_flags, read_lifecycle, write_flag
 from ossbot.common.paths import Paths
 from ossbot.common.snapshot import read_current
 from ossbot.common.uds import uds_client
@@ -30,8 +30,10 @@ from ossbot.common.uds import uds_client
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="ossbot operator CLI")
 config_app = typer.Typer(no_args_is_help=True, help="config snapshot")
 audit_app = typer.Typer(no_args_is_help=True, help="audit log")
+egress_app = typer.Typer(no_args_is_help=True, help="egress mode (allowlist | research | open)")
 app.add_typer(config_app, name="config")
 app.add_typer(audit_app, name="audit")
+app.add_typer(egress_app, name="egress")
 
 BIN = Path("/opt/ossbot/bin")
 SANDBOXD_SOCK = Path("/run/ossbot/sandboxd.sock")
@@ -342,6 +344,28 @@ def dryrun(mode: Annotated[str, typer.Argument(help="on | off")]) -> None:
     code, data = api("POST", "/v1/control/dry-run", {"enabled": mode == "on"})
     if code != 200:
         _fail(f"dry-run change refused ({code}): {data}")
+    _show(data)
+
+
+@egress_app.command("mode")
+def egress_mode(mode: Annotated[str, typer.Argument(help="allowlist | research | open")]) -> None:
+    """Switch the egress mode (TTY confirm; DESIGN §11.5). Root re-renders squid and restarts the
+    proxy (ossbot-egress.path); fetch/validate, runner and gatekeeper egress never change."""
+    if mode not in EGRESS_MODES:
+        _fail(f"usage: ossctl egress mode {'|'.join(EGRESS_MODES)}", 2)
+    _confirm(f"EGRESS {mode.upper()}")
+    code, data = api("POST", "/v1/control/egress-mode", {"mode": mode})
+    if code != 200:
+        _fail(f"egress mode change refused ({code}): {data}")
+    _show(data)
+
+
+@egress_app.command("status")
+def egress_status() -> None:
+    """The active egress mode and the snapshot default (``egress.mode_default``)."""
+    code, data = api("GET", "/v1/control/egress-mode")
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
     _show(data)
 
 

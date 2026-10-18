@@ -16,21 +16,44 @@ categories:
   pkg_rust: [crates.io, index.crates.io, static.crates.io]
   pkg_ruby: [rubygems.org, index.rubygems.org]
   pkg_iac: [registry.terraform.io, releases.hashicorp.com, registry.opentofu.org, get.opentofu.org]
+  # CR-002 req 1: GitHub Pages and gists hold much technical knowledge; read-only content hosts with
+  # no GitHub write API. research and hermes only, in every mode; never a code-running profile.
+  github_user_content: [.github.io, gist.github.com, gist.githubusercontent.com]
 # Denied unless `ossctl egress learn` shows the CLI fails without them.
 denied_by_default: [kiro_telemetry]
+# Base lists = mode `allowlist`. No base list carries web_public; the modes below add it.
 sandbox_profiles:
   fetch: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_helm]
   validate: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_helm]
-  research: [kiro_core, web_public]
+  research: [kiro_core, github_user_content]
   agent-llm: [kiro_core]
   catalog: [kiro_core]
 host_callers:
   runner: {port: 3140, categories: [github_read]}
-  hermes: {port: 3141, categories: [kiro_core, kiro_idc_login, web_public]}
+  hermes: {port: 3141, categories: [kiro_core, kiro_idc_login, github_user_content]}
   gatekeeper: {port: 3150, categories: [gatekeeper]}
+# Egress modes (DESIGN §11.5). The active mode is the control flag /var/lib/ossbot/control/egress-mode
+# (`ossctl egress mode <m>`); absent = mode_default, unparseable = allowlist (fail closed).
+# Grants only ADD categories, and only to research, hermes, agent-llm and catalog (schema keys);
+# agent-llm and catalog share the llm pool, so they always get the same list.
+mode_default: open
+modes:
+  allowlist: {}
+  research: {research: [web_public], hermes: [web_public]}
+  open: {research: [web_public], hermes: [web_public], agent-llm: [web_public], catalog: [web_public]}
 always_denied:
+  # Every address deny is a §11.5 network invariant (the renderer also asserts a floor of them):
+  # RFC1918, 100.64.0.0/10 (CGNAT), 169.254.0.0/16 (link-local, cloud metadata), 127.0.0.0/8 (loopback).
   # 0.0.0.0/8: a name resolving to 0.0.0.0 would make squid connect to its own loopback.
   # 198.18.0.0/15: fake-IP range of Windows VPN/proxy clients (TUN modes), reachable through the WSL NAT.
   # 192.0.0.0/24 (IETF protocol assignments), 224.0.0.0/4 (multicast), 240.0.0.0/4 (reserved, broadcast).
-  cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 0.0.0.0/8, 198.18.0.0/15, 192.0.0.0/24, 224.0.0.0/4, 240.0.0.0/4, "::1/128", "fc00::/7", "fe80::/10"]
-  domains: [.github.io, gist.github.com, uploads.github.com, checkpoint-api.hashicorp.com]
+  # ::/128 (unspecified, the IPv6 0.0.0.0, P1-15), ::1/128 (loopback), fc00::/7 (ULA), fe80::/10 (link-local).
+  # ::ffff:0:0/96 (IPv4-mapped) is documented, not listed: squid keeps IPv4 addresses in mapped form,
+  # so the entry would deny every IPv4 destination; the IPv4 ranges above cover mapped addresses and
+  # IP-literal request hosts are denied by name before any lookup.
+  cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 0.0.0.0/8, 198.18.0.0/15, 192.0.0.0/24, 224.0.0.0/4, 240.0.0.0/4, "::/128", "::1/128", "fc00::/7", "fe80::/10"]
+  # uploads.github.com: accepts release-asset uploads (a write channel).
+  # checkpoint-api.hashicorp.com: version/telemetry beacon that leaks usage, never needed (CHECKPOINT_DISABLE=1).
+  # telegra.ph, api.telegra.ph, edit.telegra.ph: a public, undeletable publishing channel; no LLM caller
+  #   may reach it (CR-003 U11). The gatekeeper's opt-in `telegraph` category is FEAT-010.
+  domains: [uploads.github.com, checkpoint-api.hashicorp.com, telegra.ph, api.telegra.ph, edit.telegra.ph]

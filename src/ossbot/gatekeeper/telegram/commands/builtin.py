@@ -49,6 +49,7 @@ async def status(ctx: CommandContext, args: list[str]) -> Reply:
         f"Lifecycle {b(view.lifecycle)} · Telegram last poll {esc(poll['last_ok_at'] or '-')}"
         f" · reconnects {poll['reconnects']}"
     )
+    lines.append(f"Egress mode {b(app.control.egress_mode(app.config.egress.mode_default))}")
     return Reply("\n".join(lines))
 
 

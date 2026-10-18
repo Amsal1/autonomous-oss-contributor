@@ -14,8 +14,16 @@ for the host part, a systemd-resolved that is not masked or still listening
 (``firewall_drift:resolved_ipc``, Phase 1 review P1-6) and io_uring not disabled system-wide
 (``firewall_drift:io_uring``, P1-14).
 
+Egress modes (§11.5, CR-002): ``squid`` renders base lists plus the grants of the active mode (the
+``egress-mode`` control flag, else the snapshot's ``mode_default``). Every render first renders all
+three modes and refuses if an invariant differs (denied networks and names, IP-literal and DNS
+lines, fetch/validate and runner/gatekeeper lists), and each context is asserted on its own (fetch,
+validate, runner, gatekeeper never ``web_public``; ``allowlist`` has none; agent-llm/catalog only in
+``open``). ``--check`` (host part) also compares the live squid.conf with the render for the current
+mode (``firewall_drift:squid_mode``).
+
 Usage (root): ``python -I -m ossbot.ctl.render firewall --apply|--check|--print [--part P]`` and
-``python -I -m ossbot.ctl.render squid [--out PATH] [--hermes-login]``.
+``python -I -m ossbot.ctl.render squid [--out PATH] [--hermes-login] [--mode M]``.
 """
 
 from __future__ import annotations
@@ -24,9 +32,11 @@ import argparse
 import ipaddress
 import os
 import pwd
+import re
 import socket
 import subprocess
 import sys
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,8 +45,16 @@ from urllib.parse import urlparse
 
 import jinja2
 
-from ossbot.common.config import ConfigBundle, EgressConfig, ProfileConfig, TargetsConfig, parse_bundle
-from ossbot.common.snapshot import read_current
+from ossbot.common.config import (
+    ConfigBundle,
+    ConfigError,
+    EgressConfig,
+    ProfileConfig,
+    TargetsConfig,
+    parse_bundle,
+)
+from ossbot.common.control_flags import EGRESS_MODE_FILE, EGRESS_MODES, EgressMode, read_egress_mode
+from ossbot.common.snapshot import read_current, read_snapshot
 
 PROXY_IP = "10.212.0.2"
 HOST_BRIDGE = "10.212.0.1/32"
@@ -61,6 +79,19 @@ IO_URING_SYSCTL = Path("/proc/sys/kernel/io_uring_disabled")
 # decimal, octal, hex; IPv6 with or without brackets). POSIX ERE for squid `dstdom_regex -n -i`;
 # no DNS name can match (a TLD is never all-numeric, and no host name contains ':' or '[').
 IP_LITERAL_PATTERNS = (r"^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+)){0,3}\.?$", ":", r"^\[")
+DEFAULT_CONTROL_DIR = Path("/var/lib/ossbot/control")
+# §11.5 invariants no egress mode relaxes, asserted by the renderer on top of the data (decision B3).
+REQUIRED_DENIED_CIDRS = (
+    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8",
+    "0.0.0.0/8", "::/128", "::1/128", "fc00::/7", "fe80::/10",
+)  # fmt: skip
+REQUIRED_DENIED_DOMAINS = ("uploads.github.com", "telegra.ph", "api.telegra.ph", "edit.telegra.ph")
+CODE_POOL_SRC = "pool_fetch"  # fetch + validate: untrusted code, never web_public
+LLM_POOL_SRC = "pool_llm"
+TRUSTED_CALLERS = ("runner", "gatekeeper")  # identical egress in every mode
+# A mode switch writes the flag first and the root apply re-renders a moment later: a conf older
+# than a flag this young is "apply pending", not drift (the watchdog re-checks within 9 s anyway).
+MODE_APPLY_GRACE_S = 60.0
 
 
 class RenderError(ValueError):
@@ -128,18 +159,36 @@ def _dst(category: str, cats: Mapping[str, list[str]]) -> str | None:
     return f"cat_{category}" if category in cats else None
 
 
+def mode_lists(egress: EgressConfig, mode: EgressMode) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """(sandbox profile -> categories, host caller -> categories) for ``mode``: base + the mode's grants."""
+    grants: dict[str, list[str]] = {str(k): v for k, v in egress.modes.get(mode, {}).items()}
+
+    def plus(base: Sequence[str], name: str) -> list[str]:
+        return [*base, *[c for c in grants.get(name, []) if c not in base]]
+
+    profiles = {str(p): plus(cats, str(p)) for p, cats in egress.sandbox_profiles.items()}
+    callers = {str(c): plus(hc.categories, str(c)) for c, hc in egress.host_callers.items()}
+    return profiles, callers
+
+
 def squid_context(
-    bundle: ConfigBundle, snapshot_hash: str, ns: Sequence[str], hermes_login: bool = False
+    bundle: ConfigBundle,
+    snapshot_hash: str,
+    ns: Sequence[str],
+    hermes_login: bool = False,
+    mode: EgressMode | None = None,
 ) -> dict[str, Any]:
     egress = bundle.egress
+    mode = mode or egress.mode_default
     cats = resolve_categories(egress, bundle.profile, bundle.targets, hermes_login)
     callers = egress.host_callers
+    profile_lists, caller_lists = mode_lists(egress, mode)
     listeners = [{"bind": str(SANDBOX_PORT), "name": "sandbox"}]
     listeners += [{"bind": f"{PROXY_IP}:{callers[c].port}", "name": c} for c in HOST_CALLER_ORDER if c in callers]
     rules: list[dict[str, str]] = []
     pools = []
     for pool, cidr, profiles in SQUID_POOLS:
-        lists = [egress.sandbox_profiles.get(p) for p in profiles]  # type: ignore[call-overload]
+        lists = [profile_lists.get(p) for p in profiles]
         present = [lst for lst in lists if lst is not None]
         if not present:
             continue
@@ -151,15 +200,16 @@ def squid_context(
             if dst is not None:
                 rules.append({"port": "sandbox", "src": f"pool_{pool}", "dst": dst})
     for caller in HOST_CALLER_ORDER:
-        if caller not in callers:
+        if caller not in caller_lists:
             continue
-        for category in callers[caller].categories:  # type: ignore[index]
+        for category in caller_lists[caller]:
             dst = _dst(category, cats)
             if dst is not None:
                 rules.append({"port": caller, "src": "src_host", "dst": dst})
     referenced = {r["dst"][4:] for r in rules if r["dst"].startswith("cat_")}
-    return {
+    ctx = {
         "snapshot_hash": snapshot_hash,
+        "mode": mode,
         "listeners": listeners,
         "nameservers": list(ns),
         "host_src": HOST_BRIDGE,
@@ -171,20 +221,145 @@ def squid_context(
         "denied_cidrs": [str(ipaddress.ip_network(c, strict=True)) for c in egress.always_denied.cidrs],
         "rules": rules,
     }
+    assert_context_invariants(ctx)
+    return ctx
 
 
-def render_squid(
-    bundle: ConfigBundle, snapshot_hash: str, ns: Sequence[str], template: str, hermes_login: bool = False
-) -> str:
-    for server in ns:
+def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
+    """§11.5 invariants of one rendered context (assertions, not data): raise RenderError on a violation."""
+    rules: list[dict[str, str]] = ctx["rules"]
+    for r in rules:
+        if r["src"] == CODE_POOL_SRC and r["dst"] == "all":
+            raise RenderError("fetch/validate (code-running profiles) must never get web_public")
+        if r["port"] in TRUSTED_CALLERS and r["dst"] == "all":
+            raise RenderError(f"host caller {r['port']} must never get web_public")
+    web = {(r["port"], r["src"]) for r in rules if r["dst"] == "all"}
+    if ctx["mode"] == "allowlist" and web:
+        raise RenderError(f"egress mode allowlist grants web_public to {sorted(web)}")
+    if ctx["mode"] != "open" and ("sandbox", LLM_POOL_SRC) in web:
+        raise RenderError(f"egress mode {ctx['mode']} grants web_public to agent-llm/catalog (open only)")
+    denied = {str(ipaddress.ip_network(c)) for c in ctx["denied_cidrs"]}
+    missing = [c for c in REQUIRED_DENIED_CIDRS if str(ipaddress.ip_network(c)) not in denied]
+    if missing:
+        raise RenderError(f"always_denied.cidrs lacks the invariant networks {missing}")
+    missing_domains = [d for d in REQUIRED_DENIED_DOMAINS if d not in ctx["denied_domains"]]
+    if missing_domains:
+        raise RenderError(f"always_denied.domains lacks {missing_domains}")
+    if tuple(ctx["ip_literal_patterns"]) != IP_LITERAL_PATTERNS:
+        raise RenderError("IP-literal deny patterns changed")
+
+
+def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
+    """The parts of a context that must be identical in every egress mode (§11.5)."""
+    fixed = [r for r in ctx["rules"] if r["src"] == CODE_POOL_SRC or r["port"] in TRUSTED_CALLERS]
+    used = {r["dst"][4:] for r in fixed if r["dst"].startswith("cat_")}
+    return {
+        "listeners": ctx["listeners"],
+        "nameservers": ctx["nameservers"],
+        "host_src": ctx["host_src"],
+        "pools": ctx["pools"],
+        "denied_domains": ctx["denied_domains"],
+        "denied_cidrs": ctx["denied_cidrs"],
+        "ip_literal_patterns": ctx["ip_literal_patterns"],
+        "fetch_validate_runner_gatekeeper_rules": fixed,
+        "their_categories": {k: v for k, v in ctx["categories"].items() if k in used},
+    }
+
+
+def check_mode_invariants(bundle: ConfigBundle, ns: Sequence[str], hermes_login: bool = False) -> None:
+    """Render every egress mode and refuse if any §11.5 invariant differs between them."""
+    views = {m: _invariant_view(squid_context(bundle, "", ns, hermes_login, m)) for m in EGRESS_MODES}
+    base = views[EGRESS_MODES[0]]
+    for mode, view in views.items():
+        for key, value in base.items():
+            if view[key] != value:
+                raise RenderError(f"egress mode {mode} changes the invariant {key}")
+
+
+def render_context(ctx: Mapping[str, Any], template: str) -> str:
+    for server in ctx["nameservers"]:
         ipaddress.IPv4Address(server)  # never render anything but literal IPv4 addresses
+    assert_context_invariants(ctx)
     # Not HTML: every value is validated (HOST_RE hosts, literal IPs, fixed names), so no escaping.
     env = jinja2.Environment(
         autoescape=False,  # noqa: S701
         undefined=jinja2.StrictUndefined,
         keep_trailing_newline=True,
     )
-    return env.from_string(template).render(**squid_context(bundle, snapshot_hash, ns, hermes_login))
+    return env.from_string(template).render(**ctx)
+
+
+def render_squid(
+    bundle: ConfigBundle,
+    snapshot_hash: str,
+    ns: Sequence[str],
+    template: str,
+    hermes_login: bool = False,
+    mode: EgressMode | None = None,
+) -> str:
+    for server in ns:
+        ipaddress.IPv4Address(server)
+    check_mode_invariants(bundle, ns, hermes_login)
+    return render_context(squid_context(bundle, snapshot_hash, ns, hermes_login, mode), template)
+
+
+_SNAPSHOT_LINE_RE = re.compile(r"^# Config snapshot: ([0-9a-f]{64})$", re.MULTILINE)
+
+
+def squid_drift(
+    conf: Path = DEFAULT_SQUID_OUT,
+    snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
+    template: Path = DEFAULT_TEMPLATE,
+    resolv_conf: Path = Path("/etc/resolv.conf"),
+    control_dir: Path = DEFAULT_CONTROL_DIR,
+    now: float | None = None,
+) -> list[str]:
+    """The live squid.conf must equal the render of its snapshot for the current egress mode.
+
+    No conf yet is not drift (the proxy refuses to start without one). The snapshot is the one the
+    conf names (snapshots are kept), so a confirmed reload is not drift before the proxy restart;
+    the mode is always the current flag (fail closed ``allowlist``)."""
+    tag = "firewall_drift:squid_mode"
+    try:
+        text = conf.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError) as exc:
+        return [f"{tag} cannot read {conf}: {exc}"]
+    match = _SNAPSHOT_LINE_RE.search(text)
+    if match is None:
+        return [f"{tag} {conf} names no config snapshot"]
+    digest = match.group(1)
+    try:
+        files = read_snapshot(snapshot_root, digest)
+    except (OSError, ValueError) as exc:
+        return [f"{tag} cannot read the snapshot {digest[:12]} the conf names: {exc}"]
+    try:
+        bundle = parse_bundle(files)
+    except ConfigError:
+        # A deploy changed the schema and the installed code no longer accepts the (hash-verified,
+        # gatekeeper-written) snapshot the live conf came from. The gatekeeper writes a new snapshot
+        # at its next start and the proxy re-renders at its restart; refusing here would block the
+        # very gatekeeper start that fixes it (every unit runs --check first). Not verifiable yet.
+        return []
+    try:
+        mode = read_egress_mode(control_dir, bundle.egress.mode_default)
+        expected = render_squid(
+            bundle, digest, nameservers(resolv_conf), template.read_text(encoding="utf-8"),
+            hermes_login="\nacl cat_kiro_idc_login " in text, mode=mode,
+        )  # fmt: skip
+    except (OSError, ValueError) as exc:
+        return [f"{tag} cannot render the expected config: {exc}"]
+    if expected == text:
+        return []
+    try:
+        flag_mtime = (control_dir / EGRESS_MODE_FILE).stat().st_mtime
+        pending = flag_mtime > conf.stat().st_mtime and (now or time.time()) - flag_mtime < MODE_APPLY_GRACE_S
+    except OSError:
+        pending = False
+    if pending:
+        return []
+    return [f"{tag} {conf} differs from the render for egress mode {mode}"]
 
 
 # ------------------------------------------------------------------------------- firewall
@@ -438,16 +613,28 @@ def main(argv: list[str] | None = None) -> int:
     sq.add_argument("--template", type=Path, default=DEFAULT_TEMPLATE)
     sq.add_argument("--resolv-conf", type=Path, default=Path("/etc/resolv.conf"))
     sq.add_argument("--hermes-login", action="store_true")
+    # Default: the current egress-mode flag (absent = the snapshot's mode_default, unparseable = allowlist).
+    sq.add_argument("--mode", choices=EGRESS_MODES, default=None)
+    sq.add_argument("--control-dir", type=Path, default=DEFAULT_CONTROL_DIR)
     args = parser.parse_args(argv)
     try:
         if args.what == "squid":
             digest, files = read_current(args.snapshot_root)
+            bundle = parse_bundle(files)
+            egress: EgressMode = args.mode or read_egress_mode(args.control_dir, bundle.egress.mode_default)
             text = render_squid(
-                parse_bundle(files), digest, nameservers(args.resolv_conf), args.template.read_text("utf-8"),
-                args.hermes_login,
+                bundle, digest, nameservers(args.resolv_conf), args.template.read_text("utf-8"),
+                args.hermes_login, egress,
             )  # fmt: skip
+            try:
+                same = args.out.read_text(encoding="utf-8") == text
+            except (OSError, UnicodeDecodeError):
+                same = False
+            if same:  # idempotent (provision prints `unchanged`); the running proxy is untouched
+                print(f"unchanged {args.out} (snapshot {digest}, egress mode {egress})")
+                return 0
             _write_atomic(args.out, text)
-            print(f"rendered {args.out} from snapshot {digest}")
+            print(f"rendered {args.out} from snapshot {digest} (egress mode {egress})")
             return 0
         ns = nameservers(args.resolv_conf)[0]
         if args.print:
@@ -462,6 +649,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.part in ("host", "all"):
             problems.extend(resolved_ipc_problems())
             problems.extend(io_uring_problems())
+            problems.extend(squid_drift(resolv_conf=args.resolv_conf))
         for problem in problems:
             print(f"ossbot-firewall --check: {problem}", file=sys.stderr)
         return 1 if problems else 0

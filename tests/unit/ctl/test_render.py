@@ -5,11 +5,14 @@ from __future__ import annotations
 import os
 import re
 import socket
+import time
 from pathlib import Path
 
 import pytest
 
-from ossbot.common.config import parse_bundle
+from ossbot.common.config import ConfigError, EgressConfig, parse_bundle, parse_yaml_model
+from ossbot.common.control_flags import write_flag
+from ossbot.common.snapshot import write_snapshot
 from ossbot.ctl import render
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -197,13 +200,226 @@ def test_nameservers_from_resolv_conf(tmp_path: Path) -> None:
 
 
 # ------------------------------------------------------------------------------ squid
-def test_squid_render_matches_golden() -> None:
-    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE)
-    assert text == _golden("squid.conf", text)
+MODES = ("allowlist", "research", "open")
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_squid_render_matches_golden(mode: str) -> None:
+    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode=mode)  # type: ignore[arg-type]
+    assert text == _golden(f"squid.{mode}.conf", text)
+    assert f"# Egress mode: {mode} " in text
+
+
+def test_default_mode_is_open() -> None:
+    bundle = _bundle()
+    assert bundle.egress.mode_default == "open"
+    assert render.render_squid(bundle, "0" * 64, [NS], TEMPLATE) == render.render_squid(
+        bundle, "0" * 64, [NS], TEMPLATE, mode="open"
+    )
+
+
+def _allows(text: str) -> set[str]:
+    return {line for line in text.splitlines() if line.startswith("http_access allow ")}
+
+
+def test_mode_table_of_design_11_5() -> None:
+    """allowlist: no web_public anywhere; research: + web_public for research and hermes; open: + the
+    llm pool (agent-llm and catalog share it). github_user_content for research/hermes in every mode."""
+    texts = {m: render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode=m) for m in MODES}  # type: ignore[arg-type]
+    web = {m: {line for line in _allows(t) if " all " in line} for m, t in texts.items()}
+    assert web["allowlist"] == set()
+    assert web["research"] == {
+        "http_access allow port_sandbox pool_research all !denied_dst",
+        "http_access allow port_hermes src_host all !denied_dst",
+    }
+    assert web["open"] == web["research"] | {"http_access allow port_sandbox pool_llm all !denied_dst"}
+    for text in texts.values():
+        acl = "acl cat_github_user_content dstdomain -n .github.io gist.github.com gist.githubusercontent.com\n"
+        assert acl in text
+        assert "http_access allow port_sandbox pool_research cat_github_user_content !denied_dst\n" in text
+        assert "http_access allow port_hermes src_host cat_github_user_content !denied_dst\n" in text
+        for line in _allows(text):
+            if "pool_fetch" in line or "port_runner" in line or "port_gatekeeper" in line or "pool_llm" in line:
+                assert "github_user_content" not in line, line
+
+
+def test_invariants_identical_in_every_mode() -> None:
+    """Everything but the research/hermes/llm grants is byte-identical between the modes."""
+    texts = {m: render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode=m) for m in MODES}  # type: ignore[arg-type]
+
+    def fixed(text: str) -> list[str]:
+        return [
+            line for line in text.splitlines()
+            if not line.startswith("# Egress mode:")
+            and not (line.startswith("http_access allow ") and any(
+                k in line for k in ("pool_research", "port_hermes", "pool_llm")))
+        ]  # fmt: skip
+
+    assert fixed(texts["allowlist"]) == fixed(texts["research"]) == fixed(texts["open"])
+    denied = _acls(texts["open"])["denied_domains"][2:]
+    assert {"uploads.github.com", "checkpoint-api.hashicorp.com", "telegra.ph", "api.telegra.ph",
+            "edit.telegra.ph"} == set(denied)  # fmt: skip
+    assert ".github.io" not in denied and "gist.github.com" not in denied
+    assert "::/128" in _acls(texts["open"])["denied_dst"]  # P1-15
+
+
+def test_grant_to_a_code_running_profile_is_rejected_by_the_schema() -> None:
+    """Decision B3: grantee keys are a closed Literal set; fetch/validate/runner/gatekeeper are not."""
+    text = (ROOT / "config" / "egress.yaml").read_text(encoding="utf-8")
+    for grantee in ("fetch", "validate", "runner", "gatekeeper"):
+        bad = text.replace("  allowlist: {}", f"  allowlist: {{{grantee}: [web_public]}}")
+        with pytest.raises(ConfigError, match=grantee):
+            parse_yaml_model(EgressConfig, "egress.yaml", bad.encode())
+    with pytest.raises(ConfigError, match="every egress mode"):
+        parse_yaml_model(EgressConfig, "egress.yaml", text.replace("  allowlist: {}\n", "").encode())
+
+
+def _with_egress(bundle: render.ConfigBundle, **update: object) -> render.ConfigBundle:
+    egress = bundle.egress.model_copy(update=update)
+    return render.ConfigBundle(bundle.policy, bundle.targets, egress, bundle.profile)
+
+
+def test_renderer_refuses_web_public_in_base_lists_of_code_or_trusted_callers() -> None:
+    """Data that bypasses the grant keys (a base list) still cannot give fetch/runner/gatekeeper the web."""
+    bundle = _bundle()
+    profiles = dict(bundle.egress.sandbox_profiles)
+    profiles["fetch"] = [*profiles["fetch"], "web_public"]
+    profiles["validate"] = [*profiles["validate"], "web_public"]
+    with pytest.raises(render.RenderError, match="fetch/validate"):
+        render.render_squid(_with_egress(bundle, sandbox_profiles=profiles), "0" * 64, [NS], TEMPLATE)
+    callers = dict(bundle.egress.host_callers)
+    callers["runner"] = callers["runner"].model_copy(update={"categories": ["github_read", "web_public"]})
+    with pytest.raises(render.RenderError, match="runner"):
+        render.render_squid(_with_egress(bundle, host_callers=callers), "0" * 64, [NS], TEMPLATE)
+
+
+def test_renderer_refuses_a_hand_built_context_giving_fetch_web_public() -> None:
+    ctx = render.squid_context(_bundle(), "0" * 64, [NS], mode="open")
+    ctx["rules"] = [*ctx["rules"], {"port": "sandbox", "src": "pool_fetch", "dst": "all"}]
+    with pytest.raises(render.RenderError, match="fetch/validate"):
+        render.render_context(ctx, TEMPLATE)
+    ctx = render.squid_context(_bundle(), "0" * 64, [NS], mode="allowlist")
+    ctx["rules"] = [*ctx["rules"], {"port": "hermes", "src": "src_host", "dst": "all"}]
+    with pytest.raises(render.RenderError, match="allowlist"):
+        render.render_context(ctx, TEMPLATE)
+
+
+def test_renderer_refuses_mode_dependent_invariants() -> None:
+    """A mode grant that changes a pool-mate list (agent-llm vs catalog) or drops an always-denied
+    entry fails every render, whichever mode is asked for."""
+    bundle = _bundle()
+    modes = {k: dict(v) for k, v in bundle.egress.modes.items()}
+    modes["research"] = {**modes["research"], "agent-llm": ["web_public"]}  # catalog not granted
+    with pytest.raises(render.RenderError, match="share pool"):
+        render.render_squid(_with_egress(bundle, modes=modes), "0" * 64, [NS], TEMPLATE, mode="allowlist")
+    denied = bundle.egress.always_denied.model_copy(
+        update={"domains": [d for d in bundle.egress.always_denied.domains if d != "telegra.ph"]}
+    )
+    with pytest.raises(render.RenderError, match=r"telegra\.ph"):
+        render.render_squid(_with_egress(bundle, always_denied=denied), "0" * 64, [NS], TEMPLATE)
+    cidrs = bundle.egress.always_denied.model_copy(
+        update={"cidrs": [c for c in bundle.egress.always_denied.cidrs if c != "169.254.0.0/16"]}
+    )
+    with pytest.raises(render.RenderError, match=r"169\.254"):
+        render.render_squid(_with_egress(bundle, always_denied=cidrs), "0" * 64, [NS], TEMPLATE)
+
+
+def test_check_mode_invariants_catches_a_grant_to_the_code_pool(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Belt and braces: if mode_lists ever leaked a grant into fetch, every render fails."""
+    real = render.mode_lists
+
+    def leaky(egress: EgressConfig, mode: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        profiles, callers = real(egress, mode)  # type: ignore[arg-type]
+        if mode == "open":
+            profiles = {**profiles, "fetch": [*profiles["fetch"], "web_public"]}
+            profiles["validate"] = profiles["fetch"]
+        return profiles, callers
+
+    monkeypatch.setattr(render, "mode_lists", leaky)
+    with pytest.raises(render.RenderError):
+        render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode="allowlist")
+
+
+# ------------------------------------------------------------------- live drift (--check)
+def _snapshot_env(tmp_path: Path, mode: str | None) -> tuple[Path, Path, Path, Path]:
+    files = {n: (ROOT / "config" / n).read_bytes() for n in ("policy.yaml", "egress.yaml", "targets.yaml")}
+    files["profile.yaml"] = (ROOT / "tests" / "fixtures" / "profile.test.yaml").read_bytes()
+    root = tmp_path / "snap"
+    digest = write_snapshot(root, files)
+    control = tmp_path / "control"
+    control.mkdir()
+    if mode is not None:
+        write_flag(control / "egress-mode", {"mode": mode, "actor": "test", "ts": "x"})
+    resolv = tmp_path / "resolv.conf"
+    resolv.write_text(f"nameserver {NS}\n")
+    template = tmp_path / "squid.conf.j2"
+    template.write_text(TEMPLATE, encoding="utf-8")
+    conf = tmp_path / "squid.conf"
+    conf.write_text(render.render_squid(parse_bundle(files), digest, [NS], TEMPLATE, mode=mode or "open"))  # type: ignore[arg-type]
+    return conf, root, template, resolv
+
+
+def _drift(conf: Path, root: Path, template: Path, resolv: Path, control: Path, now: float | None = None) -> list[str]:
+    return render.squid_drift(conf, root, template, resolv, control, now)
+
+
+def test_squid_drift_none_when_live_matches_the_mode(tmp_path: Path) -> None:
+    conf, root, template, resolv = _snapshot_env(tmp_path, "research")
+    assert _drift(conf, root, template, resolv, tmp_path / "control") == []
+    assert _drift(tmp_path / "absent.conf", root, template, resolv, tmp_path / "control") == []  # not rendered yet
+
+
+def test_squid_drift_after_a_mode_switch_without_apply(tmp_path: Path) -> None:
+    conf, root, template, resolv = _snapshot_env(tmp_path, "research")
+    control = tmp_path / "control"
+    old = time.time() - 600
+    os.utime(conf, (old, old))
+    write_flag(control / "egress-mode", {"mode": "allowlist", "actor": "test", "ts": "x"})
+    flag_mtime = (control / "egress-mode").stat().st_mtime
+    assert _drift(conf, root, template, resolv, control, now=flag_mtime + 5) == []  # apply pending (grace)
+    [problem] = _drift(conf, root, template, resolv, control, now=flag_mtime + render.MODE_APPLY_GRACE_S + 1)
+    assert problem.startswith("firewall_drift:squid_mode ") and "allowlist" in problem
+
+
+def test_squid_drift_unparseable_flag_means_allowlist(tmp_path: Path) -> None:
+    conf, root, template, resolv = _snapshot_env(tmp_path, "open")
+    control = tmp_path / "control"
+    old = time.time() - 600
+    (control / "egress-mode").write_text("{not json")
+    os.utime(control / "egress-mode", (old, old))
+    [problem] = _drift(conf, root, template, resolv, control)
+    assert "egress mode allowlist" in problem
+
+
+def test_squid_drift_detects_a_hand_edit_and_a_missing_snapshot(tmp_path: Path) -> None:
+    conf, root, template, resolv = _snapshot_env(tmp_path, None)
+    control = tmp_path / "control"
+    text = conf.read_text()
+    conf.write_text(text.replace("http_access deny ip_literal\n", ""))
+    [problem] = _drift(conf, root, template, resolv, control)
+    assert problem.startswith("firewall_drift:squid_mode")
+    conf.write_text(text.replace(text.split("# Config snapshot: ")[1][:64], "f" * 64))
+    [problem] = _drift(conf, root, template, resolv, control)
+    assert "cannot read the snapshot" in problem
+    conf.write_text("http_access allow all\n")
+    [problem] = _drift(conf, root, template, resolv, control)
+    assert "names no config snapshot" in problem
+
+
+def test_squid_drift_tolerates_a_snapshot_the_new_schema_rejects(tmp_path: Path) -> None:
+    """A deploy that changes the schema must not deadlock the gatekeeper start (its ExecStartPre
+    runs --check before it can write the new snapshot); a missing snapshot still fails."""
+    conf, root, template, resolv = _snapshot_env(tmp_path, None)
+    files = {p.name: p.read_bytes() for p in (root / "current").iterdir()}
+    files["targets.yaml"] = files["targets.yaml"].replace(b"  size_class: null", b"  max_changed_lines: 400")
+    old = write_snapshot(root, files)
+    text = conf.read_text()
+    conf.write_text(text.replace(text.split("# Config snapshot: ")[1][:64], old))
+    assert _drift(conf, root, template, resolv, tmp_path / "control") == []
 
 
 def test_squid_listeners_and_classes() -> None:
-    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE)
+    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode="research")
     assert "http_port 3128 name=sandbox\n" in text
     for port, name in ((3140, "runner"), (3141, "hermes"), (3150, "gatekeeper")):
         assert f"http_port 10.212.0.2:{port} name={name}\n" in text

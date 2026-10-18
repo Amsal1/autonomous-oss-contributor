@@ -1,0 +1,10 @@
+# Egress mode watcher (DESIGN §11.5): the gatekeeper writes egress-mode after a human confirm
+# (ossctl egress mode, Telegram /egress); the root applier re-renders squid and restarts the proxy.
+[Unit]
+Description=ossbot egress mode watcher
+After=ossbot-boot-gate.service
+[Path]
+PathChanged=/var/lib/ossbot/control/egress-mode
+Unit=ossbot-egress-apply.service
+[Install]
+WantedBy=multi-user.target

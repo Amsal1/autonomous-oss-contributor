@@ -168,6 +168,55 @@ def require_up(control_dir: Path, what: str) -> None:
         raise NotUp(what, info)
 
 
+# ------------------------------------------------------------------ egress mode (CR-002, §11.5)
+# ``egress-mode`` in the control dir: JSON {mode, actor, ts}, written by the gatekeeper after a human
+# confirm; applied by root (ossbot-egress.path -> ossbot-egress-apply). Absent = the snapshot's
+# ``egress.mode_default``; unparseable, oversize, a symlink or an unknown mode = ``allowlist`` (fail
+# closed: the narrowest mode).
+EgressMode = Literal["allowlist", "research", "open"]
+EGRESS_MODES: tuple[EgressMode, ...] = ("allowlist", "research", "open")
+EGRESS_MODE_FILE = "egress-mode"
+
+
+def _read_flag_bytes(path: Path) -> bytes | None:
+    """Raw content (None if absent); anything odd (symlink, unreadable, oversize) is ``b""``."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return b""
+    try:
+        with os.fdopen(fd, "rb") as fh:
+            raw = fh.read(FLAG_MAX_BYTES + 1)
+    except OSError:  # e.g. a directory planted in place of the flag
+        return b""
+    return b"" if len(raw) > FLAG_MAX_BYTES else raw
+
+
+def _read_choice(path: Path, key: str) -> str | None:
+    """The string at ``key`` of the JSON flag, ``""`` when present but unusable, None when absent."""
+    raw = _read_flag_bytes(path)
+    if raw is None:
+        return None
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return ""
+    value = data.get(key) if isinstance(data, dict) else None
+    return value if isinstance(value, str) else ""
+
+
+def read_egress_mode(control_dir: Path, default: EgressMode) -> EgressMode:
+    value = _read_choice(control_dir / EGRESS_MODE_FILE, "mode")
+    if value is None:
+        return default
+    for mode in EGRESS_MODES:
+        if value == mode:
+            return mode
+    return "allowlist"
+
+
 def write_flag(path: Path, payload: dict[str, Any]) -> None:
     """Atomically write a flag file with mode 0640 (writers: gatekeeper and root only)."""
     tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")

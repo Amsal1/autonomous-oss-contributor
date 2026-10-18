@@ -150,7 +150,12 @@ if networked:
     facts["proxy_example"] = connect_code("https://example.com/", proxy)
     facts["noproxy_example"] = connect_code("https://example.com/", None, 8)
     facts["github"] = connect_code("https://github.com/", proxy)
+    # github_user_content (CR-002): research in every egress mode, never fetch/validate (§11.3)
     facts["gist"] = connect_code("https://gist.github.com/", proxy)
+    facts["gist_raw"] = connect_code("https://gist.githubusercontent.com/", proxy)
+    facts["ghio"] = connect_code("https://github.github.io/", proxy)
+    # always denied for every caller (CR-003 U11)
+    facts["telegraph"] = connect_code("https://telegra.ph/", proxy)
     facts["host_ports"] = {str(p): tcp("10.212.0.2", p) for p in (3140, 3141, 3150)}
     facts["alias_ports"] = {str(p): connect_code("https://example.com/", f"http://proxy:{p}", 8) for p in (3140, 3141, 3150)}
     peer = os.environ.get("OSSBOT_PROBE_PEER")

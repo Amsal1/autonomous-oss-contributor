@@ -20,13 +20,16 @@ from typing import Any, Literal
 
 from ossbot.common.clock import Clock, to_iso
 from ossbot.common.control_flags import (
+    EGRESS_MODE_FILE,
     Blocked,
+    EgressMode,
     FlagState,
     KillLevel,
     LifecycleInfo,
     LifecycleScope,
     PauseInfo,
     lifecycle_name,
+    read_egress_mode,
     read_flags,
     read_lifecycle,
     write_flag,
@@ -253,6 +256,26 @@ class ControlService:
             invalidated = self.approvals.invalidate_all_open("dry_run_toggled", actor)
             self.audit.append(actor, "dry_run_set", {"enabled": enabled, "invalidated": len(invalidated)})
         return invalidated
+
+    # ------------------------------------------------------------ egress mode (§11.5)
+    def egress_mode(self, default: EgressMode) -> EgressMode:
+        """The active mode: the flag, else the snapshot's ``mode_default``; unparseable = allowlist."""
+        return read_egress_mode(self.paths.control_dir, default)
+
+    def set_egress_mode(self, mode: EgressMode, actor: str, default: EgressMode) -> EgressMode:
+        """Human-confirmed (ossctl TTY, Telegram /egress later): write the flag, audit, FYI.
+
+        Root applies it (ossbot-egress.path -> ossbot-egress-apply re-renders squid and restarts the
+        proxy). Returns the previous mode. The code-running profiles never change (§11.5)."""
+        with db.transaction(self.conn):
+            previous = self.egress_mode(default)
+            write_flag(
+                self.paths.control_dir / EGRESS_MODE_FILE,
+                {"mode": mode, "actor": actor, "ts": to_iso(self.clock.now())},
+            )
+            self.audit.append(actor, "egress_mode_changed", {"from": previous, "to": mode})
+        self.notify(f"🌐 Egress mode {previous} → {mode} by {actor} (fetch/validate unchanged)")
+        return previous
 
     def set_config_hash(self, config_hash: str) -> None:
         """Called inside the snapshot manager's transaction."""

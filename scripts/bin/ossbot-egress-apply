@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# ossbot-egress-apply (installed as /opt/ossbot/bin/ossbot-egress-apply; DESIGN §11.5, CR-002).
+# Self-contained. Run by ossbot-egress-apply.service when ossbot-egress.path sees the gatekeeper
+# write /var/lib/ossbot/control/egress-mode (after a human confirm: ossctl egress mode, Telegram
+# /egress). It re-renders /etc/ossbot/proxy/squid.conf from the config snapshot for the mode in the
+# flag (the renderer reads it: absent = egress.yaml mode_default, unparseable = allowlist, fail
+# closed; every render refuses if a §11.5 invariant differs between the modes) and restarts the
+# proxy: the conf is a read-only single-file bind mount, so the running container keeps the old
+# inode after the atomic replace and `squid -k reconfigure` would re-read the old rules.
+# A stopped proxy (full kill, ossctl down) stays stopped; its ExecStartPre renders the same file.
+# Exit 0 applied, 1 render or restart failed, 2 usage.
+set -uo pipefail
+PY=${OSSBOT_PY:-/opt/ossbot/app/.venv/bin/python}
+OUT=${OSSBOT_SQUID_CONF:-/etc/ossbot/proxy/squid.conf}
+[[ $# -eq 0 ]] || { echo "usage: ossbot-egress-apply" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "ossbot-egress-apply: must run as root" >&2; exit 2; }
+log() { printf 'ossbot-egress-apply: %s\n' "$*"; }
+main() {
+  local out net i
+  if ! out=$("$PY" -I -m ossbot.ctl.render squid --out "$OUT" 2>&1); then
+    log "render failed, proxy left as it was: $out"
+    exit 1
+  fi
+  log "$out"
+  if ! systemctl try-restart ossbot-proxy.service; then
+    log "proxy restart failed (journalctl -u ossbot-proxy)"
+    exit 1
+  fi
+  if ! systemctl is-active --quiet ossbot-proxy.service; then
+    log "proxy not running; it renders the same rules at its next start"
+    exit 0
+  fi
+  # The new container is attached to ossbot-egress only: re-attach it, with alias proxy, to every
+  # task network that exists (sandboxd attaches it per job, so running jobs keep their proxy).
+  for ((i = 0; i < 60; i++)); do
+    [[ $(docker inspect -f '{{.State.Running}}' ossbot-proxy 2>/dev/null) == true ]] && break
+    sleep 0.5
+  done
+  while read -r net; do
+    [[ -n $net ]] || continue
+    docker network connect --alias proxy "$net" ossbot-proxy >/dev/null 2>&1 || true
+  done < <(docker network ls --filter label=ossbot.sandbox=1 --format '{{.Name}}')
+  log "proxy restarted with the new rules"
+  exit 0
+}
+main </dev/null

@@ -6,7 +6,8 @@ Per tick, in order:
 2. ``ossbot-firewall --check`` (re-checked up to 3 x 3 s to ride out a Docker restart): drift ->
    kill (soft) ``firewall_drift`` / ``firewall_drift:resolver_changed`` /
    ``firewall_drift:resolved_ipc`` (systemd-resolved unmasked or listening again, e.g. after an
-   apt upgrade) / ``firewall_drift:io_uring`` (``kernel.io_uring_disabled`` is not 2);
+   apt upgrade) / ``firewall_drift:io_uring`` (``kernel.io_uring_disabled`` is not 2) /
+   ``firewall_drift:squid_mode`` (the live squid.conf differs from the render for the egress mode);
 3. while killed: a running ``ossbot.sandbox=1`` container or an active unit the kill stops ->
    re-enforce (``ossbot-kill --enforce``) + alert;
 4. while running: gatekeeper ``/v1/health`` failing 4 consecutive ticks -> ``paused``
@@ -129,8 +130,9 @@ def check_firewall(t: Tick) -> None:
         out = _run([FIREWALL, "--check"])
     if out.returncode != 0:
         reason = "firewall_drift"
-        # resolved_ipc: systemd-resolved unmasked (P1-6); io_uring: kernel.io_uring_disabled != 2 (P1-14)
-        for detail in ("resolver_changed", "resolved_ipc", "io_uring"):
+        # resolved_ipc: systemd-resolved unmasked (P1-6); io_uring: kernel.io_uring_disabled != 2 (P1-14);
+        # squid_mode: the live squid.conf is not the render for the current egress mode (§11.5)
+        for detail in ("resolver_changed", "resolved_ipc", "io_uring", "squid_mode"):
             if detail in out.stderr:
                 reason = f"firewall_drift:{detail}"
                 break

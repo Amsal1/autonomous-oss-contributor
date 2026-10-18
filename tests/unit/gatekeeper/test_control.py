@@ -6,6 +6,8 @@ and the Docker filter call the same ``require_running`` so later FEATs extend th
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from ossbot.common.control_flags import Blocked, require_running
@@ -20,6 +22,9 @@ from ossbot.common.schemas import (
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.control import ModeChanged
 from ossbot.gatekeeper.state_machine import ALLOWED, BLOCKED_WHILE_STOPPED, Actor, TransitionError
+from tests.conftest import UID_OPERATOR, UID_REQUESTER, UID_SANDBOX, UID_WORKER
+from tests.unit.gatekeeper.api_helpers import client
+from tests.unit.gatekeeper.test_authz import outbox_texts
 from tests.unit.gatekeeper.test_state_machine import guard_columns, make
 
 STOPPED = ["paused", "killed"]
@@ -115,6 +120,37 @@ def test_levels_only_escalate(ctx: AppContext) -> None:
 def test_pause_while_killed_keeps_killed(ctx: AppContext) -> None:
     ctx.control.kill("a", "x")
     assert ctx.control.pause("b", "y").state == "killed"
+
+
+def _audits(ctx: AppContext, event: str) -> list[dict[str, object]]:
+    rows = ctx.conn.execute("SELECT data_json FROM audit_events WHERE event = ? ORDER BY seq", (event,))
+    return [json.loads(r["data_json"]) for r in rows]
+
+
+def test_set_egress_mode_writes_flag_audits_and_fyis(ctx: AppContext) -> None:
+    """§11.5: the default comes from the snapshot (open); a switch writes {mode, actor, ts}."""
+    default = ctx.config.egress.mode_default
+    assert default == "open" and ctx.control.egress_mode(default) == "open"
+    previous = ctx.control.set_egress_mode("allowlist", "uid:1000/operator", default)
+    assert previous == "open" and ctx.control.egress_mode(default) == "allowlist"
+    flag = json.loads((ctx.paths.control_dir / "egress-mode").read_text())
+    assert flag["mode"] == "allowlist" and flag["actor"] == "uid:1000/operator" and flag["ts"]
+    assert (ctx.paths.control_dir / "egress-mode").stat().st_mode & 0o777 == 0o640
+    assert _audits(ctx, "egress_mode_changed") == [{"from": "open", "to": "allowlist"}]
+    assert any("Egress mode open → allowlist" in t for t in outbox_texts(ctx))
+
+
+async def test_egress_mode_api_is_operator_only(ctx: AppContext) -> None:
+    for uid in (UID_WORKER, UID_SANDBOX, UID_REQUESTER):
+        async with client(ctx, uid) as c:
+            assert (await c.post("/v1/control/egress-mode", json={"mode": "allowlist"})).status_code == 403
+            assert (await c.get("/v1/control/egress-mode")).json()["mode"] == "open"
+    async with client(ctx, UID_OPERATOR) as c:
+        assert (await c.post("/v1/control/egress-mode", json={"mode": "fetch"})).status_code == 400
+        resp = await c.post("/v1/control/egress-mode", json={"mode": "research"})
+    assert resp.status_code == 200
+    assert resp.json() == {"mode": "research", "default": "open", "previous": "open"}
+    assert _audits(ctx, "egress_mode_changed")[-1] == {"from": "open", "to": "research"}
 
 
 def test_dry_run_default_on_and_resume_does_not_change_it(ctx: AppContext) -> None:

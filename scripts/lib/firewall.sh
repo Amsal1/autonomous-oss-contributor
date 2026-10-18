@@ -56,6 +56,19 @@ step_firewall() {
   ensure_file /opt/ossbot/bin/ossbot-firewall root root 0755 <"$OSSBOT_REPO/scripts/bin/ossbot-firewall"
   install_unit ossbot-firewall.service
   install_unit ossbot-firewall-docker.service
+  # '--check' (host part) also compares the live squid.conf with the render for the current egress
+  # mode (§11.5). After a deploy of new renderer code, re-render it first (same snapshot, current
+  # mode); the running proxy keeps its old inode until its restart in step enable-start. A snapshot
+  # the new schema rejects is left alone: the gatekeeper restart writes a new one, the proxy restart
+  # renders from it (and --check does not count the old one as drift meanwhile).
+  local out
+  if [[ -f /etc/ossbot/proxy/squid.conf && -L /srv/ossbot/config-snapshot/current ]]; then
+    if out=$(/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.render squid --out /etc/ossbot/proxy/squid.conf 2>&1); then
+      [[ $out == unchanged* ]] || mark_changed "re-rendered /etc/ossbot/proxy/squid.conf"
+    else
+      warn "squid.conf not re-rendered now (${out:0:200}); the proxy re-renders after the gatekeeper restart"
+    fi
+  fi
   local part
   for part in host docker; do
     if ! /opt/ossbot/bin/ossbot-firewall --check --part "$part" >/dev/null 2>&1; then

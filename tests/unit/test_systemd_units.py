@@ -11,7 +11,8 @@ import pytest
 from pydantic import ValidationError
 
 from ossbot.common.config import LifecyclePolicy
-from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S
+from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S, EGRESS_MODE_FILE
+from ossbot.common.paths import Paths
 from ossbot.ctl import cli
 
 UNITS = Path(__file__).resolve().parents[2] / "systemd"
@@ -86,6 +87,35 @@ def test_non_root_units_filter_io_uring(path: Path) -> None:
     assert service["SystemCallErrorNumber"] == "EPERM"
     # no 32-bit/x32 ABI either: socketcall(2) would be a second socket entry point past both filters
     assert service["SystemCallArchitectures"] == "native"
+
+
+@pytest.mark.parametrize("path", sorted(UNITS.glob("ossbot-*.path")), ids=lambda p: p.name)
+def test_path_units_trigger_an_existing_service_and_are_enabled(path: Path) -> None:
+    unit = _unit(path)["Path"]["Unit"]
+    assert (UNITS / unit).is_file(), unit
+    services_sh = (UNITS.parent / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    enable = services_sh.split("OSSBOT_ENABLE_UNITS=(", 1)[1].split(")", 1)[0].split()
+    assert path.name in enable
+
+
+def test_egress_path_watches_the_flag_the_gatekeeper_writes() -> None:
+    """§11.5: ossbot-egress.path -> ossbot-egress-apply re-renders squid for the flag's mode."""
+    watched = _unit(UNITS / "ossbot-egress.path")["Path"]["PathChanged"]
+    assert watched == str(Paths.default().control_dir / EGRESS_MODE_FILE)
+    apply = _unit(UNITS / "ossbot-egress-apply.service")["Service"]
+    assert apply["ExecStart"] == "/opt/ossbot/bin/ossbot-egress-apply" and apply["Type"] == "oneshot"
+    services_sh = (UNITS.parent / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    assert "ossbot-egress-apply" in services_sh.split("OSSBOT_BINS=(", 1)[1].split(")", 1)[0]
+
+
+def test_proxy_renders_before_its_firewall_check() -> None:
+    """--check compares the live squid.conf with the render for the current mode, so the proxy
+    renders first (a mode switched while it was stopped would otherwise fail its own start)."""
+    pre = [line for line in (UNITS / "ossbot-proxy.service").read_text(encoding="utf-8").splitlines()
+           if line.startswith("ExecStartPre=")]  # fmt: skip
+    render = next(i for i, line in enumerate(pre) if "ossbot.ctl.render squid" in line)
+    check = next(i for i, line in enumerate(pre) if "ossbot-firewall --check" in line)
+    assert render < check
 
 
 def test_workers_stop_before_gatekeeper_and_proxy() -> None:

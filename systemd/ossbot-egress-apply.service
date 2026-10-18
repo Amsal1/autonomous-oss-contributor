@@ -1,0 +1,14 @@
+# Root egress mode applier (DESIGN §11.5, decision B4): renders /etc/ossbot/proxy/squid.conf from
+# the config snapshot for the mode in the egress-mode flag (unparseable = allowlist) and restarts
+# ossbot-proxy if it runs. fetch/validate, runner and gatekeeper egress are identical in every mode
+# (the renderer refuses otherwise); ossbot-firewall --check and the watchdog compare the live conf
+# with the render for the current mode.
+[Unit]
+Description=ossbot egress mode apply
+After=ossbot-boot-gate.service docker.service
+[Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
+Type=oneshot
+ExecStart=/opt/ossbot/bin/ossbot-egress-apply
+TimeoutStartSec=120
