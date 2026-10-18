@@ -6,8 +6,12 @@ RESCOPE_REQUIRED). A snoozed or expired item is re-scouted only while it still a
 open, unassigned, unlocked, no open PR mentioning it, repo not set to "never"); otherwise it is
 SKIPPED with the reason. Autonomous first proposals respect ``proposal.max_per_day`` before any
 work: while the gatekeeper's pacing says no slot is left, the item waits (``CapReached``) instead
-of scouting into a 429. The clone is a ``fetch`` job with ``prefetch: false`` and depth 1, so no repo code
-runs; the real fetch after Start work replaces it. Its ``fetch.json`` says whether the repo has a
+of scouting into a 429. The clone is a ``fetch`` job with ``prefetch: false`` (depth 1, single branch,
+no tags, no submodules, no LFS, https only, no hooks, no credentials; nothing from the repo runs);
+the scout session reads it as a read-only snapshot in the ``research`` profile (no shell). A clone
+over ``SCOUT_MAX_MB`` skips the item (``snapshot_too_large``, with a note). The task volume is
+destroyed when the stage ends, whatever the outcome, so gate 1 waits without one; the real fetch
+after Start work clones afresh (DESIGN §9.5a, ADR-0005 addendum). Its ``fetch.json`` says whether the repo has a
 test suite; a proposal listing no tests for such a repo gets one repair retry. The gatekeeper
 validates and stores the proposal and moves the item to PROPOSED; autonomous proposals above
 ``autonomous_max_class``, an excluded kind or a "never" repo are refused there and the item is
@@ -22,13 +26,21 @@ from typing import Any
 from ossbot.common.clock import from_iso
 from ossbot.common.schemas import Proposal
 from ossbot.runner import prompts
-from ossbot.runner.errors import CapReached
+from ossbot.runner.errors import CapReached, StageFailed
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.outputs import SCHEMA_HINTS
 from ossbot.runner.pipeline import StageContext, StageRun
-from ossbot.runner.stages.common import artifact_json, has_test_suite, issue_text, job, owner_notes
+from ossbot.runner.stages.common import (
+    artifact_json,
+    destroy_volume,
+    has_test_suite,
+    issue_text,
+    job,
+    owner_notes,
+)
 
 STAGE = "scout"
+SCOUT_MAX_MB = 2048  # sandbox/entrypoints/fetch.sh SCOUT_MAX_MB (error_class snapshot_too_large)
 SKIP_CODES = {"above_autonomous_max": "too_big_for_auto", "kind_filtered": "kind_filtered",
               "never_repo": "never_repo", "above_ceiling": "above_ceiling"}  # fmt: skip
 TESTS_REQUIRED = (
@@ -94,10 +106,36 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         sc.transition(cid, state, "SCOUTING")
         state = "SCOUTING"
     user = c.get("source") == "user"
+    try:
+        skip = _scout(sc, c, state, user)
+    finally:  # the scout clone never outlives the stage: gate 1 waits without a task volume
+        destroy_volume(sc, cid)
+    if skip is None:
+        return
+    sc.transition(cid, "SCOUTING", "SKIPPED", {"reason": skip})
+    where = f"{repo}#{c['issue_number']}" if c.get("issue_number") else repo
+    if skip == "snapshot_too_large":
+        noted = sc.load("_repos").get("too_large_noted", [])
+        if user or repo not in noted:  # autonomous: one note per repo
+            sc.save("_repos", too_large_noted=sorted({*noted, repo}))
+            sc.say(f"🛑 {where}: skipped, the repository is too large to scout (its shallow clone is over"
+                   f" {SCOUT_MAX_MB} MB). Nothing was started.")  # fmt: skip
+    elif user:
+        sc.say(f"🛑 {where}: the scouted change is {skip.replace('_', ' ')}; nothing was started.")
+
+
+def _scout(sc: StageContext, c: dict[str, Any], state: str, user: bool) -> str | None:
+    """The stage proper; returns a skip reason, or None once the proposal is stored."""
+    cid, repo = str(c["id"]), str(c["upstream"])
     feedback = json.loads(c["proposal_feedback_json"]) if c.get("proposal_feedback_json") else None
     with StageRun(sc, cid, STAGE, profile="research") as run_:
         depth_args = {"repo": repo, "clone_depth": 1, "prefetch": False}
-        clone = job(sc, cid, STAGE, "fetch", "fetch", depth_args, "rw")
+        try:
+            clone = job(sc, cid, STAGE, "fetch", "fetch", depth_args, "rw")
+        except StageFailed as exc:
+            if exc.error_class != "snapshot_too_large" or state != "SCOUTING":
+                raise
+            return "snapshot_too_large"
         suite = has_test_suite(artifact_json(clone, "fetch.json"))
         issue, comments = issue_text(sc, c)
         merged, open_prs = _prs(sc, repo)
@@ -137,11 +175,6 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
                     until = None
                 raise CapReached(until) from exc
             if exc.status == 422 and exc.code in SKIP_CODES and state == "SCOUTING":
-                skip = SKIP_CODES[exc.code]
-            else:
-                raise
-        else:
-            return
-    sc.transition(cid, "SCOUTING", "SKIPPED", {"reason": skip})
-    if user:
-        sc.say(f"🛑 {repo}: the scouted change is {skip.replace('_', ' ')}; nothing was started.")
+                return SKIP_CODES[exc.code]
+            raise
+    return None

@@ -14,10 +14,14 @@ SLUG="${OSSBOT_ARG_REPO:-}"
 BASE_REF="${OSSBOT_ARG_BASE_REF:-}"
 BASE_SHA="${OSSBOT_ARG_BASE_SHA:-}"
 DEPTH="${OSSBOT_ARG_CLONE_DEPTH:-200}"
-# OSSBOT_ARG_PREFETCH=0: the CR-004 scout clone (shallow, no dependency prefetch, so no repo code
-# runs). It is marked, and the real fetch after Start work replaces it with a fresh clone.
+# OSSBOT_ARG_PREFETCH=0: the CR-004 scout clone before gate 1 (DESIGN §9.5a, ADR-0005 addendum):
+# depth 1, single branch, no tags, no submodules, no LFS smudge, https only, no hooks, no
+# credentials, nothing from the repo runs (no dependency fetch or build). It is size-capped
+# (SCOUT_MAX_MB, error_class snapshot_too_large) and marked; the runner destroys the task volume
+# when the scout stage ends, and the real fetch after Start work starts from a fresh clone.
 PREFETCH_ON="${OSSBOT_ARG_PREFETCH:-1}"
 SCOUT_MARK="$WORK/.scout-clone"
+SCOUT_MAX_MB=2048  # same cap as the research snapshot (snapshot.sh); ossbot.runner.stages.scout.SCOUT_MAX_MB
 
 result() { # result <ok> <error_class|null> [head]
   local err_json="null" head_json="null"
@@ -38,8 +42,10 @@ if [[ -f "$SCOUT_MARK" ]]; then rm -rf "$REPO" "$SCOUT_MARK"; fi  # the scout cl
 
 mkdir -p "$REPO" "$WORK/cache" "$WORK/venv" "$WORK/.home"
 export HOME="$WORK/.home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
-G=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.file.allow=never
-   -c protocol.ext.allow=never -c submodule.recurse=false)
+unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_ASKPASS SSH_ASKPASS
+[[ "$PREFETCH_ON" == 1 ]] || export GIT_LFS_SKIP_SMUDGE=1
+G=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.allow=never -c protocol.https.allow=always
+   -c submodule.recurse=false -c credential.helper=)  # no system/global config: no LFS filter is defined
 
 BRANCH=()
 [[ -n "$BASE_REF" ]] && BRANCH=(--branch "$BASE_REF")
@@ -47,6 +53,14 @@ BRANCH=()
   "https://github.com/$SLUG.git" "$REPO" || fail clone_failed "git clone failed"
 cd "$REPO"
 "${G[@]}" config core.hooksPath /dev/null  # defence in depth; package and gatekeeper never trust it
+if [[ "$PREFETCH_ON" == 0 ]]; then
+  SIZE_MB="$(du -s --block-size=1M "$REPO" | cut -f1)"
+  if (( SIZE_MB > SCOUT_MAX_MB )); then
+    cd /
+    rm -rf "$REPO"
+    fail snapshot_too_large "scout clone is ${SIZE_MB} MB > ${SCOUT_MAX_MB} MB"
+  fi
+fi
 [[ -n "$BASE_REF" ]] || BASE_REF="$("${G[@]}" symbolic-ref --short HEAD)"
 if [[ -n "$BASE_SHA" ]]; then
   if ! "${G[@]}" cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then

@@ -125,6 +125,8 @@ class FetchArgs(Strict):
     def _sha_needs_ref(self) -> FetchArgs:
         if self.base_sha is not None and self.base_ref is None:
             raise ValueError("base_sha requires base_ref")
+        if not self.prefetch and (self.clone_depth != 1 or self.base_ref is not None):
+            raise ValueError("the scout clone (prefetch false) is depth 1 of the default branch")
         return self
 
 

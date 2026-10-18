@@ -257,6 +257,14 @@ def test_destroy_only_terminal(sbx: Sbx) -> None:
     with pytest.raises(ApiError) as exc:
         sbx.jobs.destroy_task("c_01ABCDEFGH")
     assert exc.value.error_class == "not_terminal"
+    for after_start in ("PROPOSAL_APPROVED", "FETCHING", "RESCOPE_REQUIRED", "WATCHING"):
+        sbx.gatekeeper.states["c_01ABCDEFGH"] = after_start
+        with pytest.raises(ApiError):
+            sbx.jobs.destroy_task("c_01ABCDEFGH")
+    sbx.gatekeeper.states["c_01ABCDEFGH"] = "PROPOSAL_SNOOZED"  # gate 1 pending: only the scout clone (§9.5a)
+    sbx.jobs.destroy_task("c_01ABCDEFGH")
+    assert "ossbot-task-c_01abcdefgh" not in sbx.runtime.volumes
+    sbx.jobs.submit(_fetch(sbx, run_id="r2"))
     sbx.gatekeeper.states["c_01ABCDEFGH"] = "MERGED"
     sbx.jobs.destroy_task("c_01ABCDEFGH")
     assert "ossbot-task-c_01abcdefgh" not in sbx.runtime.volumes

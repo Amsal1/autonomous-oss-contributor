@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from ossbot.runner import prompts
 from ossbot.runner.errors import sandbox_run
 from ossbot.runner.llm import StageFailed, new_run_id
 from ossbot.runner.pipeline import STAGE_TIMEOUT_S, StageContext
+from ossbot.runner.sbx_client import SbxError
 
 # Same pattern as sandbox/entrypoints/fetch.sh TEST_RE (fetch.json test_files / has_test_suite).
 TEST_PATH_RE = re.compile(
@@ -19,6 +22,36 @@ TEST_PATH_RE = re.compile(
     r"|(^|/)(pytest\.ini|conftest\.py|jest\.config\.[A-Za-z]+|vitest\.config\.[A-Za-z]+|karma\.conf\.js"
     r"|phpunit\.xml(\.dist)?)$"
 )
+
+
+VOLUMES = "_volumes"  # runner note: cids whose task volume may exist (a fetch job ran for them)
+_volumes_lock = threading.Lock()
+log = logging.getLogger(__name__)
+
+
+def note_volume(sc: StageContext, cid: str, present: bool) -> None:
+    with _volumes_lock:
+        cids = set(sc.load(VOLUMES).get("cids", []))
+        if (cid in cids) != present:
+            sc.save(VOLUMES, cids=sorted(cids | {cid} if present else cids - {cid}))
+
+
+def volume_cids(sc: StageContext) -> list[str]:
+    with _volumes_lock:
+        return [str(c) for c in sc.load(VOLUMES).get("cids", [])]
+
+
+def destroy_volume(sc: StageContext, cid: str) -> bool:
+    """``POST /v1/tasks/{cid}/destroy`` (sandboxd allows it only for terminal or pre-Start-work
+    items); best effort, the scheduler's sweep retries."""
+    try:
+        sc.sbx.destroy(cid)
+    except SbxError as exc:
+        if exc.status != 404:
+            log.warning("task volume of %s not destroyed: %s", cid, exc.code, extra={"event": "destroy_failed"})
+            return False
+    note_volume(sc, cid, False)
+    return True
 
 
 def has_test_suite(fetch_info: dict[str, Any] | None) -> bool:
@@ -45,6 +78,8 @@ def job(
         "run_id": new_run_id(stage), "cid": cid, "profile": profile, "entrypoint": entrypoint, "args": args,
         "repo_mode": repo_mode, "inputs": inputs or {}, "timeout_s": timeout_s or STAGE_TIMEOUT_S.get(stage, 1800),
     }  # fmt: skip
+    if entrypoint == "fetch":
+        note_volume(sc, cid, True)  # sandboxd creates ossbot-task-<cid>; the sweep destroys it later
     done = sandbox_run(sc.sbx, spec, sc.tick)
     if done.get("state") != "succeeded":
         raise StageFailed(str(done.get("error_class") or f"{entrypoint}_failed"), str(spec["run_id"]))

@@ -35,13 +35,16 @@ from ossbot.runner.errors import CapReached, Deferred, Interrupted, ProbesNotRea
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.sbx_client import SbxError
-from ossbot.runner.stages import catalog, discover, scout
+from ossbot.runner.stages import catalog, common, discover, scout
 
 log = logging.getLogger(__name__)
 TERMINAL = frozenset({"SKIPPED", "ABANDONED", "REJECTED", "EXPIRED", "FAILED", "DRY_RUN_DONE", "MERGED", "CLOSED",
                       "PROPOSAL_REJECTED"})  # fmt: skip
 NO_FAIL = frozenset({"PROPOSED", "RESCOPE_REQUIRED", "AWAITING_APPROVAL", "APPROVED", "SUBMITTING", "SUBMITTED",
                      "SUBMIT_FAILED"})  # fmt: skip  # G/H-owned: a stage error never fails them from the runner
+# Before Start work: a task volume holds only the scout clone (sandboxd.jobs.PRE_START_STATES)
+PRE_START = frozenset({"DISCOVERED", "VETTING", "VETTED", "SCOUTING", "PROPOSED", "PROPOSAL_SNOOZED",
+                       "PROPOSAL_EXPIRED"})  # fmt: skip
 CATALOG_RETRY = timedelta(hours=1)  # §20: catalog_empty is retried hourly
 PROBE_RETRY = timedelta(minutes=30)  # probes that ran but did not all pass (a failure also pauses, §10.9)
 CAP_RECHECK = timedelta(hours=1)  # daily cap without a known next slot
@@ -153,8 +156,36 @@ class Scheduler:
         return True
 
     # ------------------------------------------------------------------- tick
+    def sweep_volumes(self) -> int:
+        """Destroy task volumes nothing needs any more: terminal items (§9.12) and items that have not
+        passed Start work (only a scout clone left behind by a kill, crash or drain, §9.5a). Runs on
+        every tick, also while stopped (cleanup only, nothing new starts). Returns the count."""
+        noted = common.volume_cids(self.sc)
+        if not noted:
+            return 0
+        try:
+            states = {str(c["id"]): str(c.get("state")) for c in self.sc.gk.contributions(limit=200)}
+        except GkError:
+            return 0
+        done = 0
+        for cid in noted:
+            if cid in self.running:
+                continue
+            state = states.get(cid)
+            if state is None:
+                try:
+                    state = str(self.sc.gk.contribution(cid)["state"])
+                except GkError as exc:
+                    if exc.status == 404:
+                        common.note_volume(self.sc, cid, False)
+                    continue
+            if (state in TERMINAL or state in PRE_START) and common.destroy_volume(self.sc, cid):
+                done += 1
+        return done
+
     def tick(self) -> Tick:
         out = Tick()
+        self.sweep_volumes()
         if not self.sc.gate.open("discover"):
             out.skipped = "stopped"  # killed, paused, draining or down: nothing new starts
             return out

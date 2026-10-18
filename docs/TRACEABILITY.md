@@ -11,7 +11,7 @@ Generated 2026-10-18 during the Phase 2 consolidation step from the sources at c
 - **location** and **tests** marked `(planned)` name the module or test the FEAT will add.
 - CR-003 ids follow DESIGN §14 numbering rules: `CR3-AC-n` = §14.21 AC n, `CR3-BA-n` = §14.21.1 BA-n, `CR3-Dn`, `CR3-Sn`, `CR3-Un` = §14.8/§14.9.
 
-Totals: deferred 26, done 178, missing 291, rework 13, **508 rows**.
+Totals: deferred 27, done 178, missing 291, rework 13, **509 rows**.
 
 | id | source | requirement | phase | implementation location | test(s) | status | evidence |
 |---|---|---|---|---|---|---|---|
@@ -118,6 +118,7 @@ Totals: deferred 26, done 178, missing 291, rework 13, **508 rows**.
 | DES-DEF-10 | DESIGN §6.1 §14.8 D4, FR-22 | Telegram Mini App (needs no-exposure hosting or user approval) | deferred | flag rejects anything but the v1 value (where a flag exists) | config schema tests | deferred | – |
 | DES-DEF-11 | DESIGN §6.1 §14.12.7, §14.19 | Feature-registry consumers (nutrition log) and guest/inline mode hooks | deferred | flag rejects anything but the v1 value (where a flag exists) | config schema tests | deferred | – |
 | DES-DEF-12 | DESIGN §6.1 §15.6 | A specific reverse-image-search provider | deferred | flag rejects anything but the v1 value (where a flag exists) | config schema tests | deferred | – |
+| DES-DEF-13 | DESIGN §6.1 §9.5a §10.2, ADR-0005 addendum (R1-5) | Streaming stage-in (runner-downloaded tarball as the scout snapshot) | deferred | scout uses the scout-mode fetch clone (§9.5a rules 1–5) | test_scout_clone.py | deferred | – |
 | DES-V-1 | DESIGN §23 item 1 | `.wslconfig` on WSL 3.0.3: every key in 7.7 is honoured (`nproc`, `free`, `swapon` after `wsl --shutdown`); `instanceIdleTimeout=-1` keeps the distro and systemd services up after the launching `wsl.exe` exits; `localhostForwardi… | P1 | ADR addenda / versions.lock.yaml | web search or live probe | done | PLAN Phase 1 items 8, 14, 16 (ADR addenda) |
 | DES-V-2 | DESIGN §23 item 2 | Hyper-V firewall: `DefaultOutboundAction Block` plus 80/443 allow rules apply to WSL NAT traffic on build 26100; DNS tunnelling unaffected; Kiro, GitHub, Telegram, Docker pulls work. | P1 | ADR addenda / versions.lock.yaml | web search or live probe | done | PLAN Phase 1 items 8, 14, 16 (ADR addenda) |
 | DES-V-3 | DESIGN §23 item 3 | drvfs sub-folder mount via fstab: escaping form, `metadata,uid,gid,umask` behaviour; survives `wsl --shutdown`; Windows-side edits keep group-write. | P1 | ADR addenda / versions.lock.yaml | web search or live probe | done | PLAN Phase 1 items 8, 14, 16 (ADR addenda) |

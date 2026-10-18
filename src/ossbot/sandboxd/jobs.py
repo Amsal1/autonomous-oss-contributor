@@ -69,6 +69,9 @@ PROBE_CID = "sys-probe"
 INTERRUPTED = "interrupted"  # job error_class after a drain timeout or a crash (CR-001); state 'failed'
 INTERRUPT_GRACE_S = 15.0  # after killing the containers, how long the job threads get to record
 PROMPT_DIR_PROBES = "/opt/ossbot/probes"
+# Before Start work (CR-004 gate 1) a task volume holds only the scout clone and may be destroyed.
+PRE_START_STATES = frozenset({"DISCOVERED", "VETTING", "VETTED", "SCOUTING", "PROPOSED", "PROPOSAL_SNOOZED",
+                              "PROPOSAL_EXPIRED", "PROPOSAL_REJECTED"})  # fmt: skip
 
 
 class ApiError(Exception):
@@ -633,11 +636,12 @@ class JobService:
         return data
 
     def destroy_task(self, cid: str) -> None:
-        """Only for terminal contributions (§9.12): task volume, networks and subnets."""
+        """Task volume, networks and subnets of a terminal contribution (§9.12), or of one that has
+        not passed Start work: before gate 1 the volume holds only the scout clone (§9.5a)."""
         state = self.gatekeeper.contribution_state(cid)
         if state is None:
             raise ApiError(404, "not_found")
-        if state not in {s.value for s in TERMINAL_STATES}:
+        if state not in {s.value for s in TERMINAL_STATES} | PRE_START_STATES:
             raise ApiError(409, "not_terminal", f"contribution is {state}")
         with self._lock:
             if cid in self._active:

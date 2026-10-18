@@ -63,6 +63,8 @@ class FakeSbx:
     probes_pass_on_run: bool = True
     probe_runs: list[dict[str, str]] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)  # M11 order: list_models, probes_status, probes_run, kiro:<role>
+    error_class: dict[str, str] = field(default_factory=dict)  # handler key -> error_class of a failed job
+    destroyed: list[str] = field(default_factory=list)  # POST /v1/tasks/{cid}/destroy
 
     def run(self, spec: dict[str, Any], *, tick: Callable[[], None] | None = None, poll_s: float = 0) -> dict[str, Any]:
         key = f"kiro:{spec['args']['role']}" if spec["entrypoint"] == "kiro" else spec["entrypoint"]
@@ -86,8 +88,12 @@ class FakeSbx:
         handler = self.handlers.get(key) or (fetch_json if key == "fetch" else None)
         code = handler(spec, out) if handler is not None else 0
         state = "succeeded" if code == 0 else "failed"
+        error = self.error_class.get(key, f"{spec['entrypoint']}_exit_{code}")  # result.json error_class
         return {"run_id": spec["run_id"], "state": state, "artifact_dir": str(out) if code == 0 else None,
-                "error_class": None if code == 0 else f"{spec['entrypoint']}_exit_{code}"}  # fmt: skip
+                "error_class": None if code == 0 else error}  # fmt: skip
+
+    def destroy(self, cid: str) -> None:
+        self.destroyed.append(cid)
 
     def kiro(self, role: str, *answers: str, model: str = "claude-opus-5.5") -> None:
         """Canned answers for a role, in order (the last one repeats)."""
