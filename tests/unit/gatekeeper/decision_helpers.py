@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
+from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import SendError
@@ -20,7 +21,12 @@ class FakeProposals:
     fields_by_key: dict[tuple[str, int], dict[str, Any]] = field(default_factory=dict)
 
     def fields(self, conn: sqlite3.Connection, cid: str, version: int) -> dict[str, Any]:
-        return dict(self.fields_by_key.get((cid, version), {"proposal_sha256": "a" * 64, "est_class": "s"}))
+        return dict(
+            self.fields_by_key.get(
+                (cid, version),
+                {"proposal_sha256": "a" * 64, "est_class": "s", "user_directed": False, "policy_hash": "h"},
+            )
+        )
 
 
 @dataclass
@@ -35,11 +41,6 @@ class FakeSkills:
         return self.staged.get(skill)
 
 
-class _State:
-    def __init__(self, value: str) -> None:
-        self.value = value
-
-
 def install_sources(ctx: AppContext) -> tuple[FakeProposals, FakeSkills]:
     proposals, skills = FakeProposals(), FakeSkills()
     ctx.decisions.proposals.source = proposals
@@ -48,7 +49,7 @@ def install_sources(ctx: AppContext) -> tuple[FakeProposals, FakeSkills]:
 
 
 def proposed_contribution(ctx: AppContext) -> str:
-    return insert_contribution(ctx, _State("PROPOSED"))  # type: ignore[arg-type]  # CR-004 state, PLAN item 29
+    return insert_contribution(ctx, State.PROPOSED)
 
 
 def proposal_card(ctx: AppContext, cid: str, version: int = 1, message_id: int = 700) -> tuple[str, dict[str, str]]:

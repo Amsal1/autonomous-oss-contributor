@@ -9,6 +9,9 @@
   redirect, into SUBMIT_FAILED, into WATCHING from a gate state) are allowed while paused/killed.
 * The transition and its audit event commit in one SQLite transaction; entering IMPLEMENTING
   invalidates the contribution's open approvals in the same transaction.
+* CR-004 gate 1: VETTED -> SCOUTING -> PROPOSED (G, inside POST /proposal) -> PROPOSAL_APPROVED (H,
+  Start work) -> FETCHING (W, guarded by the consumed approval of the current version and, behind
+  gate 1, the claim guard). Decline edges and the two Undo edges are H; RESCOPE_REQUIRED is G.
 """
 
 from __future__ import annotations
@@ -26,7 +29,7 @@ from ossbot.common.config import Limits
 from ossbot.common.control_flags import Blocked
 from ossbot.common.hashing import canonical_json
 from ossbot.common.schemas import State, TransitionResponse
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import db, outcomes
 from ossbot.gatekeeper.approvals import ApprovalService
 from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.control import ControlService
@@ -48,32 +51,46 @@ WORKING: frozenset[State] = frozenset(
         S.IMPORTED, S.VETTING, S.FETCHING, S.FETCHED, S.PLANNING, S.PLANNED, S.IMPLEMENTING, S.IMPLEMENTED,
         S.VALIDATING, S.VALIDATION_FAILED, S.VALIDATED, S.REVIEWING, S.REVISE, S.REVIEW_PASSED,
         S.REVIEW_REJECTED, S.PACKAGING, S.CHANGES_REQUESTED, S.WATCHING, S.DISCOVERED, S.VETTED,
+        S.SCOUTING, S.PROPOSAL_APPROVED,
     }
 )  # fmt: skip
 GATE: frozenset[State] = frozenset({S.AWAITING_APPROVAL, S.APPROVED, S.SUBMITTING, S.SUBMITTED, S.SUBMIT_FAILED})
 APPROVAL_STATES: frozenset[State] = frozenset(
     {S.AWAITING_APPROVAL, S.APPROVED, S.SUBMITTING, S.SUBMITTED, S.SUBMIT_FAILED, S.DRY_RUN_DONE, S.REJECTED}
 )
+# CR-004 gate 1 (§9.2): every edge into or out of these is G or H, except the guarded worker edge
+# PROPOSAL_APPROVED -> FETCHING and the generated FAILED edge of the working state PROPOSAL_APPROVED.
+GATE1_STATES: frozenset[State] = frozenset({S.PROPOSED, S.PROPOSAL_APPROVED, S.PROPOSAL_REJECTED, S.RESCOPE_REQUIRED})
+# Waiting states with a worker way out (re-scout); they keep the worker's FAILED edge.
+WAITING_W: frozenset[State] = frozenset({S.PROPOSAL_SNOOZED, S.PROPOSAL_EXPIRED})
+UNDO_WINDOW = timedelta(minutes=10)  # §14.11.15: Undo of Skip and Later
 
 _LISTED: dict[State, dict[State, frozenset[Actor]]] = {
     S.DISCOVERED: {S.VETTING: W},
     S.VETTING: {S.VETTED: W, S.SKIPPED: W},
-    S.VETTED: {S.FETCHING: W, S.SKIPPED: W | G},  # FETCHING guarded (claim); G = claim rejected (N1)
+    S.VETTED: {S.SCOUTING: W, S.SKIPPED: W | G},  # CR-004: no fetch before gate 1
+    S.SCOUTING: {S.PROPOSED: G, S.SKIPPED: W},  # PROPOSED inside POST /proposal after validation
+    S.PROPOSED: {S.PROPOSAL_APPROVED: H, S.PROPOSAL_REJECTED: H, S.PROPOSAL_SNOOZED: H, S.PROPOSAL_EXPIRED: G},
+    S.PROPOSAL_APPROVED: {S.FETCHING: W, S.SKIPPED: G},  # FETCHING guarded (approval + claim); G = claim rejected
+    S.PROPOSAL_REJECTED: {S.PROPOSED: H},  # Undo (Skip only, 10 min)
+    S.PROPOSAL_SNOOZED: {S.PROPOSED: H, S.SCOUTING: W},  # Undo (10 min) | snooze elapsed
+    S.PROPOSAL_EXPIRED: {S.SCOUTING: W, S.SKIPPED: W},  # still relevant | not
+    S.RESCOPE_REQUIRED: {S.PROPOSED: G, S.ABANDONED: H, S.PACKAGING: G},  # new version | Drop | Continue/Re-check
     S.IMPORTED: {S.FETCHING: W},  # M3: creation is G (import endpoint), fetch is W
     S.FETCHING: {S.FETCHED: W},
     S.FETCHED: {S.PLANNING: W, S.IMPLEMENTED: W},  # IMPLEMENTED guarded: source='operator' + unbundle done
     S.PLANNING: {S.PLANNED: W, S.ABANDONED: W},
     S.PLANNED: {S.IMPLEMENTING: W},
     S.IMPLEMENTING: {S.IMPLEMENTED: W},
-    S.IMPLEMENTED: {S.VALIDATING: W},
+    S.IMPLEMENTED: {S.VALIDATING: W, S.RESCOPE_REQUIRED: G},
     S.VALIDATING: {S.VALIDATED: W, S.VALIDATION_FAILED: W},
     S.VALIDATION_FAILED: {S.IMPLEMENTING: W},  # attempt < max
-    S.VALIDATED: {S.REVIEWING: W},
+    S.VALIDATED: {S.REVIEWING: W, S.RESCOPE_REQUIRED: G},
     S.REVIEWING: {S.REVISE: W, S.REVIEW_REJECTED: W, S.REVIEW_PASSED: W},
     S.REVISE: {S.IMPLEMENTING: W, S.ABANDONED: W},  # round < max
     S.REVIEW_REJECTED: {S.ABANDONED: W},
-    S.REVIEW_PASSED: {S.PACKAGING: W},
-    S.PACKAGING: {S.AWAITING_APPROVAL: G},
+    S.REVIEW_PASSED: {S.PACKAGING: W, S.RESCOPE_REQUIRED: G},
+    S.PACKAGING: {S.AWAITING_APPROVAL: G, S.RESCOPE_REQUIRED: G},  # RESCOPE: /package size check (reapprove|ceiling)
     S.AWAITING_APPROVAL: {
         S.APPROVED: H,
         S.REJECTED: H,
@@ -92,7 +109,7 @@ _LISTED: dict[State, dict[State, frozenset[Actor]]] = {
 
 def _build_allowed() -> dict[State, dict[State, frozenset[Actor]]]:
     allowed = {k: dict(v) for k, v in _LISTED.items()}
-    for state in WORKING:
+    for state in WORKING | WAITING_W:
         allowed.setdefault(state, {})[S.FAILED] = W | G
     for state in GATE:
         allowed.setdefault(state, {})[S.FAILED] = G | H
@@ -147,6 +164,7 @@ class StateMachine:
         control: ControlService,
         limits: Callable[[], Limits],
         notify: Callable[[str], None] | None = None,
+        claim_comment: Callable[[], bool] = lambda: False,
     ) -> None:
         self.conn = conn
         self.clock = clock
@@ -155,13 +173,45 @@ class StateMachine:
         self.control = control
         self.limits = limits
         self.notify = notify or (lambda text: None)
+        self.claim_comment = claim_comment  # policy proposal.claim_comment == 'on'
 
     # ---------------------------------------------------------------- guards
+    def _recent_decline(self, row: sqlite3.Row) -> bool:
+        at = row["declined_at"]
+        return at is not None and self.clock.now() - from_iso(at) <= UNDO_WINDOW
+
+    def _gate1_guard(self, row: sqlite3.Row, from_: State, to: State) -> str | None:
+        if from_ is S.PROPOSAL_APPROVED and to is S.FETCHING:
+            consumed = self.conn.execute(
+                "SELECT 1 FROM proposal_approvals WHERE cid = ? AND version = ? AND status = 'consumed' LIMIT 1",
+                (row["id"], row["proposal_version"]),
+            ).fetchone()
+            if consumed is None:
+                return "proposal_approved"
+        if from_ is S.PROPOSAL_REJECTED and to is S.PROPOSED:
+            if row["declined_reason"] != "skipped":
+                return "undo_reason"
+            if not self._recent_decline(row):
+                return "undo_window"
+        if from_ is S.PROPOSAL_SNOOZED and to is S.PROPOSED and not self._recent_decline(row):
+            return "undo_window"
+        if from_ is S.PROPOSAL_SNOOZED and to is S.SCOUTING:
+            until = row["snooze_until"]
+            if until is not None and from_iso(until) > self.clock.now():
+                return "snoozed"
+        return None
+
     def _guard(self, row: sqlite3.Row, from_: State, to: State, redirected: bool) -> str | None:
         pr = row["pr_number"]
-        if from_ is S.VETTED and to is S.FETCHING:
+        gate1 = self._gate1_guard(row, from_, to)
+        if gate1 is not None:
+            return gate1
+        if from_ is S.PROPOSAL_APPROVED and to is S.FETCHING:
+            # CR-004: the claim guard sits behind gate 1 (vet found assignment required, or
+            # proposal.claim_comment is on); dry-run applies to the claim like any public write.
             vetting = json.loads(row["vetting_json"] or "{}")
-            if vetting.get("requires_claim_comment"):
+            required = bool(vetting.get("requires_claim_comment") or vetting.get("requires_assignment"))
+            if required or self.claim_comment():
                 statuses = ["done"] + (["dry_run_done"] if db.current_dry_run(self.conn) else [])
                 found = self.conn.execute(
                     "SELECT 1 FROM outbound_actions WHERE cid = ? AND kind = 'issue_claim' AND status IN"
@@ -280,8 +330,12 @@ class StateMachine:
         if target.redirected_from is not None and error_class == "branch_moved":
             sets["watch_rounds"] = "?"
             params.append(self.limits().watch_rounds_max)
+        if from_ in {S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED, S.PROPOSAL_EXPIRED}:
+            # Undo or re-scout: the decline record goes with the state (§14.11.15 Undo step 2)
+            sets.update({"declined_at": "NULL", "declined_reason": "NULL", "snooze_until": "NULL"})
         assignments = ", ".join(f"{k} = {v}" for k, v in sets.items())
         self.conn.execute(f"UPDATE contributions SET {assignments} WHERE id = ?", (*params, cid))
+        outcomes.on_transition(self.conn, row, target.to, to_iso(self.clock.now()))
         if target.to is S.IMPLEMENTING:
             self.approvals.invalidate_contribution(cid, "entered_implementing")
         if target.redirected_from is not None:

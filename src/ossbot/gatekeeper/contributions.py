@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Callable
 from typing import Any
@@ -11,13 +12,13 @@ from ossbot.common.clock import Clock, from_iso, to_iso
 from ossbot.common.config import ConfigBundle, TargetsConfig, parse_yaml_model, resolve_target
 from ossbot.common.ids import new_cid
 from ossbot.common.rediscover import Decision, PriorContribution, RepoFactChanges, eligible
-from ossbot.common.schemas import ContributionSource, State
+from ossbot.common.schemas import TERMINAL_STATES, WORK_URL_RE, ContributionSource, State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.audit import AuditLog
 
 REDACTED_FOR_REQUESTER = (
     "plan_json", "validation_json", "review_json", "vetting_json", "commit_message", "pr_body",
-    "pr_body_override", "diffstat_json", "models_json", "package_ts_json",
+    "pr_body_override", "diffstat_json", "models_json", "package_ts_json", "notes", "proposal_feedback_json",
 )  # fmt: skip
 
 
@@ -61,11 +62,17 @@ def repo_fact_changes(conn: sqlite3.Connection, repo: str) -> RepoFactChanges:
 
 def history(conn: sqlite3.Connection, repo: str, issue_number: int) -> list[PriorContribution]:
     rows = conn.execute(
-        "SELECT id, state, state_reason, updated_at FROM contributions"
+        "SELECT id, state, state_reason, updated_at, issue_hash FROM contributions"
         " WHERE lower(upstream) = lower(?) AND issue_number = ? ORDER BY updated_at DESC",
         (repo, issue_number),
     ).fetchall()
-    return [PriorContribution(r["id"], State(r["state"]), r["state_reason"], from_iso(r["updated_at"])) for r in rows]
+    return [
+        PriorContribution(r["id"], State(r["state"]), r["state_reason"], from_iso(r["updated_at"]), r["issue_hash"])
+        for r in rows
+    ]
+
+
+WORK_RE = re.compile(WORK_URL_RE)
 
 
 class ContributionService:
@@ -77,23 +84,66 @@ class ContributionService:
         self.audit = audit
         self.config = config
 
-    def decide(self, repo: str, issue_number: int) -> Decision:
+    def decide(self, repo: str, issue_number: int, issue_hash: str | None = None) -> Decision:
         return eligible(
             history(self.conn, repo, issue_number),
             dry_run=db.current_dry_run(self.conn),
             now=self.clock.now(),
             cooldown_days=self.config().policy.limits.rediscover_cooldown_days,
             facts=repo_fact_changes(self.conn, repo),
+            issue_hash=issue_hash,
         )
 
-    def create(self, repo: str, issue_number: int, source: ContributionSource, score: float | None, actor: str) -> str:
+    def create_user(self, url: str, notes: str, actor: str) -> dict[str, Any]:
+        """``/work`` / ``ossctl work`` (CR-004 Amendment B): user-directed, ``source='user'``.
+
+        Only GitHub issue, PR or repo URLs of a configured, enabled target. Skips ranking, caps, the
+        size preference, the filters and the re-discovery history (the owner asked for it); an
+        active contribution for the same issue still answers 409 ``duplicate_active``."""
+        clean = url.strip().split("#", 1)[0].split("?", 1)[0]
+        match = WORK_RE.fullmatch(clean)
+        if match is None:
+            raise ContributionRefused(400, "not_a_github_url")
+        repo = f"{match['owner']}/{match['repo']}"
+        target = resolve_target(self.config().targets, repo)
+        if target is None:
+            raise ContributionRefused(400, "not_a_target")
+        if not target.enabled:
+            raise ContributionRefused(400, "target_disabled")
+        ref = {"issues": "issue", "pull": "pull", None: "repo"}[match["kind"]]
+        number = int(match["n"]) if match["n"] else None
+        issue_number = number if ref == "issue" else None
+        canonical = f"https://github.com/{target.repo}" + (f"/{match['kind']}/{number}" if number else "")
+        with db.transaction(self.conn):
+            if issue_number is not None and any(
+                p.state not in TERMINAL_STATES for p in history(self.conn, target.repo, issue_number)
+            ):
+                raise ContributionRefused(409, "duplicate_active")
+            cid = new_cid()
+            now = to_iso(self.clock.now())
+            self.conn.execute(
+                "INSERT INTO contributions (id, upstream, issue_number, issue_url, source, category, priority,"
+                " state, work_url, work_ref, notes, created_at, updated_at)"
+                " VALUES (?,?,?,?,'user',?,?,?,?,?,?,?,?)",
+                (
+                    cid, target.repo, issue_number, canonical if ref == "issue" else None, target.category,
+                    target.priority, State.DISCOVERED.value, canonical, ref, notes or None, now, now,
+                ),
+            )  # fmt: skip
+            self.audit.append(actor, "work_requested", {"url": canonical, "ref": ref, "notes": bool(notes)}, cid)
+        return {"cid": cid, "repo": target.repo, "ref": ref, "url": canonical}
+
+    def create(
+        self, repo: str, issue_number: int, source: ContributionSource, score: float | None, actor: str,
+        issue_hash: str | None = None,
+    ) -> str:  # fmt: skip
         target = resolve_target(self.config().targets, repo)
         if target is None:
             raise ContributionRefused(400, "not_a_target")
         if not target.discovery and source != "operator":
             raise ContributionRefused(400, "discovery_disabled")
         with db.transaction(self.conn):
-            decision = self.decide(repo, issue_number)
+            decision = self.decide(repo, issue_number, issue_hash)
             if not decision.allowed:
                 raise ContributionRefused(409, decision.http_code)
             cid = new_cid()
@@ -102,10 +152,10 @@ class ContributionService:
             try:
                 self.conn.execute(
                     "INSERT INTO contributions (id, upstream, issue_number, issue_url, source, category, priority,"
-                    " score, state, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    " score, state, issue_hash, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (
                         cid, target.repo, issue_number, f"https://github.com/{target.repo}/issues/{issue_number}",
-                        source, target.category, target.priority, score, initial.value, now, now,
+                        source, target.category, target.priority, score, initial.value, issue_hash, now, now,
                     ),
                 )  # fmt: skip
             except sqlite3.IntegrityError as exc:
@@ -131,8 +181,9 @@ class ContributionService:
         return doc
 
     def list(self, state: str | None, limit: int) -> list[dict[str, Any]]:
-        sql = "SELECT id, upstream, issue_number, source, state, state_reason, pr_number, pr_url, updated_at" \
-              " FROM contributions"  # fmt: skip
+        sql = "SELECT id, upstream, issue_number, source, state, state_reason, pr_number, pr_url, updated_at," \
+              " kind, est_class, approved_class, proposal_version, snooze_until, work_url, work_ref," \
+              " proposal_feedback_json IS NOT NULL AS feedback_pending FROM contributions"  # fmt: skip
         params: list[Any] = []
         if state:
             sql += " WHERE state = ?"

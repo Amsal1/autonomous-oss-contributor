@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.paths import Paths
-from ossbot.gatekeeper import db, policy, secret_scan
+from ossbot.gatekeeper import db, policy, proposals, secret_scan
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler
 from ossbot.gatekeeper.approvals import ApprovalService, ArtifactSource, Invalidated
@@ -22,6 +22,7 @@ from ossbot.gatekeeper.contributions import ContributionService
 from ossbot.gatekeeper.control import ControlService
 from ossbot.gatekeeper.decisions import DecisionServices
 from ossbot.gatekeeper.derive import GitArtifacts
+from ossbot.gatekeeper.discovery_prefs import DiscoveryPrefs
 from ossbot.gatekeeper.gitops import GitOps
 from ossbot.gatekeeper.models_admin import ModelsAdmin
 from ossbot.gatekeeper.outbox import Outbox
@@ -60,6 +61,7 @@ class AppContext:
     on_approval_created: Callable[[str], None] = field(default=lambda approval_id: None)
     poll_stats: PollStats = field(default_factory=PollStats)  # Telegram long-poll health (CR-001)
     decisions: DecisionServices = field(default=None)  # type: ignore[assignment]  # set by build_context
+    discovery_prefs: DiscoveryPrefs = field(default=None)  # type: ignore[assignment]  # set by build_context
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
     card_recover: Callable[[], None] = field(default=lambda: None)
 
@@ -229,7 +231,8 @@ def build_context(
         approvals=approvals,
         proposals=ProposalApprovals(
             conn, clock, audit, approvals, lambda: holder["snap"].current.bundle.policy.proposal.ttl_hours,
-            confirm_ttl, gate1_refusal, chat_id=owner_chat,
+            confirm_ttl, gate1_refusal, renderer=lambda row: proposals.render_card(conn, row), chat_id=owner_chat,
+            source=proposals.StoredProposals(lambda: holder["snap"].current.hash),
         ),
         skills=SkillApprovals(
             conn, clock, audit, approvals, lambda: limits().approval_ttl_hours, confirm_ttl, skill_refusal,
@@ -250,7 +253,16 @@ def build_context(
         approvals=approvals,
         control=control,
         snapshots=snapshots,
-        state_machine=StateMachine(conn, clock, audit, approvals, control, limits, notify),
+        state_machine=StateMachine(
+            conn,
+            clock,
+            audit,
+            approvals,
+            control,
+            limits,
+            notify,
+            claim_comment=lambda: holder["snap"].current.bundle.policy.proposal.claim_comment == "on",
+        ),
         contributions=ContributionService(conn, clock, audit, lambda: snapshots.current.bundle),
         anomaly=AnomalyHandler(conn, clock, audit, control, notify),
         models=ModelsAdmin(paths.config_dir / "models.yaml", conn, clock, audit, notify),
@@ -259,6 +271,7 @@ def build_context(
         kiro_key_sha256=os.environ.get("KIRO_KEY_SHA256") or None,
         poll_stats=PollStats(clock),
         decisions=decisions,
+        discovery_prefs=DiscoveryPrefs(conn, clock, audit, lambda: snapshots.current.bundle, notify),
     )
     ctx_ref["ctx"] = ctx
     # BA-16: a snapshot whose secret scanner can't be built refuses the start or the /reload.

@@ -23,7 +23,8 @@ from ossbot.common.gitcmd import CHANGE_REF
 from ossbot.common.hashing import sha256_hex
 from ossbot.common.ids import new_action_id
 from ossbot.common.schemas import TERMINAL_STATES, OutboundKind, PackageArtifactName, PackageRequest, State
-from ossbot.gatekeeper import db, derive, policy
+from ossbot.common.size import SIZE_CLASSES, classify, path_matches, split_numstat
+from ossbot.gatekeeper import db, derive, outcomes, policy
 from ossbot.gatekeeper.anomaly import Signal
 from ossbot.gatekeeper.approvals import normalize_text
 from ossbot.gatekeeper.context import AppContext
@@ -71,6 +72,49 @@ def gitleaks_scan(data: bytes) -> list[str]:
 class PackageResult:
     status: int
     body: dict[str, Any]
+
+
+CEILING_CODES = frozenset({"too_many_files", "too_many_code_lines", "too_many_test_lines"})
+
+
+def _in_areas(path: str, areas: list[str]) -> bool:
+    for area in areas:
+        prefix = area.rstrip("/")
+        if path == prefix or path.startswith(prefix + "/") or path_matches(path, [area]):
+            return True
+    return False
+
+
+def size_report(ctx: AppContext, contrib: Any, entries: Any) -> dict[str, Any]:
+    """The gatekeeper's own measurement (pinned numstat split by size globs) vs the approved proposal."""
+    size = ctx.config.policy.size
+    m = split_numstat(entries, size.test_globs, size.exclude_globs)
+    measured_class = classify(m.code_lines, m.files)
+    report: dict[str, Any] = {
+        "measured": {"files": m.files, "code_added": m.code_added, "code_deleted": m.code_deleted,
+                     "test_added": m.test_added, "test_deleted": m.test_deleted},
+        "measured_class": measured_class, "approved_class": contrib["approved_class"], "estimate": None,
+        "overrun": False, "class_grew": False, "outside_areas": [], "tolerance": size.overrun_tolerance,
+        "user_directed": contrib["source"] == "user",
+    }  # fmt: skip
+    if contrib["proposal_version"] is None:
+        return report
+    row = db.one(
+        ctx.conn, "SELECT proposal_json FROM proposals WHERE cid = ? AND version = ?",
+        (contrib["id"], contrib["proposal_version"]),
+    )  # fmt: skip
+    if row is None:
+        return report
+    prop = json.loads(row["proposal_json"])
+    est = prop["estimate"]
+    report["estimate"] = {"files": est["files"], "code_lines": est["code_lines"], "test_lines": est["test_lines"]}
+    report["overrun"] = m.code_lines > est["code_lines"] * (1 + size.overrun_tolerance)
+    approved = contrib["approved_class"] or est["class"]
+    report["class_grew"] = SIZE_CLASSES.index(measured_class) > SIZE_CLASSES.index(approved)
+    areas = list(prop.get("areas") or [])
+    if areas:
+        report["outside_areas"] = [e.path for e in entries if not _in_areas(e.path, areas)][:20]
+    return report
 
 
 def prune_retention(ctx: AppContext) -> list[tuple[str, int]]:
@@ -304,11 +348,24 @@ class Packager:
             violations += [policy.Violation("secret_pattern", hit) for hit in self.scanner(derived.patch)]
         if ctx.secret_scanner.value_hits(derived.patch):
             violations.append(policy.Violation("gatekeeper_secret", "patch"))
-        if violations:
+        # CR-004 size accounting (§9.14 c, §14.11.17/18): measured vs the approved estimate. The
+        # ceiling pauses a first-round item in RESCOPE_REQUIRED (autonomous and 👤 alike); a class
+        # overrun does so only with size.on_overrun: reapprove, else it is flagged on the card.
+        report = size_report(ctx, contrib, derived.entries)
+        others = [v for v in violations if v.code not in CEILING_CODES]
+        hit_ceiling = len(others) < len(violations)
+        if others or (hit_ceiling and kind != "open_pr"):
             codes = sorted({v.code for v in violations})
             if any(v.code in {"secret_pattern", "kiro_key", "gatekeeper_secret"} for v in violations):
                 ctx.anomaly.report(Signal.SECRET_IN_TEXT, f"/package {cid}", cid)
             raise PackageRefused(422, "policy", ",".join(codes))
+        rescope = None
+        if hit_ceiling:
+            rescope = "ceiling"
+        elif kind == "open_pr" and report["class_grew"] and ctx.config.policy.size.on_overrun == "reapprove":
+            rescope = "overrun"
+        if rescope is not None:
+            return self._rescope(cid, req.rev, rescope, report, [v.detail for v in violations], actor)
 
         # step 8: action + approval, or the N5 live claim first
         dry_run = db.current_dry_run(ctx.conn)
@@ -335,13 +392,14 @@ class Packager:
                 "UPDATE contributions SET artifact_rev = ?, base_ref = ?, base_sha = ?, upstream_base_tip = ?,"
                 " pr_title = COALESCE(?, pr_title), pr_body = COALESCE(?, pr_body), commit_message = ?,"
                 " patch_sha256 = ?, commit_message_sha256 = ?, bundle_sha256 = ?, diffstat_json = ?,"
-                " validation_json = ?, review_json = ?, branch = ?, updated_at = ? WHERE id = ?",
+                " validation_json = ?, review_json = ?, branch = ?, size_report_json = ?, updated_at = ? WHERE id = ?",
                 (
                     req.rev, req.base_ref, base_sha, tip, title, body, message, derived.patch_sha256,
                     derived.commit_message_sha256, copy.sha256, json.dumps(derived.diffstat()),
-                    json.dumps(req.validation), json.dumps(req.review), branch, now, cid,
+                    json.dumps(req.validation), json.dumps(req.review), branch, json.dumps(report), now, cid,
                 ),
             )  # fmt: skip
+            outcomes.set_measured(ctx.conn, cid, report["measured_class"], now)
             ctx.audit.append(
                 actor, "package_verified",
                 {"rev": req.rev, "head": head, "kind": kind, "bundle_sha256": copy.sha256,
@@ -369,6 +427,39 @@ class Packager:
             return claim[0]
         ctx.on_approval_created(approval_id)
         return PackageResult(200, {"kind": kind, "action_id": action_id, "approval_id": approval_id, "head_sha": head})
+
+    def _rescope(
+        self, cid: str, rev: int, reason: str, report: dict[str, Any], details: list[str], actor: str
+    ) -> PackageResult:
+        """PACKAGING -> RESCOPE_REQUIRED (G): the item pauses until the owner decides (§14.11.17/18)."""
+        ctx = self.ctx
+        now = to_iso(ctx.clock.now())
+        with db.transaction(ctx.conn):
+            ctx.conn.execute(
+                "UPDATE contributions SET size_report_json = ?, updated_at = ? WHERE id = ?",
+                (json.dumps(report), now, cid),
+            )
+            outcomes.set_measured(ctx.conn, cid, report["measured_class"], now)
+            ctx.state_machine.transition(cid, State.PACKAGING, State.RESCOPE_REQUIRED, Actor.GATEKEEPER,
+                                         {"reason": f"rescope_{reason}", "rev": rev}, actor)  # fmt: skip
+            ctx.audit.append(actor, "size_rescope", {"reason": reason, "rev": rev, "report": report}, cid)
+        m = report["measured"]
+        measured = f"{m['files']} files · +{m['code_added']} / −{m['code_deleted']} code · +{m['test_added']} test"
+        if reason == "ceiling":
+            ceiling = ctx.config.policy.diff
+            ctx.notify(
+                f"🧱 Size ceiling reached · {cid} · paused\nMeasured {measured}\n"
+                f"Ceiling (config only): {ceiling.max_files} files · {ceiling.max_changed_lines} code ·"
+                f" {ceiling.max_test_lines} test\n"
+                "Split the work, or raise policy.diff in config/policy.yaml and /reload."
+            )
+        else:
+            ctx.notify(
+                f"📏 Re-approval needed · {cid}\nApproved {report['approved_class']} · measured"
+                f" {report['measured_class']}: {measured}"
+            )
+        return PackageResult(202, {"state": State.RESCOPE_REQUIRED.value, "reason": reason, "size_report": report,
+                                   "violations": details})  # fmt: skip
 
     def _live_claim(self, cid: str, actor: str, now: str) -> tuple[PackageResult, str | None] | None:
         """N5: with dry-run off a claim must be ``done`` before the open_pr action exists.

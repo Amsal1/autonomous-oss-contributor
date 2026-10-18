@@ -30,6 +30,7 @@ from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import Actor, TransitionError
 from ossbot.gatekeeper.telegram import cards, keyboards
 from ossbot.gatekeeper.telegram.auth import authorized
@@ -57,6 +58,8 @@ KILL_CANCELS: frozenset[TaskKind] = frozenset({"chat_turn", "media", "telegraph"
 PREFLIGHT_TIMEOUT_S = 8.0  # the one inline await: the Confirm live preflight (timeout = live_check:timeout)
 HANDLER_SLOW_S = 1.0
 STOP_COMMANDS = frozenset({"kill", "pause"})
+# Gate 1 decision purposes (p_ ids); the kit purposes (skip, adjust, ...) arrive with FEAT-009.
+PROPOSAL_PURPOSES = frozenset({"proposal_start", "proposal_confirm", "proposal_cancel"})
 
 
 def markup(rows: keyboards.Rows) -> InlineKeyboardMarkup:
@@ -243,6 +246,8 @@ class Handlers:
                 await self._reject(query, token, user_id, chat_id, message_id)
             elif purpose == "retry":
                 await self._retry(query, token, row, user_id, chat_id, message_id)
+            elif purpose in PROPOSAL_PURPOSES:
+                await self._proposal(query, token, purpose, row, user_id, chat_id, message_id)
             elif purpose in CONFIRMS:
                 with db.transaction(self.ctx.conn):
                     self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
@@ -263,6 +268,34 @@ class Handlers:
                 extra={"event": "callback_rejected"},
             )  # fmt: skip
             await query.answer(self._rejection_text(exc, row))
+
+    async def _proposal(
+        self, query: Any, token: str, purpose: str, row: Any, user_id: int, chat_id: int, message_id: int
+    ) -> None:
+        """Gate 1 (§14.11.15): ✅ Start work -> Confirm -> PROPOSAL_APPROVED. Two taps, message-bound
+        single-use tokens; the binding is recomputed at each tap and right before the effect."""
+        svc = self.ctx.decisions.proposals
+        pid = str(row["approval_id"])
+        tap = {"tg_user_id": user_id, "chat_id": chat_id, "message_id": message_id}
+        if purpose == "proposal_start":
+            arm = svc.approve(token, **tap)
+            text = f"{svc.card_view(pid).card}\n\n{b(arm.confirm_text)}"
+            await self._edit(query, text, keyboards.confirm_rows(arm.confirm_token, arm.cancel_token))
+        elif purpose == "proposal_confirm":
+            svc.confirm(token, **tap)
+            try:
+                result = ProposalService(self.ctx).start(pid, f"tg:{user_id}")
+            except (ProposalRefused, TransitionError) as exc:
+                await self._edit(query, f"{svc.card_view(pid).card}\n\n❌ Not started: {esc(str(exc)[:200])}")
+                await query.answer("Not started.")
+                return
+            note = f"🛠 {b('Started')} · class {esc(result['approved_class'])}. The PR still needs its own approval."
+            await self._edit(query, f"{svc.card_view(pid).card}\n\n{note}")
+        else:
+            svc.cancel(token, **tap)
+            tokens = svc.rotate_card_tokens(pid)
+            await self._edit(query, svc.card_view(pid).card, svc.card_rows(pid, tokens))
+        await query.answer()
 
     async def _finish_confirm(self, query: Any, effect: Awaitable[Reply]) -> None:
         try:

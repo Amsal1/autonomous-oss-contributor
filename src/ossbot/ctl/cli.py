@@ -47,6 +47,8 @@ model_app = typer.Typer(no_args_is_help=True, help="global model switch (config/
 models_app = typer.Typer(no_args_is_help=True, help="Kiro model catalog")
 app.add_typer(model_app, name="model")
 app.add_typer(models_app, name="models")
+size_app = typer.Typer(no_args_is_help=True, help="autonomous size preference (CR-004; never the ceiling)")
+app.add_typer(size_app, name="size")
 
 BIN = Path("/opt/ossbot/bin")
 SANDBOXD_SOCK = Path("/run/ossbot/sandboxd.sock")
@@ -459,6 +461,77 @@ def models_refresh() -> None:
     if code != 202:
         _fail(f"refresh request refused ({code}): {data}")
     typer.echo(f"catalog refresh requested at {data.get('requested_at')}; the runner picks it up on its next tick")
+
+
+@app.command("work")
+def work(
+    url: Annotated[str, typer.Argument(help="GitHub issue, PR or repo URL of a configured target")],
+    notes: Annotated[str, typer.Option(help="what you want (≤ 1000 chars; shown on every card)")] = "",
+) -> None:
+    """User-directed work (👤): vet -> scout -> proposal card; size preference and filters don't apply."""
+    code, data = api("POST", "/v1/work", {"url": url, "notes": notes})
+    if code != 201:
+        _fail(f"work request refused ({code}): {data}")
+    _show(data)
+
+
+def _prefs_show(repo: str | None) -> None:
+    code, data = api("GET", "/v1/discovery-prefs" + (f"?repo={repo}" if repo else ""))
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
+    _show(data["effective"])
+
+
+def _prefs_put(body: dict[str, Any]) -> None:
+    code, data = api("PUT", "/v1/discovery-prefs", body)
+    if code != 200:
+        _fail(f"preference change refused ({code}): {data}")
+    _show(data)
+    typer.echo(f"undo within 60 s: ossctl size undo {data['undo_id']}")
+
+
+@size_app.command("show")
+def size_show(repo: Annotated[str | None, typer.Option(help="owner/repo (default: global)")] = None) -> None:
+    """Effective autonomous size preference and filters (where each value comes from)."""
+    _prefs_show(repo)
+
+
+@size_app.command("set")
+def size_set(
+    size_class: Annotated[str, typer.Argument(help="xs | s | m | l | xl (inherit: per repo only)")],
+    repo: Annotated[str | None, typer.Option(help="owner/repo override (autonomous discovery only)")] = None,
+) -> None:
+    """Largest class the bot picks on its own. Never limits /work items; the ceiling is config-only."""
+    _prefs_put({"scope": repo or "*", "autonomous_max_class": size_class})
+
+
+@size_app.command("undo")
+def size_undo(undo_id: Annotated[str, typer.Argument(help="u_... from the last change")]) -> None:
+    code, data = api("POST", "/v1/discovery-prefs/undo", {"undo_id": undo_id})
+    if code != 200:
+        _fail(f"undo refused ({code}): {data}")
+    _show(data)
+
+
+@app.command("filters")
+def filters(
+    set_: Annotated[list[str] | None, typer.Option("--set", help="key=value (JSON value; repeatable)")] = None,
+    repo: Annotated[str | None, typer.Option(help="owner/repo override")] = None,
+) -> None:
+    """Show (no --set) or change the autonomous discovery filters (kinds, labels, tier, age, ...)."""
+    if not set_:
+        _prefs_show(repo)
+        return
+    values: dict[str, Any] = {}
+    for item in set_:
+        key, sep, raw = item.partition("=")
+        if not sep:
+            _fail("usage: --set key=value", 2)
+        try:
+            values[key] = json.loads(raw)
+        except ValueError:
+            values[key] = raw
+    _prefs_put({"scope": repo or "*", "filters": values})
 
 
 @config_app.command("reload")

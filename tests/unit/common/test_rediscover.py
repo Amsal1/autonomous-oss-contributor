@@ -61,3 +61,30 @@ def test_cla_required_needs_newer_snapshot() -> None:
     skipped = row(State.SKIPPED, 10, "cla_required")
     assert decide(skipped)[0] is False
     assert decide(skipped, facts=RepoFactChanges(cla_signed_at=NOW))[0] is True
+
+
+# ------------------------------------------------------------------ CR-004 gate-1 declines
+def gate1(reason: str, issue_hash: str | None = "a" * 64, days_ago: float = 30) -> PriorContribution:
+    return PriorContribution("c_P", State.PROPOSAL_REJECTED, reason, NOW - timedelta(days=days_ago), issue_hash)
+
+
+@pytest.mark.parametrize("reason", ["never_repo", "never_kind"])
+def test_never_is_never_re_proposed(reason: str) -> None:
+    d = eligible([gate1(reason)], dry_run=False, now=NOW, cooldown_days=7, issue_hash="b" * 64)
+    assert (d.allowed, d.rule) == (False, f"never:{reason}")
+
+
+def test_skip_only_after_a_material_change() -> None:
+    same = eligible([gate1("skipped")], dry_run=False, now=NOW, cooldown_days=7, issue_hash="a" * 64)
+    assert (same.allowed, same.rule) == (False, "skipped_unchanged")
+    unknown = eligible([gate1("skipped")], dry_run=False, now=NOW, cooldown_days=7)
+    assert unknown.allowed is False
+    changed = eligible([gate1("skipped")], dry_run=False, now=NOW, cooldown_days=7, issue_hash="b" * 64)
+    assert (changed.allowed, changed.rule) == (True, "material_change")
+
+
+@pytest.mark.parametrize("state", [State.PROPOSAL_SNOOZED, State.PROPOSAL_EXPIRED, State.PROPOSED, State.SCOUTING])
+def test_open_gate_1_states_block_a_new_contribution(state: State) -> None:
+    """Later: re-scouted by the runner after the snooze, not re-discovered; likewise an expired card."""
+    d = eligible([row(state)], dry_run=False, now=NOW, cooldown_days=7)
+    assert (d.allowed, d.rule) == (False, "duplicate_active")

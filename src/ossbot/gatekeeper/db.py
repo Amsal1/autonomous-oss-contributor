@@ -59,12 +59,23 @@ def migrate(conn: sqlite3.Connection) -> int:
     for number, name, sql in migrations:
         if number <= current:
             continue
+        # SQLite's table-rebuild procedure (0003 rebuilds contributions): foreign keys off for the
+        # migration, then foreign_key_check inside the transaction must come back empty.
+        fk_on = bool(conn.execute("PRAGMA foreign_keys").fetchone()[0])
+        conn.execute("PRAGMA foreign_keys = OFF")
         try:
-            conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {number};\nCOMMIT;")
+            conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {number};")
+            broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if broken:
+                raise sqlite3.IntegrityError(f"foreign_key_check: {[tuple(r) for r in broken[:5]]}")
+            conn.execute("COMMIT")
         except sqlite3.Error as exc:
             if conn.in_transaction:
                 conn.execute("ROLLBACK")
             raise MigrationError(f"{name}: {exc}") from exc
+        finally:
+            if fk_on:
+                conn.execute("PRAGMA foreign_keys = ON")
     return schema_version(conn)
 
 

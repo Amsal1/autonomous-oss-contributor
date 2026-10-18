@@ -1480,6 +1480,14 @@ POST /v1/notify {text}                  worker, requester (10/h)
 GET  /v1/models  · PUT /v1/models/{role} {model, effort, force}   operator
 POST /v1/models/refresh                 operator       (ossctl models refresh: held for the runner's next tick, 16.3)
 POST /v1/models/refresh/claim           worker         -> {requested} (consumes the pending refresh request)
+POST /v1/contributions/{id}/proposal    worker         {proposal, revises?, feedback?}  (CR-004: SCOUTING|PROPOSED|RESCOPE_REQUIRED;
+                                                        stores version n+1 canonical + proposal_sha256, creates the p_ card; 422
+                                                        above_ceiling | above_autonomous_max | kind_filtered | never_repo, 429 daily cap)
+GET  /v1/contributions/{id}/proposal    worker, operator ?version=  -> the stored proposal (+ pending Adjust/Smaller feedback)
+POST /v1/work {url, notes}              operator       (CR-004 Amendment B: GitHub issue/PR/repo URL of an enabled target; source='user')
+GET  /v1/discovery-prefs?repo=          operator, worker -> effective size preference and filters (+ rows)
+PUT  /v1/discovery-prefs                operator       {scope, autonomous_max_class?, preferred_classes?, filters?} -> {undo_id}
+POST /v1/discovery-prefs/undo {undo_id} operator       (60 s; ceiling keys are refused by the writer, U13)
 GET  /v1/audit/verify                   operator
 ```
 

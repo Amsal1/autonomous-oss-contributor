@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort
 
@@ -49,10 +49,19 @@ class State(StrEnum):
     FAILED = "FAILED"
     MERGED = "MERGED"
     CLOSED = "CLOSED"
+    # CR-004 (DESIGN §9.2): scout, gate 1 and re-scope
+    SCOUTING = "SCOUTING"
+    PROPOSED = "PROPOSED"
+    PROPOSAL_APPROVED = "PROPOSAL_APPROVED"
+    PROPOSAL_REJECTED = "PROPOSAL_REJECTED"
+    PROPOSAL_SNOOZED = "PROPOSAL_SNOOZED"
+    PROPOSAL_EXPIRED = "PROPOSAL_EXPIRED"
+    RESCOPE_REQUIRED = "RESCOPE_REQUIRED"
 
 
 TERMINAL_STATES: frozenset[State] = frozenset(
     {
+        State.PROPOSAL_REJECTED,  # terminal unless the human Undo (Skip only, 10 min)
         State.SKIPPED,
         State.ABANDONED,
         State.REJECTED,
@@ -66,14 +75,14 @@ TERMINAL_STATES: frozenset[State] = frozenset(
 
 OutboundKind = Literal["open_pr", "push_update", "comment", "issue_claim"]
 OUTBOUND_KINDS: tuple[OutboundKind, ...] = ("open_pr", "push_update", "comment", "issue_claim")
-ContributionSource = Literal["discover", "hermes_request", "operator"]
+ContributionSource = Literal["discover", "hermes_request", "operator", "user"]  # 'user' = /work (👤)
 ControlStateName = Literal["running", "paused", "killed"]
 
 # Runner stage entrypoints (§9.1), sandboxd job entrypoints (sandbox/entrypoints/*.sh), the
 # Docker filter operations refused while paused/killed (N5), and the gatekeeper's per-write
 # submission checkpoints per kind (§12.5, M5).
 STAGE_ENTRYPOINTS: tuple[str, ...] = (
-    "discover", "vet", "fetch", "plan", "implement", "validate", "review", "package", "watch",
+    "discover", "vet", "scout", "fetch", "plan", "implement", "validate", "review", "package", "watch",
     "catalog", "import",
 )  # fmt: skip
 SANDBOX_JOB_ENTRYPOINTS: tuple[str, ...] = (
@@ -168,6 +177,91 @@ class ContributionCreate(ApiModel):
     issue_number: Annotated[int, Field(ge=1)]
     source: Literal["discover", "hermes_request"]
     score: float | None = None
+    # sha256 of the issue's title, body and labels (CR-004 M6: a Skip is re-proposed only on change)
+    issue_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
+
+
+# ------------------------------------------------------------------- CR-004 proposals
+SizeClassName = Literal["xs", "s", "m", "l", "xl", "xxl"]
+KIND_RE = r"^[a-z][a-z0-9-]{0,31}$"
+Line300 = Annotated[str, Field(min_length=1, max_length=300)]
+Line200 = Annotated[str, Field(min_length=1, max_length=200)]
+
+
+class ProposalEstimate(ApiModel):
+    files: Annotated[int, Field(ge=0, le=100_000)]
+    code_lines: Annotated[int, Field(ge=0, le=10_000_000)]
+    test_lines: Annotated[int, Field(ge=0, le=10_000_000)]
+    size_class: SizeClassName = Field(alias="class")
+
+
+class ProposalAlternative(ApiModel):
+    summary: Line300
+    est_class: SizeClassName | None = None
+
+
+class Proposal(ApiModel):
+    """Scout output (DESIGN §9.5a). Untrusted model text: validated, canonicalized, rendered escaped."""
+
+    problem: Annotated[str, Field(min_length=1, max_length=2000)]
+    approach: Annotated[list[Line300], Field(min_length=1, max_length=10)]
+    areas: Annotated[list[Line200], Field(max_length=100)]
+    kind: Annotated[str, Field(pattern=KIND_RE)]
+    estimate: ProposalEstimate
+    tests: Annotated[list[Line300], Field(max_length=50)]
+    no_suite_reason: Line300 | None = None
+    validation_plan: Annotated[str, Field(max_length=1000)]
+    risks: Annotated[list[Line200], Field(max_length=10)] = Field(default_factory=list)
+    open_questions: Annotated[list[Line200], Field(max_length=10)] = Field(default_factory=list)
+    acceptance_signals: Annotated[list[Line200], Field(max_length=10)] = Field(default_factory=list)
+    rationale: Annotated[str, Field(max_length=500)] = ""
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)]
+    alternatives: Annotated[list[ProposalAlternative], Field(max_length=10)] = Field(default_factory=list)
+    overview: Annotated[str, Field(max_length=8000)] = ""  # scout's codebase overview (Details)
+    citations: Annotated[list[Annotated[str, Field(max_length=500)]], Field(max_length=30)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def _tests_or_reason(self) -> Proposal:
+        """Tests are expected (§9.14): name them, or say why the repo has no suite."""
+        if not self.tests and not self.no_suite_reason:
+            raise ValueError("tests is empty: name the tests to add, or give no_suite_reason")
+        return self
+
+
+class ProposalSubmit(ApiModel):
+    """``POST /v1/contributions/{id}/proposal`` (worker): a new version (1, 2, ...)."""
+
+    proposal: Proposal
+    revises: Annotated[int, Field(ge=1)] | None = None  # the version this one answers (adjust/smaller)
+    feedback: Annotated[str, Field(max_length=2000)] | None = None  # "You asked" (echoed from the request)
+
+
+WORK_URL_RE = (
+    r"^(?:https://)?(?:www\.)?github\.com/(?P<owner>[A-Za-z0-9-]{1,39})/(?P<repo>[A-Za-z0-9._-]{1,100})"
+    r"(?:/(?P<kind>issues|pull)/(?P<n>[1-9][0-9]{0,9}))?/?$"
+)
+
+
+class WorkRequest(ApiModel):
+    """``POST /v1/work`` (operator; Telegram /work in item 47): user-directed work (👤)."""
+
+    url: Annotated[str, Field(min_length=1, max_length=400)]
+    notes: Annotated[str, Field(max_length=1000)] = ""
+
+
+class PrefsUpdate(ApiModel):
+    """``PUT /v1/discovery-prefs``: size and filter preferences (never the ceiling)."""
+
+    scope: Annotated[str, Field(pattern=r"^(\*|" + REPO_RE.strip("^$") + r")$")] = "*"
+    autonomous_max_class: Literal["xs", "s", "m", "l", "xl", "inherit"] | None = None
+    preferred_classes: list[Literal["xs", "s", "m", "l", "xl"]] | None = None
+    filters: dict[str, Any] | None = None  # keys checked against discovery_prefs.FILTER_KEYS
+
+
+class PrefsUndo(ApiModel):
+    undo_id: Annotated[str, Field(pattern=r"^u_[0-9A-Z]{10}$")]
 
 
 class TransitionRequest(ApiModel):

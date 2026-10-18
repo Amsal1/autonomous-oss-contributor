@@ -13,6 +13,7 @@ from ossbot.common.schemas import (
     ImportRequest,
     PackageRequest,
     PackageTsRequest,
+    ProposalSubmit,
     State,
     TransitionRequest,
     TransitionResponse,
@@ -21,6 +22,7 @@ from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 from ossbot.gatekeeper.imports import Importer, ImportInvalid
 from ossbot.gatekeeper.packaging import Packager, PackageRefused, gitleaks_scan
+from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import Actor
 
 router = APIRouter(prefix="/v1")
@@ -55,8 +57,36 @@ async def get_contribution(request: Request, cid: str, caller: Annotated[Caller,
 async def create_contribution(
     request: Request, body: ContributionCreate, caller: Annotated[Caller, Depends(require(Role.WORKER))]
 ) -> dict[str, Any]:
-    cid = ctx(request).contributions.create(body.repo, body.issue_number, body.source, body.score, caller.actor)
+    cid = ctx(request).contributions.create(
+        body.repo, body.issue_number, body.source, body.score, caller.actor, issue_hash=body.issue_hash
+    )
     return {"cid": cid}
+
+
+@router.post("/contributions/{cid}/proposal", status_code=201)
+async def submit_proposal(
+    request: Request, cid: str, body: ProposalSubmit, caller: Annotated[Caller, Depends(require(Role.WORKER))]
+) -> Any:
+    """Scout output (CR-004 §9.5a): stored canonical, versioned, hash-bound; queues the gate-1 card."""
+    _check_cid(cid)
+    try:
+        return ProposalService(ctx(request)).submit(cid, body, caller.actor)
+    except ProposalRefused as exc:
+        return JSONResponse(status_code=exc.status, content={"error": exc.code, "detail": exc.detail})
+
+
+@router.get("/contributions/{cid}/proposal")
+async def get_proposal(
+    request: Request,
+    cid: str,
+    caller: Annotated[Caller, Depends(require(Role.WORKER, Role.OPERATOR))],
+    version: Annotated[int | None, Query(ge=1)] = None,
+) -> Any:
+    _check_cid(cid)
+    try:
+        return ProposalService(ctx(request)).get(cid, version)
+    except ProposalRefused as exc:
+        return JSONResponse(status_code=exc.status, content={"error": exc.code, "detail": exc.detail})
 
 
 @router.post("/contributions/import", status_code=201)

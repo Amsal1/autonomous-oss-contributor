@@ -40,3 +40,40 @@ def test_from_version_1_keeps_rows(tmp_path: Path) -> None:
     assert db.migrate(conn) == LATEST
     row = conn.execute("SELECT method, result_message_id, bind_tokens_json, view_json FROM tg_outbox").fetchone()
     assert tuple(row) == ("m", None, None, None)
+
+
+def test_from_version_2_rebuilds_contributions_and_keeps_references(tmp_path: Path) -> None:
+    """0003 rebuilds contributions (source 'user'); rows and the foreign keys onto it survive."""
+    conn = db.connect(tmp_path / "c.db")
+    files = resources.files("ossbot.gatekeeper.migrations")
+    for number, name in ((1, "0001_init.sql"), (2, "0002_decisions.sql")):
+        sql = (files / name).read_text(encoding="utf-8")
+        conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {number};\nCOMMIT;")
+    conn.execute(
+        "INSERT INTO contributions (id, upstream, issue_number, source, state, created_at, updated_at)"
+        " VALUES ('c_0000000001', 'o/r', 5, 'discover', 'VETTED', 't', 't')"
+    )
+    conn.execute(
+        "INSERT INTO stage_runs (id, cid, stage, attempt, status) VALUES ('r1', 'c_0000000001', 'vet', 1, 'succeeded')"
+    )
+    assert db.migrate(conn) == LATEST
+    assert _tables(conn) >= CR004_TABLES | {"proposals", "outcomes", "discovery_prefs", "discovery_prefs_undo"}
+    assert {"work_url", "notes", "issue_hash", "proposal_version", "size_report_json"} <= _columns(
+        conn, "contributions"
+    )
+    assert conn.execute("SELECT state FROM contributions").fetchone()[0] == "VETTED"
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    conn.execute(
+        "INSERT INTO contributions (id, upstream, source, state, created_at, updated_at)"
+        " VALUES ('c_0000000002', 'o/r', 'user', 'DISCOVERED', 't', 't')"
+    )
+    import sqlite3
+
+    try:
+        conn.execute(
+            "INSERT INTO stage_runs (id, cid, stage, attempt, status) VALUES ('r2', 'c_nope', 'vet', 1, 'queued')"
+        )
+    except sqlite3.IntegrityError:
+        pass
+    else:  # pragma: no cover - the foreign key must still be enforced on the rebuilt table
+        raise AssertionError("foreign key onto contributions not enforced after the rebuild")

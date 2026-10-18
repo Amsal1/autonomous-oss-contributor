@@ -33,7 +33,7 @@ def test_two_taps_then_consume(ctx: AppContext) -> None:
     assert status_of(ctx, "proposal_approvals", pid) == "armed"
     binding = ctx.decisions.proposals.confirm(confirm, tg_user_id=CHAT, chat_id=CHAT, message_id=700)
     assert binding == {"v": 1, "kind": "proposal", "cid": cid, "version": 1, "proposal_sha256": "a" * 64,
-                       "est_class": "s"}  # fmt: skip
+                       "est_class": "s", "user_directed": False, "policy_hash": "h"}  # fmt: skip
     assert ctx.decisions.proposals.consume(pid) == binding
     assert status_of(ctx, "proposal_approvals", pid) == "consumed"
 
@@ -57,7 +57,7 @@ def test_binding_recomputed_at_each_point(ctx: AppContext, point: str) -> None:
     source, _ = install_sources(ctx)
     cid = proposed_contribution(ctx)
     pid, tokens = proposal_card(ctx, cid)
-    changed = {"proposal_sha256": "b" * 64, "est_class": "m"}
+    changed = {"proposal_sha256": "b" * 64, "est_class": "m", "user_directed": False, "policy_hash": "h"}
     if point == "approve":
         source.fields_by_key[(cid, 1)] = changed
         with pytest.raises(Superseded):

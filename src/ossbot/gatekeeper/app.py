@@ -20,15 +20,17 @@ from fastapi.responses import JSONResponse
 from ossbot.common.config import ConfigError
 from ossbot.common.control_flags import Blocked
 from ossbot.gatekeeper import db
-from ossbot.gatekeeper.api import actions, audit, config, contributions, control, models, notify
+from ossbot.gatekeeper.api import actions, audit, config, contributions, control, models, notify, prefs, work
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.authz import PEER_SCOPE_KEY, Forbidden, Peer
 from ossbot.gatekeeper.config_snapshot import ReloadConflict
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.contributions import ContributionRefused
 from ossbot.gatekeeper.control import ControlConflict
+from ossbot.gatekeeper.discovery_prefs import PrefsRefused
 from ossbot.gatekeeper.models_admin import ModelSetError
 from ossbot.gatekeeper.packaging import prune_retention
+from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import TransitionError
 
 log = logging.getLogger(__name__)
@@ -94,6 +96,11 @@ def _install_handlers(app: FastAPI) -> None:
     async def _model(request: Request, exc: ModelSetError) -> JSONResponse:
         return _error(400, "model_invalid", str(exc))
 
+    @app.exception_handler(ProposalRefused)
+    @app.exception_handler(PrefsRefused)
+    async def _cr004(request: Request, exc: Exception) -> JSONResponse:
+        return _error(getattr(exc, "status", 400), getattr(exc, "code", "refused"), getattr(exc, "detail", ""))
+
     @app.exception_handler(ReloadConflict)
     @app.exception_handler(ControlConflict)
     async def _conflict(request: Request, exc: Exception) -> JSONResponse:
@@ -118,6 +125,7 @@ async def housekeeping_once(ctx: AppContext) -> None:
         svc.expire_due()
         svc.disarm_expired()
     ctx.state_machine.sweep_expired()
+    ProposalService(ctx).sweep_expired()  # CR-004: PROPOSED past proposal.ttl_hours -> PROPOSAL_EXPIRED
     prune_retention(ctx)
     # delta 8: CardPublisher.recover (no-op until the Telegram front-end starts). Last and guarded, so
     # one card that fails to render cannot stop the expiry sweep on every tick.
@@ -165,6 +173,6 @@ def create_app(ctx: AppContext, *, housekeeping: bool = True, services: Sequence
                   openapi_url=None)  # fmt: skip
     app.state.ctx = ctx
     _install_handlers(app)
-    for module in (control, config, contributions, actions, models, audit, notify):
+    for module in (control, config, contributions, actions, models, audit, notify, work, prefs):
         app.include_router(module.router)
     return app

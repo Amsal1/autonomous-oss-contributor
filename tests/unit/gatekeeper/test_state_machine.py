@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 
 import pytest
 
-from ossbot.common.clock import FakeClock
-from ossbot.common.schemas import State
+from ossbot.common.clock import FakeClock, to_iso
+from ossbot.common.schemas import TERMINAL_STATES, State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.state_machine import (
     ALLOWED,
     APPROVAL_STATES,
     GATE,
+    GATE1_STATES,
     WORKING,
     Actor,
     TransitionError,
@@ -32,12 +34,30 @@ def guard_columns(from_: State, to: State) -> dict[str, object]:
         cols["pr_number"] = 7
     if from_ is S.FETCHED and to is S.IMPLEMENTED:
         cols["source"] = "operator"
+    if from_ in {S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED} and to is S.PROPOSED:
+        cols.update(declined_at=to_iso(FakeClock().now()), declined_reason="skipped")
     return cols
+
+
+def consumed_proposal(ctx: AppContext, cid: str, version: int = 1, status: str = "consumed") -> str:
+    """A proposal approval row for (cid, version) in ``status`` (gate 1 already decided)."""
+    pid = f"p_{cid[2:]}"
+    with db.transaction(ctx.conn):
+        ctx.conn.execute(
+            "INSERT INTO proposal_approvals (id, cid, version, binding_json, binding_hash, status, tg_chat_id,"
+            " created_at, expires_at) VALUES (?, ?, ?, '{}', 'h', ?, 1, 't', '2999-01-01T00:00:00Z')",
+            (pid, cid, version, status),
+        )
+    return pid
 
 
 def make(ctx: AppContext, state: State, **cols: object) -> str:
     source = str(cols.pop("source", "discover"))
+    if state is S.PROPOSAL_APPROVED:
+        cols.setdefault("proposal_version", 1)
     cid = insert_contribution(ctx, state, source=source, **cols)
+    if state is S.PROPOSAL_APPROVED:
+        consumed_proposal(ctx, cid)
     if source == "operator" and state is S.FETCHED:
         with db.transaction(ctx.conn):
             ctx.conn.execute(
@@ -151,24 +171,125 @@ def test_unknown_contribution_is_404(ctx: AppContext) -> None:
 
 
 # ----------------------------------------------------------------------------- guards
-def test_claim_guard_blocks_until_claim_done(ctx: AppContext) -> None:
-    cid = make(ctx, S.VETTED, vetting_json=json.dumps({"requires_claim_comment": True}))
+def test_no_fetch_before_gate_1(ctx: AppContext) -> None:
+    """CR-004 AC 37: VETTED goes to SCOUTING, never straight to FETCHING."""
+    cid = make(ctx, S.VETTED)
     with pytest.raises(TransitionError) as info:
         ctx.state_machine.transition(cid, S.VETTED, S.FETCHING, Actor.WORKER)
+    assert info.value.code == "no_edge"
+
+
+@pytest.mark.parametrize("status", ["pending", "armed", "confirmed", "invalidated", "expired", "rejected"])
+def test_fetch_needs_the_consumed_approval_of_the_current_version(ctx: AppContext, status: str) -> None:
+    cid = insert_contribution(ctx, S.PROPOSAL_APPROVED, proposal_version=2)
+    consumed_proposal(ctx, cid, version=1)  # an older version's Start work does not count
+    with db.transaction(ctx.conn):
+        ctx.conn.execute(
+            "INSERT INTO proposal_approvals (id, cid, version, binding_json, binding_hash, status, tg_chat_id,"
+            " created_at, expires_at) VALUES ('p_X000000002', ?, 2, '{}', 'h', ?, 1, 't', 't')",
+            (cid, status),
+        )
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.PROPOSAL_APPROVED, S.FETCHING, Actor.WORKER)
+    assert info.value.code == "guard_failed:proposal_approved"
+
+
+@pytest.mark.parametrize("vetting", [{"requires_claim_comment": True}, {"requires_assignment": True}, None])
+def test_claim_guard_sits_behind_gate_1(ctx: AppContext, vetting: dict[str, bool] | None) -> None:
+    """Claim after gate 1 (CR4-1h): vet's requirement or proposal.claim_comment: on; dry-run applies."""
+    if vetting is None:
+        ctx.state_machine.claim_comment = lambda: True
+    cid = make(ctx, S.PROPOSAL_APPROVED, vetting_json=json.dumps(vetting or {}))
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.PROPOSAL_APPROVED, S.FETCHING, Actor.WORKER)
     assert info.value.code == "guard_failed:claim"
     # dry-run (default ON): a dry_run_done claim satisfies the guard
     insert_action(ctx, cid, "issue_claim", {"target_number": 101, "body": "x"}, status="dry_run_done")
-    ctx.state_machine.transition(cid, S.VETTED, S.FETCHING, Actor.WORKER)
+    ctx.state_machine.transition(cid, S.PROPOSAL_APPROVED, S.FETCHING, Actor.WORKER)
 
 
 def test_claim_guard_live_needs_done(ctx: AppContext) -> None:
     ctx.control.set_dry_run(False, "tg:4242")
-    cid = make(ctx, S.VETTED, vetting_json=json.dumps({"requires_claim_comment": True}))
+    cid = make(ctx, S.PROPOSAL_APPROVED, vetting_json=json.dumps({"requires_claim_comment": True}))
     insert_action(ctx, cid, "issue_claim", {"target_number": 101, "body": "x"}, status="dry_run_done")
     with pytest.raises(TransitionError):
-        ctx.state_machine.transition(cid, S.VETTED, S.FETCHING, Actor.WORKER)
+        ctx.state_machine.transition(cid, S.PROPOSAL_APPROVED, S.FETCHING, Actor.WORKER)
     insert_action(ctx, cid, "issue_claim", {"target_number": 101, "body": "x"}, status="done")
-    ctx.state_machine.transition(cid, S.VETTED, S.FETCHING, Actor.WORKER)
+    ctx.state_machine.transition(cid, S.PROPOSAL_APPROVED, S.FETCHING, Actor.WORKER)
+
+
+def test_claim_rejected_after_gate_1_skips(ctx: AppContext) -> None:
+    cid = make(ctx, S.PROPOSAL_APPROVED)
+    ctx.state_machine.transition(cid, S.PROPOSAL_APPROVED, S.SKIPPED, Actor.GATEKEEPER, {"reason": "claim_rejected"})
+    assert state_of(ctx, cid) == "SKIPPED"
+
+
+GATE1_EDGES = [
+    (f, t)
+    for f, t, _ in EDGES
+    if (f in GATE1_STATES or t in GATE1_STATES)
+    and (f, t) not in {(S.PROPOSAL_APPROVED, S.FETCHING), (S.PROPOSAL_APPROVED, S.FAILED)}
+]
+
+
+@pytest.mark.parametrize(("from_", "to"), GATE1_EDGES, ids=[f"{f}->{t}" for f, t in GATE1_EDGES])
+def test_worker_cannot_drive_gate_1(ctx: AppContext, from_: State, to: State) -> None:
+    """AC 19 extended (CR-004): edges into or out of the gate-1 states are G or H only."""
+    assert Actor.WORKER not in ALLOWED[from_][to]
+    cid = make(ctx, from_, **guard_columns(from_, to))
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, from_, to, Actor.WORKER)
+    assert info.value.status == 403 and state_of(ctx, cid) == from_.value
+
+
+def test_gate_1_edges_and_actors() -> None:
+    assert ALLOWED[S.VETTED] == {S.SCOUTING: {Actor.WORKER}, S.SKIPPED: {Actor.WORKER, Actor.GATEKEEPER},
+                                 S.FAILED: {Actor.WORKER, Actor.GATEKEEPER}}  # fmt: skip
+    assert ALLOWED[S.SCOUTING][S.PROPOSED] == {Actor.GATEKEEPER}
+    for to in (S.PROPOSAL_APPROVED, S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED):
+        assert ALLOWED[S.PROPOSED][to] == {Actor.HUMAN}
+    assert ALLOWED[S.PROPOSED][S.PROPOSAL_EXPIRED] == {Actor.GATEKEEPER}
+    assert ALLOWED[S.PROPOSAL_REJECTED] == {S.PROPOSED: {Actor.HUMAN}}  # terminal unless Undo
+    assert ALLOWED[S.PROPOSAL_SNOOZED][S.PROPOSED] == {Actor.HUMAN}
+    for src in (S.IMPLEMENTED, S.VALIDATED, S.REVIEW_PASSED, S.PACKAGING):
+        assert ALLOWED[src][S.RESCOPE_REQUIRED] == {Actor.GATEKEEPER}
+    assert ALLOWED[S.RESCOPE_REQUIRED][S.ABANDONED] == {Actor.HUMAN}
+    assert S.PROPOSAL_REJECTED in TERMINAL_STATES and S.PROPOSED not in TERMINAL_STATES
+
+
+@pytest.mark.parametrize("from_", [S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED])
+def test_undo_edges(ctx: AppContext, clock: FakeClock, from_: State) -> None:
+    """§14.11.15: human only, ≤ 10 min, Skip only for PROPOSAL_REJECTED; the decline record is cleared."""
+    cols = guard_columns(from_, S.PROPOSED)
+    cid = make(ctx, from_, **cols)
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, from_, S.PROPOSED, Actor.GATEKEEPER)
+    assert info.value.status == 403
+    late = make(ctx, from_, declined_at=to_iso(clock.now() - timedelta(minutes=11)), declined_reason="skipped")
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(late, from_, S.PROPOSED, Actor.HUMAN)
+    assert info.value.code == "guard_failed:undo_window"
+    ctx.state_machine.transition(cid, from_, S.PROPOSED, Actor.HUMAN)
+    row = db.one(ctx.conn, "SELECT state, declined_at, declined_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("PROPOSED", None, None)
+
+
+@pytest.mark.parametrize("reason", ["never_repo", "never_kind", "snoozed"])
+def test_undo_refused_for_never(ctx: AppContext, clock: FakeClock, reason: str) -> None:
+    cid = make(ctx, S.PROPOSAL_REJECTED, declined_at=to_iso(clock.now()), declined_reason=reason)
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.PROPOSAL_REJECTED, S.PROPOSED, Actor.HUMAN)
+    assert info.value.code == "guard_failed:undo_reason"
+
+
+def test_snooze_elapsed_rescouts(ctx: AppContext, clock: FakeClock) -> None:
+    cid = make(ctx, S.PROPOSAL_SNOOZED, snooze_until=to_iso(clock.now() + timedelta(days=1)))
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.PROPOSAL_SNOOZED, S.SCOUTING, Actor.WORKER)
+    assert info.value.code == "guard_failed:snoozed"
+    clock.advance(hours=25)
+    ctx.state_machine.transition(cid, S.PROPOSAL_SNOOZED, S.SCOUTING, Actor.WORKER)
+    assert state_of(ctx, cid) == "SCOUTING"
 
 
 def test_fetched_to_implemented_requires_operator_and_unbundle(ctx: AppContext) -> None:

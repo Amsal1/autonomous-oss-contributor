@@ -6,8 +6,9 @@
 ``consume`` right before the effect (enqueueing the plan stage, PLAN item 29). Start work is refused
 while paused, killed, draining or down. A proposal card has no parts: it is armable once sent.
 
-The proposal content (scout output, versions) arrives with PLAN item 29 (FEAT-006); until then the
-``ProposalSource`` is fail-closed (no binding can be computed, so nothing can be approved).
+The proposal content (scout output, versions) is ``gatekeeper.proposals.StoredProposals`` (PLAN item
+29); without a source the service is fail-closed (no binding can be computed, so nothing can be
+approved). The effects (Start work, declines, Undo) are ``gatekeeper.proposals.ProposalService``.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.decisions import TableDecisions
 
 RejectReason = Literal["skipped", "snoozed", "never_repo", "never_kind"]
+# §14.11.15 binding: {v, kind, cid, version} + these (proposals.StoredProposals, PLAN item 29)
+BOUND_FIELDS: tuple[str, ...] = ("proposal_sha256", "est_class", "user_directed", "policy_hash")
 REJECT_REASONS: tuple[str, ...] = ("skipped", "snoozed", "never_repo", "never_kind")
 
 
@@ -58,8 +61,8 @@ class ProposalApprovals(TableDecisions):
 
     def fields(self, row: sqlite3.Row) -> dict[str, Any]:
         fields = self.source.fields(self.conn, str(row["cid"]), int(row["version"]))
-        want = {"proposal_sha256", "est_class"}
-        if set(fields) != want or any(v in (None, "") for v in fields.values()):
+        want = set(BOUND_FIELDS)
+        if set(fields) != want or any(v is None or v == "" for v in fields.values()):
             raise ApprovalError("binding_fields", f"proposal fields {sorted(fields)} != {sorted(want)}")
         return fields
 
