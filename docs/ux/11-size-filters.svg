@@ -1,0 +1,277 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1680" height="900" viewBox="0 0 1680 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup: /size and /filters pickers, and user-directed work from a pasted GitHub link</title>
+  <desc id="desc">Left phone: the /size message shows the autonomous size preference, preferred classes, that user requests ignore it, per-repo overrides, the read-only hard ceiling, the overrun mode and recent merge rates, with class buttons xs to xl, Preferred and Per repo buttons, and the Undo row after a change. Middle phone: /filters page 1 of 3 with ten kind toggles in five rows and a pager row with More, Undo and Labels, plus a preview of page 2 with label toggles and the validation tier. Right phone: a pasted GitHub issue link answered by a link card with Work on this and Dismiss, the card after Work on this showing that scouting started and that the item is requested by you, and a refusal card for a repository that bans AI-assisted contributions.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:11.5px;fill:#111}
+    .b{font-weight:700}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:10.5px;fill:#1b1b1b;white-space:pre}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:11.5px;fill:#fff;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .claim{fill:#555;font-style:italic}
+    .link{fill:#1a6fd1}
+    .ghost{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#3f5a3f}
+  </style>
+
+  <!-- ============ PHONE 1: /size ============ -->
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">09:05</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">🚦 Control · bot</text>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="330" y="130" width="60" height="30" rx="14" fill="#e1ffc7"/>
+  <text class="t" x="342" y="150">/size</text>
+
+  <rect x="40" y="170" width="300" height="160" rx="16" fill="#ffffff"/>
+  <text class="t b" x="52" y="189" style="font-size:11px">📏 Size preference · autonomous discovery only</text>
+  <text class="t" x="52" y="206">Bot proposes up to <tspan class="b">m</tspan> · ≤ 250 code lines · ≤ 8 files</text>
+  <text class="t" x="52" y="222">Preferred: xs, s · test lines never count</text>
+  <text class="t" x="52" y="238">👤 Your /work requests ignore this.</text>
+  <text class="t" x="52" y="254" style="font-size:10.5px">Per repo: langfuse/langfuse ≤ l · ollama/ollama ≤ xs</text>
+  <text class="t" x="52" y="270">Ceiling (config only): 80 files · 3,000 code</text>
+  <text class="t" x="64" y="285">· 3,000 test</text>
+  <text class="t" x="52" y="301">Overrun: flag on the PR card</text>
+  <text class="t" x="52" y="317">Merged, 90 d: xs 3/4 · s 4/6 · m 1/2 → /digest</text>
+  <text class="s" x="330" y="326" text-anchor="end">09:05 edited</text>
+
+  <rect x="40" y="336" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="355">xs ≤20</text>
+  <rect x="141" y="336" width="98" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="355">s ≤80</text>
+  <rect x="243" y="336" width="97" height="30" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="291" y="355">✅ m ≤250</text>
+  <rect x="40" y="370" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="389">l ≤500</text>
+  <rect x="192" y="370" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="389">xl ≤1000</text>
+  <rect x="40" y="404" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="423">⭐ Preferred…</text>
+  <rect x="192" y="404" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="423">🏷 Per repo…</text>
+  <rect x="40" y="438" width="300" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="457">↩️ Undo</text>
+
+  <rect x="48" y="478" width="284" height="40" rx="12" fill="#2b2b2b" fill-opacity="0.88"/>
+  <text class="btn" x="190" y="494" style="font-weight:500">Auto size ≤ m. Proposals already sent</text>
+  <text class="btn" x="190" y="510" style="font-weight:500">keep their size.</text>
+
+  <text class="ghost" x="40" y="540">🏷 Per repo… → repo picker → class picker (same as</text>
+  <text class="ghost" x="40" y="553">the /repos card's [📏 Size: l ▾] row):</text>
+  <rect x="40" y="560" width="300" height="30" rx="12" fill="#ffffff"/>
+  <text class="t" x="52" y="580">📏 <tspan class="b">langfuse/langfuse</tspan> · autonomous size</text>
+  <rect x="40" y="594" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="613">Inherit (m)</text>
+  <rect x="141" y="594" width="98" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="613">xs</text>
+  <rect x="243" y="594" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="613">s</text>
+  <rect x="40" y="628" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="647">m</text>
+  <rect x="141" y="628" width="98" height="30" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="190" y="647">✅ l</text>
+  <rect x="243" y="628" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="647">xl</text>
+  <rect x="40" y="662" width="300" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="681">↩️ Back</text>
+  <text class="ghost" x="40" y="712">xxl is never offered: user-directed work already has</text>
+  <text class="ghost" x="40" y="725">no size limit below the ceiling. Typed: /size m,</text>
+  <text class="ghost" x="40" y="738">/repos langfuse/langfuse size l | inherit.</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ PHONE 2: /filters ============ -->
+  <rect x="440" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="450" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="450" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="450" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="478" y="54" class="t b">09:07</text>
+  <circle cx="506" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="506" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="532" y="90" class="hdr">ossbot</text>
+  <text x="532" y="107" class="s">🚦 Control · bot</text>
+  <line x1="450" y1="118" x2="820" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="740" y="130" width="70" height="30" rx="14" fill="#e1ffc7"/>
+  <text class="t" x="752" y="150">/filters</text>
+
+  <rect x="460" y="170" width="300" height="56" rx="16" fill="#ffffff"/>
+  <text class="t b" x="472" y="189">🧰 Discovery filters · autonomous only</text>
+  <text class="t" x="472" y="205"><tspan class="b">1/3 Kinds</tspan> · ✅ = the bot may propose this kind</text>
+  <text class="t" x="472" y="221">👤 /work ignores filters.</text>
+
+  <rect x="460" y="232" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="251">✅ Bug</text>
+  <rect x="612" y="232" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="251">✅ Docs</text>
+  <rect x="460" y="266" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="285">✅ Tests</text>
+  <rect x="612" y="266" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="285">✅ Small feature</text>
+  <rect x="460" y="300" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="319">✅ CI fix</text>
+  <rect x="612" y="300" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="319">✅ Small refactor</text>
+  <rect x="460" y="334" width="148" height="30" rx="10" fill="#8d9c8c"/>
+  <text class="btn" x="534" y="353">⬜ Breaking change</text>
+  <rect x="612" y="334" width="148" height="30" rx="10" fill="#8d9c8c"/>
+  <text class="btn" x="686" y="353">⬜ New dependency</text>
+  <rect x="460" y="368" width="148" height="30" rx="10" fill="#8d9c8c"/>
+  <text class="btn" x="534" y="387">⬜ API redesign</text>
+  <rect x="612" y="368" width="148" height="30" rx="10" fill="#8d9c8c"/>
+  <text class="btn" x="686" y="387">⬜ Crypto/security</text>
+  <rect x="460" y="402" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="508" y="421">◀ More</text>
+  <rect x="561" y="402" width="98" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="610" y="421">↩️ Undo</text>
+  <rect x="663" y="402" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="711" y="421">Labels ▶</text>
+
+  <text class="ghost" x="460" y="454">↓ Labels ▶ — the same message, page 2/3</text>
+  <rect x="460" y="462" width="300" height="40" rx="16" fill="#ffffff"/>
+  <text class="t b" x="472" y="481">🧰 Discovery filters · 2/3 Labels and tier</text>
+  <text class="t" x="472" y="496">Require any of these labels · validation tier</text>
+  <rect x="460" y="508" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="527">✅ good first issue</text>
+  <rect x="612" y="508" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="527">✅ help wanted</text>
+  <rect x="460" y="542" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="561">✅ bug</text>
+  <rect x="612" y="542" width="148" height="30" rx="10" fill="#8d9c8c"/>
+  <text class="btn" x="686" y="561">⬜ documentation</text>
+  <rect x="460" y="576" width="300" height="30" rx="10" fill="#8d9c8c"/>
+  <text class="btn" x="610" y="595">⬜ Any label (no label required)</text>
+  <rect x="460" y="610" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="508" y="629">T0</text>
+  <rect x="561" y="610" width="98" height="30" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="610" y="629">✅ T0–T1</text>
+  <rect x="663" y="610" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="711" y="629">T0–T2</text>
+  <rect x="460" y="644" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="508" y="663">◀ Kinds</text>
+  <rect x="561" y="644" width="98" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="610" y="663">↩️ Undo</text>
+  <rect x="663" y="644" width="97" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="711" y="663">More ▶</text>
+  <text class="ghost" x="460" y="694">Page 3 More: issue age [30 d] [90 d] [✅ 180 d] / [365 d]</text>
+  <text class="ghost" x="460" y="707">[Any] · maintainer activity [Any] [✅ 30 d] [90 d] ·</text>
+  <text class="ghost" x="460" y="720">languages (from profile) · open PRs/repo [✅ 1] [2] [3].</text>
+  <text class="ghost" x="460" y="740">Each tap applies now, is audited, FYI'd silently in</text>
+  <text class="ghost" x="460" y="753">📈 OSS feed, and Undo restores the last value (60 s).</text>
+
+  <rect x="450" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="462" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="497" y="834">☰ Menu</text>
+  <rect x="540" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="554" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ PHONE 3: pasted link → work request ============ -->
+  <rect x="860" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="870" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="870" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="870" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="898" y="54" class="t b">09:12</text>
+  <circle cx="926" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="926" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="952" y="90" class="hdr">ossbot</text>
+  <text x="952" y="107" class="s">💬 Assistant · bot</text>
+  <line x1="870" y1="118" x2="1240" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="914" y="130" width="316" height="34" rx="14" fill="#e1ffc7"/>
+  <text class="t link" x="926" y="151">https://github.com/ollama/ollama/issues/9876</text>
+
+  <rect x="880" y="174" width="300" height="56" rx="16" fill="#ffffff"/>
+  <text class="t" x="892" y="193">🔗 <tspan class="b">ollama/ollama #9876</tspan> · issue · open</text>
+  <text class="t" x="892" y="209">"Model pull hangs at 99% on slow links"</text>
+  <text class="s" x="1170" y="224" text-anchor="end">09:12</text>
+  <rect x="880" y="236" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="954" y="255">🛠 Work on this</text>
+  <rect x="1032" y="236" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="1106" y="255">✖️ Dismiss</text>
+  <text class="ghost" x="880" y="282">Link-only message → not relayed to Hermes. With other</text>
+  <text class="ghost" x="880" y="295">text it is carded and also answered by the assistant.</text>
+
+  <text class="ghost" x="880" y="318">↓ after 🛠 Work on this (exactly /work &lt;url&gt;)</text>
+  <rect x="880" y="326" width="300" height="104" rx="16" fill="#ffffff"/>
+  <text class="t" x="892" y="345">🛠 <tspan class="b">Working on it</tspan> · ollama/ollama#9876</text>
+  <text class="t" x="892" y="361">👤 <tspan class="b">requested by you</tspan></text>
+  <text class="t" x="892" y="377">"Model pull hangs at 99% on slow links" · open</text>
+  <text class="t" x="892" y="393">Scouting now (slot 1 of 2) · the proposal card</text>
+  <text class="t" x="892" y="409">will arrive in ✅ Reviews. Size preference and</text>
+  <text class="t" x="892" y="425">filters don't apply; safety checks do.</text>
+  <rect x="880" y="436" width="300" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="1030" y="455">✖️ Cancel request</text>
+
+  <rect x="1050" y="482" width="180" height="34" rx="14" fill="#e1ffc7"/>
+  <text class="t" x="1062" y="503">/work github.com/acme/x</text>
+  <rect x="880" y="526" width="300" height="104" rx="16" fill="#ffffff"/>
+  <text class="t" x="892" y="545">🚫 <tspan class="b">Can't work on this</tspan>: acme/x bans</text>
+  <text class="t" x="892" y="561">AI-assisted contributions.</text>
+  <rect x="888" y="568" width="3" height="40" fill="#b0b8ad"/>
+  <text class="t claim" x="898" y="582">"We do not accept PRs generated with AI</text>
+  <text class="t claim" x="898" y="598">tools." · CONTRIBUTING.md</text>
+  <text class="s" x="892" y="622">Nothing was queued. The repo's rules win.</text>
+  <rect x="880" y="636" width="300" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="1030" y="655">📄 Open policy ↗</text>
+
+  <text class="ghost" x="880" y="688">Other "still applies" checks show on the proposal card:</text>
+  <text class="ghost" x="880" y="701">⛔ forbidden paths (no Start work) · ⚠️ CLA required</text>
+  <text class="ghost" x="880" y="714">(confirm = signed) · ⚠️ PR already open here (confirm</text>
+  <text class="ghost" x="880" y="727">overrides) · 🧱 ceiling card if the diff is too big.</text>
+
+  <rect x="870" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="882" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="917" y="834">☰ Menu</text>
+  <rect x="960" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="974" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ NOTES ============ -->
+  <text class="note nh" x="1280" y="58">/size · /filters · /work (CR-004 Amendment B)</text>
+  <text class="note b" x="1280" y="86">What they change</text>
+  <text class="note" x="1280" y="104">• Autonomous discovery only: what the bot</text>
+  <text class="note" x="1280" y="120">  proposes on its own. 👤 work skips them.</text>
+  <text class="note" x="1280" y="138">• Class tap / toggle: immediate (class "tune"),</text>
+  <text class="note" x="1280" y="154">  audited, silent FYI, Undo for 60 s.</text>
+  <text class="note" x="1280" y="172">• Never touches an approved proposal, a 👤 item,</text>
+  <text class="note" x="1280" y="188">  either gate, or the ceiling (U13).</text>
+  <text class="note" x="1280" y="206">• Ceiling (policy.diff 80 / 3,000 / 3,000): shown</text>
+  <text class="note" x="1280" y="222">  read-only; config file + /reload only.</text>
+  <text class="note b" x="1280" y="252">Telegram constraints</text>
+  <text class="note" x="1280" y="270">• /size: 4 rows; 3 per row only when every label</text>
+  <text class="note" x="1280" y="286">  is ≤ 12 chars ("✅ m ≤250" = 8).</text>
+  <text class="note" x="1280" y="304">• /filters: ≤ 5 toggle rows + 1 pager row per</text>
+  <text class="note" x="1280" y="320">  page; 2 per row (labels > 12); longest label</text>
+  <text class="note" x="1280" y="336">  "⬜ Breaking change" = 17 ≤ 24.</text>
+  <text class="note" x="1280" y="354">• Single-button rows ≤ 64 ("⬜ Any label (no</text>
+  <text class="note" x="1280" y="370">  label required)" = 32).</text>
+  <text class="note" x="1280" y="388">• Every button is a 24-byte token; kind and label</text>
+  <text class="note" x="1280" y="404">  names are fixed constants, never repo text.</text>
+  <text class="note" x="1280" y="422">• Text ≤ 600 chars; toast ≤ 180 chars.</text>
+  <text class="note b" x="1280" y="452">Storage</text>
+  <text class="note" x="1280" y="470">• DiscoveryPrefs → discovery_prefs (scope '*' or</text>
+  <text class="note" x="1280" y="486">  'owner/repo'); effective = repo ?? global ??</text>
+  <text class="note" x="1280" y="502">  policy.yaml. ossctl size/filters use it too.</text>
+  <text class="note b" x="1280" y="532">/work and link cards</text>
+  <text class="note" x="1280" y="550">• Accepts github.com repo, /issues/N, /pull/N</text>
+  <text class="note" x="1280" y="566">  (query and fragment stripped); notes ≤ 1,000.</text>
+  <text class="note" x="1280" y="584">• ≤ 3 link cards per message; built only from the</text>
+  <text class="note" x="1280" y="600">  parsed URL + GitHub read facts, never your text.</text>
+  <text class="note" x="1280" y="618">• Class "request": queues a scout only; nothing</text>
+  <text class="note" x="1280" y="634">  runs or publishes before gate 1 and gate 2.</text>
+  <text class="note" x="1280" y="652">• 👤 proposals sort in class 1 and arrive loud.</text>
+  <text class="note b" x="1280" y="682">Digest (§7.4)</text>
+  <text class="note" x="1280" y="700">• Weekly: merge rate by class (xs, s, m, l+ while</text>
+  <text class="note" x="1280" y="716">  &lt; 3 PRs each) + a "👤 yours" row; rate only from</text>
+  <text class="note" x="1280" y="732">  ≥ 3 PRs; the /size line shows the 90-day numbers.</text>
+</svg>

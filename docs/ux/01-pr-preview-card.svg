@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="900" viewBox="0 0 820 900" role="img" aria-labelledby="title desc">
   <title id="title">ossbot mockup S1: PR preview card</title>
-  <desc id="desc">Telegram phone screen in the Reviews topic showing the decorated approval card with mode badge, verified facts, model claims, expiry, a four-row inline keyboard and the first verbatim PR body part.</desc>
+  <desc id="desc">Telegram phone screen in the Reviews topic showing the decorated approval card with mode badge, verified facts, model claims, the size estimate versus the measured diff with code and test lines split, expiry, a four-row inline keyboard and the first verbatim PR body part.</desc>
   <style>
     .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
     .b{font-weight:700}
@@ -13,6 +13,7 @@
     .claim{fill:#555;font-style:italic}
     .dry{fill:#1565c0;font-weight:700}
     .link{fill:#1a6fd1}
+    .warn{fill:#8a4b00}
     .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
   </style>
   <!-- phone -->
@@ -22,7 +23,7 @@
   <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
   <text x="58" y="54" class="t b">9:41</text>
   <text x="372" y="54" class="t" text-anchor="end">5G ▮▮▮ 82%</text>
-  <text x="46" y="98" class="t" fill="#2f7fe0" style="fill:#2f7fe0;font-size:20px">‹</text>
+  <text x="46" y="98" class="t" style="fill:#2f7fe0;font-size:20px">‹</text>
   <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
   <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
   <text x="112" y="90" class="hdr">ossbot</text>
@@ -30,56 +31,57 @@
   <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
 
   <!-- card bubble -->
-  <rect x="40" y="130" width="300" height="296" rx="16" fill="#ffffff"/>
-  <text class="t" x="52" y="150"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r2</text>
-  <text class="t dry" x="52" y="168">🧪 DRY RUN — nothing is published</text>
-  <text class="t" x="52" y="186"><tspan class="b">langfuse/langfuse</tspan> ⭐ 36.0k · 14 ext PRs/90d</text>
-  <text class="t" x="52" y="204">Issue <tspan class="link">#1234</tspan> <tspan class="b">Fix trace export when</tspan></text>
-  <text class="t" x="52" y="222"><tspan class="b">spans are empty</tspan> · bug, good first issue</text>
-  <text class="t claim" x="52" y="240">🤖 Why: export crashes on empty span</text>
-  <text class="t claim" x="52" y="258">lists; maintainer confirmed in thread.</text>
-  <text class="t" x="52" y="276">✅ CONTRIBUTING · AI policy · DCO signed</text>
-  <text class="t" x="52" y="294">✅ unclaimed · no competing PR</text>
-  <text class="t" x="52" y="312">Risk 🤖 low (0.82) · ✅ 3 files +42 −7</text>
-  <text class="t" x="52" y="330">Tests ✅ lint · unit 212 · smoke</text>
-  <text class="t" x="52" y="348">Self-review 🤖 PASS · 0 blocking · 2 nits</text>
-  <text class="t" x="52" y="366">Commit <tspan class="m">abc1234</tspan> on main@def5678 (10:02)</text>
-  <text class="t" x="52" y="384">PR title: <tspan class="m">fix(web): handle empty spans…</tspan></text>
-  <text class="t" x="52" y="402">Body 2,140 chars (1 part ↓) · 0 hidden chars</text>
-  <text class="t" x="52" y="419">⏳ Approval expires <tspan class="b">in 3 days</tspan></text>
-  <text class="s" x="330" y="419" text-anchor="end">10:14</text>
+  <rect x="40" y="128" width="300" height="332" rx="16" fill="#ffffff"/>
+  <text class="t" x="52" y="148"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r2</text>
+  <text class="t dry" x="52" y="166">🧪 DRY RUN — nothing is published</text>
+  <text class="t" x="52" y="184"><tspan class="b">langfuse/langfuse</tspan> ⭐ 36.0k · 14 ext PRs/90d</text>
+  <text class="t" x="52" y="202">Issue <tspan class="link">#1234</tspan> <tspan class="b">Fix trace export when</tspan></text>
+  <text class="t" x="52" y="220"><tspan class="b">spans are empty</tspan> · bug, good first issue</text>
+  <text class="t claim" x="52" y="238">🤖 Why: export crashes on empty span</text>
+  <text class="t claim" x="52" y="256">lists; maintainer confirmed in thread.</text>
+  <text class="t" x="52" y="274">✅ CONTRIBUTING · AI policy · DCO signed</text>
+  <text class="t" x="52" y="292">✅ unclaimed · no competing PR</text>
+  <text class="t" x="52" y="310">Risk 🤖 low (0.82) · Change ✅ 3 files</text>
+  <text class="t" x="52" y="328"><tspan class="b">Size ✅ s</tspan> · est ~40 code → +31 / −7 code</text>
+  <text class="t" x="64" y="346">· +11 test · within estimate</text>
+  <text class="t" x="52" y="364">Tests ✅ lint · unit 212 · smoke</text>
+  <text class="t" x="52" y="382">Self-review 🤖 PASS · 0 blocking · 2 nits</text>
+  <text class="t" x="52" y="400">Commit <tspan class="m">abc1234</tspan> on main@def5678 (10:02)</text>
+  <text class="t" x="52" y="418">PR title: <tspan class="m">fix(web): handle empty spans…</tspan></text>
+  <text class="t" x="52" y="436">Body 2,140 chars (1 part ↓) · 0 hidden chars</text>
+  <text class="t" x="52" y="453">⏳ Approval expires <tspan class="b">in 3 days</tspan></text>
+  <text class="s" x="330" y="453" text-anchor="end">10:14</text>
 
   <!-- keyboard -->
-  <rect x="40" y="432" width="148" height="32" rx="10" fill="#2e9d4f"/>
-  <text class="btn" x="114" y="452">✅ Approve &amp; Submit</text>
-  <rect x="192" y="432" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="266" y="452">❌ Reject</text>
-  <rect x="40" y="468" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="114" y="488">🧭 Explore</text>
-  <rect x="192" y="468" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="266" y="488">🧾 Files (3)</text>
-  <rect x="40" y="504" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="114" y="524">✏️ Request changes</text>
-  <rect x="192" y="504" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="266" y="524">📝 Edit text</text>
-  <rect x="40" y="540" width="300" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="190" y="560">🐙 Review on GitHub</text>
-  <text class="btn" x="330" y="552" style="font-size:10px">↗</text>
+  <rect x="40" y="466" width="148" height="32" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="114" y="486">✅ Approve &amp; Submit</text>
+  <rect x="192" y="466" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="486">❌ Reject</text>
+  <rect x="40" y="502" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="522">🧭 Explore</text>
+  <rect x="192" y="502" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="522">🧾 Files (3)</text>
+  <rect x="40" y="538" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="558">✏️ Request changes</text>
+  <rect x="192" y="538" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="558">📝 Edit text</text>
+  <rect x="40" y="574" width="300" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="594">🐙 Review on GitHub</text>
+  <text class="btn" x="330" y="586" style="font-size:10px">↗</text>
 
   <!-- body part bubble -->
-  <rect x="40" y="584" width="300" height="196" rx="16" fill="#ffffff"/>
-  <text class="t b" x="52" y="604">PR body (1/1)</text>
-  <rect x="50" y="612" width="280" height="150" rx="6" fill="#eef1ec"/>
-  <text class="m" x="58" y="630">## Summary</text>
-  <text class="m" x="58" y="645">Handle empty span lists in the OTel</text>
-  <text class="m" x="58" y="660">trace exporter so export no longer</text>
-  <text class="m" x="58" y="675">throws on traces without spans.</text>
-  <text class="m" x="58" y="690">Fixes #1234</text>
-  <text class="m" x="58" y="705">## How this was validated</text>
-  <text class="m" x="58" y="720">- unit: 212 passed (pnpm test)</text>
-  <text class="m" x="58" y="735">&lt;!-- AI disclosure: drafted with</text>
-  <text class="m" x="58" y="750">an AI assistant, reviewed by me --&gt;</text>
-  <text class="s" x="330" y="774" text-anchor="end">10:14</text>
+  <rect x="40" y="616" width="300" height="172" rx="16" fill="#ffffff"/>
+  <text class="t b" x="52" y="636">PR body (1/1)</text>
+  <rect x="50" y="644" width="280" height="126" rx="6" fill="#eef1ec"/>
+  <text class="m" x="58" y="661">## Summary</text>
+  <text class="m" x="58" y="676">Handle empty span lists in the OTel</text>
+  <text class="m" x="58" y="691">trace exporter so export no longer</text>
+  <text class="m" x="58" y="706">throws on traces without spans.</text>
+  <text class="m" x="58" y="721">Fixes #1234</text>
+  <text class="m" x="58" y="736">## How this was validated</text>
+  <text class="m" x="58" y="751">- unit: 212 passed (pnpm test)</text>
+  <text class="m" x="58" y="766">&lt;!-- AI disclosure … --&gt;</text>
+  <text class="s" x="330" y="782" text-anchor="end">10:14</text>
 
   <!-- input bar -->
   <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
@@ -93,47 +95,48 @@
   <text class="note nh" x="440" y="58">S1 · Preview card (classic HTML)</text>
   <text class="note" x="440" y="80">The bound approval surface (U3). Never rich,</text>
   <text class="note" x="440" y="96">never a draft, never ephemeral.</text>
-  <text class="note b" x="440" y="126">Telegram constraints</text>
-  <text class="note" x="440" y="146">• Card text ≈ 1,480 chars; limit 4,096,</text>
-  <text class="note" x="440" y="162">  ossbot budget ≤ 3,900 escaped chars.</text>
-  <text class="note" x="440" y="180">• 4 rows · ≤ 2 buttons per row · labels ≤ 20.</text>
-  <text class="note" x="440" y="198">• callback_data = "t:" + 22 chars = 24 bytes</text>
-  <text class="note" x="440" y="214">  (limit 1–64); args live in ui_tokens.</text>
-  <text class="note" x="440" y="232">• Row 4 is a URL button (no token), shown only</text>
-  <text class="note" x="440" y="248">  when the review mirror is enabled and pushed.</text>
-  <text class="note" x="440" y="266">• Approve is styled success (green) and still</text>
-  <text class="note" x="440" y="282">  says "Approve": colour is never the only cue.</text>
-  <text class="note b" x="440" y="312">Behaviour</text>
-  <text class="note" x="440" y="332">• Until body part 1/1 is delivered the first row</text>
-  <text class="note" x="440" y="348">  is [⏳ delivering…] [❌ Reject]; the approve</text>
-  <text class="note" x="440" y="364">  token is minted after delivery (unchanged).</text>
-  <text class="note" x="440" y="382">• ✅ = verified by the gatekeeper; 🤖 = model</text>
-  <text class="note" x="440" y="398">  claim, italic and quoted (U6).</text>
-  <text class="note" x="440" y="416">• "in 3 days" is &lt;tg-time format="r"&gt;: the</text>
-  <text class="note" x="440" y="432">  client keeps it current, even offline.</text>
-  <text class="note" x="440" y="450">• Issue title is untrusted: escaped, made</text>
-  <text class="note" x="440" y="466">  visible, bot commands defused (U8).</text>
-  <text class="note" x="440" y="484">• Body bytes are verbatim in &lt;pre&gt; parts;</text>
-  <text class="note" x="440" y="500">  &gt; 3 parts or &gt; 10k chars adds pr_body.md.</text>
-  <text class="note" x="440" y="518">• Loud only within 2 cards/hour or class 0–1;</text>
-  <text class="note" x="440" y="534">  otherwise disable_notification.</text>
-  <text class="note b" x="440" y="564">📝 Edit text → picker (reply to card)</text>
-  <rect x="440" y="576" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="526" y="595">✏️ Title</text>
-  <rect x="616" y="576" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="702" y="595">✏️ Body</text>
-  <rect x="440" y="610" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="526" y="629">📄 Body as file</text>
-  <rect x="616" y="610" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="702" y="629">📋 Copy title</text>
-  <rect x="440" y="644" width="348" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="614" y="663">↩️ Clear my edits</text>
-  <text class="note" x="440" y="696">• Title/Body: ForceReply, current text quoted;</text>
-  <text class="note" x="440" y="712">  policy.check_text before storing (P1-4).</text>
-  <text class="note" x="440" y="730">• Body as file: .md/.txt ≤ 64 KiB, strict UTF-8.</text>
-  <text class="note" x="440" y="748">• Copy title uses copy_text (≤ 256 chars); Clear</text>
-  <text class="note" x="440" y="764">  shows only when an override exists. Any accepted</text>
-  <text class="note" x="440" y="780">  edit → new card; this one turns stale (S12).</text>
-  <text class="note" x="440" y="812">Mode badge flips to "🔴 LIVE — opens a public PR"</text>
-  <text class="note" x="440" y="828">when dry-run is off; any toggle re-issues cards.</text>
+  <text class="note b" x="440" y="124">Telegram constraints</text>
+  <text class="note" x="440" y="142">• Card text ≈ 1,560 chars; limit 4,096, ossbot</text>
+  <text class="note" x="440" y="158">  budget ≤ 3,900 escaped chars (optional blocks</text>
+  <text class="note" x="440" y="174">  dropped first; header, mode, title, size, expiry</text>
+  <text class="note" x="440" y="190">  never cut).</text>
+  <text class="note" x="440" y="208">• 4 rows · ≤ 2 per row · labels ≤ 24 (target 20).</text>
+  <text class="note" x="440" y="226">• callback_data = "t:" + 22 chars = 24 bytes</text>
+  <text class="note" x="440" y="242">  (limit 1–64); args live in ui_tokens.</text>
+  <text class="note" x="440" y="260">• Row 4 is a URL button (no token), shown only with</text>
+  <text class="note" x="440" y="276">  the mirror; a late push adds it by editing the</text>
+  <text class="note" x="440" y="292">  markup with the same tokens.</text>
+  <text class="note" x="440" y="310">• Approve is styled success and still says "Approve".</text>
+  <text class="note b" x="440" y="338">Size line (CR-004 Amendment B)</text>
+  <text class="note" x="440" y="356">• Gatekeeper numstat; test lines shown apart and</text>
+  <text class="note" x="440" y="372">  never counted toward the class.</text>
+  <text class="note" x="440" y="390">• Overrun (default on_overrun: flag) is highlighted,</text>
+  <text class="note" x="440" y="406">  never blocked, e.g. "Size ⚠️ m (est s) … +330%</text>
+  <text class="note" x="440" y="422">  over estimate · 🤖 coder: …" (see mockup 10).</text>
+  <text class="note" x="440" y="440">• 👤 requested by you appears under the header for</text>
+  <text class="note" x="440" y="456">  /work items.</text>
+  <text class="note b" x="440" y="484">Behaviour</text>
+  <text class="note" x="440" y="502">• While parts are delivering: one disabled</text>
+  <text class="note" x="440" y="518">  [⏳ delivering 1/2…] and no tokens; Approve is</text>
+  <text class="note" x="440" y="534">  minted after delivery (unchanged).</text>
+  <text class="note" x="440" y="552">• ✅ = verified by the gatekeeper; 🤖 = model claim.</text>
+  <text class="note" x="440" y="570">• "in 3 days" is &lt;tg-time format="r"&gt;.</text>
+  <text class="note" x="440" y="588">• Issue title is untrusted: escaped, made visible,</text>
+  <text class="note" x="440" y="604">  bot commands defused (U8).</text>
+  <text class="note" x="440" y="622">• Loud only within 2 cards/hour or class 0–1.</text>
+  <text class="note b" x="440" y="650">📝 Edit text → picker (reply to card)</text>
+  <rect x="440" y="660" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="526" y="679">✏️ Title</text>
+  <rect x="616" y="660" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="702" y="679">✏️ Body</text>
+  <rect x="440" y="694" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="526" y="713">📄 Body as file</text>
+  <rect x="616" y="694" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="702" y="713">📋 Copy title</text>
+  <rect x="440" y="728" width="348" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="614" y="747">↩️ Clear my edits</text>
+  <text class="note" x="440" y="778">• Body as file: .md/.txt ≤ 64 KiB, strict UTF-8. Any</text>
+  <text class="note" x="440" y="794">  accepted edit → new card; this one turns stale.</text>
+  <text class="note" x="440" y="822">Mode badge flips to "🔴 LIVE — opens a public PR"</text>
+  <text class="note" x="440" y="838">when dry-run is off; any toggle re-issues cards.</text>
 </svg>

@@ -150,8 +150,8 @@
 
   <!-- ack -->
   <rect x="460" y="632" width="300" height="46" rx="16" fill="#ffffff"/>
-  <text class="t" x="472" y="652">📝 <tspan class="b">Comment 1 saved</tspan> · trace.ts L42 (new)</text>
-  <text class="s" x="472" y="668">quote matched 1 line · 1 pending in draft review</text>
+  <text class="t" x="472" y="652">📝 <tspan class="b">Comment 1 saved</tspan> · trace.ts L41 (new)</text>
+  <text class="s" x="472" y="668">manual quote matched 1 line · 1 of ≤ 30 in draft</text>
   <rect x="460" y="682" width="148" height="32" rx="10" fill="#5f7d64"/>
   <text class="btn" x="534" y="702">↩️ Undo</text>
 
@@ -170,24 +170,24 @@
   <text class="note" x="860" y="158">6 Diff · 7 Tests · 8 Self-review · 9 PR text</text>
   <text class="note" x="860" y="176">• nav tokens: multi-use, 24 h, message-bound,</text>
   <text class="note" x="860" y="192">  24-byte callback_data; ≤ 3 per row.</text>
-  <text class="note b" x="860" y="220">File view (one message per file)</text>
+  <text class="note b" x="860" y="220">File view (one message per r2, edited in place)</text>
   <text class="note" x="860" y="238">• Rich: pre language="diff", details for hunks</text>
   <text class="note" x="860" y="254">  &gt; 60 lines; ≤ 30,000 chars / ≤ 450 blocks;</text>
   <text class="note" x="860" y="270">  skip_entity_detection = true (U1).</text>
   <text class="note" x="860" y="288">• Classic fallback: &lt;pre&gt;&lt;code class=</text>
   <text class="note" x="860" y="304">  "language-diff"&gt; pages ≤ 3,500 chars.</text>
-  <text class="note" x="860" y="322">• Hunk text = derived patch bytes, with hidden</text>
-  <text class="note" x="860" y="338">  and bidi characters shown as ⟦U+XXXX⟧.</text>
+  <text class="note" x="860" y="322">• ◀ Prev / Next ▶ edit this message to the other</text>
+  <text class="note" x="860" y="338">  file; 📂 1/3 swaps in a file picker (≤ 8/page).</text>
   <text class="note b" x="860" y="366">Comments</text>
-  <text class="note" x="860" y="384">• Reply + quote: quote.text (≤ 1,024) searched in</text>
-  <text class="note" x="860" y="400">  the page text → path + lines; ties broken by</text>
-  <text class="note" x="860" y="416">  quote.position; ambiguous → line picker.</text>
+  <text class="note" x="860" y="384">• Reply + manual quote (is_manual): searched in the</text>
+  <text class="note" x="860" y="400">  page text → path + lines (+/context = new side);</text>
+  <text class="note" x="860" y="416">  ties by position; ambiguous → line picker.</text>
   <text class="note" x="860" y="434">• 💬 Comment → hunk picker → ForceReply</text>
   <text class="note" x="860" y="450">  (placeholder ≤ 60 chars, text ≤ 4,000).</text>
   <text class="note b" x="860" y="480">Draft review (reply to card, edited in place)</text>
   <rect x="860" y="490" width="370" height="98" rx="14" fill="#ffffff" stroke="#c9d3c4"/>
   <text class="t b" x="872" y="510">📝 Draft review · c_01JABC r2 · 2 comments</text>
-  <text class="t" x="872" y="530">1. trace.ts L42 — return early, warn level</text>
+  <text class="t" x="872" y="530">1. trace.ts L41 — return early, warn level</text>
   <text class="t" x="872" y="548">2. general — add a test for empty spans</text>
   <text class="s" x="872" y="576">source: telegram · stored in review_comments</text>
   <rect x="860" y="594" width="370" height="32" rx="10" fill="#5f7d64"/>
@@ -200,8 +200,8 @@
   <text class="note" x="860" y="700">  comments_json) → CHANGES_REQUESTED → S5.</text>
   <text class="note" x="860" y="718">• Mirror (opt-in) single comments join here,</text>
   <text class="note" x="860" y="734">  with source = mirror.</text>
-  <text class="note" x="860" y="752">• While Confirm is armed, new comments wait; the</text>
-  <text class="note" x="860" y="768">  Confirm panel warns they will be discarded.</text>
+  <text class="note" x="860" y="752">• Keyed by (cid, rev): Cancel or Show card never</text>
+  <text class="note" x="860" y="768">  loses them; ≤ 30 per draft, text ≤ 60,000.</text>
   <text class="note" x="860" y="796">Labels ≤ 20 chars; ≤ 2 per row when a label</text>
   <text class="note" x="860" y="812">is over 12 chars (so Send gets its own row).</text>
 </svg>

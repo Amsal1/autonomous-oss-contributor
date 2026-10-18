@@ -137,21 +137,23 @@
   <text class="note" x="860" y="380">  informational and never gates Confirm.</text>
   <text class="note" x="860" y="398">• Unsent draft-review comments are listed; on</text>
   <text class="note" x="860" y="414">  Confirm they are marked discarded.</text>
-  <text class="note" x="860" y="432">• Cancel or expiry → back to S1 with rotated</text>
-  <text class="note" x="860" y="448">  tokens; toast "Cancelled; nothing was submitted."</text>
-  <text class="note b" x="860" y="478">Telegram constraints</text>
-  <text class="note" x="860" y="498">• Classic message ≤ 3,900 escaped chars; never</text>
-  <text class="note" x="860" y="514">  a rich message, draft or ephemeral (U3).</text>
-  <text class="note" x="860" y="532">• 2 buttons, 1 row; labels ≤ 20 chars.</text>
-  <text class="note" x="860" y="550">• Toasts via answerCallbackQuery: limit 200, ossbot</text>
-  <text class="note" x="860" y="566">  ≤ 180; show_alert only for refusals.</text>
-  <text class="note" x="860" y="584">• "in 5 minutes" is &lt;tg-time format="r"&gt;.</text>
-  <text class="note" x="860" y="602">• URL buttons (Open PR) and copy_text (Copy</text>
-  <text class="note" x="860" y="618">  link, ≤ 256) need no token.</text>
-  <text class="note b" x="860" y="648">Other action kinds</text>
-  <text class="note" x="860" y="668">push_update: "Confirm: LIVE — push 1 commit to</text>
-  <text class="note" x="860" y="684">PR #5678 (langfuse/langfuse) as Amsal1."</text>
-  <text class="note" x="860" y="702">comment / claim: "Confirm: LIVE — post comment</text>
-  <text class="note" x="860" y="718">on langfuse/langfuse#1234 as Amsal1."</text>
-  <text class="note" x="860" y="736">skill: "Confirm: activate skill … (sha256 …)".</text>
+  <text class="note" x="860" y="432">• Cancel → S1 with rotated tokens ("Cancelled; nothing</text>
+  <text class="note" x="860" y="448">  was submitted."). No tap in 5 min → housekeeping</text>
+  <text class="note" x="860" y="464">  disarm_expired(): pending again, S1, fresh tokens.</text>
+  <text class="note b" x="860" y="494">Telegram constraints</text>
+  <text class="note" x="860" y="514">• Classic message ≤ 3,900 escaped chars; never</text>
+  <text class="note" x="860" y="530">  a rich message, draft or ephemeral (U3).</text>
+  <text class="note" x="860" y="548">• 2 buttons, 1 row; labels ≤ 20 chars.</text>
+  <text class="note" x="860" y="566">• Toasts via answerCallbackQuery: limit 200, ossbot</text>
+  <text class="note" x="860" y="582">  ≤ 180; show_alert only for refusals.</text>
+  <text class="note" x="860" y="600">• "in 5 minutes" is &lt;tg-time format="r"&gt;.</text>
+  <text class="note" x="860" y="618">• URL buttons (Open PR) and copy_text (Copy</text>
+  <text class="note" x="860" y="634">  link, ≤ 256) need no token.</text>
+  <text class="note b" x="860" y="664">Other action kinds</text>
+  <text class="note" x="860" y="684">push_update: "Confirm: LIVE — push 1 commit to</text>
+  <text class="note" x="860" y="700">PR #5678 (langfuse/langfuse) as Amsal1."</text>
+  <text class="note" x="860" y="718">comment / claim: "Confirm: LIVE — post comment</text>
+  <text class="note" x="860" y="734">on langfuse/langfuse#1234 as Amsal1."</text>
+  <text class="note" x="860" y="752">skill / proposal start: local change, "dry-run does</text>
+  <text class="note" x="860" y="768">not apply" (mockups 08 and 10).</text>
 </svg>

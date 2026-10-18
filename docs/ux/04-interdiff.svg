@@ -50,7 +50,7 @@
   <text class="t dry" x="52" y="334">🧪 DRY RUN — nothing is published</text>
   <text class="t" x="52" y="352"><tspan class="b">langfuse/langfuse</tspan> · Issue #1234</text>
   <text class="t b" x="52" y="374">You asked (2 comments, 10:25):</text>
-  <text class="t" x="52" y="392">1. trace.ts L42 — return early, warn level</text>
+  <text class="t" x="52" y="392">1. trace.ts L41 — return early, warn level</text>
   <text class="t" x="64" y="410">✅ touched · <tspan class="claim">🤖 coder: switched to warn</tspan></text>
   <text class="t" x="52" y="428">2. general — add a test for empty spans</text>
   <text class="t" x="64" y="446">✅ new file · <tspan class="claim">🤖 coder: added 2 tests</tspan></text>
@@ -68,9 +68,9 @@
   <rect x="192" y="628" width="148" height="32" rx="10" fill="#5f7d64"/>
   <text class="btn" x="266" y="648">❌ Reject</text>
   <rect x="40" y="664" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="114" y="684">🔀 Interdiff</text>
+  <text class="btn" x="114" y="684">🧭 Explore</text>
   <rect x="192" y="664" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="266" y="684">🧭 Explore</text>
+  <text class="btn" x="266" y="684">🔀 Interdiff</text>
   <rect x="40" y="700" width="148" height="32" rx="10" fill="#5f7d64"/>
   <text class="btn" x="114" y="720">✏️ Request changes</text>
   <rect x="192" y="700" width="148" height="32" rx="10" fill="#5f7d64"/>
@@ -96,15 +96,15 @@
   <text class="note" x="440" y="256">• "✅ touched" is deterministic: the interdiff</text>
   <text class="note" x="440" y="272">  changes the commented lines ±3 (or adds the</text>
   <text class="note" x="440" y="288">  file); else "⚠️ not touched".</text>
-  <text class="note" x="440" y="306">• "🤖 coder:" is the implementer's report,</text>
-  <text class="note" x="440" y="322">  ≤ 120 chars, untrusted (U6).</text>
-  <text class="note" x="440" y="340">• Interdiff = gitcmd.INTERDIFF (same base) or</text>
-  <text class="note" x="440" y="356">  RANGE_DIFF (base moved), in the rev-3 mirror</text>
-  <text class="note" x="440" y="372">  with a temporary alternate to the rev-2 mirror.</text>
+  <text class="note" x="440" y="306">• "You asked": ≤ 5 items × 80 chars, "🤖 coder:"</text>
+  <text class="note" x="440" y="322">  ≤ 60; then "+N more → 🧭"; dropped first if long.</text>
+  <text class="note" x="440" y="340">• Interdiff = INTERDIFF (same base) or RANGE_DIFF</text>
+  <text class="note" x="440" y="356">  (base moved: file-level "touched" only, card says</text>
+  <text class="note" x="440" y="372">  "line-level touch check unavailable").</text>
   <text class="note" x="440" y="390">• Display-only (U4): the binding is still the full</text>
   <text class="note" x="440" y="406">  derived patch + head SHA + title/body hashes.</text>
 
-  <text class="note b" x="440" y="436">🔀 Interdiff → file-view message (comments work)</text>
+  <text class="note b" x="440" y="436">🔀 Interdiff view (same base: line comments work)</text>
   <rect x="440" y="446" width="370" height="138" rx="12" fill="#ffffff" stroke="#c9d3c4"/>
   <text class="t b" x="452" y="466">🔀 Interdiff r2 → r3 · web/src/export/trace.ts</text>
   <rect x="450" y="474" width="350" height="100" rx="6" fill="#f6f8fa"/>
@@ -117,15 +117,15 @@
   <text class="m" x="456" y="550">       return emptyExport(t.id);</text>
   <text class="s" x="456" y="568">file 1/2 · next: trace.test.ts (new, +18)</text>
 
-  <text class="note b" x="440" y="614">S12 stale variants (same keyboard)</text>
-  <text class="note" x="440" y="632">⌛ Expired · approval was valid 72 h</text>
-  <text class="note" x="440" y="650">⚪ Invalidated · dry-run turned off → new LIVE card</text>
-  <text class="note" x="440" y="668">⚪ Invalidated · config reloaded / title edited / kill</text>
+  <text class="note b" x="440" y="614">S12 variants (label from the reason code)</text>
+  <text class="note" x="440" y="632">⌛ Expired · valid 72 h → [🔁 Retry] (fresh card)</text>
+  <text class="note" x="440" y="650">⚪ dry_run_toggled → "dry-run turned off" + current</text>
+  <text class="note" x="440" y="668">⚪ config reloaded · title/body edited · kill · moved</text>
   <text class="note" x="440" y="686">• Body-part messages become "⚪ part of superseded</text>
   <text class="note" x="440" y="702">  c_01JABC r2", so stale bytes can't be mistaken.</text>
   <text class="note" x="440" y="720">• A tap on any old token: toast "Superseded: content</text>
   <text class="note" x="440" y="736">  or mode changed since this card; review the new card."</text>
   <text class="note" x="440" y="754">• "⬇️ Show current" re-sends the live card at the</text>
-  <text class="note" x="440" y="770">  bottom (token rotation, N4).</text>
+  <text class="note" x="440" y="770">  bottom via reissue() (N4); drafts survive.</text>
   <text class="note" x="440" y="800">Keyboard: 3 rows × 2 · labels ≤ 20 · 24-byte data.</text>
 </svg>

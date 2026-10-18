@@ -1,0 +1,205 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="900" viewBox="0 0 1260 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup: gate 1 proposal card, its Confirm, the size overrun highlight and the ceiling-hit card</title>
+  <desc id="desc">Left phone: proposal version 2 for a user-requested issue, sent as a reply to the superseded version 1. It shows the mode badge marked not applicable, the requested-by-you badge, the repository and issue, a gatekeeper-computed list of what changed since version 1, the problem, three approach steps, likely files, the size estimate with code and test lines, the validation plan, signals, acceptance rationale, confidence, and the expiry, followed by a four-row keyboard: Start work and Skip, Adjust plan and Make it smaller, Never and Later, Details. Right phone: the card edited into the Start work confirm panel with a blue Confirm start button; later, a PR preview card excerpt where the measured size is larger than estimated and is highlighted with the percentage and the coder's labelled reason while Approve stays available; and a size-ceiling card with Split, Drop, Re-check and Explore buttons.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:11.5px;fill:#111}
+    .b{font-weight:700}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:10.5px;fill:#1b1b1b;white-space:pre}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:11.5px;fill:#fff;font-weight:600;text-anchor:middle}
+    .dis{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:11.5px;fill:#f2f4f0;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .rq{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#2f7fe0;font-weight:700}
+    .claim{fill:#555;font-style:italic}
+    .dry{fill:#0d47a1;font-weight:700}
+    .warn{fill:#8a4b00}
+    .add{fill:#116329}
+    .del{fill:#a40e26}
+    .link{fill:#1a6fd1}
+    .ghost{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#3f5a3f}
+  </style>
+
+  <!-- ============ LEFT PHONE: proposal v2 ============ -->
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">14:12</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="40" y="126" width="300" height="464" rx="16" fill="#ffffff"/>
+  <rect x="50" y="134" width="3" height="26" fill="#2f7fe0"/>
+  <text class="rq" x="58" y="145">ossbot</text>
+  <text class="s" x="58" y="157">⚪ Superseded · Proposal v1 · c_01JABC</text>
+  <text class="t b" x="52" y="178">💡 Proposal · c_01JABC · v2</text>
+  <text class="t dry" x="52" y="194">🧪 DRY RUN (n/a: local change)</text>
+  <text class="t" x="52" y="210">👤 <tspan class="b">requested by you</tspan> · "keep it minimal"</text>
+  <text class="t" x="52" y="226"><tspan class="b">langfuse/langfuse</tspan> ⭐ 36.0k · merge ~2 d</text>
+  <text class="t" x="52" y="242">Issue <tspan class="link">#1234</tspan> <tspan class="b">Fix trace export when spans</tspan></text>
+  <text class="t" x="52" y="258"><tspan class="b">are empty</tspan> · bug · good first issue</text>
+  <rect x="48" y="265" width="284" height="84" rx="6" fill="#f3f6f0"/>
+  <text class="t b" x="54" y="280">Changed since v1 (diff by gatekeeper; 🤖)</text>
+  <text class="t" x="54" y="295">You asked: "keep the debug log, behind a flag"</text>
+  <text class="t add" x="54" y="310">+ Approach 3: Gate the debug log behind a flag</text>
+  <text class="t del" x="54" y="325">− Approach 3: Remove the debug log</text>
+  <text class="t add" x="54" y="340">+ File: web/src/config.ts · ~35 → ~48 code</text>
+  <text class="t claim" x="52" y="366">🤖 Problem: export throws when a trace has</text>
+  <text class="t claim" x="52" y="381">no spans (toOtel maps an undefined list).</text>
+  <text class="t b" x="52" y="398">🤖 Approach</text>
+  <text class="t claim" x="64" y="413">1. Guard empty span lists in toOtel()</text>
+  <text class="t claim" x="64" y="428">2. Return an empty export payload</text>
+  <text class="t claim" x="64" y="443">3. Gate the debug log behind a flag</text>
+  <text class="t" x="52" y="460">🤖 Files <tspan class="m">trace.ts · trace.test.ts · config.ts</tspan></text>
+  <text class="t" x="52" y="476"><tspan class="b">Size</tspan> 🤖 est <tspan class="b">s</tspan> · ~48 code · ~40 test · 3 files</text>
+  <text class="t" x="52" y="491">👤 size preference not applied</text>
+  <text class="t" x="52" y="507">Validate ✅ vitest found · T0 unit · 🤖 easy</text>
+  <text class="t" x="52" y="523">✅ maintainer confirmed · no competing PR</text>
+  <text class="t claim" x="52" y="539">🤖 Why it fits: maintainer asked for a PR</text>
+  <text class="t" x="52" y="555">Confidence 🤖 0.78 · Risks 2 · Alt. 1 → 🧭</text>
+  <text class="t" x="52" y="575">⏳ Proposal expires <tspan class="b">in 3 days</tspan></text>
+  <text class="s" x="330" y="584" text-anchor="end">14:11</text>
+
+  <!-- keyboard: 4 rows, ≤ 2 per row -->
+  <rect x="40" y="596" width="148" height="32" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="114" y="616">✅ Start work</text>
+  <rect x="192" y="596" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="616">⏭ Skip</text>
+  <rect x="40" y="632" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="652">✏️ Adjust plan</text>
+  <rect x="192" y="632" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="652">📏 Make it smaller</text>
+  <rect x="40" y="668" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="688">🚫 Never…</text>
+  <rect x="192" y="668" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="688">⏰ Later…</text>
+  <rect x="40" y="704" width="300" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="724">🧭 Details</text>
+
+  <text class="ghost" x="40" y="756">Row 4 becomes [🧭 Details] [🙋 Ask maintainers first]</text>
+  <text class="ghost" x="40" y="770">when vet found "assignment required".</text>
+  <text class="ghost" x="40" y="786">v1 above: ⚪ Superseded · [⛔ Not decidable] [⬇️ Show current]</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ RIGHT PHONE ============ -->
+  <rect x="440" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="450" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="450" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="450" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="478" y="54" class="t b">14:13</text>
+  <circle cx="506" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="506" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="532" y="90" class="hdr">ossbot</text>
+  <text x="532" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="450" y1="118" x2="820" y2="118" stroke="#d0d6cc"/>
+
+  <text class="ghost" x="460" y="134">↓ after ✅ Start work — the same card, edited in place</text>
+  <rect x="460" y="140" width="300" height="138" rx="16" fill="#ffffff" stroke="#9fb39a" stroke-dasharray="4 3"/>
+  <text class="t b" x="472" y="158">💡 Proposal · c_01JABC · v2</text>
+  <text class="t dry" x="472" y="173">🧪 DRY RUN (n/a: local change)</text>
+  <text class="t b" x="472" y="191">Confirm: start work on langfuse/langfuse#1234</text>
+  <text class="t b" x="472" y="206">(proposal v2 · est s · sha256 1a2b…9f0c).</text>
+  <text class="t b" x="472" y="221">Local work only — dry-run does not apply;</text>
+  <text class="t b" x="472" y="236">nothing is public before you approve the PR.</text>
+  <text class="t" x="472" y="252">⏳ Expires <tspan class="b">in 5 minutes</tspan></text>
+  <text class="s" x="472" y="268">single-use · 5 min · bound to this message</text>
+  <rect x="460" y="282" width="148" height="30" rx="10" fill="#2f7fe0"/>
+  <text class="btn" x="534" y="301">🛠 Confirm start</text>
+  <rect x="612" y="282" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="301">↩️ Cancel</text>
+
+  <text class="ghost" x="460" y="330">↓ later · gate 2 preview, size overrun (on_overrun: flag)</text>
+  <rect x="460" y="336" width="300" height="164" rx="16" fill="#ffffff"/>
+  <text class="t" x="472" y="354"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r1</text>
+  <text class="t dry" x="472" y="369">🧪 DRY RUN — nothing is published</text>
+  <text class="t" x="472" y="384">👤 <tspan class="b">requested by you</tspan> · /work 14 Oct</text>
+  <text class="s" x="472" y="398">… repo, issue, checks, tests, self-review …</text>
+  <rect x="468" y="404" width="284" height="64" rx="6" fill="#fff4e0"/>
+  <text class="t warn" x="474" y="419"><tspan class="b">Size ⚠️ m (est s)</tspan> · est ~48 code →</text>
+  <text class="t" x="474" y="434">+142 / −30 code · +210 test · 6 files</text>
+  <text class="t warn" x="474" y="449">⚠️ <tspan class="b">+258% over estimate</tspan> · <tspan class="claim">🤖 coder: "the</tspan></text>
+  <text class="t claim" x="474" y="463">empty payload needs a config migration"</text>
+  <text class="t warn" x="472" y="483">⚠️ 2 files outside the plan: docs/export.md, …</text>
+  <text class="s" x="472" y="496">Approve stays available: flagged, never blocked</text>
+  <rect x="460" y="504" width="148" height="28" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="534" y="522">✅ Approve &amp; Submit</text>
+  <rect x="612" y="504" width="148" height="28" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="522">❌ Reject</text>
+
+  <text class="ghost" x="460" y="552">↓ any mode, autonomous or 👤: diff above policy.diff</text>
+  <rect x="460" y="558" width="300" height="140" rx="16" fill="#ffffff"/>
+  <text class="t" x="472" y="576"><tspan class="b">🧱 Size ceiling reached</tspan> · c_01JXYZ · paused</text>
+  <text class="t" x="472" y="592">Measured ✅ 91 files · +3,180 / −240 code</text>
+  <text class="t" x="484" y="607">· +1,020 test</text>
+  <text class="t" x="472" y="623">Ceiling (config only): 80 files · 3,000 code</text>
+  <text class="t" x="484" y="638">· 3,000 test</text>
+  <text class="t" x="472" y="655">This guard stops runaway changes. Split the</text>
+  <text class="t" x="472" y="670">work, or raise policy.diff in config/policy.yaml</text>
+  <text class="t" x="472" y="685">and /reload. No button raises it.</text>
+  <rect x="460" y="704" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="723">✂️ Split (adjust plan)</text>
+  <rect x="612" y="704" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="723">🗑 Drop</text>
+  <rect x="460" y="738" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="757">🔁 Re-check</text>
+  <rect x="612" y="738" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="757">🧭 Explore</text>
+
+  <rect x="450" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="462" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="497" y="834">☰ Menu</text>
+  <rect x="540" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="554" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ NOTES ============ -->
+  <text class="note nh" x="860" y="58">Gate 1 · proposal card (CR-004, CR-003 §5.15)</text>
+  <text class="note" x="860" y="80">A bound decision surface like the PR card (U3):</text>
+  <text class="note" x="860" y="96">classic HTML, never rich, never a draft; Start work</text>
+  <text class="note" x="860" y="112">exists only on the card. ✅ = gatekeeper fact,</text>
+  <text class="note" x="860" y="128">🤖 = scout claim (quoted, untrusted, U6).</text>
+  <text class="note b" x="860" y="156">Telegram constraints</text>
+  <text class="note" x="860" y="174">• Card ≈ 1,250 chars; budget ≤ 3,900 escaped (limit</text>
+  <text class="note" x="860" y="190">  4,096). Overflow drops Signals, then rationale, then</text>
+  <text class="note" x="860" y="206">  bullets after 3; header, mode, issue, size and</text>
+  <text class="note" x="860" y="222">  expiry are never cut.</text>
+  <text class="note" x="860" y="240">• 4 rows · ≤ 2 per row · labels ≤ 24 ("🙋 Ask</text>
+  <text class="note" x="860" y="256">  maintainers first" = 24, "✂️ Split (adjust plan)" = 22).</text>
+  <text class="note" x="860" y="274">• callback_data = "t:" + 22 chars = 24 bytes.</text>
+  <text class="note" x="860" y="290">• Field bounds: problem ≤ 300, ≤ 6 steps × 100,</text>
+  <text class="note" x="860" y="306">  ≤ 4 paths × 60, rationale ≤ 160; rest in 🧭 Details.</text>
+  <text class="note b" x="860" y="334">Buttons</text>
+  <text class="note" x="860" y="352">• Start work → Confirm (two taps, 5 min, binds version</text>
+  <text class="note" x="860" y="368">  + proposal hash + est class); primary: widens nothing.</text>
+  <text class="note" x="860" y="384">  CLA / open-PR warnings are added to this panel.</text>
+  <text class="note" x="860" y="402">• Adjust plan → ForceReply (≤ 2,000) or reply to the</text>
+  <text class="note" x="860" y="418">  card; Make it smaller → "fit the next class".</text>
+  <text class="note" x="860" y="436">• Skip / Later: immediate + Undo; Never: confirm.</text>
+  <text class="note" x="860" y="452">• Details: one reply message, no decision buttons.</text>
+  <text class="note b" x="860" y="480">Versions (§5.16)</text>
+  <text class="note" x="860" y="498">• v(N+1) replies to vN; vN goes ⚪ Superseded.</text>
+  <text class="note" x="860" y="514">• "Changed since" is a field-by-field diff of the two</text>
+  <text class="note" x="860" y="530">  stored proposals: ≤ 6 lines × 100, then "+N → 🧭".</text>
+  <text class="note b" x="860" y="558">Order and sound in ✅ Reviews (§5.13)</text>
+  <text class="note" x="860" y="576">• 👤 items: class 1, loud. Previews (gate 2): class 3.</text>
+  <text class="note" x="860" y="592">• Autonomous proposals: class 4, silent, ≤ 3 per cycle,</text>
+  <text class="note" x="860" y="608">  ≤ 5/day; within 6 h of expiry → class 2.</text>
+  <text class="note b" x="860" y="636">Size (CR-004 Amendment B)</text>
+  <text class="note" x="860" y="654">• Test lines are shown apart, never counted.</text>
+  <text class="note" x="860" y="670">• Overrun is highlighted with % and the coder's 🤖</text>
+  <text class="note" x="860" y="686">  reason; Approve stays (default on_overrun: flag).</text>
+  <text class="note" x="860" y="702">• RESCOPE_REQUIRED card only with on_overrun:</text>
+  <text class="note" x="860" y="718">  reapprove: [✅ Continue at m] [📏 Make it smaller]</text>
+  <text class="note" x="860" y="734">  [🧭 Explore] [🗑 Drop].</text>
+  <text class="note" x="860" y="752">• Ceiling: config-only (U13); Re-check re-runs only</text>
+  <text class="note" x="860" y="768">  the deterministic size check after /reload.</text>
+</svg>

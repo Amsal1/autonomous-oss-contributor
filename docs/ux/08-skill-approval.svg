@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="840" height="900" viewBox="0 0 840 900" role="img" aria-labelledby="title desc">
   <title id="title">ossbot mockup: self_improve skill approval card</title>
-  <desc id="desc">A skill approval card in the Reviews topic listing the skill name, version, requesting tier, labelled model reason, requested tools checked against the tier, files and sizes, deterministic checks and hash; the verbatim SKILL.md part; and the Confirm panel shown after Approve.</desc>
+  <desc id="desc">A skill approval card in the Reviews topic listing the skill name, version, requesting tier, labelled model reason, requested tools checked against the tier, files and sizes, deterministic checks and hash, with the mode badge marked not applicable for a local change; the verbatim SKILL.md part; and the Confirm panel shown after Approve, whose sentence says dry-run does not apply and whose red Activate skill button is styled danger.</desc>
   <style>
     .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
     .b{font-weight:700}
@@ -12,6 +12,7 @@
     .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
     .claim{fill:#555;font-style:italic}
     .warn{fill:#8a4b00}
+    .dry{fill:#0d47a1;font-weight:700}
     .ghost{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#3f5a3f}
   </style>
 
@@ -27,17 +28,18 @@
   <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
 
   <rect x="40" y="128" width="300" height="236" rx="16" fill="#ffffff"/>
-  <text class="t b" x="52" y="148">🧠 Skill ready for approval</text>
-  <text class="t" x="52" y="166"><tspan class="b">nutrition-log v3</tspan> (update) · s_01JXYZ</text>
-  <text class="t" x="52" y="184">Requested by Hermes (tier self_improve)</text>
-  <text class="t claim" x="52" y="202">🤖 "log meals from photos and keep daily</text>
-  <text class="t claim" x="52" y="220">totals without asking each time"</text>
-  <text class="t" x="52" y="240">Tools: ossbot_feature_card, memory</text>
-  <text class="t" x="52" y="258">✅ all within tier · ✅ size 4.1 KB ≤ 64 KB</text>
-  <text class="t" x="52" y="276">Files: SKILL.md +54 −12 · examples.md +20</text>
-  <text class="t warn" x="52" y="294">⚠️ 2 URLs <tspan style="fill:#111">· ✅ no hidden chars</tspan></text>
-  <text class="t" x="52" y="312">sha256 <tspan class="m">9f2c…e1a0</tspan> · staged 3 min ago</text>
-  <text class="t" x="52" y="332">⏳ Approval expires <tspan class="b">in 3 days</tspan></text>
+  <text class="t b" x="52" y="146">🧠 Skill ready for approval</text>
+  <text class="t" x="52" y="162" style="font-size:11.5px"><tspan class="dry">🧪 DRY RUN</tspan> (n/a: local change)</text>
+  <text class="t" x="52" y="180"><tspan class="b">nutrition-log v3</tspan> (update) · s_01JXYZ</text>
+  <text class="t" x="52" y="197">Requested by Hermes (tier self_improve)</text>
+  <text class="t claim" x="52" y="214">🤖 "log meals from photos and keep daily</text>
+  <text class="t claim" x="52" y="231">totals without asking each time"</text>
+  <text class="t" x="52" y="249">Tools: ossbot_feature_card, memory</text>
+  <text class="t" x="52" y="266">✅ all within tier · ✅ size 4.1 KB ≤ 64 KB</text>
+  <text class="t" x="52" y="283">Files: SKILL.md +54 −12 · examples.md +20</text>
+  <text class="t warn" x="52" y="300">⚠️ 2 URLs <tspan style="fill:#111">· ✅ no hidden chars</tspan></text>
+  <text class="t" x="52" y="317">sha256 <tspan class="m">9f2c…e1a0</tspan> · staged 3 min ago</text>
+  <text class="t" x="52" y="336">⏳ Approval expires <tspan class="b">in 3 days</tspan></text>
   <text class="s" x="330" y="356" text-anchor="end">18:12</text>
   <rect x="40" y="370" width="148" height="32" rx="10" fill="#2e9d4f"/>
   <text class="btn" x="114" y="390">✅ Approve skill</text>
@@ -63,15 +65,16 @@
   <text class="s" x="330" y="634" text-anchor="end">18:12</text>
 
   <text class="ghost" x="40" y="660">↓ after Approve — the card is edited into Confirm</text>
-  <rect x="40" y="668" width="300" height="84" rx="16" fill="#ffffff" stroke="#9fb39a" stroke-dasharray="4 3"/>
-  <text class="t b" x="52" y="688">Confirm: activate skill nutrition-log v3</text>
-  <text class="t b" x="52" y="706">(sha256 9f2c…e1a0) for Hermes. Tools stay</text>
-  <text class="t b" x="52" y="724">within tier self_improve. Expires in 5 min.</text>
-  <text class="s" x="52" y="742">single-use · 5 min · bound to this message</text>
-  <rect x="40" y="756" width="148" height="32" rx="10" fill="#2f7fe0"/>
-  <text class="btn" x="114" y="776">✅ Confirm</text>
-  <rect x="192" y="756" width="148" height="32" rx="10" fill="#5f7d64"/>
-  <text class="btn" x="266" y="776">↩️ Cancel</text>
+  <rect x="40" y="666" width="300" height="94" rx="16" fill="#ffffff" stroke="#9fb39a" stroke-dasharray="4 3"/>
+  <text class="t b" x="52" y="682" style="font-size:11.5px">Confirm: activate skill nutrition-log v3</text>
+  <text class="t b" x="52" y="697" style="font-size:11.5px">(sha256 9f2c…e1a0) for Hermes — local change,</text>
+  <text class="t b" x="52" y="712" style="font-size:11.5px">dry-run does not apply. Tools stay within tier</text>
+  <text class="t b" x="52" y="727" style="font-size:11.5px">self_improve. Expires in 5 min.</text>
+  <text class="s" x="52" y="746">single-use · 5 min · bound to this message</text>
+  <rect x="40" y="764" width="148" height="30" rx="10" fill="#d93025"/>
+  <text class="btn" x="114" y="783">🧠 Activate skill</text>
+  <rect x="192" y="764" width="148" height="30" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="783">↩️ Cancel</text>
 
   <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
   <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
@@ -114,6 +117,12 @@
   <text class="note b" x="440" y="634">Limits</text>
   <text class="note" x="440" y="652">• Card ≤ 3,900 escaped chars; &lt;pre&gt; parts ≤ 3,500;</text>
   <text class="note" x="440" y="668">  2 rows × 2 buttons; labels ≤ 20; 24-byte data.</text>
-  <text class="note" x="440" y="686">• Confirm uses primary (blue): activation is not a</text>
+  <text class="note" x="440" y="686">• Confirm uses danger (red): activation is not a</text>
   <text class="note" x="440" y="702">  public action, but it widens what Hermes does.</text>
+  <text class="note b" x="440" y="730">Mode</text>
+  <text class="note" x="440" y="748">• Local change: identical in DRY RUN and LIVE (dry-run</text>
+  <text class="note" x="440" y="764">  governs public GitHub writes only). The badge is still</text>
+  <text class="note" x="440" y="780">  shown, marked "n/a: local change" (S3).</text>
+  <text class="note" x="440" y="798">• SkillApprovals has its own confirm_text; the PR</text>
+  <text class="note" x="440" y="814">  kinds' Confirm sentences are untouched.</text>
 </svg>

@@ -91,7 +91,7 @@
   <text class="t" x="583" y="253" text-anchor="middle">👌</text>
 
   <rect x="460" y="272" width="300" height="250" rx="16" fill="#ffffff"/>
-  <text class="t b" x="472" y="294">🍽 Meal logged · lunch · 12:40</text>
+  <text class="t b" x="472" y="294" style="font-size:11.5px">🍽 Meal logged · lunch · 12:40 · 🤖 assistant</text>
   <rect x="470" y="304" width="280" height="22" fill="#eef1ec"/>
   <text class="tc b" x="476" y="319">item</text>
   <text class="tc b" x="606" y="319">g</text>
@@ -160,25 +160,25 @@
   <text class="note" x="860" y="266">  plain strings, skip_entity_detection = true. No</text>
   <text class="note" x="860" y="282">  Telegram markdown/html mode, no tg-button, no</text>
   <text class="note" x="860" y="298">  tg:// links, no media from model URLs.</text>
-  <text class="note" x="860" y="316">• Sources: ≤ 8, deduped, in a closed details block;</text>
-  <text class="note" x="860" y="332">  previews off unless the answer has one source.</text>
+  <text class="note" x="860" y="316">• Sources: ≤ 8, deduped, in a closed details block.</text>
+  <text class="note" x="860" y="332">  Rich answers have no link preview at all.</text>
   <text class="note" x="860" y="350">• Footer: model actually used (runtime.model),</text>
   <text class="note" x="860" y="366">  ⚠️ when it is a fallback.</text>
   <text class="note b" x="860" y="394">Follow-ups (U2, D9)</text>
-  <text class="note" x="860" y="412">• ≤ 3, one per row, labels ≤ 40 chars after</text>
-  <text class="note" x="860" y="428">  sanitizing; never "/…" or approval words.</text>
-  <text class="note" x="860" y="446">• Tap → "↪️ text" echoed → sent to Hermes as your</text>
-  <text class="note" x="860" y="462">  next turn. Never reaches the command registry.</text>
+  <text class="note" x="860" y="412">• ≤ 3, one per row; label = the exact text sent,</text>
+  <text class="note" x="860" y="428">  ≤ 64 (longer: dropped); no "/…", no approval words.</text>
+  <text class="note" x="860" y="446">• Tap → "↪️ text" echoed first → then sent to Hermes</text>
+  <text class="note" x="860" y="462">  (origin followup_tap). Never reaches the registry.</text>
   <text class="note b" x="860" y="490">Media</text>
   <text class="note" x="860" y="508">• 👀 reaction on receipt → 👌 when answered (bots</text>
   <text class="note" x="860" y="524">  may set one reaction per message).</text>
-  <text class="note" x="860" y="542">• ≤ 20 MB; EXIF/GPS stripped; albums within 1.5 s</text>
-  <text class="note" x="860" y="558">  = one turn; vision role from models.yaml.</text>
+  <text class="note" x="860" y="542">• Metadata stripped by a walker that never decodes</text>
+  <text class="note" x="860" y="558">  pixels; files JPEG/PNG/WebP ≤ 5 MB; albums 1.5 s.</text>
   <text class="note b" x="860" y="586">Feature cards (D10)</text>
   <text class="note" x="860" y="604">• Hermes calls ossbot_feature_card(feature, kind,</text>
   <text class="note" x="860" y="620">  data); the gatekeeper validates (pydantic, extra=</text>
-  <text class="note" x="860" y="636">  forbid) and renders with the kit. Buttons are</text>
-  <text class="note" x="860" y="652">  gatekeeper tokens (personal class, undoable).</text>
+  <text class="note" x="860" y="636">  forbid) and renders with the kit; 🤖-prefixed, only</text>
+  <text class="note" x="860" y="652">  in the turn's own Assistant/user topic (U12).</text>
   <text class="note" x="860" y="670">• Rich table ≤ 12 columns; card ≤ 30,000 chars.</text>
   <text class="note" x="860" y="688">• Topics: each user topic is its own Hermes</text>
   <text class="note" x="860" y="704">  session (tg-&lt;uid&gt;-t&lt;thread_id&gt;); /new adds one.</text>

@@ -97,7 +97,7 @@
   <text class="cmd" x="470" y="642">/settings</text><text class="p" x="578" y="642">Preferences</text>
   <text class="cmd" x="470" y="670">/help</text><text class="p" x="578" y="670">All commands</text>
   <text class="s" x="470" y="700">… ~30 commands total; scope = owner chat only</text>
-  <text class="s" x="470" y="716">killed mode → /status /resume /logs /help</text>
+  <text class="s" x="470" y="716">killed mode → /status /resume /logs /help /start</text>
 
   <rect x="450" y="800" width="370" height="70" fill="#ffffff"/>
   <rect x="462" y="814" width="70" height="30" rx="15" fill="#1f5fb8"/>
@@ -110,25 +110,25 @@
   <text class="note b" x="860" y="86">Topics (when enabled in @BotFather)</text>
   <text class="note" x="860" y="104">🚦 Control: dashboard (pinned), commands,</text>
   <text class="note" x="860" y="120">  P0 alerts, lifecycle summaries.</text>
-  <text class="note" x="860" y="138">✅ Reviews: every approval card and its explorer,</text>
+  <text class="note" x="860" y="138">✅ Reviews: proposals, every approval card, explorer,</text>
   <text class="note" x="860" y="154">  files, draft review, Confirm, status card and</text>
   <text class="note" x="860" y="170">  drafted replies (replies can't cross topics).</text>
   <text class="note" x="860" y="188">📈 OSS feed: stage FYIs, batches, digests (silent).</text>
   <text class="note" x="860" y="206">💬 Assistant + your topics: one Hermes session</text>
   <text class="note" x="860" y="222">  each (tg-&lt;uid&gt;-t&lt;thread_id&gt;).</text>
   <text class="note b" x="860" y="252">Routing (first match wins)</text>
-  <text class="note" x="860" y="270">1 callback → token handler · 2 stop-generation →</text>
-  <text class="note" x="860" y="286">stream · 3 "/cmd" → registry (any topic) ·</text>
-  <text class="note" x="860" y="302">4 reply to a prompt → that input · 5 reply to a</text>
-  <text class="note" x="860" y="318">card/file/explorer → review comment · 6 free text</text>
-  <text class="note" x="860" y="334">in Reviews → Hermes + "Use as comment?" ·</text>
-  <text class="note" x="860" y="350">7 everything else → Hermes (topic session).</text>
+  <text class="note" x="860" y="270">1 callback → token · 2 stop-generation → stream ·</text>
+  <text class="note" x="860" y="286">3 reply to an open prompt → that input (even "/…")</text>
+  <text class="note" x="860" y="302">· 4 "/cmd" → registry · 5 reply to card/file/body/</text>
+  <text class="note" x="860" y="318">proposal → comment or plan adjust · 6 GitHub link</text>
+  <text class="note" x="860" y="334">→ 🔗 [🛠 Work on this] · 7 Reviews text → Hermes +</text>
+  <text class="note" x="860" y="350">[📝 Use as comment] · 8 rest → Hermes (topic).</text>
   <text class="note" x="860" y="368">Authorization never depends on the topic (U10).</text>
   <text class="note b" x="860" y="398">Menu button and scopes</text>
   <text class="note" x="860" y="416">• MenuButtonCommands; setMyCommands only for</text>
   <text class="note" x="860" y="432">  BotCommandScopeChat(owner); Default = empty.</text>
-  <text class="note" x="860" y="450">• Re-set on control-state change (killed, down,</text>
-  <text class="note" x="860" y="466">  draining). Commands 1–32 chars [a-z0-9_]; ossbot</text>
+  <text class="note" x="860" y="450">• Re-set on state change (killed hides /settings;</text>
+  <text class="note" x="860" y="466">  down/draining add /up). Commands 1–32 [a-z0-9_]; ossbot</text>
   <text class="note" x="860" y="482">  descriptions ≤ 60 chars; ≤ 100 commands.</text>
   <text class="note" x="860" y="500">• Every argument has an inline picker; typed</text>
   <text class="note" x="860" y="516">  arguments are validated the same way.</text>
@@ -141,4 +141,7 @@
   <text class="note" x="860" y="660">Topic names ≤ 48 chars (limit 128); icon colours</text>
   <text class="note" x="860" y="676">from the 6 allowed values; thread "not found" →</text>
   <text class="note" x="860" y="692">re-create once, then flat mode.</text>
+  <text class="note" x="860" y="710">getMe().allows_users_to_create_topics false →</text>
+  <text class="note" x="860" y="726">doctor warns; /new still creates topics itself.</text>
+  <text class="note" x="860" y="744">Replies go to the originating topic (§4.1).</text>
 </svg>
