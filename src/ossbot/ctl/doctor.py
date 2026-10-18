@@ -227,16 +227,52 @@ def _can_connect(user: str, host: str, port: int) -> bool:
     return out.stdout.startswith("open")
 
 
+_DNS_QUERY = (
+    "import socket,sys\n"
+    "q = b'\\x12\\x34\\x01\\x00\\x00\\x01\\x00\\x00\\x00\\x00\\x00\\x00\\x07example\\x03com\\x00\\x00\\x01\\x00\\x01'\n"
+    "try:\n"
+    " if sys.argv[2] == 'udp':\n"
+    "  s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.settimeout(3); s.sendto(q, (sys.argv[1], 53))\n"
+    " else:\n"
+    "  s = socket.create_connection((sys.argv[1], 53), 3); s.sendall(len(q).to_bytes(2, 'big') + q)\n"
+    " print('answer' if s.recv(512) else 'none')\n"
+    "except OSError as e: print('none', e.errno)\n"
+)
+
+
+def _dns_answers(user: str, server: str, proto: str) -> bool:
+    out = _run(["/usr/bin/python3", "-I", "-c", _DNS_QUERY, server, proto], timeout=10, user=user)
+    return out.stdout.startswith("answer")
+
+
+def dns_probe_targets() -> list[str]:
+    """Every resolv.conf nameserver plus the systemd-resolved stub address (P1-1)."""
+    from ossbot.ctl.render import RenderError, nameservers  # noqa: PLC0415
+
+    try:
+        servers = nameservers()
+    except (OSError, RenderError):
+        servers = []
+    return list(dict.fromkeys([*servers, "127.0.0.53"]))
+
+
 def check_uid_probes() -> Result:
     owned = {"ossrunner": 3140, "hermes": 3141, "gatekeeper": 3150}
     problems = []
+    resolvers = dns_probe_targets()
     for user in ("ossrunner", "hermes", "gatekeeper", "ossbox", "ossnobody"):
         for port in (3140, 3141, 3150):
             if _can_connect(user, PROXY_IP, port) != (owned.get(user) == port):
                 problems.append(f"{user}->{PROXY_IP}:{port}")
         if _can_connect(user, "1.1.1.1", 443):
             problems.append(f"{user}->1.1.1.1:443 (direct)")
-    return Result(PASS if not problems else FAIL, "per-uid egress", "; ".join(problems) or "only owned ports")
+        for server in ["1.1.1.1", *resolvers]:
+            for proto in ("udp", "tcp"):
+                if _dns_answers(user, server, proto):
+                    problems.append(f"{user}->{server}:53/{proto} (direct DNS)")
+    return Result(
+        PASS if not problems else FAIL, "per-uid egress", "; ".join(problems) or "only owned ports, no direct DNS"
+    )
 
 
 def _connect_code(user: str, port: int, url: str) -> str:
@@ -316,6 +352,11 @@ def check_sandbox_kiro() -> list[Result]:
             *out,
             Result(AWAITING, "safety probes", f"{AWAITING}: KIRO_API_KEY (sandbox) - no pass for the current tuple"),
         ]
+    recorded = status.get("probes")
+    if isinstance(recorded, dict) and not any(v is not None for v in recorded.values()):
+        # Never run for this tuple (they need catalog models, FEAT-006); Kiro jobs stay refused.
+        return [*out, Result(WARN, "safety probes", "not run yet for the current tuple; Kiro jobs refused until "
+                             "they pass", "ossctl doctor --probes (after the model catalog exists)")]  # fmt: skip
     return [*out, Result(FAIL, "safety probes", "no pass for the current tuple", "ossctl doctor --probes")]
 
 

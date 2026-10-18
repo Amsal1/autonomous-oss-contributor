@@ -97,6 +97,18 @@ class Paths:
     def resume_request(self) -> Path:
         return self.control_dir / "resume-request"
 
+    @property
+    def lifecycle_flag(self) -> Path:
+        return self.control_dir / "lifecycle"
+
+    @property
+    def shutdown_marker(self) -> Path:
+        return self.control_dir / "shutdown-marker"
+
+    @property
+    def last_shutdown(self) -> Path:
+        return self.control_dir / "last-shutdown"
+
     # sockets
     @property
     def gatekeeper_sock(self) -> Path:

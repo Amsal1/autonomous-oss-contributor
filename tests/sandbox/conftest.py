@@ -119,21 +119,11 @@ def proxy_ip_on(network: str) -> str:
     return str(json.loads(out.stdout)[network]["IPAddress"])
 
 
-@pytest.fixture(scope="session")
-def sandbox(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sandbox]:
-    if os.geteuid() != 0:
-        pytest.fail("the sandbox suite runs as root (ROOTDEV pytest -m sandbox)")
-    if not FILTER_SOCKET.exists():
-        pytest.fail("Docker filter socket missing: provision first")
-    if (CONTROL / "killed").exists() or (CONTROL / "paused").exists():
-        pytest.fail("ossbot is killed or paused; resume first")
-    pins = load_image_pins(DEFAULT_LOCK_COPY)
-    for image in ("sandbox-full", "sandbox-llm"):
-        if pins.ref(image) is None:
-            pytest.fail(f"{image} digest not pinned in {DEFAULT_LOCK_COPY}")
-    root = tmp_path_factory.mktemp("sandbox")
+def make_box(root: Path) -> Sandbox:
+    """A JobService like sandboxd's (real filter socket), state under ``root`` (also used by the
+    crash-safety child process, tests/sandbox/crash_child.py)."""
     for sub in ("artifacts", "logs", "staging", "inputs"):
-        (root / sub).mkdir()
+        (root / sub).mkdir(exist_ok=True)
     runtime = DockerCliRuntime()
     store = Store(root / "sandboxd.db")
     clock = SystemClock()
@@ -145,7 +135,28 @@ def sandbox(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sandbox]:
                           control_dir=CONTROL, input_roots=(root / "inputs",)),
         trust_mode=lambda: "ids", networks=Networks(runtime, SubnetAllocator(store, clock)), background=False,
     )  # fmt: skip
-    box = Sandbox(svc=svc, runtime=runtime, root=root, gatekeeper=gatekeeper)
+    return Sandbox(svc=svc, runtime=runtime, root=root, gatekeeper=gatekeeper)
+
+
+def require_provisioned() -> None:
+    if os.geteuid() != 0:
+        pytest.fail("the sandbox suite runs as root (ROOTDEV pytest -m sandbox)")
+    if not FILTER_SOCKET.exists():
+        pytest.fail("Docker filter socket missing: provision first")
+    if (CONTROL / "killed").exists() or (CONTROL / "paused").exists():
+        pytest.fail("ossbot is killed or paused; resume first")
+    pins = load_image_pins(DEFAULT_LOCK_COPY)
+    for image in ("sandbox-full", "sandbox-llm"):
+        if pins.ref(image) is None:
+            pytest.fail(f"{image} digest not pinned in {DEFAULT_LOCK_COPY}")
+
+
+@pytest.fixture(scope="session")
+def sandbox(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sandbox]:
+    require_provisioned()
+    root = tmp_path_factory.mktemp("sandbox")
+    box = make_box(root)
+    store = box.svc.store
     yield box
     for cid in ("c_SMOKETEST1", "c_SMOKETEST2", "c_SMOKETEST3", "c_SMOKETEST4", "sys-catalog"):
         box.cleanup(cid)

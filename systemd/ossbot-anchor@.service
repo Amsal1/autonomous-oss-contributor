@@ -3,6 +3,8 @@
 Description=ossbot audit anchor (per connection)
 
 [Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
 Type=oneshot
 ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.watchdog.anchors --serve-one
 StandardInput=socket

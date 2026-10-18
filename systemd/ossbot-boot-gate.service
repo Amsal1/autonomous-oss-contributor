@@ -11,6 +11,8 @@ Conflicts=shutdown.target
 Before=shutdown.target
 
 [Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/opt/ossbot/bin/ossbot-boot-gate

@@ -271,6 +271,9 @@ class ApprovalService:
 
     # ------------------------------------------------------------------ text edits
     def set_text_override(self, cid: str, *, title: str | None = None, body: str | None = None, actor: str) -> None:
+        """Store a human title/body edit. The caller (FEAT-005 Edit title/body) must run
+        ``policy.check_text`` on the edited text first and refuse on any violation (Phase 1
+        review P1-4); there is no caller in Phase 1."""
         with db.transaction(self.conn):
             if title is not None:
                 self.conn.execute(

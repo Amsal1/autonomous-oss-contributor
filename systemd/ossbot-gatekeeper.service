@@ -7,6 +7,8 @@ After=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.se
 RequiresMountsFor=/mnt/d/Work/autonomous-oss-contributor
 
 [Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
 Type=simple
 User=gatekeeper
 Group=gatekeeper

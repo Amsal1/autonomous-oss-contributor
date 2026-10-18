@@ -178,10 +178,20 @@ class Handlers:
             raise ApprovalError("unknown_approval", approval_id)
         return row["kind"]
 
+    def _not_up(self) -> str | None:
+        """CR-001: no new submissions while draining/down; approvals stay valid (not invalidated)."""
+        info = self.ctx.control.lifecycle()
+        return None if info is None else info.state
+
     async def _approve(self, query: Any, token: str, user_id: int, chat_id: int, message_id: int) -> None:
         if not self.ctx.approvals.system_running():
             log.warning("approve refused while paused/killed", extra={"event": "callback_rejected"})
             await query.answer("Paused or killed: nothing was approved. /resume first.")
+            return
+        lifecycle = self._not_up()
+        if lifecycle is not None:
+            log.warning("approve refused while %s", lifecycle, extra={"event": "callback_rejected"})
+            await query.answer(f"ossbot is {lifecycle}: nothing was approved. The card stays valid; retry after up.")
             return
         arm = self.ctx.approvals.approve(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id)
         text = f"{self._card_text(arm.approval_id)}\n\n{b(arm.confirm_text)}"
@@ -194,6 +204,11 @@ class Handlers:
         self.ctx.approvals.check_token(token, ("confirm",), chat_id=chat_id, message_id=message_id)
         if not self.ctx.approvals.system_running():
             raise ApprovalError("confirm_refused", "paused or killed")
+        lifecycle = self._not_up()
+        if lifecycle is not None:
+            log.warning("confirm refused while %s", lifecycle, extra={"event": "callback_rejected"})
+            await query.answer(f"ossbot is {lifecycle}: nothing was submitted. Confirm again after up.")
+            return
         if self.preflight is not None:
             failed = await self.preflight(approval_id)
             if failed:

@@ -193,19 +193,29 @@ def firewall_plan(ns: str, uids: Mapping[str, str] | None = None) -> dict[str, l
         ("-s", TASK_NET, "-j", "DROP"),
         ("-s", EGRESS_NET, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"),
     )
+
+    # DNS (port 53, any destination) is refused for every service uid before the lo ACCEPT: the WSL
+    # resolver (10.255.255.254) and a 127.0.0.53 stub both sit on lo, so the lo ACCEPT alone would
+    # be a direct DNS channel past squid (Phase 1 review P1-1, DESIGN §11.4 "no direct UDP 53").
+    def no_dns(owner: tuple[str, ...], verdict: str) -> list[tuple[str, ...]]:
+        return [(*owner, "-p", proto, "--dport", "53", "-j", verdict) for proto in ("udp", "tcp")]
+
     out: list[tuple[str, ...]] = []
     for user, port in (("ossrunner", 3140), ("hermes", 3141), ("gatekeeper", 3150)):
         owner = ("-m", "owner", "--uid-owner", u[user])
+        out.extend(no_dns(owner, "REJECT"))
         out.append((*owner, "-d", PROXY_IP, "-p", "tcp", "--dport", str(port), "-j", "ACCEPT"))
         out.append((*owner, "-o", "lo", "-j", "ACCEPT"))
         out.append((*owner, "-j", "REJECT"))
     for user in ("ossbox", "ossnobody"):
         owner = ("-m", "owner", "--uid-owner", u[user])
+        out.extend(no_dns(owner, "REJECT"))
         out.append((*owner, "-o", "lo", "-j", "ACCEPT"))
         out.append((*owner, "-j", "REJECT"))
     out6: list[tuple[str, ...]] = []
     for user in SERVICE_USERS:
         owner = ("-m", "owner", "--uid-owner", u[user])
+        out6.extend(no_dns(owner, "DROP"))
         out6.append((*owner, "-o", "lo", "-j", "ACCEPT"))
         out6.append((*owner, "-j", "DROP"))
     fwd6 = (

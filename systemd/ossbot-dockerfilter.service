@@ -7,6 +7,8 @@ Wants=docker.service
 After=ossbot-boot-gate.service docker.service ossbot-firewall-docker.service
 
 [Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
 Type=simple
 ExecStart=/opt/ossbot/app/.venv/bin/ossbot-dockerfilter --listen /run/ossbot/docker-filter.sock --docker /var/run/docker.sock --control-dir /var/lib/ossbot/control --images-lock /etc/ossbot/versions.lock.yaml
 Restart=always

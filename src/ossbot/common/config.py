@@ -139,9 +139,17 @@ class BackupPolicy(Strict):
     keep: PosInt = 8
 
 
+class LifecyclePolicy(Strict):
+    """CR-001 graceful down: running work gets ``drain_timeout_s``; ``up`` waits for health."""
+
+    drain_timeout_s: Annotated[int, Field(ge=10, le=3600)] = 120
+    up_health_timeout_s: Annotated[int, Field(ge=10, le=900)] = 180
+
+
 class PolicyConfig(Strict):
     version: Literal[1]
     dry_run_default: Literal[True] = True  # I7: dry-run is ON at first start and after any reset
+    lifecycle: LifecyclePolicy = LifecyclePolicy()
     sandbox: SandboxPolicy = SandboxPolicy()
     limits: Limits = Limits()
     diff: DiffPolicy = DiffPolicy()

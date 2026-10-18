@@ -31,6 +31,45 @@ write_killed() {
   mv -f "$tmp" "$KILLED"
 }
 
+# write_json FILE JSON: atomic root:osscontrol 0640 (the watchdog's control-dir invariant).
+write_json() {
+  local file=$1 tmp="$CONTROL/.${1##*/}.tmp-$$"
+  printf '%s\n' "$2" >"$tmp"
+  chown root:osscontrol "$tmp" 2>/dev/null || true
+  chmod 0640 "$tmp"
+  mv -f "$tmp" "$file"
+}
+
+# CR-001: classify how the previous distro run ended (shutdown-marker from `ossctl down` =
+# graceful | hook; none but an earlier start recorded = unclean) into last-shutdown, and end a
+# distro-scope draining/down: it lasts until the distro stops (the autostart stays enabled and a
+# new start is "up"). A workers-scope down (Telegram /down) and any kill flag are left alone.
+lifecycle_at_boot() {
+  local marker="$CONTROL/shutdown-marker" seen="$CONTROL/boot-seen" lifecycle="$CONTROL/lifecycle"
+  local type=none marker_ts="" now scope
+  now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [[ -f $marker && ! -L $marker ]]; then
+    type=$(head -c 4096 "$marker" | jq -r '.type // ""' 2>/dev/null || true)
+    [[ $type == graceful || $type == hook ]] || type=graceful
+    marker_ts=$(head -c 4096 "$marker" | jq -r '.ts // ""' 2>/dev/null | tr -cd '0-9TZ:-' || true)
+  elif [[ -e $seen ]]; then
+    type=unclean
+  fi
+  write_json "$CONTROL/last-shutdown" "$(jq -cn --arg type "$type" --arg marker_ts "$marker_ts" --arg at "$now" \
+    '{type: $type, marker_ts: $marker_ts, detected_at: $at}')"
+  rm -f "$marker"
+  write_json "$seen" "$(jq -cn --arg ts "$now" '{ts: $ts}')"
+  if [[ -f $lifecycle && ! -L $lifecycle ]]; then
+    scope=$(head -c 4096 "$lifecycle" | jq -r '.scope // ""' 2>/dev/null || true)
+    if [[ $scope == distro ]]; then
+      rm -f "$lifecycle"
+      echo "ossbot-boot-gate: distro-scope lifecycle ended with the previous run; up (last shutdown: $type)"
+      return 0
+    fi
+  fi
+  echo "ossbot-boot-gate: last shutdown: $type"
+}
+
 if [[ ${1:-} == --allow ]]; then
   [[ ${2:-} == minimal ]] || { echo "usage: ossbot-boot-gate [--allow minimal]" >&2; exit 2; }
   case $(flag_level) in
@@ -41,6 +80,8 @@ fi
 [[ $# -eq 0 ]] || { echo "usage: ossbot-boot-gate [--allow minimal]" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "ossbot-boot-gate: must run as root" >&2; exit 2; }
 [[ -d $CONTROL ]] || { echo "ossbot-boot-gate: control dir $CONTROL missing" >&2; exit 1; }
+
+lifecycle_at_boot || echo "ossbot-boot-gate: lifecycle bookkeeping failed (ignored)" >&2
 
 current=$(flag_level)
 if ! mountpoint -q "$REPO" || [[ ! -d $REPO/scripts ]]; then

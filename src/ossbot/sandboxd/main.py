@@ -23,6 +23,7 @@ import uvicorn
 
 from ossbot.common.clock import SystemClock
 from ossbot.common.config import ConfigError, parse_bundle
+from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S
 from ossbot.common.images import DEFAULT_LOCK_COPY, load_image_pins
 from ossbot.common.logging import setup_logging
 from ossbot.common.paths import Paths
@@ -153,16 +154,30 @@ def main() -> int:
         trust_mode=lambda: trust_mode_from_snapshot(paths.snapshot_root),
         networks=Networks(runtime, SubnetAllocator(store, clock)),
     )  # fmt: skip
+    jobs.recover()  # CR-001 crash safety: whatever a killed/crashed predecessor left behind
     watch = KillWatch(jobs, paths.control_dir)
     watch.start()
     sock = bind_socket(SOCKET, SOCKET_GROUP)
     app = create_app(jobs, ProbeRunner(jobs, _proxy_log), _allowed_uids())
     config = uvicorn.Config(
         app, http=PeerCredProtocol, lifespan="off", log_config=None, access_log=False, server_header=False,
+        timeout_graceful_shutdown=5,
     )  # fmt: skip
     uvicorn.Server(config).run(sockets=[sock])
+    # SIGTERM (systemctl stop): drain like `ossctl down` would (skipped while killed: the kill watch
+    # already killed the containers). TimeoutStopSec in the unit is >= this + 30 s.
+    result = jobs.drain(drain_timeout())
+    log.info("stopped: %d finished, %d interrupted", result["finished"], result["interrupted"])
     watch.stop()
     return 0
+
+
+def drain_timeout() -> int:
+    raw = os.environ.get("OSSBOT_DRAIN_TIMEOUT_S", str(DEFAULT_DRAIN_TIMEOUT_S))
+    try:
+        return max(0, min(int(raw), 3600))
+    except ValueError:
+        return DEFAULT_DRAIN_TIMEOUT_S
 
 
 if __name__ == "__main__":

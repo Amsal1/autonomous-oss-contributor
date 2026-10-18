@@ -7,7 +7,7 @@ from typing import Any
 
 from ossbot.common.schemas import OutboundKind
 
-CALLBACK_RE = re.compile(r"^t:[A-Za-z0-9_-]{22}$")
+CALLBACK_RE = re.compile(r"^t:[A-Za-z0-9_-]{22}\Z")
 Rows = list[list[tuple[str, str]]]  # rows of (label, token)
 
 APPROVE_LABEL: dict[OutboundKind, str] = {

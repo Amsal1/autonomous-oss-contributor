@@ -55,6 +55,9 @@ def test_tokens_are_22_char_base64url() -> None:
     tokens = {new_token() for _ in range(200)}
     assert len(tokens) == 200
     assert all(TOKEN_RE.match(t) for t in tokens)
+    token = next(iter(tokens))
+    assert not TOKEN_RE.match(token + "\n")  # P1-5: exact, no trailing newline
+    assert not ID_RE.match(new_id("c") + "\n")
 
 
 def test_redactor_patterns_and_values() -> None:

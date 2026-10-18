@@ -13,13 +13,18 @@ import json
 import os
 import subprocess
 import sys
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
 import typer
 
+from ossbot.common.config import ConfigError, LifecyclePolicy, parse_bundle
+from ossbot.common.control_flags import lifecycle_name, read_flags, read_lifecycle, write_flag
 from ossbot.common.paths import Paths
+from ossbot.common.snapshot import read_current
 from ossbot.common.uds import uds_client
 
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="ossbot operator CLI")
@@ -29,6 +34,14 @@ app.add_typer(config_app, name="config")
 app.add_typer(audit_app, name="audit")
 
 BIN = Path("/opt/ossbot/bin")
+SANDBOXD_SOCK = Path("/run/ossbot/sandboxd.sock")
+SYSTEMCTL = "/usr/bin/systemctl"
+# CR-001 stop order: workers first, then the watchdog (so it does not count the stopped gatekeeper
+# as unhealthy), the gatekeeper and the proxy last (the Telegram summary is flushed before).
+WORKER_UNITS = ("ossbot-runner.service", "ossbot-hermes.service", "ossbot-sandboxd.service")
+CORE_UNITS = ("ossbot-gatekeeper.service", "ossbot-proxy.service")
+WATCHDOG_TIMER = "ossbot-watchdog.timer"
+OUTBOX_FLUSH_S = 20.0
 
 
 class GatekeeperDown(RuntimeError):
@@ -78,24 +91,202 @@ def _show(data: Any) -> None:
     typer.echo(json.dumps(data, indent=2, sort_keys=True) if not isinstance(data, str) else data)
 
 
+def _local_lifecycle() -> dict[str, Any]:
+    """What the control dir says without the gatekeeper (root; best effort for ossadmin)."""
+    paths = Paths.default()
+    out: dict[str, Any] = {}
+    if not os.access(paths.control_dir, os.R_OK | os.X_OK):  # unreadable flags would read as "killed"
+        return {"control_dir": "not readable as this user (sudo ossctl status)"}
+    flags = read_flags(paths.control_dir)
+    info = read_lifecycle(paths.control_dir)
+    out["killed"] = None if flags.killed is None else {"level": flags.killed.level, "reason": flags.killed.reason}
+    out["paused"] = None if flags.paused is None else {"reason": flags.paused.reason}
+    out["lifecycle_flag"] = lifecycle_name(info) if info is None else {"state": info.state, "scope": info.scope}
+    try:
+        out["last_shutdown"] = json.loads(paths.last_shutdown.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        out["last_shutdown"] = None
+    return out
+
+
+def _sandboxd(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 10.0) -> Any:
+    with uds_client(SANDBOXD_SOCK, timeout=httpx.Timeout(timeout, connect=3.0)) as client:
+        resp = client.request(method, path, json=body)
+    resp.raise_for_status()
+    return resp.json()
+
+
 @app.command()
 def status() -> None:
-    """Control state (running / paused / killed), dry-run and config hash."""
+    """Control state (running / paused / killed), lifecycle (up / draining / down), dry-run,
+    running work, pending approvals, Telegram last poll and the last shutdown type (CR-001)."""
     try:
-        code, data = api("GET", "/v1/control")
+        code, data = api("GET", "/v1/control/lifecycle")
+        if code == 403:  # not an operator uid: the plain control view only
+            code, data = api("GET", "/v1/control")
     except GatekeeperDown as exc:
-        flags = Paths.default().killed_flag
         typer.echo(f"gatekeeper unreachable ({exc})")
-        try:
-            typer.echo(f"killed flag: {flags.read_text(encoding='utf-8').strip()}")
-        except FileNotFoundError:
-            typer.echo("killed flag: absent")
-        except PermissionError:
-            typer.echo("killed flag: not readable as this user (sudo ossctl status)")
+        _show(_local_lifecycle())
         raise typer.Exit(1) from None
     if code != 200:
         _fail(f"gatekeeper answered {code}: {data}")
+    if isinstance(data, dict) and isinstance(data.get("control"), dict):
+        data = {**data.pop("control"), **data}
+        local = _local_lifecycle()
+        data["last_shutdown"] = local.get("last_shutdown")
+        try:
+            health = _sandboxd("GET", "/v1/health")
+            data["sandbox_running_jobs"] = health.get("running")
+        except (httpx.HTTPError, OSError, ValueError):
+            data["sandbox_running_jobs"] = None  # not root, or sandboxd stopped
     _show(data)
+
+
+# ------------------------------------------------------------------- lifecycle (CR-001)
+def _require_root(what: str) -> None:
+    if os.geteuid() != 0:
+        _fail(f"{what} runs as root (sudo ossctl {what}; Windows: scripts\\{what}.ps1)", 2)
+
+
+def _lifecycle_policy() -> LifecyclePolicy:
+    try:
+        _, files = read_current(Paths.default().snapshot_root)
+        return parse_bundle(files).policy.lifecycle
+    except (OSError, ValueError, ConfigError):
+        return LifecyclePolicy()
+
+
+def _now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _systemctl(action: str, units: tuple[str, ...]) -> list[str]:
+    """``systemctl <action>`` each unit that exists, in order; returns the failures."""
+    failed: list[str] = []
+    for unit in units:
+        if subprocess.run([SYSTEMCTL, "cat", unit], capture_output=True, check=False).returncode != 0:
+            continue  # not installed (runner/hermes before FEAT-006/007)
+        if subprocess.run([SYSTEMCTL, action, unit], check=False).returncode != 0:
+            failed.append(unit)
+    return failed
+
+
+def _lifecycle_field(name: str) -> Any:
+    code, data = api("GET", "/v1/control/lifecycle", timeout=5.0)
+    return data.get(name) if code == 200 and isinstance(data, dict) else None
+
+
+def _wait(predicate: Any, timeout_s: float, step: float = 1.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while True:
+        try:
+            if predicate():
+                return True
+        except (GatekeeperDown, httpx.HTTPError, OSError, ValueError):
+            pass
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(step)
+
+
+@app.command()
+def down(
+    timeout: Annotated[int | None, typer.Option(help="drain timeout in s (default: policy lifecycle)")] = None,
+    scope: Annotated[str, typer.Option(help="distro (stop everything) | workers (gatekeeper stays)")] = "distro",
+    kind: Annotated[str, typer.Option(help="graceful | hook (shutdown marker type)")] = "graceful",
+) -> None:
+    """Graceful down (CR-001): drain, interrupt what does not finish, summary, stop the units.
+
+    Not a kill: approvals stay valid, autostart stays enabled, and ``up`` (or the next distro
+    start for scope distro) brings it back. Kill always overrides lifecycle.
+    """
+    _require_root("down")
+    if scope not in {"distro", "workers"} or kind not in {"graceful", "hook"}:
+        _fail("usage: ossctl down [--timeout S] [--scope distro|workers] [--kind graceful|hook]", 2)
+    paths = Paths.default()
+    drain_s = timeout if timeout is not None else _lifecycle_policy().drain_timeout_s
+    drain_s = max(0, min(drain_s, 3600))
+    started = time.monotonic()
+    report: dict[str, Any] = {"scope": scope, "kind": kind, "drain_timeout_s": drain_s}
+    reason = f"ossctl down ({kind})"
+    try:
+        code, data = api("POST", "/v1/control/drain", {"reason": reason, "timeout_s": drain_s, "scope": scope})
+        report["gatekeeper"] = "draining" if code == 200 else f"drain refused {code}: {data}"
+    except GatekeeperDown:
+        report["gatekeeper"] = "unreachable"
+    if read_lifecycle(paths.control_dir) is None:  # gatekeeper down or refused: write it ourselves
+        write_flag(paths.lifecycle_flag, {"state": "draining", "scope": scope, "reason": reason,
+                                          "actor": "ossctl", "ts": _now_iso(), "timeout_s": drain_s})  # fmt: skip
+    try:
+        result = _sandboxd("POST", "/v1/drain", {"timeout_s": drain_s}, timeout=drain_s + 60.0)
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        result = {"finished": 0, "interrupted": 0, "error": f"sandboxd: {type(exc).__name__}"}
+    report["sandbox"] = result
+    left = max(5.0, drain_s - (time.monotonic() - started))
+    gk_up = report["gatekeeper"] != "unreachable"
+    report["submissions_settled"] = gk_up and _wait(lambda: _lifecycle_field("executing_actions") == 0, left)
+    finished, interrupted = int(result.get("finished", 0)), int(result.get("interrupted", 0))
+    try:
+        code, data = api("POST", "/v1/control/down", {"finished": finished, "interrupted": interrupted, "scope": scope})
+        # the Telegram summary must leave before the gatekeeper and the proxy stop
+        report["summary_delivered"] = code == 200 and _wait(
+            lambda: _lifecycle_field("outbox_pending") == 0, OUTBOX_FLUSH_S
+        )
+    except GatekeeperDown:
+        report["summary_delivered"] = False
+    info = read_lifecycle(paths.control_dir)
+    if info is None or info.state != "down":
+        write_flag(paths.lifecycle_flag, {"state": "down", "scope": scope, "reason": reason, "actor": "ossctl",
+                                          "ts": _now_iso(), "timeout_s": drain_s})  # fmt: skip
+    if scope == "distro":
+        write_flag(paths.shutdown_marker, {"type": kind, "ts": _now_iso(), "interrupted": interrupted})
+        failed = _systemctl("stop", (*WORKER_UNITS, WATCHDOG_TIMER, *CORE_UNITS))
+    else:
+        failed = _systemctl("stop", WORKER_UNITS)
+    report["stop_failed"] = failed
+    report["elapsed_s"] = round(time.monotonic() - started, 1)
+    _show(report)
+    raise typer.Exit(1 if failed else 0)
+
+
+@app.command()
+def up(
+    timeout: Annotated[int | None, typer.Option(help="health wait in s (default: policy lifecycle)")] = None,
+) -> None:
+    """Back up (CR-001): start the units, wait until healthy, lift draining/down, doctor --quick.
+
+    Refused while killed (exit 3): kill overrides lifecycle and needs the human resume.
+    """
+    _require_root("up")
+    paths = Paths.default()
+    flags = read_flags(paths.control_dir)
+    if flags.killed is not None:
+        _fail(f"killed ({flags.killed.level}: {flags.killed.reason}): up refused; resume first "
+              "(/resume, ossctl resume, scripts\\resume.ps1)", 3)  # fmt: skip
+    wait_s = timeout if timeout is not None else _lifecycle_policy().up_health_timeout_s
+    report: dict[str, Any] = {"start_failed": _systemctl("start", (*CORE_UNITS, *WORKER_UNITS, WATCHDOG_TIMER))}
+    healthy = _wait(lambda: api("GET", "/v1/health", timeout=5.0)[0] == 200, wait_s)
+    sandbox = _wait(lambda: _sandboxd("GET", "/v1/health").get("ok") is True, 30 if healthy else 1)
+    report["gatekeeper_healthy"], report["sandboxd_healthy"] = healthy, sandbox
+    if not healthy:
+        _show(report)
+        _fail(f"gatekeeper not healthy within {wait_s} s (journalctl -u ossbot-gatekeeper); lifecycle unchanged")
+    try:
+        code, data = api("POST", "/v1/control/up", {"resumed": 0})  # stage re-queue arrives with the runner
+    except GatekeeperDown as exc:
+        code, data = 503, str(exc)
+    if code != 200:
+        _show(report)
+        _fail(f"up refused ({code}): {data}", 3 if code == 409 else 1)
+    report["control"] = {k: data.get(k) for k in ("state", "lifecycle", "dry_run")}
+    from ossbot.ctl import doctor as doctor_mod  # noqa: PLC0415
+
+    results = doctor_mod.run(quick=True)
+    report["doctor_quick"] = {s: sum(1 for r in results if r.status == s) for s in sorted({r.status for r in results})}
+    report["doctor_failures"] = [f"{r.name}: {r.detail}" for r in results if r.status == "FAIL"]
+    report["last_shutdown"] = _local_lifecycle().get("last_shutdown")
+    _show(report)
+    raise typer.Exit(1 if report["start_failed"] or not sandbox else 0)
 
 
 @app.command()

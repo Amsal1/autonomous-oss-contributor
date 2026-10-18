@@ -3,6 +3,9 @@
 # Unknown keys are rejected. Effective forbidden paths/logins/confidentiality = config ∪ floor.
 version: 1
 dry_run_default: true
+lifecycle:                         # CR-001 graceful down/up (ossctl down|up, scripts\down.ps1 -Timeout overrides)
+  drain_timeout_s: 120             # running work gets this long, then it is marked interrupted
+  up_health_timeout_s: 180         # ossctl up waits this long for the units to be healthy
 sandbox:
   coder_mode: split                # split only in v1 (single is phase 2)
   kiro_trust_mode: ids             # ids = --trust-tools=<exact ids>; all = --trust-all-tools (needs probes under 'all')

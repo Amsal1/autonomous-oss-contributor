@@ -101,10 +101,31 @@ class ControlView(ApiModel):
     config_hash: str
     audit_head: str
     kill_level: Literal["soft", "full"] | None = None
+    lifecycle: Literal["up", "draining", "down"] = "up"  # CR-001; kill always overrides it
 
 
 class ReasonRequest(ApiModel):
     reason: Annotated[str, Field(min_length=1, max_length=500)]
+
+
+class DrainRequest(ApiModel):
+    """CR-001: stop scheduling new work; running work gets ``timeout_s``."""
+
+    reason: Annotated[str, Field(min_length=1, max_length=200)] = "ossctl down"
+    timeout_s: Annotated[int, Field(ge=0, le=3600)] = 120
+    scope: Literal["distro", "workers"] = "distro"
+
+
+class DownRequest(ApiModel):
+    """CR-001: the drain is over; ``finished``/``interrupted`` feed the Telegram summary."""
+
+    finished: Annotated[int, Field(ge=0)] = 0
+    interrupted: Annotated[int, Field(ge=0)] = 0
+    scope: Literal["distro", "workers"] = "distro"
+
+
+class UpRequest(ApiModel):
+    resumed: Annotated[int, Field(ge=0)] = 0
 
 
 class DryRunRequest(ApiModel):

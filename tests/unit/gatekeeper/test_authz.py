@@ -34,6 +34,11 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/control/kill"): frozenset({O, W, R}),
     ("POST", "/v1/control/resume"): frozenset({O}),
     ("POST", "/v1/control/dry-run"): frozenset({O}),
+    # CR-001 lifecycle (operator only: ossctl up|down|status as root/ossadmin)
+    ("GET", "/v1/control/lifecycle"): frozenset({O}),
+    ("POST", "/v1/control/drain"): frozenset({O}),
+    ("POST", "/v1/control/down"): frozenset({O}),
+    ("POST", "/v1/control/up"): frozenset({O}),
     ("GET", "/v1/config/snapshot"): ANY,
     ("POST", "/v1/config/reload"): frozenset({O}),
     ("GET", "/v1/contributions"): ANY,

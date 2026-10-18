@@ -19,7 +19,18 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from ossbot.common.clock import Clock, to_iso
-from ossbot.common.control_flags import Blocked, FlagState, KillLevel, PauseInfo, read_flags, write_flag
+from ossbot.common.control_flags import (
+    Blocked,
+    FlagState,
+    KillLevel,
+    LifecycleInfo,
+    LifecycleScope,
+    PauseInfo,
+    lifecycle_name,
+    read_flags,
+    read_lifecycle,
+    write_flag,
+)
 from ossbot.common.paths import Paths
 from ossbot.common.schemas import ControlView
 from ossbot.gatekeeper import db
@@ -105,6 +116,7 @@ class ControlService:
             config_hash=row["config_hash"],
             audit_head=self.audit.head().row_hash,
             kill_level=flags.killed.level if flags.killed else None,
+            lifecycle=lifecycle_name(self.lifecycle()),
         )
 
     @staticmethod
@@ -145,6 +157,70 @@ class ControlService:
             )
         self.notify(f"🛑 Killed ({effective}) by {actor}: {reason}")
         return self.view()
+
+    # ------------------------------------------------------------- lifecycle (CR-001)
+    def lifecycle(self) -> LifecycleInfo | None:
+        return read_lifecycle(self.paths.control_dir)
+
+    def drain(self, actor: str, reason: str, timeout_s: int, scope: LifecycleScope = "distro") -> ControlView:
+        """No new jobs, stages or submissions; running work may finish. Approvals stay valid."""
+        with db.transaction(self.conn):
+            current = self.lifecycle()
+            if current is None or current.state != "draining" or current.scope != scope:
+                write_flag(
+                    self.paths.lifecycle_flag,
+                    {"state": "draining", "scope": scope, "reason": reason, "actor": actor,
+                     "ts": to_iso(self.clock.now()), "timeout_s": timeout_s},
+                )  # fmt: skip
+            self.audit.append(actor, "lifecycle_draining", {"reason": reason, "timeout_s": timeout_s, "scope": scope})
+        self.notify(f"⏬ Draining ({actor}): no new work; running work gets up to {timeout_s} s")
+        return self.view()
+
+    def down(self, actor: str, finished: int, interrupted: int, scope: LifecycleScope = "distro") -> ControlView:
+        with db.transaction(self.conn):
+            current = self.lifecycle()
+            write_flag(
+                self.paths.lifecycle_flag,
+                {"state": "down", "scope": scope, "reason": current.reason if current else "down", "actor": actor,
+                 "ts": to_iso(self.clock.now()), "timeout_s": current.timeout_s if current else 0},
+            )  # fmt: skip
+            self.audit.append(
+                actor, "lifecycle_down", {"finished": finished, "interrupted": interrupted, "scope": scope}
+            )
+        self.notify(f"⏹ Going down: {finished} finished, {interrupted} interrupted (re-queued on up)")
+        return self.view()
+
+    def up(self, actor: str, resumed: int = 0) -> ControlView:
+        """Back to scheduling work. Refused while killed (kill overrides lifecycle; use resume)."""
+        flags = self.flags()
+        if flags.killed is not None or self._row()["state"] == "killed":
+            raise ControlConflict("killed: up refused; resume first (/resume, ossctl resume, resume.ps1)")
+        with db.transaction(self.conn):
+            was = lifecycle_name(self.lifecycle())
+            self.paths.lifecycle_flag.unlink(missing_ok=True)
+            awaiting = int(
+                self.conn.execute("SELECT COUNT(*) FROM approvals WHERE status IN ('pending','armed')").fetchone()[0]
+            )
+            self.audit.append(actor, "lifecycle_up", {"from": was, "resumed": resumed, "awaiting": awaiting})
+        self.notify(f"▶️ Back up: {resumed} resumed, {awaiting} awaiting approval")
+        return self.view()
+
+    def lifecycle_status(self) -> dict[str, Any]:
+        """One-screen state for ``ossctl status`` / ``status.ps1`` (CR-001 item 5)."""
+        info = self.lifecycle()
+
+        def count(sql: str) -> int:
+            return int(self.conn.execute(sql).fetchone()[0])
+
+        return {
+            "lifecycle": lifecycle_name(info),
+            "scope": info.scope if info else None,
+            "lifecycle_since": info.ts if info else None,
+            "running_stages": count("SELECT COUNT(*) FROM stage_runs WHERE status = 'running'"),
+            "executing_actions": count("SELECT COUNT(*) FROM outbound_actions WHERE status = 'executing'"),
+            "awaiting_approval": count("SELECT COUNT(*) FROM approvals WHERE status IN ('pending','armed')"),
+            "outbox_pending": count("SELECT COUNT(*) FROM tg_outbox WHERE status = 'pending'"),
+        }
 
     # ------------------------------------------------------------------ go (human only)
     def request_resume(self, actor: str, reason: str = "") -> None:
@@ -236,9 +312,29 @@ class ControlService:
             flags = self.flags()
             resumed_by_enforcer = (self._resume_pending or offline > 0) and flags.running
             if flags.killed is not None:
+                # §12.4 "kill invalidates armed|confirmed": a flag written by root (watchdog,
+                # ossbot-kill/kill.ps1, boot gate) bypasses kill(), so invalidate here, in the same
+                # transaction. Idempotent: nothing can be armed while the flag is present, so a
+                # repeated reconcile finds nothing; a newer flag after a quick resume is covered too.
+                invalidated = self.approvals.invalidate_armed_confirmed("killed", "flag")
                 if row["state"] != "killed":
                     self._set("killed", flags.killed.reason, "flag")
-                    self.audit.append("system", "control_reconciled", {"state": "killed", "from": row["state"]})
+                if row["state"] != "killed" or invalidated:
+                    self.audit.append(
+                        "system",
+                        "control_reconciled",
+                        {
+                            "state": "killed",
+                            "from": row["state"],
+                            "level": flags.killed.level,
+                            "invalidated": [i.approval_id for i in invalidated],
+                        },
+                    )
+                if invalidated:
+                    fyis.append(
+                        f"🛑 Kill flag ({flags.killed.level}: {flags.killed.reason}) observed: "
+                        f"{len(invalidated)} armed/confirmed approval(s) invalidated"
+                    )
             elif flags.paused is not None:
                 if row["state"] != "paused" and row["state"] != "killed":
                     self._set("paused", flags.paused.reason, "flag")

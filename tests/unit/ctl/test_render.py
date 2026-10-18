@@ -54,7 +54,7 @@ def _design_rules() -> list[str]:
 def test_golden_contains_design_section_11_4_in_order() -> None:
     golden = (GOLDEN / "iptables.rules").read_text(encoding="utf-8").splitlines()
     design = _design_rules()
-    assert len(design) == 24
+    assert len(design) == 34
     positions = [golden.index(line) for line in design]  # ValueError if any design rule is missing
     assert positions == sorted(positions)
     # the only additions are the ip6tables chains (DESIGN: "ip6tables ... DROP for the same uids")
@@ -76,6 +76,19 @@ def test_parts_split_host_and_docker() -> None:
 def test_dns_accepts_precede_the_drops() -> None:
     rules = render.firewall_plan(NS)["host"][0].rules
     assert [r[-1] for r in rules] == ["ACCEPT", "ACCEPT", "DROP", "DROP"]
+
+
+def test_every_service_uid_refuses_dns_before_the_lo_accept() -> None:
+    """P1-1: the WSL resolver sits on lo, so port 53 must be refused before ``-o lo -j ACCEPT``."""
+    host = render.firewall_plan(NS)["host"]
+    for chain, verdict in ((host[1], "REJECT"), (host[2], "DROP")):
+        for user in render.SERVICE_USERS:
+            rules = [r for r in chain.rules if r[3] == user]
+            lo = rules.index(("-m", "owner", "--uid-owner", user, "-o", "lo", "-j", "ACCEPT"))
+            for proto in ("udp", "tcp"):
+                dns = ("-m", "owner", "--uid-owner", user, "-p", proto, "--dport", "53", "-j", verdict)
+                assert rules.index(dns) < lo, (chain.family, user, proto)
+            assert all("ACCEPT" not in r for r in rules[: rules.index(dns)]), (chain.family, user)
 
 
 def test_bad_nameserver_refused() -> None:

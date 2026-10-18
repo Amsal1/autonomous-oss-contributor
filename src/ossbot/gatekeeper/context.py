@@ -24,6 +24,7 @@ from ossbot.gatekeeper.derive import GitArtifacts
 from ossbot.gatekeeper.gitops import GitOps
 from ossbot.gatekeeper.models_admin import ModelsAdmin
 from ossbot.gatekeeper.outbox import Outbox
+from ossbot.gatekeeper.pollstats import PollStats
 from ossbot.gatekeeper.state_machine import StateMachine
 from ossbot.gatekeeper.telegram import cards
 
@@ -50,6 +51,7 @@ class AppContext:
     kiro_key_sha256: str | None = None
     secret_scanner: Callable[[bytes], list[str]] | None = None  # None = gitleaks (packaging.gitleaks_scan)
     on_approval_created: Callable[[str], None] = field(default=lambda approval_id: None)
+    poll_stats: PollStats = field(default_factory=PollStats)  # Telegram long-poll health (CR-001)
 
     @property
     def config(self) -> ConfigBundle:
@@ -167,6 +169,7 @@ def build_context(
         anchors=AnchorClient(paths.anchor_sock),
         gitops=gitops,
         kiro_key_sha256=os.environ.get("KIRO_KEY_SHA256") or None,
+        poll_stats=PollStats(clock),
     )
     ctx_ref["ctx"] = ctx
     return ctx

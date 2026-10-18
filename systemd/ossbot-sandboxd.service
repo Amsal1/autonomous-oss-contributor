@@ -8,6 +8,9 @@ Wants=ossbot-dockerfilter.service
 After=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service
 
 [Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
+Environment=OSSBOT_DRAIN_TIMEOUT_S=120
 Type=simple
 User=ossbox
 Group=ossbox

@@ -44,6 +44,11 @@ async def status(ctx: CommandContext, args: list[str]) -> Reply:
     ]
     if counts:
         lines.append("Contributions: " + ", ".join(f"{esc(r['state'])} {r['n']}" for r in counts))
+    poll = app.poll_stats.as_dict()
+    lines.append(
+        f"Lifecycle {b(view.lifecycle)} · Telegram last poll {esc(poll['last_ok_at'] or '-')}"
+        f" · reconnects {poll['reconnects']}"
+    )
     return Reply("\n".join(lines))
 
 

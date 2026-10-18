@@ -32,7 +32,7 @@ from typing import Any
 
 import httpx
 
-from ossbot.common.control_flags import read_flags, write_flag
+from ossbot.common.control_flags import read_flags, read_lifecycle, write_flag
 from ossbot.common.uds import uds_client
 from ossbot.gatekeeper.anchors import parse_anchors
 from ossbot.gatekeeper.audit import verify
@@ -50,6 +50,7 @@ UNHEALTHY_TICKS = 4
 ANCHOR_EVERY = 10
 VERIFY_EVERY = 120
 DISK_MIN_BYTES = 20 * 1024**3
+SLEPT_GAP_S = 300  # > 10 missed ticks: the laptop slept / the VM was frozen (CR-001 item 7)
 SOFT_KILL_UNITS = ("ossbot-runner.service", "ossbot-sandboxd.service", "ossbot-hermes.service")
 FULL_KILL_UNITS = ("ossbot-gatekeeper.service", "ossbot-proxy.service")
 RESTARTABLE = ("ossbot-dockerfilter.service", "ossbot-gatekeeper.service", "ossbot-proxy.service",
@@ -182,19 +183,36 @@ def restart_failed(t: Tick) -> None:
             t.event("unit_restarted", unit=unit)
 
 
+def note_sleep(t: Tick, now: float) -> None:
+    """CR-001 item 7: a wall-clock gap far beyond the 30 s tick means the laptop slept or the VM
+    was frozen. Failures counted before the gap are not evidence of a sick gatekeeper (the poller
+    and the gatekeeper reconnect after resume), so the counter restarts."""
+    last = t.state.get("last_tick_wall")
+    t.state["last_tick_wall"] = now
+    if isinstance(last, int | float) and now - last > SLEPT_GAP_S:
+        t.event("slept", gap_s=round(now - last))
+        t.state["health_failures"] = 0
+
+
 def run_tick() -> Tick:
     t = Tick(_load_state())
     count = int(t.state.get("tick", 0)) + 1
     t.state["tick"] = count
+    note_sleep(t, time.time())
     drift = perms.check_all()
     if drift:
         t.event("perm_drift", problems=drift[:20])
         kill(t, f"perm_drift:{drift[0][:150]}")
     check_firewall(t)
     flags = read_flags(CONTROL)
+    lifecycle = read_lifecycle(CONTROL)
+    down = lifecycle is not None and lifecycle.state == "down"
     if flags.killed is not None:
         reenforce_kill(t, flags.killed.level)
         t.state["health_failures"] = 0
+    elif down:  # CR-001: `ossctl down` stops the units on purpose; that is not "unhealthy"
+        t.state["health_failures"] = 0
+        check_disk(t)
     elif flags.paused is None:
         check_health(t)
         check_disk(t)
@@ -207,7 +225,7 @@ def run_tick() -> Tick:
             t.event("anchor_failed", error=str(exc))
     if count % VERIFY_EVERY == 0:
         audit_check(t)
-    if read_flags(CONTROL).running:
+    if read_flags(CONTROL).running and not down:
         restart_failed(t)
     return t
 

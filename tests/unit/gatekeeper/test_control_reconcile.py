@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from ossbot.common.clock import FakeClock
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
-from tests.conftest import write_flag
+from tests.conftest import packaged_contribution, write_flag
+from tests.unit.gatekeeper.test_approvals import card, confirm, status, tap
 
 
 def set_db_state(ctx: AppContext, state: str, reason: str = "r") -> None:
@@ -102,6 +106,54 @@ def test_offline_resume_does_not_override_present_flags(ctx: AppContext) -> None
     write_flag(ctx.paths.killed_flag, {"level": "soft", "reason": "x"})
     ctx.paths.resume_log.write_text(json.dumps({"ts": "a"}) + "\n")
     assert ctx.control.reconcile().state == "killed"
+
+
+def _armed_and_confirmed(ctx: AppContext) -> tuple[str, str, str]:
+    """(armed approval, its live confirm token, confirmed approval)."""
+    _, a_armed = packaged_contribution(ctx)
+    _, a_confirmed = packaged_contribution(ctx)
+    armed, t1 = card(ctx, a_armed, message_id=11)
+    confirm_token = tap(ctx, t1, message_id=11)
+    confirmed, t2 = card(ctx, a_confirmed, message_id=12)
+    confirm(ctx, tap(ctx, t2, message_id=12), message_id=12)
+    return armed, confirm_token, confirmed
+
+
+def test_root_written_soft_kill_while_running_invalidates_armed_and_confirmed(ctx: AppContext) -> None:
+    """P1-2: watchdog / ossbot-kill write the flag directly; reconcile must apply §12.4."""
+    armed, confirm_token, confirmed = _armed_and_confirmed(ctx)
+    sent: list[str] = []
+    ctx.control.notify = sent.append
+    write_flag(ctx.paths.killed_flag, {"level": "soft", "reason": "watchdog: firewall_drift", "actor": "root"})
+    assert ctx.control.reconcile().state == "killed"
+    assert status(ctx, armed) == status(ctx, confirmed) == "invalidated"
+    [event] = events(ctx, "control_reconciled")
+    assert event["state"] == "killed" and event["level"] == "soft" and set(event["invalidated"]) == {armed, confirmed}
+    assert any("2 armed/confirmed approval(s) invalidated" in s for s in sent)
+    # an operator resume within the 5-minute TTL does not revive the confirm token
+    ctx.paths.killed_flag.unlink()
+    ctx.paths.resume_log.write_text(json.dumps({"ts": "a", "via": "resume.ps1"}) + "\n")
+    assert ctx.control.reconcile().state == "running"
+    with pytest.raises(ApprovalError):
+        confirm(ctx, confirm_token, message_id=11)
+    assert status(ctx, armed) == "invalidated"
+
+
+def test_full_kill_flag_found_at_startup_invalidates(ctx: AppContext) -> None:
+    armed, confirm_token, confirmed = _armed_and_confirmed(ctx)
+    write_flag(ctx.paths.killed_flag, {"level": "full", "reason": "kill.ps1", "actor": "root", "ts": "t"})
+    set_db_state(ctx, "killed", "kill.ps1")  # the DB already says killed: invalidation still happens
+    assert ctx.control.reconcile().state == "killed"
+    assert status(ctx, armed) == status(ctx, confirmed) == "invalidated"
+    with pytest.raises(ApprovalError):
+        confirm(ctx, confirm_token, message_id=11)
+
+
+def test_repeated_reconcile_while_killed_is_quiet(ctx: AppContext) -> None:
+    write_flag(ctx.paths.killed_flag, {"level": "soft", "reason": "x", "actor": "root"})
+    ctx.control.reconcile()
+    ctx.control.reconcile()
+    assert len(events(ctx, "control_reconciled")) == 1
 
 
 def test_enforcer_resume_after_request(ctx: AppContext) -> None:

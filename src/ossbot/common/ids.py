@@ -15,8 +15,8 @@ import threading
 import time
 
 CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-ID_RE = re.compile(r"^[a-z]_[0-9A-HJKMNP-TV-Z]{10}$")
-TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{22}$")
+ID_RE = re.compile(r"^[a-z]_[0-9A-HJKMNP-TV-Z]{10}\Z")
+TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{22}\Z")
 
 _lock = threading.Lock()
 _last: tuple[int, int] = (0, 0)

@@ -48,6 +48,11 @@ class PeerCredProtocol(H11Protocol):
         self.app = app
 
 
+class DrainBody(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    timeout_s: Annotated[int, Field(ge=0, le=3600)]
+
+
 class ProbeRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     models: dict[str, Annotated[str, Field(pattern=MODEL_ID_RE)]]
@@ -77,7 +82,14 @@ def create_app(jobs: JobService, probes: ProbeRunner, allowed_uids: frozenset[in
 
     @app.get("/v1/health")
     def health(uid: Caller) -> dict[str, Any]:
-        return {"ok": True}
+        running = jobs.running()
+        return {"ok": True, "running": len(running), "running_run_ids": running}
+
+    @app.post("/v1/drain")
+    def drain(body: DrainBody, uid: Caller) -> dict[str, Any]:
+        """CR-001: blocks up to ``timeout_s`` while running jobs finish, then interrupts the rest.
+        Admission is closed by the lifecycle flag (written first by ``ossctl down``)."""
+        return jobs.drain(body.timeout_s)
 
     @app.post("/v1/jobs", status_code=202)
     def submit(spec: JobSpec, uid: Caller) -> dict[str, Any]:

@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ossbot.common.clock import Clock, to_iso
-from ossbot.common.control_flags import Blocked, require_running
+from ossbot.common.control_flags import Blocked, NotUp, read_flags, require_running, require_up
 from ossbot.common.images import ImagePins
 from ossbot.common.schemas import TERMINAL_STATES
 from ossbot.sandboxd.argv import Volumes, job_spec, probe_spec, stagein_spec
@@ -66,6 +66,8 @@ log = logging.getLogger(__name__)
 EXEC_READY_TIMEOUT_S = 30.0
 EXEC_READY_POLL_S = 0.25
 PROBE_CID = "sys-probe"
+INTERRUPTED = "interrupted"  # job error_class after a drain timeout or a crash (CR-001); state 'failed'
+INTERRUPT_GRACE_S = 15.0  # after killing the containers, how long the job threads get to record
 PROMPT_DIR_PROBES = "/opt/ossbot/probes"
 
 
@@ -189,6 +191,10 @@ class JobService:
         self._active: dict[str, str] = {}  # cid -> run_id
         self._containers: dict[str, list[str]] = {}  # run_id -> container names
         self._cancelled: set[str] = set()
+        self._interrupted: set[str] = set()
+        self._running: set[str] = set()  # submitted jobs whose final row is not written yet
+        self._draining = False
+        self._idle = threading.Condition()
         self._lock = threading.Lock()
 
     # --------------------------------------------------------------------- admission
@@ -204,6 +210,12 @@ class JobService:
             require_running(self.settings.control_dir, f"sandbox_job:{spec.entrypoint}")
         except Blocked as exc:
             raise ApiError(423, exc.flags.state, str(exc)) from exc
+        try:  # CR-001: draining/down admits no new jobs; running ones may finish
+            require_up(self.settings.control_dir, f"sandbox_job:{spec.entrypoint}")
+        except NotUp as exc:
+            raise ApiError(423, exc.info.state, str(exc)) from exc
+        if self._draining:
+            raise ApiError(423, "draining", "sandboxd is draining")
         trust_mode = self.trust_mode()
         if isinstance(job.args, KiroArgs):
             try:
@@ -244,6 +256,8 @@ class JobService:
                     (plan.run_id, plan.cid, spec.profile, spec.entrypoint, "queued", to_iso(self.clock.now())),
                 )
             self._active[plan.cid] = plan.run_id
+        with self._idle:
+            self._running.add(plan.run_id)
         if self.background:
             threading.Thread(target=self._run_job, args=(plan,), daemon=True, name=f"job-{plan.run_id}").start()
         else:
@@ -251,16 +265,26 @@ class JobService:
         return self.get(plan.run_id)
 
     def _run_job(self, plan: Plan) -> None:
-        self._set_state(plan.run_id, "running")
         try:
-            outcome = self.execute(plan)
-        except Exception as exc:
-            log.exception("job crashed", extra={"run_id": plan.run_id, "cid": plan.cid})
-            outcome = Outcome(error_class=f"internal:{type(exc).__name__}")
+            self._set_state(plan.run_id, "running")
+            try:
+                outcome = self.execute(plan)
+            except Exception as exc:
+                log.exception("job crashed", extra={"run_id": plan.run_id, "cid": plan.cid})
+                outcome = Outcome(error_class=f"internal:{type(exc).__name__}")
+            finally:
+                with self._lock:
+                    self._active.pop(plan.cid, None)
+            self._record(plan, outcome)
         finally:
-            with self._lock:
-                self._active.pop(plan.cid, None)
+            with self._idle:  # the drain waits on this (durable row first, then "not running")
+                self._running.discard(plan.run_id)
+                self._idle.notify_all()
+
+    def _record(self, plan: Plan, outcome: Outcome) -> None:
         state = "cancelled" if plan.run_id in self._cancelled else ("succeeded" if outcome.ok else "failed")
+        if plan.run_id in self._interrupted:  # CR-001 drain timeout: the runner re-queues the stage
+            state, outcome.error_class, outcome.exit_code = "failed", INTERRUPTED, None
         with self.store.tx() as conn:
             conn.execute(
                 "UPDATE jobs SET state = ?, exit_code = ?, error_class = ?, artifact_dir = ?, finished_at = ?"
@@ -498,6 +522,103 @@ class JobService:
             log.warning("killed %d sandbox containers (%s)", len(names), reason)
         return len(names)
 
+    # ------------------------------------------------------------ drain / crash (CR-001)
+    def running(self) -> list[str]:
+        with self._idle:
+            return sorted(self._running)
+
+    def _wait_idle(self, deadline: float) -> None:
+        """Wait (monotonic clock: sleep/hibernate does not count) until no job is running."""
+        with self._idle:
+            while self._running:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return
+                self._idle.wait(min(left, 1.0))
+
+    def drain(self, timeout_s: float) -> dict[str, Any]:
+        """Let running jobs finish for up to ``timeout_s``; interrupt the rest.
+
+        New jobs are already refused (the lifecycle flag, or a kill). Interrupted jobs end
+        ``failed``/``interrupted`` with no artifacts; their task volume stays, so the runner
+        can restart the stage from its last completed one on the next ``up``.
+        """
+        self._draining = True  # also closes admission if the lifecycle flag was not written
+        try:
+            return self._drain(timeout_s)
+        finally:
+            self._draining = False
+
+    def _drain(self, timeout_s: float) -> dict[str, Any]:
+        before = set(self.running())
+        killed = read_flags(self.settings.control_dir).killed is not None
+        if not killed:
+            self._wait_idle(time.monotonic() + max(0.0, timeout_s))
+        left = set(self.running())
+        if left:
+            with self._lock:
+                self._interrupted.update(left)
+                self._cancelled.update(left)
+                names = [n for run_id in left for n in self._containers.get(run_id, [])]
+            for name in names:
+                self._quiet(self.runtime.kill, name)
+            log.warning("drain: interrupting %d job(s)", len(left), extra={"run_ids": sorted(left)})
+            self._wait_idle(time.monotonic() + INTERRUPT_GRACE_S)
+        still = set(self.running())
+        if still:  # threads that did not record in time: write the row ourselves
+            self._mark_interrupted(still)
+        return {
+            "finished": len(before - left),
+            "interrupted": len(left),
+            "interrupted_run_ids": sorted(left),
+            "killed": killed,
+        }
+
+    def _mark_interrupted(self, run_ids: set[str]) -> None:
+        with self.store.tx() as conn:
+            for run_id in sorted(run_ids):
+                conn.execute(
+                    "UPDATE jobs SET state = 'failed', error_class = ?, exit_code = NULL, artifact_dir = NULL,"
+                    " finished_at = ? WHERE run_id = ? AND state IN ('queued','running')",
+                    (INTERRUPTED, to_iso(self.clock.now()), run_id),
+                )
+
+    def recover(self, sweep_orphans: bool = True) -> dict[str, Any]:
+        """At start: rows a dead sandboxd left queued/running become ``interrupted`` (durable
+        first), then their containers and per-run volumes are removed. ``sweep_orphans`` also
+        removes every other ``ossbot.sandbox=1`` container (probe/fixture runs have no row);
+        nothing of a previous process can still be wanted. Task volumes are kept (re-queue).
+        """
+        with self.store.tx() as conn:
+            rows = conn.execute("SELECT run_id, cid FROM jobs WHERE state IN ('queued','running')").fetchall()
+            for row in rows:
+                conn.execute(
+                    "UPDATE jobs SET state = 'failed', error_class = ?, exit_code = NULL, artifact_dir = NULL,"
+                    " finished_at = ? WHERE run_id = ?",
+                    (INTERRUPTED, to_iso(self.clock.now()), row["run_id"]),
+                )
+        run_ids = {str(r["run_id"]) for r in rows}
+        removed = 0
+        try:
+            containers = self.runtime.list({"ossbot.sandbox": "1"})
+        except RuntimeFailure as exc:
+            log.warning("recover: cannot list sandbox containers: %s", exc)
+            containers = []
+        for info in containers:
+            if sweep_orphans or info.labels.get("ossbot.run") in run_ids:
+                self._quiet(self.runtime.remove, info.name)
+                removed += 1
+        for row in rows:
+            vols = Volumes(str(row["run_id"]), str(row["cid"]))
+            for name in (vols.input, vols.output, vols.ro, vols.exec, vols.exec_output):
+                self._quiet(self.runtime.remove_volume, name)
+        if rows or removed:
+            log.warning(
+                "recovered after an unclean stop: %d job(s) interrupted, %d container(s) removed", len(rows), removed,
+                extra={"event": "sandboxd_recovered", "run_ids": sorted(run_ids)},
+            )  # fmt: skip
+        return {"interrupted": sorted(run_ids), "containers_removed": removed}
+
     def logs(self, run_id: str, tail: int | None) -> bytes:
         self.get(run_id)
         path = self.settings.logs_dir / "runs" / f"{run_id}.log"
@@ -572,8 +693,11 @@ class ProbeRunner:
             raise ApiError(409, "images_not_pinned", "sandbox image digests or probe hashes are not recorded")
         try:
             require_running(self.jobs.settings.control_dir, "sandbox_job:probe")
+            require_up(self.jobs.settings.control_dir, "sandbox_job:probe")
         except Blocked as exc:
             raise ApiError(423, exc.flags.state, str(exc)) from exc
+        except NotUp as exc:
+            raise ApiError(423, exc.info.state, str(exc)) from exc
         for role in ("planner", "coder"):
             try:
                 self.jobs.catalog.validate(models[role])

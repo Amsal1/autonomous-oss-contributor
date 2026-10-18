@@ -107,6 +107,67 @@ def require_running(control_dir: Path, what: str) -> FlagState:
     return flags
 
 
+# ------------------------------------------------------------------- lifecycle (CR-001)
+# ``lifecycle`` in the control dir: absent = up; JSON {state: draining|down, scope: distro|workers,
+# reason, actor, ts, timeout_s}. Separate from kill/pause: draining/down stop *new* work only
+# (running jobs may finish), never invalidate approvals, and kill always overrides them. Scope
+# ``distro`` (ossctl down / down.ps1) ends with the distro: the boot gate clears it at the next
+# start; scope ``workers`` (Telegram /down, FEAT-005) survives restarts until ``up``. An
+# unparseable file counts as ``down`` (fail closed: no new work).
+LifecycleName = Literal["up", "draining", "down"]
+LifecycleScope = Literal["distro", "workers"]
+LIFECYCLE_FILE = "lifecycle"
+SHUTDOWN_MARKER_FILE = "shutdown-marker"
+LAST_SHUTDOWN_FILE = "last-shutdown"
+DEFAULT_DRAIN_TIMEOUT_S = 120
+
+
+@dataclass(frozen=True)
+class LifecycleInfo:
+    state: Literal["draining", "down"]
+    scope: LifecycleScope
+    reason: str
+    actor: str
+    ts: str
+    timeout_s: int
+
+
+class NotUp(RuntimeError):
+    """New work refused because the lifecycle is draining or down (HTTP 423)."""
+
+    def __init__(self, what: str, info: LifecycleInfo) -> None:
+        self.what = what
+        self.info = info
+        super().__init__(f"{what} refused: {info.state} ({info.reason})")
+
+
+def read_lifecycle(control_dir: Path) -> LifecycleInfo | None:
+    raw = _read_json(control_dir / LIFECYCLE_FILE)
+    if raw is None:
+        return None
+    state = raw.get("state")
+    scope = raw.get("scope")
+    timeout = raw.get("timeout_s")
+    return LifecycleInfo(
+        state="draining" if state == "draining" else "down",
+        scope="distro" if scope == "distro" else "workers",
+        reason=str(raw.get("reason", "unparseable_flag")),
+        actor=str(raw.get("actor", "unknown")),
+        ts=str(raw.get("ts", "")),
+        timeout_s=timeout if isinstance(timeout, int) and not isinstance(timeout, bool) else DEFAULT_DRAIN_TIMEOUT_S,
+    )
+
+
+def lifecycle_name(info: LifecycleInfo | None) -> LifecycleName:
+    return "up" if info is None else info.state
+
+
+def require_up(control_dir: Path, what: str) -> None:
+    info = read_lifecycle(control_dir)
+    if info is not None:
+        raise NotUp(what, info)
+
+
 def write_flag(path: Path, payload: dict[str, Any]) -> None:
     """Atomically write a flag file with mode 0640 (writers: gatekeeper and root only)."""
     tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")

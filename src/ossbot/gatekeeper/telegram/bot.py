@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import warnings
 from datetime import timedelta
@@ -20,13 +21,14 @@ from typing import Any
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import Application
-from telegram.request import HTTPXRequest
+from telegram.request import BaseRequest, HTTPXRequest, RequestData
 from telegram.warnings import PTBDeprecationWarning
 
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow, OutboxWorker, SendError
+from ossbot.gatekeeper.pollstats import PollStats
 from ossbot.gatekeeper.telegram import cards, keyboards
 from ossbot.gatekeeper.telegram.commands.registry import load_plugins, menu
 from ossbot.gatekeeper.telegram.escape import esc
@@ -38,6 +40,8 @@ TELEGRAM_PROXY = "http://10.212.0.2:3150"
 ALLOWED_UPDATES = ["message", "callback_query"]
 OUTBOX_INTERVAL_SECONDS = 1.0  # <= 1 msg/s per chat
 RETRY_TOKEN_TTL = timedelta(hours=24)
+CONNECT_BACKOFF_MIN_S = 2.0
+CONNECT_BACKOFF_MAX_S = 60.0
 CARD_PREFIX = "card:"
 RETRY_PREFIX = "retry:"
 
@@ -157,14 +161,70 @@ class CardPublisher:
         )  # fmt: skip
 
 
+class PollTrackingRequest(BaseRequest):
+    """Wraps the ``getUpdates`` request to record long-poll health (CR-001 item 1).
+
+    PTB's polling loop already retries network errors with backoff and only advances the offset
+    after a successful ``getUpdates``, so pending updates survive IP changes, sleep and outages;
+    this wrapper counts failures and reconnects for ``/status`` and ``status.ps1``.
+    """
+
+    def __init__(self, inner: BaseRequest, stats: PollStats) -> None:
+        self.inner = inner
+        self.stats = stats
+
+    @property
+    def read_timeout(self) -> float | None:
+        return self.inner.read_timeout
+
+    async def initialize(self) -> None:
+        await self.inner.initialize()
+
+    async def shutdown(self) -> None:
+        await self.inner.shutdown()
+
+    async def do_request(
+        self,
+        url: str,
+        method: str,
+        request_data: RequestData | None = None,
+        read_timeout: Any = BaseRequest.DEFAULT_NONE,
+        write_timeout: Any = BaseRequest.DEFAULT_NONE,
+        connect_timeout: Any = BaseRequest.DEFAULT_NONE,
+        pool_timeout: Any = BaseRequest.DEFAULT_NONE,
+    ) -> tuple[int, bytes]:
+        try:
+            code, body = await self.inner.do_request(
+                url, method, request_data, read_timeout=read_timeout, write_timeout=write_timeout,
+                connect_timeout=connect_timeout, pool_timeout=pool_timeout,
+            )  # fmt: skip
+        except TelegramError as exc:  # NetworkError / TimedOut: PTB retries with backoff
+            self.stats.failed(f"{type(exc).__name__}: {exc.message}")
+            raise
+        if url.endswith("/getUpdates"):
+            if 200 <= code < 300:
+                self.stats.ok()
+            else:
+                self.stats.failed(f"HTTP {code}")
+        return code, body
+
+
 def build_application(
-    token: str, handlers: Handlers, proxy: str = TELEGRAM_PROXY
+    token: str,
+    handlers: Handlers,
+    proxy: str = TELEGRAM_PROXY,
+    *,
+    stats: PollStats | None = None,
+    request: BaseRequest | None = None,
+    poll_request: BaseRequest | None = None,
 ) -> Application[Any, Any, Any, Any, Any, Any]:
+    """``request``/``poll_request`` default to ``HTTPXRequest`` through the proxy (tests inject fakes)."""
+    poller: BaseRequest = poll_request or HTTPXRequest(proxy=proxy, read_timeout=40.0)
     application = (
         Application.builder()
         .token(token)
-        .request(HTTPXRequest(proxy=proxy))
-        .get_updates_request(HTTPXRequest(proxy=proxy, read_timeout=40.0))
+        .request(request or HTTPXRequest(proxy=proxy))
+        .get_updates_request(PollTrackingRequest(poller, stats or handlers.ctx.poll_stats))
         .build()
     )
     handlers.register(application)
@@ -180,11 +240,29 @@ class TelegramFrontend:
         self.publisher = CardPublisher(ctx)
         self.worker = OutboxWorker(ctx.outbox, TelegramSender(application.bot), self.publisher.on_sent, batch=1)
         self._task: asyncio.Task[None] | None = None
+        self._connect_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
+        """Never blocks or fails the gatekeeper start: with the network down (laptop offline,
+        proxy restarting, after sleep) the bot connects in the background with backoff (CR-001
+        item 1). Cards and notes queue in the persistent outbox meanwhile."""
         load_plugins()
         self.ctx.on_approval_created = self.publisher.publish
-        await self.application.initialize()
+        self._connect_task = asyncio.create_task(self._connect())
+
+    async def _connect(self) -> None:
+        delay = CONNECT_BACKOFF_MIN_S
+        while True:
+            try:
+                await self.application.initialize()
+                break
+            except NetworkError as exc:  # incl. TimedOut: transient, retry with backoff
+                self.ctx.poll_stats.failed(f"initialize: {type(exc).__name__}: {exc.message}")
+                await asyncio.sleep(delay)
+                delay = min(CONNECT_BACKOFF_MAX_S, delay * 2)
+            except TelegramError as exc:  # InvalidToken, Forbidden: permanent, the front-end stays off
+                log.error("telegram disabled: %s", type(exc).__name__, extra={"event": "telegram_disabled"})
+                return
         try:
             await self.application.bot.set_my_commands([(c["command"], c["description"]) for c in menu()])
         except TelegramError as exc:
@@ -203,6 +281,10 @@ class TelegramFrontend:
             await asyncio.sleep(OUTBOX_INTERVAL_SECONDS)
 
     async def stop(self) -> None:
+        if self._connect_task is not None and not self._connect_task.done():
+            self._connect_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._connect_task
         if self._task is not None:
             self._task.cancel()
         if self.application.updater is not None and self.application.updater.running:

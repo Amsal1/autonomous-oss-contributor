@@ -344,7 +344,9 @@ Fail-closed egress (M6): `ossbot-gatekeeper`, `ossbot-proxy`, `ossbot-sandboxd`,
 
 Kill-level conditions (M5): `ossbot-gatekeeper.service` and `ossbot-proxy.service` carry `ExecCondition=/opt/ossbot/bin/ossbot-boot-gate --allow minimal`. It exits 0 when there is no `killed` file or the file has `level: soft`, and exits 1 (systemd skips the unit without marking it failed) when `level: full`, or when the file is unparseable (fail closed). sandboxd, runner and Hermes keep `ConditionPathExists=!/var/lib/ossbot/control/killed`.
 
-Watchdog rule: it never starts or restarts any ossbot unit while `killed` or `paused` exists; while running, it only restarts units systemd itself gave up on (`Restart=` exhausted) and only if their conditions hold.
+Watchdog rule: it never starts or restarts any ossbot unit while `killed` or `paused` exists; while running, it only restarts units systemd itself gave up on (`Restart=` exhausted) and only if their conditions hold. While the lifecycle is `down` (13.5) it neither counts the stopped gatekeeper as unhealthy nor restarts anything.
+
+Graceful stop (CR-001, 13.5): every ossbot service unit sets `TimeoutStopSec=150` (drain timeout 120 s + 30 s; `tests/unit/test_systemd_units.py`). On `SIGTERM` sandboxd drains itself (`OSSBOT_DRAIN_TIMEOUT_S=120`: no new jobs, running jobs get the timeout, the rest end `interrupted`), skipped while killed. On start it first marks every job a dead predecessor left `queued`/`running` as `interrupted` and removes leftover sandbox containers and per-run volumes (task volumes stay). systemd stops in reverse start order: sandboxd (after gatekeeper and proxy) stops first; `ossctl down` stops workers, then the watchdog timer, then the gatekeeper, then the proxy.
 
 All non-root units use hardening: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes` (hermes: `ProtectHome=tmpfs` + `BindPaths=/home/hermes`), `PrivateTmp=yes`, `ReadWritePaths=` limited to the component's dirs, `ReadOnlyPaths=/mnt/d/Work/autonomous-oss-contributor`, `CapabilityBoundingSet=` (empty), `RestrictSUIDSGID=yes`, `LockPersonality=yes`, `SystemCallArchitectures=native`. Secrets come via `EnvironmentFile=/etc/ossbot/secrets/<svc>.env`.
 
@@ -352,7 +354,7 @@ Exception (M8): `ossbot-gatekeeper.service` is the only writer of `config/models
 
 ### 7.6 Autostart and idle behaviour
 
-`.wslconfig` sets `[general] instanceIdleTimeout=-1`, which per the WSL docs disables automatic distro shutdown, so the old keepalive (`wsl.exe --exec sleep infinity`) is no longer the primary mechanism. Something must still boot the distro after Windows logon: `bootstrap.ps1` registers a per-user Scheduled Task `ossbot-autostart` (trigger: at logon, 60 s delay; action: `wsl.exe -d ossbot -u ossnobody --exec /bin/true`, hidden window). systemd then starts the ossbot units (unless killed). **[VERIFY]** on WSL 3.0.3 that with `instanceIdleTimeout=-1` the distro and its systemd services stay up after the launching `wsl.exe` exits; if not, the task action becomes `wsl.exe -d ossbot -u ossnobody --exec /usr/bin/sleep infinity` with restart-on-failure (the v1 design). `kill.ps1 -Hard` disables the task; `resume.ps1` re-enables it.
+`.wslconfig` sets `[general] instanceIdleTimeout=-1`, which per the WSL docs disables automatic distro shutdown, so the old keepalive (`wsl.exe --exec sleep infinity`) is no longer the primary mechanism. Something must still boot the distro after Windows logon: `bootstrap.ps1` registers a per-user Scheduled Task `ossbot-autostart` (trigger: at logon, 60 s delay; action: `wsl.exe -d ossbot -u ossnobody --exec /bin/true`, hidden window). systemd then starts the ossbot units (unless killed). **[VERIFY]** on WSL 3.0.3 that with `instanceIdleTimeout=-1` the distro and its systemd services stay up after the launching `wsl.exe` exits; if not, the task action becomes `wsl.exe -d ossbot -u ossnobody --exec /usr/bin/sleep infinity` with restart-on-failure (the v1 design). `kill.ps1 -Hard` disables the task; `resume.ps1` re-enables it. `down.ps1` (13.5) never disables it: a distro-scope `down` ends with the distro, so the next start (autostart at logon, `up.ps1`, any `wsl.exe -d ossbot`) is "up" again. The boot gate records how the previous run ended (`last-shutdown`: `graceful`/`hook` from the marker `ossctl down` writes, `unclean` when there was none) and removes a distro-scope `lifecycle` flag. `status.ps1` never starts the distro.
 
 `.wslconfig` also sets `localhostForwarding=false` under NAT, so Linux listeners on `127.0.0.1` (Hermes API 8642) are not reachable from Windows `localhost`. Doctor proves it: a temporary listener on `127.0.0.1:18642` as ossadmin, then `Test-NetConnection localhost -Port 18642` from `ossctl.ps1` must fail. The Hermes API keeps its bearer key anyway; gatekeeper, sandboxd and Docker filter APIs are Unix sockets.
 
@@ -1224,18 +1226,30 @@ iptables -A OSSBOT-IN -s 10.213.0.0/16 -j DROP
 iptables -A OSSBOT-IN -s 10.212.0.0/24 -m conntrack --ctstate NEW -j DROP
 iptables -C INPUT -j OSSBOT-IN 2>/dev/null || iptables -I INPUT 1 -j OSSBOT-IN
 # Host users: only the proxy port assigned to them, plus loopback where needed.
+# DNS (port 53, any destination) is refused first: the WSL resolver sits on lo (ADR-0005 addendum),
+# so the lo ACCEPT alone would be a direct DNS channel (Phase 1 review P1-1).
 iptables -N OSSBOT-OUT 2>/dev/null || iptables -F OSSBOT-OUT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner  -p udp --dport 53 -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner  -p tcp --dport 53 -j REJECT
 iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner  -d 10.212.0.2 -p tcp --dport 3140 -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner  -o lo -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner ossrunner  -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner hermes     -p udp --dport 53 -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner hermes     -p tcp --dport 53 -j REJECT
 iptables -A OSSBOT-OUT -m owner --uid-owner hermes     -d 10.212.0.2 -p tcp --dport 3141 -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner hermes     -o lo -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner hermes     -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -p udp --dport 53 -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -p tcp --dport 53 -j REJECT
 iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -d 10.212.0.2 -p tcp --dport 3150 -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -o lo -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner gatekeeper -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossbox     -p udp --dport 53 -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossbox     -p tcp --dport 53 -j REJECT
 iptables -A OSSBOT-OUT -m owner --uid-owner ossbox     -o lo -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner ossbox     -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossnobody  -p udp --dport 53 -j REJECT
+iptables -A OSSBOT-OUT -m owner --uid-owner ossnobody  -p tcp --dport 53 -j REJECT
 iptables -A OSSBOT-OUT -m owner --uid-owner ossnobody  -o lo -j ACCEPT
 iptables -A OSSBOT-OUT -m owner --uid-owner ossnobody  -j REJECT
 iptables -C OUTPUT -j OSSBOT-OUT 2>/dev/null || iptables -I OUTPUT 1 -j OSSBOT-OUT
@@ -1250,7 +1264,7 @@ iptables -A OSSBOT-FWD -s 10.213.0.0/16 ! -d 10.213.0.0/16 -j DROP
 iptables -C DOCKER-USER -j OSSBOT-FWD 2>/dev/null || iptables -I DOCKER-USER 1 -j OSSBOT-FWD
 ```
 
-No user gets direct UDP 53 or TCP 443. `ossbox` reaches Docker only through Unix sockets. Root and `ossadmin` (the human) are unrestricted. ip6tables: `-P OUTPUT DROP` for the same uids and DROP for sandbox ranges (Docker IPv6 off). `ossbot-firewall --check` (used by every service's `ExecStartPre` and by the watchdog) verifies all three chains and their jumps (7.5). `tests/system/test_firewall_failclosed.sh` flushes `OSSBOT-OUT`, restarts `ossbot-runner`, and expects the start to fail with the `--check` message. It then re-applies the rules and expects the start to succeed. `ossctl doctor` diff-checks live rules and runs per-uid probes: for each of {ossrunner, hermes, gatekeeper, ossbox, ossnobody} × {its port, every other port, direct `1.1.1.1:443`, direct UDP 53}, only the owned port connects, and through it only the owned categories return non-403 (e.g. gatekeeper → `https://example.com` via 3150 → 403).
+No user gets direct UDP 53 or TCP 443. `ossbox` reaches Docker only through Unix sockets. Root and `ossadmin` (the human) are unrestricted. ip6tables: `-P OUTPUT DROP` for the same uids and DROP for sandbox ranges (Docker IPv6 off). `ossbot-firewall --check` (used by every service's `ExecStartPre` and by the watchdog) verifies all three chains and their jumps (7.5). `tests/system/test_firewall_failclosed.sh` flushes `OSSBOT-OUT`, restarts `ossbot-runner`, and expects the start to fail with the `--check` message. It then re-applies the rules and expects the start to succeed. `ossctl doctor` diff-checks live rules and runs per-uid probes: for each of {ossrunner, hermes, gatekeeper, ossbox, ossnobody} × {its port, every other port, direct `1.1.1.1:443`, direct UDP 53, UDP and TCP 53 to every `/etc/resolv.conf` nameserver}, only the owned port connects, and through it only the owned categories return non-403 (e.g. gatekeeper → `https://example.com` via 3150 → 403).
 
 ## 12. Gatekeeper
 
@@ -1706,6 +1720,7 @@ Telegram `/kill` keeps a minimal gatekeeper alive so Telegram `/resume` remains 
 - `ossbot-killswitch.path` (`PathExists=`) → `ossbot-enforce-kill.service` (root oneshot): `docker ps -q --filter label=ossbot.sandbox=1 | xargs -r docker kill`; for each `ossbot-t-*` network, `docker network disconnect -f <net> ossbot-proxy` then `docker network rm <net>` (a network with the proxy attached cannot be removed, N9); `docker compose -p ossbot-<cid> down` for stack projects, `kind delete clusters` with prefix `ossbot-`, `systemctl stop ossbot-runner ossbot-sandboxd ossbot-hermes`. Target ≤ 10 s.
 - Resume: the gatekeeper writes `resume-request` (after human confirm) → `ossbot-resume.path` → `ossbot-enforce-resume.service` (root): verify the request file is owned by gatekeeper or root and newer than `killed`; remove `killed`, `paused`, `resume-request`, **and** the Windows marker; then start, in order, `ossbot-gatekeeper` (if stopped), `ossbot-proxy` (if stopped), `ossbot-dockerfilter` (if not active), `ossbot-sandboxd`, `ossbot-runner`, `ossbot-hermes` (M5). Each start passes the firewall `ExecStartPre` check. The gatekeeper sets `control_state.state='running'` (on start it reconciles from the now-absent flags). `ossbot-resume` (used by `resume.ps1` and by `ossctl resume` when the gatekeeper is down, N4) performs the same steps in the same order, first appending its entry to `/srv/ossbot/logs/resume.log`, and is the only other path that deletes the marker. Dry-run is not changed by resume. Resume never re-runs an interrupted or `executing` outbound action (M5).
 - Watchdog (root, every 30 s): if `killed` exists and any `ossbot.sandbox=1` container or killed-unit runs → re-enforce + alert; never starts or restarts units while `killed` or `paused` exists; control dir and file modes must match Section 7.3, else kill; gatekeeper `/v1/health` failing for 4 consecutive ticks (2 min) → root writes `paused` (reason `gatekeeper_unhealthy`) and logs to `/srv/ossbot/logs/watchdog.log` (N9). On gatekeeper start, it reconciles both flags into `control_state` (N12). If `killed` exists, the state is `killed`; if the DB says killed but the file is absent, the state stays killed with an alert ("flag missing; use /resume"). Otherwise, if `paused` exists, the state is `paused` with the file's reason. If the DB says paused but the file is absent, the gatekeeper re-writes `paused`, stays paused and alerts ("pause flag missing; use /resume"). File and DB therefore never disagree towards "running".
+- Kills that bypass the gatekeeper (watchdog, `ossbot-kill`/`kill.ps1`, boot gate) write the flag directly. The gatekeeper's reconcile (at start and periodically) therefore calls `invalidate_armed_confirmed` in the same transaction whenever a `killed` flag is present, so §12.4 "kill invalidates armed|confirmed" holds for every kill path, and a quick resume never revives a confirm token (Phase 1 review P1-2).
 - Every component also checks: runner before each stage and at each heartbeat; sandboxd before each job; Docker filter refuses `containers/create` and `containers/{id}/start` when `killed` or `paused` exists (N5; a job whose second container is refused is recorded `interrupted` and re-queued after resume); gatekeeper before each transition into a working state and before each individual outbound write (`control_checkpoint()`, 12.5).
 
 ### 13.3 kill.ps1 / resume.ps1
@@ -1762,6 +1777,21 @@ if ($Hard) { Disable-ScheduledTask -TaskName ossbot-autostart | Out-Null; wsl.ex
 | Audit anchor mismatch | watchdog (hourly `audit verify`) | kill |
 | Telegram updates from unknown users > 20/h | gatekeeper | alert once |
 | Disk free on `/srv` < 20 GB | watchdog | pause |
+
+### 13.5 Graceful lifecycle: up / draining / down (CR-001)
+
+`docs/plan/CR-001-lifecycle-up-down.md` is the requirement; this section is the design. Lifecycle is separate from kill and pause: it only stops *new* work, never invalidates approvals, and never disables the autostart. Kill always overrides it (`up` is refused while killed).
+
+- State: `/var/lib/ossbot/control/lifecycle`, JSON `{state: draining|down, scope: distro|workers, reason, actor, ts, timeout_s}`; absent = `up`; unparseable = `down` (fail closed). Writers: gatekeeper and root (same rules as the other flags). `ControlView.lifecycle` mirrors it.
+- Effects while `draining` or `down`: sandboxd admits no job or probe (423 `draining`/`down`); the runner schedules no stage and discovery stops (FEAT-006); Telegram Approve/Confirm are refused with no state change (armed approvals stay valid and expire normally); in-flight submissions continue (each write still passes `control_checkpoint()`). The Docker filter is unchanged, so running jobs can finish.
+- `ossctl down [--timeout S] [--scope distro|workers] [--kind graceful|hook]` (root): `POST /v1/control/drain` (or writes the flag itself if the gatekeeper is down) → `POST sandboxd /v1/drain` (running jobs get `S`, default `policy.yaml lifecycle.drain_timeout_s` = 120, measured on the monotonic clock; the rest are killed and recorded `failed`/`interrupted`, task volumes kept) → waits for `executing` submissions → `POST /v1/control/down` (Telegram "Going down: N finished, M interrupted"; the outbox is flushed before the core stops) → for scope `distro`: writes `shutdown-marker` and stops the workers, the watchdog timer, the gatekeeper and the proxy; scope `workers` stops only runner, Hermes and sandboxd.
+- `down.ps1 [-Timeout S] [-All] [-Kind graceful|hook]`: `ossctl down` as root (cut off after `S` + 90 s), then `wsl --terminate ossbot` (`-All`: `wsl --shutdown`).
+- `ossctl up [--timeout S]` (root): refused (exit 3) while killed; starts the units, waits ≤ `lifecycle.up_health_timeout_s` (180 s) for health, `POST /v1/control/up` removes the flag (Telegram "Back up: X resumed, Y awaiting approval"), runs `doctor --quick`. `up.ps1` refuses on the Windows KILL marker, starts the distro, then runs `ossctl up`.
+- `ossctl status` / `status.ps1`: control state, lifecycle, dry-run, running stages and sandbox jobs, executing submissions, pending approvals, outbox, Telegram last successful poll and reconnects, last shutdown type.
+- Interrupted public writes are never resumed (M5): a submission cut by a stop is reconciled read-only at the next start and ends `SUBMIT_FAILED` `interrupted` with a fresh-approval Retry (12.5).
+- Crash safety (power loss, force shutdown): SQLite WAL with a durable row before and after every job and transition, sandboxd start-up recovery (7.5), gatekeeper restart reconciliation by reads only (12.5). Tests: `tests/sandbox/test_crash_safety.py` (SIGKILL sandboxd mid-job), `tests/system/test_crash_safety.sh` (SIGKILL gatekeeper, sandboxd, filter), `test_submit.py::test_restart_reconciles_executing` (no duplicate writes).
+- Sleep/hibernate: job and drain timeouts use the monotonic clock (frozen VM time does not count); the watchdog treats a wall-clock gap > 300 s between ticks as "slept" and restarts its health-failure count; the Telegram poller (python-telegram-bot long polling, outbound only) retries with backoff and keeps pending updates, and every reconnect is counted (`/status`, `tests/telegram/test_polling.py`).
+- Phase 2 remainder (PLAN.md): runner stage re-queue on `up` and the `resumed` count (FEAT-006), Telegram `/drain /undrain /down /up` (FEAT-005), Windows shutdown hooks 6a/6b and `bootstrap.ps1 -Shortcuts` (FEAT-008), README/SETUP "Daily use" and AGENTS.md lifecycle invariants (FEAT-008).
 
 ## 14. Telegram design
 

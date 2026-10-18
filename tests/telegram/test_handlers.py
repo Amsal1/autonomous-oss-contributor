@@ -210,6 +210,17 @@ async def test_malformed_callback_data(ctx: AppContext, bot: Bot) -> None:
     assert bot.req.methods().count("answerCallbackQuery") == 2
 
 
+def test_callback_format_is_exact() -> None:
+    """P1-5: a trailing newline fails the §14.2 format check itself, not only the DB lookup."""
+    from ossbot.gatekeeper.telegram import keyboards
+
+    good = "t:" + "A" * 22
+    assert keyboards.token_of(good) == "A" * 22
+    assert keyboards.token_of(good + "\n") is None
+    with pytest.raises(ValueError):
+        keyboards.callback_data("A" * 22 + "\n")
+
+
 async def test_reject_cancels_action(ctx: AppContext, bot: Bot) -> None:
     cid, approval, tokens = card(ctx)
     await bot.tap(tokens["reject"])

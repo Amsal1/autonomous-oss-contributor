@@ -6,7 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from ossbot.common.schemas import ControlView, DryRunRequest, ReasonRequest
+from ossbot.common.schemas import ControlView, DownRequest, DrainRequest, DryRunRequest, ReasonRequest, UpRequest
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 
@@ -36,6 +36,30 @@ async def kill(
     request: Request, body: ReasonRequest, caller: Annotated[Caller, Depends(require(OP, WK, RQ))]
 ) -> ControlView:
     return ctx(request).control.kill(body.reason, caller.actor, "soft")
+
+
+@router.get("/control/lifecycle")
+async def get_lifecycle(request: Request, caller: Annotated[Caller, Depends(require(OP))]) -> dict[str, Any]:
+    """CR-001: lifecycle, running work, pending approvals, Telegram poll health (status.ps1)."""
+    c = ctx(request)
+    return {"control": c.control.view().model_dump(), **c.control.lifecycle_status(),
+            "telegram": c.poll_stats.as_dict()}  # fmt: skip
+
+
+@router.post("/control/drain")
+async def drain(request: Request, body: DrainRequest, caller: Annotated[Caller, Depends(require(OP))]) -> ControlView:
+    return ctx(request).control.drain(caller.actor, body.reason, body.timeout_s, body.scope)
+
+
+@router.post("/control/down")
+async def down(request: Request, body: DownRequest, caller: Annotated[Caller, Depends(require(OP))]) -> ControlView:
+    return ctx(request).control.down(caller.actor, body.finished, body.interrupted, body.scope)
+
+
+@router.post("/control/up")
+async def up(request: Request, body: UpRequest, caller: Annotated[Caller, Depends(require(OP))]) -> ControlView:
+    """Refused (409 conflict) while killed: kill overrides lifecycle and needs the human resume."""
+    return ctx(request).control.up(caller.actor, body.resumed)
 
 
 @router.post("/control/resume", status_code=202)
