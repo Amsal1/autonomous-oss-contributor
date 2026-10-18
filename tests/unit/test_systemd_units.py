@@ -118,6 +118,13 @@ def test_proxy_renders_before_its_firewall_check() -> None:
     assert render < check
 
 
+@pytest.mark.parametrize("path", NON_ROOT, ids=lambda p: p.name)
+def test_non_root_units_protect_home(path: Path) -> None:
+    """P1-17: no non-root unit sees /home or /root (yes) or only an empty tmpfs (tmpfs, for units
+    that need a private home view, e.g. Hermes in FEAT-007)."""
+    assert _unit(path)["Service"].get("ProtectHome") in {"yes", "tmpfs"}
+
+
 def test_workers_stop_before_gatekeeper_and_proxy() -> None:
     after = _unit(UNITS / "ossbot-sandboxd.service")["Unit"]["After"].split()
     assert "ossbot-gatekeeper.service" in after and "ossbot-proxy.service" in after  # stop = reverse order

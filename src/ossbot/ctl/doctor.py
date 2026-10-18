@@ -289,6 +289,35 @@ def check_resolved() -> Result:
     )  # fmt: skip
 
 
+LINGER_DIR = Path("/var/lib/systemd/linger")
+RUN_USER = Path("/run/user")
+
+
+# The uids that run (or will run) ossbot units (DESIGN §7.3). ossnobody is left out: it is the default
+# WSL login, so WSL gives it a session and /run/user/1001 by design, and no unit runs as it.
+UNIT_UIDS = ("ossrunner", "hermes", "gatekeeper", "ossbox")
+
+
+def check_no_user_managers(linger_dir: Path = LINGER_DIR, run_user: Path = RUN_USER) -> Result:
+    """P1-17: no service uid lingers or has a /run/user runtime dir (no systemd --user instance)."""
+    import pwd  # noqa: PLC0415
+
+    problems = []
+    for user in UNIT_UIDS:
+        try:
+            uid = pwd.getpwnam(user).pw_uid
+        except KeyError:
+            problems.append(f"{user} missing")
+            continue
+        if (linger_dir / user).exists():
+            problems.append(f"{user} lingers")
+        if (run_user / str(uid)).exists():
+            problems.append(f"/run/user/{uid} ({user}) exists")
+    return Result(PASS if not problems else FAIL, "service uids: no user manager", "; ".join(problems)
+                  or "Linger=no and no /run/user/<uid> for the four unit uids",
+                  "loginctl disable-linger <user>; loginctl terminate-user <user>")  # fmt: skip
+
+
 def check_io_uring() -> Result:
     """P1-14: io_uring off for every process (also part of ``ossbot-firewall --check``)."""
     from ossbot.ctl.render import io_uring_problems  # noqa: PLC0415
@@ -595,7 +624,7 @@ def check_lock_drift() -> Result:
 def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps: list[Callable[[], Result | Iterable[Result]]] = [
         check_mounts, check_default_user, check_users, check_perms, check_docker,
-        filter_deny_probe, check_firewall, check_resolved, check_io_uring,
+        filter_deny_probe, check_firewall, check_resolved, check_io_uring, check_no_user_managers,
     ]  # fmt: skip
     if not quick:
         steps += [check_uid_probes, check_proxy_denies]

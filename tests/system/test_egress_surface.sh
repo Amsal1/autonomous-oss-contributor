@@ -41,6 +41,7 @@ cleanup() {
     sysctl -q -w kernel.io_uring_disabled=2
     systemctl start ossbot-watchdog.timer
   fi
+  [[ -n ${DEADMAN:-} ]] && systemctl stop "$DEADMAN.timer" >/dev/null 2>&1
   restore_egress_mode
 }
 trap cleanup EXIT
@@ -437,6 +438,16 @@ expect "root: io_uring refused by the sysctl" setup-errno1 "$(python3 -I -c "$UR
 # Each layer alone: with the sysctl briefly at 0 (watchdog timer held, the trap restores it), the
 # unit filter and Docker's default seccomp profile must still refuse io_uring, and the unrestricted
 # control must reach 2:50002 through IORING_OP_SOCKET (so the refusals above are real).
+# P1-19: a root dead-man job restores the sysctl and the watchdog timer even if this script dies
+# (SIGKILL, a lost WSL session) where the trap cannot run; it is cancelled after the restore below.
+DEADMAN=ossbot-test-uring-deadman-$$
+if systemd-run --quiet --unit "$DEADMAN" --on-active=90 /bin/sh -c \
+     'sysctl -q -w kernel.io_uring_disabled=2; systemctl start ossbot-watchdog.timer'; then
+  pass "dead-man job armed ($DEADMAN, 90 s)"
+else
+  fail "could not arm the dead-man job; not lowering the io_uring sysctl"
+  finish
+fi
 systemctl stop ossbot-watchdog.timer
 # shellcheck disable=SC2016  # expanded by the inner bash
 wait_for 30 bash -c '[[ $(systemctl show -p ActiveState --value ossbot-watchdog.service) != activating ]]' ||
@@ -460,6 +471,18 @@ sysctl -q -w kernel.io_uring_disabled=2
 unset URING_WINDOW
 systemctl start ossbot-watchdog.timer
 expect "io_uring sysctl restored" 2 "$(cat /proc/sys/kernel/io_uring_disabled)"
+systemctl stop "$DEADMAN.timer" >/dev/null 2>&1
+refuse "dead-man job cancelled after the restore" systemctl is-active --quiet "$DEADMAN.timer"
+
+# P1-17: no service uid has a user manager (lingering) or a /run/user runtime dir, which would give it
+# a systemd --user instance and sockets outside the unit sandboxing. Only the unit uids: ossnobody is
+# the default WSL login (WSL gives it a session and /run/user/1001 by design) and runs no unit.
+for u in ossrunner hermes gatekeeper ossbox; do
+  uid=$(id -u "$u")
+  refuse "$u: no lingering (/var/lib/systemd/linger/$u)" test -e "/var/lib/systemd/linger/$u"
+  expect "$u: loginctl Linger" no "$(loginctl show-user "$u" -p Linger --value 2>/dev/null || echo no)"
+  refuse "$u: no /run/user/$uid" test -e "/run/user/$uid"
+done
 # WSL interop sockets (/run/WSL/<pid>_interop, 0777): ossbot-nointerop makes /run/WSL root-only.
 check "/run/WSL is root-only (0700)" test "$(stat -c %a /run/WSL)" = 700
 isock=$(find /run/WSL -maxdepth 1 -type s -name '*_interop' -print -quit)

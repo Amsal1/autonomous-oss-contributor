@@ -30,19 +30,37 @@ if ($cfg.Have -eq $cfg.Want) { Add-Check 'PASS' '.wslconfig' "matches config/wsl
 elseif ($cfg.Have -eq 'none') { Add-Check 'FAIL' '.wslconfig' 'missing' 'powershell -File scripts\bootstrap.ps1 -Only wsl' }
 else { Add-Check 'WARN' '.wslconfig' 'drift from config/wsl/wslconfig' 'powershell -File scripts\bootstrap.ps1 -Only wsl' }
 
-# Hyper-V firewall (7.8): optional, elevated.
-$wslId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
+# Hyper-V firewall (7.8): optional, elevated. P1-16: exactly the two ossbot rules with the required
+# properties, and no other enabled Allow rule for the WSL VM (outbound = FAIL, inbound = WARN).
+$wslId = $script:OssHyperVCreatorId
+$hvHint = 'optional: elevated powershell -File scripts\hyperv-firewall.ps1'
 try {
     $hv = Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name $wslId -ErrorAction Stop
-    $rules = @(Get-NetFirewallHyperVRule -Name 'ossbot-out-https', 'ossbot-out-http' -ErrorAction SilentlyContinue)
-    if ($hv.DefaultOutboundAction -eq 'Block' -and $hv.DefaultInboundAction -eq 'Block' -and $rules.Count -eq 2) {
-        Add-Check 'PASS' 'hyper-v firewall' 'inbound Block, outbound Block + TCP 80/443'
+    $all = @(Get-NetFirewallHyperVRule -ErrorAction Stop)
+    $drift = New-Object System.Collections.Generic.List[string]
+    foreach ($spec in $script:OssHyperVRules) {
+        $found = @($all | Where-Object { $_.Name -eq $spec.Name })
+        if ($found.Count -ne 1) { $drift.Add("$($spec.Name): $($found.Count) rule(s)"); continue }
+        foreach ($p in (Get-OssHyperVRuleProblems -Rule $found[0] -Port $spec.Port)) { $drift.Add("$($spec.Name): $p") }
+    }
+    $foreign = @(Get-OssHyperVForeignAllows -AllRules $all)
+    $foreignOut = @($foreign | Where-Object { [string]$_.Direction -eq 'Outbound' })
+    $foreignIn = @($foreign | Where-Object { [string]$_.Direction -ne 'Outbound' })
+    $applied = $hv.DefaultOutboundAction -eq 'Block' -and $hv.DefaultInboundAction -eq 'Block'
+    if (-not $applied) {
+        Add-Check 'WARN' 'hyper-v firewall' "not applied (inbound $($hv.DefaultInboundAction), outbound $($hv.DefaultOutboundAction))" $hvHint
+    } elseif ($drift.Count -gt 0) {
+        Add-Check 'FAIL' 'hyper-v firewall' ("ossbot rules drifted: " + ($drift -join '; ')) 'elevated powershell -File scripts\hyperv-firewall.ps1 (re-creates them)'
+    } elseif ($foreignOut.Count -gt 0) {
+        Add-Check 'FAIL' 'hyper-v firewall' ("other outbound Allow rule(s) for the WSL VM: " + (($foreignOut | ForEach-Object { $_.Name }) -join ', ')) 'remove them (Remove-NetFirewallHyperVRule -Name <name>, elevated)'
+    } elseif ($foreignIn.Count -gt 0) {
+        Add-Check 'WARN' 'hyper-v firewall' ("other inbound Allow rule(s) for the WSL VM: " + (($foreignIn | ForEach-Object { $_.Name }) -join ', ')) 'remove them unless you added them on purpose'
     } else {
-        Add-Check 'WARN' 'hyper-v firewall' "not applied (inbound $($hv.DefaultInboundAction), outbound $($hv.DefaultOutboundAction), rules $($rules.Count)/2)" 'optional: elevated powershell -File scripts\hyperv-firewall.ps1'
+        Add-Check 'PASS' 'hyper-v firewall' 'inbound Block, outbound Block + exactly the ossbot TCP 80/443 rules (Outbound, Allow, Enabled, WSL VM)'
     }
 } catch {
     $why = if (Test-OssElevated) { $_.Exception.Message } else { 'not elevated' }
-    Add-Check 'WARN' 'hyper-v firewall' "not checked ($why)" 'optional: elevated powershell -File scripts\hyperv-firewall.ps1'
+    Add-Check 'WARN' 'hyper-v firewall' "not checked ($why)" $hvHint
 }
 
 # Localhost forwarding probe (7.6): a distro 127.0.0.1 listener must not be reachable from Windows.

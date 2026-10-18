@@ -42,6 +42,42 @@ function Test-OssElevated {
     return ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+# Hyper-V firewall (DESIGN 7.8, ADR-0013, Phase 1 review P1-16): exactly these two ossbot rules.
+$script:OssHyperVCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'   # WSL VMCreatorId
+$script:OssHyperVRules = @(
+    @{ Name = 'ossbot-out-https'; DisplayName = 'ossbot: WSL outbound TCP 443'; Port = 443 },
+    @{ Name = 'ossbot-out-http'; DisplayName = 'ossbot: WSL outbound TCP 80 (apt)'; Port = 80 }
+)
+
+function Get-OssHyperVRuleProblems {
+    # How one Hyper-V rule differs from its ossbot spec (Outbound, Allow, Enabled, TCP, the port,
+    # the WSL VMCreatorId). An empty list means the rule is as required.
+    param([Parameter(Mandatory)][object]$Rule, [Parameter(Mandatory)][int]$Port)
+    $p = New-Object System.Collections.Generic.List[string]
+    if ([string]$Rule.Direction -ne 'Outbound') { $p.Add("direction $($Rule.Direction)") }
+    if ([string]$Rule.Action -ne 'Allow') { $p.Add("action $($Rule.Action)") }
+    if ([string]$Rule.Enabled -ne 'True') { $p.Add("enabled $($Rule.Enabled)") }
+    if (@('TCP', '6') -notcontains [string]$Rule.Protocol) { $p.Add("protocol $($Rule.Protocol)") }
+    $ports = (@($Rule.RemotePorts) | ForEach-Object { [string]$_ }) -join ','
+    if ($ports -ne [string]$Port) { $p.Add("remote ports $ports") }
+    if ([string]$Rule.VMCreatorId -ne $script:OssHyperVCreatorId) { $p.Add("VMCreatorId $($Rule.VMCreatorId)") }
+    # Unrolled on purpose: callers wrap the call in @(), so an empty result has Count 0.
+    return $p.ToArray()
+}
+
+function Get-OssHyperVForeignAllows {
+    # Enabled Allow rules for the WSL VMCreatorId that are not the two ossbot rules. WSL's own inbound
+    # defaults (WslCore-Allow-Inbound-*: ICMP and mDNS from the host) are left out; an outbound one
+    # widens the VM egress layer.
+    param([object[]]$AllRules)
+    $names = @($script:OssHyperVRules | ForEach-Object { $_.Name })
+    return @($AllRules | Where-Object {
+        [string]$_.VMCreatorId -eq $script:OssHyperVCreatorId -and [string]$_.Action -eq 'Allow' -and
+        [string]$_.Enabled -eq 'True' -and $names -notcontains $_.Name -and
+        -not ([string]$_.Direction -eq 'Inbound' -and [string]$_.Name -like 'WslCore-Allow-Inbound-*')
+    })
+}
+
 function ConvertFrom-OssWslText {
     # wsl.exe management output may still contain NULs (UTF-16 read as bytes); strip them.
     param([object[]]$Lines)

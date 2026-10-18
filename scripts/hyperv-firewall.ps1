@@ -4,15 +4,18 @@
 .DESCRIPTION
   Default inbound Block, default outbound Block, allow outbound TCP 443 and TCP 80 (apt).
   Coarse VM-level layer below the in-distro squid/iptables allowlist.
+  Exactly the two ossbot rules are required (Outbound, Allow, Enabled, TCP, 443/80, the WSL
+  VMCreatorId): a missing or drifted ossbot rule is re-created (Phase 1 review P1-16). Other Allow
+  rules for the WSL VM are reported, not deleted (they are yours); scripts\ossctl.ps1 doctor fails on them.
   -Remove restores the Allow defaults and deletes the ossbot-* rules.
 #>
 [CmdletBinding()]
 param([switch]$Remove)
 $ErrorActionPreference = 'Stop'
-$wsl = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'   # WSL VMCreatorId
+. (Join-Path $PSScriptRoot 'lib\common.ps1')
+$wsl = $script:OssHyperVCreatorId
 
-$id = [Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not ([Security.Principal.WindowsPrincipal]$id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+if (-not (Test-OssElevated)) {
     Write-Host 'hyperv-firewall.ps1 needs an elevated PowerShell (it never self-elevates).'
     exit 2
 }
@@ -21,10 +24,7 @@ if (-not (Get-Command Set-NetFirewallHyperVVMSetting -ErrorAction SilentlyContin
     exit 3
 }
 
-$rules = @(
-    @{ Name = 'ossbot-out-https'; DisplayName = 'ossbot: WSL outbound TCP 443'; Port = 443 },
-    @{ Name = 'ossbot-out-http'; DisplayName = 'ossbot: WSL outbound TCP 80 (apt)'; Port = 80 }
-)
+$rules = $script:OssHyperVRules
 
 if ($Remove) {
     Set-NetFirewallHyperVVMSetting -Name $wsl -DefaultInboundAction Allow -DefaultOutboundAction Allow
@@ -42,12 +42,21 @@ if ($setting.Enabled -ne 'True' -or $setting.DefaultInboundAction -ne 'Block' -o
     $changed = $true
 }
 foreach ($r in $rules) {
-    $existing = Get-NetFirewallHyperVRule -Name $r.Name -ErrorAction SilentlyContinue
-    if (-not $existing) {
-        New-NetFirewallHyperVRule -Name $r.Name -DisplayName $r.DisplayName -Direction Outbound -VMCreatorId $wsl `
-            -Protocol TCP -RemotePorts $r.Port -Action Allow | Out-Null
-        $changed = $true
+    $existing = @(Get-NetFirewallHyperVRule -Name $r.Name -ErrorAction SilentlyContinue)
+    $drift = @()
+    if ($existing.Count -eq 1) { $drift = @(Get-OssHyperVRuleProblems -Rule $existing[0] -Port $r.Port) }
+    if ($existing.Count -eq 1 -and $drift.Count -eq 0) { continue }
+    if ($existing.Count -gt 0) {
+        Write-Host ("  {0}: drifted ({1}); re-creating" -f $r.Name, ($(if ($drift.Count) { $drift -join ', ' } else { "$($existing.Count) copies" })))
+        Remove-NetFirewallHyperVRule -Name $r.Name
     }
+    New-NetFirewallHyperVRule -Name $r.Name -DisplayName $r.DisplayName -Direction Outbound -VMCreatorId $wsl `
+        -Protocol TCP -RemotePorts $r.Port -Action Allow -Enabled True | Out-Null
+    $changed = $true
+}
+$foreign = @(Get-OssHyperVForeignAllows -AllRules @(Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue))
+foreach ($f in $foreign) {
+    Write-Host ("  WARN: other Allow rule for the WSL VM: {0} ({1}); remove it unless you added it on purpose" -f $f.Name, $f.DisplayName)
 }
 Write-Host ("step hyperv: {0}" -f $(if ($changed) { 'changed' } else { 'unchanged' }))
 exit 0
