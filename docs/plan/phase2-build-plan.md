@@ -331,3 +331,12 @@ Depends on everything above.
 - Build loops, one per FEAT in order FEAT-005 → FEAT-011, each a `repeat` (max 10 iterations, `onMaxIterations: pause`) of a coder step then a reviewer step. The reviewer is last and writes `d:\Work\autonomous-oss-contributor\docs\review-build-FEAT-00N.json` last, every iteration, with `"verdict": "APPROVED"` or `"CHANGES_REQUESTED"`; the loop stops when that file's `verdict` is `APPROVED`. Iteration 1 implements the FEAT; later iterations fix every finding of `docs\review-build-FEAT-00N.md`/`.json`.
 - Phase 2 gate loop (max 4, `onMaxIterations: pause`): fixer then reviewer over the whole Phase 2 diff (`e0ecf11..HEAD`) and the evidence in the FEAT files, verdict `d:\Work\autonomous-oss-contributor\docs\review-phase2.json`.
 - Finalize step: commits the remaining review files, confirms `git status --porcelain` is empty, and reports. Nothing is pushed.
+
+## Working rules for every build step (orchestrator, added after code-feat-005 ran out of context)
+
+Coder steps can run out of context and stop mid-task, leaving uncommitted work. Follow these rules in every build step:
+
+1. **Start by checking for leftovers.** Run `git status --porcelain` before anything else. If it isn't empty, a previous step stopped mid-work. Read those changes, then finish, test and commit them, or deliberately revert them with a note in VERIFICATION.md. Never silently overwrite, stash or discard them.
+2. **Commit in small units.** Commit after each plan item or sub-item once its tests pass. Don't hold large uncommitted batches. Also update TRACEABILITY.md and VERIFICATION.md as you go, not only at the end.
+3. **Keep context lean.** Don't paste huge files or full test logs into context. Use grep/targeted reads and `tail` the logs.
+4. **Reviewers:** never approve while the tree is dirty, or while committed work lacks test evidence. Instead, return CHANGES_REQUESTED with a "finish the WIP" finding.
