@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.paths import Paths
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import db, policy, secret_scan
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler
 from ossbot.gatekeeper.approvals import ApprovalService, ArtifactSource, Invalidated
@@ -27,9 +27,11 @@ from ossbot.gatekeeper.models_admin import ModelsAdmin
 from ossbot.gatekeeper.outbox import Outbox
 from ossbot.gatekeeper.pollstats import PollStats
 from ossbot.gatekeeper.proposal_approvals import ProposalApprovals
+from ossbot.gatekeeper.secret_scan import SecretScanner
 from ossbot.gatekeeper.skill_approvals import SkillApprovals
 from ossbot.gatekeeper.state_machine import StateMachine
 from ossbot.gatekeeper.telegram import cards
+from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +54,9 @@ class AppContext:
     anchors: AnchorClient
     gitops: GitOps
     kiro_key_sha256: str | None = None
-    secret_scanner: Callable[[bytes], list[str]] | None = None  # None = gitleaks (packaging.gitleaks_scan)
+    gitleaks_scanner: Callable[[bytes], list[str]] | None = None  # None = gitleaks (packaging.gitleaks_scan)
+    # gatekeeper.env (the service's environment): the source of the U14 secret values
+    env: Mapping[str, str] = field(default_factory=lambda: os.environ)
     on_approval_created: Callable[[str], None] = field(default=lambda approval_id: None)
     poll_stats: PollStats = field(default_factory=PollStats)  # Telegram long-poll health (CR-001)
     decisions: DecisionServices = field(default=None)  # type: ignore[assignment]  # set by build_context
@@ -62,6 +66,20 @@ class AppContext:
     @property
     def config(self) -> ConfigBundle:
         return self.snapshots.current.bundle
+
+    @property
+    def secret_scanner(self) -> SecretScanner:
+        """The U14 scanner of the current snapshot (rebuilt when a confirmed /reload changes it)."""
+        current = self.snapshots.current.hash
+        cached = self.__dict__.get("_scanner")
+        if cached is None or cached[0] != current:
+            cached = (current, secret_scan.build(self.config, self.env))
+            self.__dict__["_scanner"] = cached
+        scanner: SecretScanner = cached[1]
+        return scanner
+
+    def reset_secret_scanner(self) -> None:
+        self.__dict__.pop("_scanner", None)
 
     @property
     def telegram_chat_id(self) -> int:
@@ -243,4 +261,16 @@ def build_context(
         decisions=decisions,
     )
     ctx_ref["ctx"] = ctx
+    # BA-16: a snapshot whose secret scanner can't be built refuses the start or the /reload.
+    snapshots.validators.append(lambda bundle: secret_scan.build(bundle, ctx.env))
+
+    def text_check(kind: str, text: str) -> list[policy.Violation]:
+        """P1-4: an edited title/body passes the same text policy as packaging."""
+        return policy.check_text(
+            kind, text, ctx.config, policy.effective_confidentiality(conn, ctx.config),  # type: ignore[arg-type]
+            ctx.kiro_key_sha256, secret_values=ctx.secret_scanner.values,
+        )  # fmt: skip
+
+    approvals.text_check = text_check
+    ui_redact.bind(lambda: ctx.secret_scanner)  # U14: the one redactor follows the current snapshot
     return ctx

@@ -44,10 +44,11 @@ async def create_action(
     action_id = new_action_id()
     text = normalize_text(body.body).rstrip("\n") + f"\n\n<!-- ossbot:action={action_id} -->"
     violations = policy.check_text(
-        "comment", text, c.config, policy.effective_confidentiality(c.conn, c.config), c.kiro_key_sha256
-    )
+        "comment", text, c.config, policy.effective_confidentiality(c.conn, c.config), c.kiro_key_sha256,
+        secret_values=c.secret_scanner.values,
+    )  # fmt: skip
     if violations:
-        if any(v.code in {"secret_pattern", "kiro_key"} for v in violations):
+        if any(v.code in {"secret_pattern", "kiro_key", "gatekeeper_secret"} for v in violations):
             c.anomaly.report(Signal.SECRET_IN_TEXT, f"{body.kind} for {body.cid}", body.cid)
         return JSONResponse(status_code=422, content={"error": "policy", "violations": [v.code for v in violations]})
     with db.transaction(c.conn):

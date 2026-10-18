@@ -92,6 +92,9 @@ class SnapshotManager:
         self.control = control
         self.approvals = approvals
         self.decisions = decisions
+        # extra load checks on a candidate bundle (e.g. the U14 secret scanner, BA-16); a ValueError
+        # refuses the start or the /reload like an invalid file
+        self.validators: list[Callable[[ConfigBundle], object]] = []
         self.notify = notify or (lambda text: None)
         self._current: LoadedSnapshot | None = None
 
@@ -109,6 +112,13 @@ class SnapshotManager:
 
     def _validate(self, files: dict[str, bytes]) -> LoadedSnapshot:
         bundle = parse_bundle(files)
+        for check in self.validators:
+            try:
+                check(bundle)
+            except ConfigError:
+                raise
+            except ValueError as exc:
+                raise ConfigError({"policy.yaml": [str(exc)]}) from exc
         return LoadedSnapshot(hash=snapshot_hash(files), files=files, bundle=bundle)
 
     def _record(self, snap: LoadedSnapshot, actor: str, diff: str, changed: tuple[str, ...]) -> None:

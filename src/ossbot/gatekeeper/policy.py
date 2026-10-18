@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -143,8 +143,14 @@ def check_text(
     bundle: ConfigBundle,
     confidentiality: set[str],
     kiro_key_sha256: str | None = None,
+    *,
+    secret_values: Collection[str] = (),
 ) -> list[Violation]:
+    """``secret_values`` are the gatekeeper's own secrets (``ctx.secret_scanner.values``, U14); every
+    production caller passes them (AST test). The detail never carries the value."""
     out: list[Violation] = []
+    if any(v and v in text for v in secret_values):
+        out.append(Violation("gatekeeper_secret", kind))
     rules = bundle.policy.text
     limits = {
         "title": rules.title_max,

@@ -124,7 +124,7 @@ def gctx(paths: Paths, clock: FakeClock, remote: LocalRemote) -> Iterator[AppCon
     ops = GitOps(paths, Git(home=paths.gatekeeper_dir / "githome", record=True), remote)
     context = build_context(paths, TEST_ROLES, clock=clock, gitops=ops)
     context.snapshots.load_at_start()
-    context.secret_scanner = fake_scanner
+    context.gitleaks_scanner = fake_scanner
     yield context
     context.conn.close()
 

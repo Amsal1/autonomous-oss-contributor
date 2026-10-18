@@ -98,7 +98,7 @@ async def package(
 ) -> JSONResponse:
     _check_cid(cid)
     c = ctx(request)
-    packager = Packager(c, c.gitops, scanner=c.secret_scanner or gitleaks_scan)
+    packager = Packager(c, c.gitops, scanner=c.gitleaks_scanner or gitleaks_scan)
     try:
         result = packager.package(cid, body, caller.actor)
     except PackageRefused as exc:

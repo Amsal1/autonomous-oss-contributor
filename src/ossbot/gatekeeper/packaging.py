@@ -44,7 +44,7 @@ class PackageRefused(RuntimeError):
         super().__init__(f"{status} {code}{': ' + detail if detail else ''}")
 
 
-SecretScanner = Callable[[bytes], list[str]]  # returns finding codes; empty = clean
+GitleaksScanner = Callable[[bytes], list[str]]  # returns finding codes; empty = clean
 
 
 def gitleaks_scan(data: bytes) -> list[str]:
@@ -102,7 +102,7 @@ def branch_name(cid: str, issue_number: int | None, title: str) -> str:
 
 
 class Packager:
-    def __init__(self, ctx: AppContext, ops: GitOps, scanner: SecretScanner = gitleaks_scan) -> None:
+    def __init__(self, ctx: AppContext, ops: GitOps, scanner: GitleaksScanner = gitleaks_scan) -> None:
         self.ctx = ctx
         self.ops = ops
         self.scanner = scanner
@@ -280,10 +280,17 @@ class Packager:
         confidentiality = policy.effective_confidentiality(ctx.conn, ctx.config)
         target = resolve_target(ctx.config.targets, upstream)
         violations = policy.check_diff(derived.entries, ctx.config.policy)
-        violations += policy.check_text("commit_message", message, ctx.config, confidentiality, ctx.kiro_key_sha256)
+        values = ctx.secret_scanner.values  # U14: the gatekeeper's own secret values
+        violations += policy.check_text(
+            "commit_message", message, ctx.config, confidentiality, ctx.kiro_key_sha256, secret_values=values
+        )
         if kind == "open_pr":
-            violations += policy.check_text("title", eff_title or "", ctx.config, confidentiality, ctx.kiro_key_sha256)
-            violations += policy.check_text("body", eff_body or "", ctx.config, confidentiality, ctx.kiro_key_sha256)
+            violations += policy.check_text(
+                "title", eff_title or "", ctx.config, confidentiality, ctx.kiro_key_sha256, secret_values=values
+            )
+            violations += policy.check_text(
+                "body", eff_body or "", ctx.config, confidentiality, ctx.kiro_key_sha256, secret_values=values
+            )
         violations += policy.check_repo(
             upstream, target, self._repo_state(contrib), policy.effective_forbidden_logins(ctx.conn, profile)
         )
@@ -295,9 +302,11 @@ class Packager:
                     break
         if ctx.config.policy.secrets.gitleaks:
             violations += [policy.Violation("secret_pattern", hit) for hit in self.scanner(derived.patch)]
+        if ctx.secret_scanner.value_hits(derived.patch):
+            violations.append(policy.Violation("gatekeeper_secret", "patch"))
         if violations:
             codes = sorted({v.code for v in violations})
-            if any(v.code in {"secret_pattern", "kiro_key"} for v in violations):
+            if any(v.code in {"secret_pattern", "kiro_key", "gatekeeper_secret"} for v in violations):
                 ctx.anomaly.report(Signal.SECRET_IN_TEXT, f"/package {cid}", cid)
             raise PackageRefused(422, "policy", ",".join(codes))
 

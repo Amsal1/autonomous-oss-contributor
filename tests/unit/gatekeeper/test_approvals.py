@@ -175,9 +175,10 @@ def test_normalize_text() -> None:
 def test_stored_bytes_equal_hashed_bytes(ctx: AppContext) -> None:
     """N3: a CRLF body edit is stored as LF and the binding hashes exactly the stored bytes."""
     cid, action = packaged_contribution(ctx)
-    ctx.approvals.set_text_override(cid, body="Line 1\r\nLine 2\r\n<!-- ossbot:cid=x -->", actor="tg:4242")
+    body = "Line 1\r\nLine 2\r\nAI assistance disclosure\r\n<!-- ossbot:cid=x -->"
+    ctx.approvals.set_text_override(cid, body=body, actor="tg:4242")
     row = db.one(ctx.conn, "SELECT pr_body_override FROM contributions WHERE id = ?", (cid,))
-    assert row is not None and row[0] == "Line 1\nLine 2\n<!-- ossbot:cid=x -->"
+    assert row is not None and row[0] == "Line 1\nLine 2\nAI assistance disclosure\n<!-- ossbot:cid=x -->"
     binding = compute_binding(ctx.conn, action, ctx.approvals.artifacts)
     assert binding["body_sha256"] == sha256_text(row[0])
 
@@ -371,6 +372,39 @@ def test_kill_invalidates_armed_and_confirmed_only(ctx: AppContext) -> None:
     ctx.control.kill("test", "tg:4242")
     assert status(ctx, pending) == "pending"
     assert status(ctx, armed) == status(ctx, confirmed) == "invalidated"
+
+
+@pytest.mark.parametrize(
+    ("edit", "code"),
+    [
+        ({"title": "Line one\nline two"}, "title:bad_title"),
+        ({"title": "x" * 257}, "title:too_long"),
+        ({"title": "   "}, "title:bad_title"),
+        ({"body": "no disclosure here"}, "body:missing_disclosure"),
+        ({"body": "x" * 60001 + "\nAI assistance disclosure\n<!-- ossbot:cid=x -->"}, "body:too_long"),
+        ({"title": "Fix for internal-codename-zeta"}, "title:confidential"),
+        ({"title": "token ghp_" + "Q8xk2LmZ9vR4tYp7Wn3bJc6Hd1Fs5Ga0Ke8U"}, "title:secret_pattern"),
+        ({"title": "pepper SECRETVALUE-0123456789"}, "title:gatekeeper_secret"),
+    ],
+)
+def test_text_override_refused_before_storing(ctx: AppContext, edit: dict[str, str], code: str) -> None:
+    """P1-4: an edited title/body that violates policy.check_text is refused and nothing is stored."""
+    ctx.env = {"OSSBOT_TOKEN_PEPPER": "SECRETVALUE-0123456789"}
+    ctx.reset_secret_scanner()
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("INSERT INTO policy_floor (kind, value, added_at) VALUES ('confidentiality',"
+                         " 'internal-codename-zeta', 'x')")  # fmt: skip
+    cid, action = packaged_contribution(ctx)
+    approval, _ = card(ctx, action, parts=2)
+    before = ctx.conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0]
+    with pytest.raises(ApprovalError) as info:
+        ctx.approvals.set_text_override(cid, actor="tg:4242", **edit)
+    assert info.value.code == "text_refused" and code in str(info.value)
+    assert "SECRETVALUE" not in str(info.value)
+    row = db.one(ctx.conn, "SELECT pr_title_override, pr_body_override FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == (None, None)
+    assert status(ctx, approval) == "pending"  # nothing invalidated either
+    assert ctx.conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == before
 
 
 def test_approve_resend_rotates_tokens(ctx: AppContext) -> None:

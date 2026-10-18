@@ -48,6 +48,10 @@ class CommandContext:
 
 Handler = Callable[[CommandContext, list[str]], Awaitable[Reply]]
 ConfirmHandler = Callable[[CommandContext, str | None], Awaitable[Reply]]
+# DESIGN §14.18.5, BA-18: "local" runs inline in the update slot (SQLite and local reads only); "io"
+# awaits I/O beyond that (root helpers, lifecycle, the Hermes probe, the proxy renderer, /model) and
+# is spawned as a ``command`` task so it never holds the slot.
+Effect = Literal["local", "io"]
 
 
 @dataclass(frozen=True)
@@ -56,25 +60,28 @@ class CommandSpec:
     help: str
     safety: Safety
     func: Handler
+    effect: Effect = "local"
 
 
 COMMANDS: dict[str, CommandSpec] = {}
 CONFIRMS: dict[str, ConfirmHandler] = {}
+CONFIRM_EFFECTS: dict[str, Effect] = {}
 
 
-def command(name: str, *, help: str, safety: Safety) -> Callable[[Handler], Handler]:
+def command(name: str, *, help: str, safety: Safety, effect: Effect = "local") -> Callable[[Handler], Handler]:
     def register(func: Handler) -> Handler:
         if name in COMMANDS:
             raise ValueError(f"command /{name} registered twice")
-        COMMANDS[name] = CommandSpec(name, help, safety, func)
+        COMMANDS[name] = CommandSpec(name, help, safety, func, effect)
         return func
 
     return register
 
 
-def confirm_handler(purpose: str) -> Callable[[ConfirmHandler], ConfirmHandler]:
+def confirm_handler(purpose: str, *, effect: Effect = "local") -> Callable[[ConfirmHandler], ConfirmHandler]:
     def register(func: ConfirmHandler) -> ConfirmHandler:
         CONFIRMS[purpose] = func
+        CONFIRM_EFFECTS[purpose] = effect
         return func
 
     return register

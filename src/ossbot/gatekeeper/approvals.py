@@ -260,6 +260,9 @@ class ApprovalService:
         # derived/<cid>/<rev>/interdiff.json present and usable (the interdiff ships in PLAN item 44)
         self.interdiff: Callable[[str, int], bool] = interdiff or (lambda cid, rev: False)
         self.on_disarmed: OnDisarmed = _no_disarm_hook
+        # (kind, text) -> policy violations (policy.check_text with the current snapshot, wired by
+        # build_context); objects with a ``code`` attribute
+        self.text_check: Callable[[str, str], list[Any]] | None = None
 
     # ---------------------------------------------------------------------- helpers
     def _now(self) -> datetime:
@@ -357,9 +360,20 @@ class ApprovalService:
 
     # ------------------------------------------------------------------ text edits
     def set_text_override(self, cid: str, *, title: str | None = None, body: str | None = None, actor: str) -> None:
-        """Store a human title/body edit. The caller (FEAT-005 Edit title/body) must run
-        ``policy.check_text`` on the edited text first and refuse on any violation (Phase 1
-        review P1-4); there is no caller in Phase 1."""
+        """Store a human title/body edit (the S7 Title/Body ForceReply, PLAN item 45). P1-4: the
+        normalized text runs ``policy.check_text`` (title one line of 1-256, body <= 60 000, disclosure,
+        confidentiality floor, secret patterns and values) and any violation raises
+        ``ApprovalError("text_refused", codes)`` before anything is stored. No check wired = refused."""
+        checks: list[tuple[str, str]] = []
+        if title is not None:
+            checks.append(("title", normalize_text(title, title=True)))
+        if body is not None:
+            checks.append(("body", normalize_text(body)))
+        if self.text_check is None:
+            raise ApprovalError("text_refused", "no text policy available")
+        codes = sorted({f"{kind}:{v.code}" for kind, text in checks for v in self.text_check(kind, text)})
+        if codes:
+            raise ApprovalError("text_refused", ",".join(codes))
         with db.transaction(self.conn):
             if title is not None:
                 self.conn.execute(

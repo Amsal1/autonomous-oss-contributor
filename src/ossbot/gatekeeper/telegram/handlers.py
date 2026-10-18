@@ -14,9 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable
+import time
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import timedelta
-from typing import Any
+from typing import Any, Literal
 
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
@@ -33,7 +34,13 @@ from ossbot.gatekeeper.state_machine import Actor, TransitionError
 from ossbot.gatekeeper.telegram import cards, keyboards
 from ossbot.gatekeeper.telegram.auth import authorized
 from ossbot.gatekeeper.telegram.commands import builtin  # noqa: F401 - registers the built-ins
-from ossbot.gatekeeper.telegram.commands.registry import COMMANDS, CONFIRMS, CommandContext, Reply
+from ossbot.gatekeeper.telegram.commands.registry import (
+    COMMANDS,
+    CONFIRM_EFFECTS,
+    CONFIRMS,
+    CommandContext,
+    Reply,
+)
 from ossbot.gatekeeper.telegram.escape import b, esc
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
@@ -43,6 +50,13 @@ Preflight = Callable[[str], Awaitable[list[str]]]
 COMMAND_CONFIRM_TTL = timedelta(minutes=5)
 RETRY_TTL = timedelta(hours=24)
 MARKER_PREFIX = "<!-- ossbot:action="
+# Update handler budget (DESIGN §14.18.5, BA-2). PTB runs one update at a time, so anything slower
+# than SQLite, an outbox enqueue and one direct Bot API edit is spawned as a tracked task.
+TaskKind = Literal["chat_turn", "media", "telegraph", "github_read", "render", "submit", "command"]
+KILL_CANCELS: frozenset[TaskKind] = frozenset({"chat_turn", "media", "telegraph", "github_read", "render"})
+PREFLIGHT_TIMEOUT_S = 8.0  # the one inline await: the Confirm live preflight (timeout = live_check:timeout)
+HANDLER_SLOW_S = 1.0
+STOP_COMMANDS = frozenset({"kill", "pause"})
 
 
 def markup(rows: keyboards.Rows) -> InlineKeyboardMarkup:
@@ -60,14 +74,82 @@ class Handlers:
         self.submit = submit
         self.preflight = preflight
         self.tasks: set[asyncio.Task[Any]] = set()
+        self._by_kind: dict[TaskKind, set[asyncio.Task[Any]]] = {}
+        self._sessions: dict[str, asyncio.Task[Any]] = {}  # session_key -> its running chat_turn
 
     def register(self, application: Application[Any, Any, Any, Any, Any, Any]) -> None:
         application.add_handler(CallbackQueryHandler(self.on_callback))
         application.add_handler(MessageHandler(filters.ALL, self.on_message))
 
+    # ----------------------------------------------------------- task budget (§14.18.5)
+    def spawn(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        kind: TaskKind,
+        *,
+        session_key: str | None = None,
+        on_done: Callable[[asyncio.Task[Any]], None] | None = None,
+    ) -> asyncio.Task[Any]:
+        """Run ``coro`` outside the update slot. Cleanup lives in one done callback, which asyncio runs
+        for every outcome, including a cancel before the coroutine started (BA-15)."""
+        task = asyncio.create_task(coro)
+        self.tasks.add(task)
+        self._by_kind.setdefault(kind, set()).add(task)
+        if session_key is not None:
+            self._sessions[session_key] = task
+        task.add_done_callback(lambda t: self._on_task_done(t, kind, session_key, on_done))
+        return task
+
+    def _on_task_done(
+        self,
+        task: asyncio.Task[Any],
+        kind: TaskKind,
+        session_key: str | None,
+        on_done: Callable[[asyncio.Task[Any]], None] | None,
+    ) -> None:
+        """Synchronous and idempotent: every step checks before it changes."""
+        self.tasks.discard(task)
+        self._by_kind.get(kind, set()).discard(task)
+        if session_key is not None and self._sessions.get(session_key) is task:
+            del self._sessions[session_key]
+        if not task.cancelled() and task.exception() is not None:
+            log.error("spawned %s task failed: %s", kind, type(task.exception()).__name__,
+                      extra={"event": "task_failed", "kind": kind})  # fmt: skip
+        if on_done is not None:
+            try:
+                on_done(task)
+            except Exception:
+                log.exception("on_done of a %s task failed", kind, extra={"event": "task_on_done_failed"})
+
+    def session_busy(self, session_key: str) -> bool:
+        return session_key in self._sessions
+
+    def cancel(self, kinds: frozenset[TaskKind] | set[TaskKind]) -> int:
+        """Cancel the running tasks of ``kinds``; returns how many were cancelled."""
+        n = 0
+        for kind in kinds:
+            for task in list(self._by_kind.get(kind, ())):
+                if not task.done():
+                    task.cancel()
+                    n += 1
+        return n
+
     async def drain(self) -> None:
+        """Shutdown: cancel the kill-cancellable kinds, then await every task (submit included)."""
+        self.cancel(KILL_CANCELS)
         while self.tasks:
             await asyncio.gather(*list(self.tasks), return_exceptions=True)
+
+    async def _timed(self, name: str, threshold_s: float, coro: Awaitable[None]) -> None:
+        started = time.monotonic()
+        try:
+            await coro
+        finally:
+            elapsed = time.monotonic() - started
+            if elapsed > threshold_s:
+                log.warning("handler %s took %d ms (budget %d ms)", name, elapsed * 1000, threshold_s * 1000,
+                            extra={"event": "handler_slow", "handler": name, "ms": int(elapsed * 1000),
+                                   "threshold_ms": int(threshold_s * 1000)})  # fmt: skip
 
     # -------------------------------------------------------------------- helpers
     def _peek(self, token: str) -> Any:
@@ -119,6 +201,14 @@ class Handlers:
     # ------------------------------------------------------------------ callbacks
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
+        token = keyboards.token_of(query.data) if query is not None else None
+        row = self._peek(token) if token is not None else None
+        purpose = str(row["purpose"]) if row is not None else "unknown"
+        threshold = PREFLIGHT_TIMEOUT_S + 1.0 if purpose == "confirm" else HANDLER_SLOW_S
+        await self._timed(f"callback:{purpose}", threshold, self._on_callback(update, context))
+
+    async def _on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        query = update.callback_query
         if query is None:
             return
         if not authorized(update, self.ctx.telegram_chat_id):
@@ -156,9 +246,15 @@ class Handlers:
             elif purpose in CONFIRMS:
                 with db.transaction(self.ctx.conn):
                     self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
-                reply = await CONFIRMS[purpose](CommandContext(self.ctx, user_id), row["arg"])
-                await self._edit(query, reply.text)
-                await query.answer()
+                effect = CONFIRMS[purpose](CommandContext(self.ctx, user_id), row["arg"])
+                if CONFIRM_EFFECTS.get(purpose, "local") == "io":  # BA-18: token used, ⏳ inline, effect spawned
+                    await self._edit(query, "⏳ Working…")
+                    await query.answer()
+                    self.spawn(self._finish_confirm(query, effect), "command")
+                else:
+                    reply = await effect
+                    await self._edit(query, reply.text)
+                    await query.answer()
             else:
                 await query.answer("Not available yet.")
         except ApprovalError as exc:
@@ -167,6 +263,13 @@ class Handlers:
                 extra={"event": "callback_rejected"},
             )  # fmt: skip
             await query.answer(self._rejection_text(exc, row))
+
+    async def _finish_confirm(self, query: Any, effect: Awaitable[Reply]) -> None:
+        try:
+            reply = await effect
+        except (Blocked, ApprovalError, TransitionError) as exc:
+            reply = Reply(f"Refused: {esc(str(exc)[:300])}")
+        await self._edit(query, reply.text)
 
     def _kind_of(self, approval_id: str) -> Any:
         row = db.one(
@@ -210,7 +313,12 @@ class Handlers:
             await query.answer(f"ossbot is {lifecycle}: nothing was submitted. Confirm again after up.")
             return
         if self.preflight is not None:
-            failed = await self.preflight(approval_id)
+            # §14.18.5 item 5: the one inline await, bounded; a timeout is the failed check
+            # live_check:timeout (the existing invalidation path, S12 with Retry).
+            try:
+                failed = await asyncio.wait_for(self.preflight(approval_id), PREFLIGHT_TIMEOUT_S)
+            except TimeoutError:
+                failed = ["timeout"]
             if failed:
                 self.ctx.approvals.invalidate_one(approval_id, "live_check:" + ",".join(failed), f"tg:{user_id}")
                 await self._edit(
@@ -223,9 +331,7 @@ class Handlers:
         await self._edit(query, f"{self._card_text(approval_id)}\n\n⏳ {b(f'Submitting ({mode})…')}")
         await query.answer()
         if self.submit is not None:
-            task = asyncio.create_task(self._run_submit(approval_id))
-            self.tasks.add(task)
-            task.add_done_callback(self.tasks.discard)
+            self.spawn(self._run_submit(approval_id), "submit")  # not cancelled by /kill (Phase 1 semantics)
 
     async def _run_submit(self, approval_id: str) -> None:
         assert self.submit is not None
@@ -315,6 +421,9 @@ class Handlers:
 
     # ------------------------------------------------------------------- messages
     async def on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        await self._timed("message", HANDLER_SLOW_S, self._on_message(update, context))
+
+    async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         if message is None or not authorized(update, self.ctx.telegram_chat_id):
             return
@@ -329,9 +438,23 @@ class Handlers:
         cctx = CommandContext(self.ctx, update.effective_user.id, words[1:])
         if spec is None:
             reply = Reply(f"Unknown command {esc(words[0][:40])}. Try /help.")
+        elif spec.effect == "io":  # BA-18: never hold the update slot on I/O
+            self.spawn(self._run_command(message.chat.id, spec.func(cctx, words[1:]), context), "command")
+            return
         else:
             try:
                 reply = await spec.func(cctx, words[1:])
             except (Blocked, ApprovalError, TransitionError) as exc:
                 reply = Reply(f"Refused: {esc(str(exc)[:300])}")
+            if name in STOP_COMMANDS:
+                # §14.18.5 item 4: the local effect (kill/pause transaction) is committed first, then
+                # the cancellable work stops; submit and command tasks keep their Phase 1 rules.
+                self.cancel(KILL_CANCELS)
         await self._send_reply(message.chat.id, reply, context)
+
+    async def _run_command(self, chat_id: int, effect: Awaitable[Reply], context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            reply = await effect
+        except (Blocked, ApprovalError, TransitionError) as exc:
+            reply = Reply(f"Refused: {esc(str(exc)[:300])}")
+        await self._send_reply(chat_id, reply, context)

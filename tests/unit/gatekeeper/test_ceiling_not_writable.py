@@ -91,7 +91,10 @@ def test_only_models_yaml_is_written_under_config() -> None:
                 assert "config_dir" not in line, line
 
 
-def test_no_gatekeeper_module_names_policy_yaml() -> None:
-    """Nothing in the gatekeeper opens policy.yaml by name (the snapshot loader goes through SNAPSHOT_FILES)."""
+def test_no_gatekeeper_module_opens_policy_yaml() -> None:
+    """Nothing in the gatekeeper builds a path to policy.yaml (the snapshot loader goes through
+    SNAPSHOT_FILES); the name may appear only as an error-report key."""
     for path in GATEKEEPER.rglob("*.py"):
-        assert "policy.yaml" not in Path(path).read_text(encoding="utf-8"), path
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            if "policy.yaml" in line:
+                assert not re.search(r"open\(|write|config_dir|/ *\"policy\.yaml|Path\(", line), (path, line)
