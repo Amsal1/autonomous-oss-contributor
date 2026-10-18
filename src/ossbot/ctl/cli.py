@@ -540,7 +540,7 @@ def kiro_smoke(timeout: Annotated[int, typer.Option(help="job timeout in s")] = 
 
     from pydantic import BaseModel, ConfigDict  # noqa: PLC0415
 
-    from ossbot.common.models import Catalog, ModelsFile, ModelUnavailable  # noqa: PLC0415
+    from ossbot.common.models import LIVE_TEST_ROLE, Catalog, ModelsFile, ModelUnavailable  # noqa: PLC0415
     from ossbot.runner import output_parse  # noqa: PLC0415
 
     class Pong(BaseModel):
@@ -552,7 +552,7 @@ def kiro_smoke(timeout: Annotated[int, typer.Option(help="job timeout in s")] = 
     if code != 200:
         _fail(f"catalog unavailable ({code})")
     try:
-        model = ModelsFile(paths.config_dir / "models.yaml").resolve("summarizer", Catalog.from_rows(rows))
+        model = ModelsFile(paths.config_dir / "models.yaml").resolve(LIVE_TEST_ROLE, Catalog.from_rows(rows))
     except ModelUnavailable as exc:
         _fail(f"model_unavailable: {exc}")
     run_id = f"smoke-{pysecrets.token_hex(6)}"

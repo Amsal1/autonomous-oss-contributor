@@ -29,7 +29,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from ossbot.common.clock import from_iso
-from ossbot.common.models import Catalog, ModelUnavailable
+from ossbot.common.models import LIVE_TEST_ROLE, Catalog, ModelUnavailable
 from ossbot.runner import stages
 from ossbot.runner.errors import CapReached, Deferred, Interrupted, ProbesNotReady, StageFailed
 from ossbot.runner.gk_client import GkError
@@ -48,7 +48,7 @@ PRE_START = frozenset({"DISCOVERED", "VETTING", "VETTED", "SCOUTING", "PROPOSED"
 CATALOG_RETRY = timedelta(hours=1)  # §20: catalog_empty is retried hourly
 PROBE_RETRY = timedelta(minutes=30)  # probes that ran but did not all pass (a failure also pauses, §10.9)
 CAP_RECHECK = timedelta(hours=1)  # daily cap without a known next slot
-PROBE_ROLES = ("planner", "coder")  # the roles the five probes exercise (§10.9)
+PROBE_ROLES = ("planner", "coder")  # the agents the five probes exercise (§10.9)
 
 
 @dataclasses.dataclass
@@ -130,7 +130,8 @@ class Scheduler:
             if self.sc.sbx.probes_status().get("all_passed"):
                 return True
             cat = Catalog.from_rows(self.sc.gk.catalog())
-            models = {role: self.sc.models.resolve(role, cat).model for role in PROBE_ROLES}
+            test_model = self.sc.models.resolve(LIVE_TEST_ROLE, cat).model  # the probes test enforcement
+            models = dict.fromkeys(PROBE_ROLES, test_model)
             log.info("running the safety probes", extra={"event": "probes_run"})
             self.sc.sbx.probes_run(models)
             passed = bool(self.sc.sbx.probes_status().get("all_passed"))

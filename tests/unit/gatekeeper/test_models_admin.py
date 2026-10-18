@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 
 import pytest
@@ -38,7 +39,9 @@ def test_set_keeps_comments_mode_and_leaves_no_temp(ctx: AppContext) -> None:
     before = path.read_text(encoding="utf-8")
     diff = ctx.models.set_model("coder", "claude-next", "xhigh", False, ACTOR)
     after = path.read_text(encoding="utf-8")
-    assert "-  coder:      { model: default, effort: high }" in diff and "claude-next" in diff
+    assert (
+        re.search(r"^-\s+coder:\s*\{\s*model: default, effort: high\s*\}", diff, re.MULTILINE) and "claude-next" in diff
+    )
     assert [line for line in before.splitlines() if line.lstrip().startswith("#")] == [
         line for line in after.splitlines() if line.lstrip().startswith("#")
     ]  # every comment kept

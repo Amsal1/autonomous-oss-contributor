@@ -436,12 +436,13 @@ def _catalog_rows() -> list[dict[str, Any]] | None:
 
 def _run_probes(rows: list[dict[str, Any]]) -> Result:
     """M11 step 3 from doctor: the five probes with the models resolve() picks for planner and coder."""
-    from ossbot.common.models import Catalog, ModelsFile, ModelUnavailable  # noqa: PLC0415
+    from ossbot.common.models import LIVE_TEST_ROLE, Catalog, ModelsFile, ModelUnavailable  # noqa: PLC0415
 
     try:
         models_file = ModelsFile(Paths.default().config_dir / "models.yaml")
         cat = Catalog.from_rows(rows)
-        models = {role: models_file.resolve(role, cat).model for role in ("planner", "coder")}
+        test_model = models_file.resolve(LIVE_TEST_ROLE, cat).model  # roles.test: live checks never prompt
+        models = dict.fromkeys(("planner", "coder"), test_model)  # the probe agents; enforcement is the test
     except (ModelUnavailable, OSError, ValueError) as exc:
         return Result(FAIL, "probe re-run", f"model_unavailable: {exc}", "ossctl model set <role> <catalog id>")
     try:
@@ -455,7 +456,7 @@ def _run_probes(rows: list[dict[str, Any]]) -> Result:
     failed = sorted(p for p, passed in results.items() if passed is not True)  # ProbeRunner: {probe: bool}
     if not results:
         failed = ["(no results)"]
-    detail = f"planner={models['planner']} coder={models['coder']}"
+    detail = f"{LIVE_TEST_ROLE}={test_model} (planner and coder agents)"
     if failed:
         return Result(FAIL, "probe re-run", f"{detail}; failed: {', '.join(failed)}", "journalctl -u ossbot-sandboxd")
     return Result(PASS, "probe re-run", f"{detail}; all five passed")

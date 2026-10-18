@@ -468,9 +468,12 @@ class ProfileConfig(Strict):
 
 # ------------------------------------------------------------------------------------ models
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
-# scout (CR-004) and vision (CR-002 Amendment A) are revision-5 roles (DESIGN §16.1).
-RoleName = Literal["chat", "planner", "vetter", "coder", "reviewer", "summarizer", "scout", "vision"]
-ROLE_NAMES: tuple[str, ...] = ("chat", "planner", "vetter", "coder", "reviewer", "summarizer", "scout", "vision")
+# scout (CR-004) and vision (CR-002 Amendment A) are revision-5 roles (DESIGN §16.1); test and
+# test_vision (owner decision 2026-10-18) are the models of every live check that calls a model.
+RoleName = Literal["chat", "planner", "vetter", "coder", "reviewer", "summarizer", "scout", "vision", "test",
+                   "test_vision"]  # fmt: skip
+ROLE_NAMES: tuple[str, ...] = ("chat", "planner", "vetter", "coder", "reviewer", "summarizer", "scout", "vision",
+                               "test", "test_vision")  # fmt: skip
 ModelRef = Annotated[str, Field(pattern=MODEL_ID_RE)]  # 'default', a role name (inherit) or a catalog id
 
 
@@ -483,6 +486,9 @@ class RoleModel(Strict):
     model: ModelRef  # 'default', another role's name (inherit that role) or a catalog id
     effort: Effort | None = None
     require_distinct_from: RoleName | None = None
+    # "none": never fall back (fail with a clear message); a list: these ids in order; unset: the
+    # role it inherits from decides, else the global ``fallbacks``
+    fallback: Literal["none"] | list[ModelRef] | None = None
 
 
 class RolesConfig(Strict):
@@ -494,6 +500,8 @@ class RolesConfig(Strict):
     summarizer: RoleModel
     scout: RoleModel
     vision: RoleModel
+    test: RoleModel
+    test_vision: RoleModel
 
 
 class CatalogConfig(Strict):
@@ -519,6 +527,8 @@ class ModelsConfig(Strict):
                 raise ValueError(f"fallbacks must be model ids, not {ref!r}")
         for name in ROLE_NAMES:
             entry: RoleModel = getattr(self.roles, name)
+            if isinstance(entry.fallback, list) and any(ref in refs for ref in entry.fallback):
+                raise ValueError(f"roles.{name}.fallback must list model ids")
             if entry.require_distinct_from == name:
                 raise ValueError(f"roles.{name}.require_distinct_from names the role itself")
             seen = [name]

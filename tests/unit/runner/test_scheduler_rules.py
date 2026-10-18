@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from ossbot.common.models import LIVE_TEST_ROLE, Catalog
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
@@ -26,7 +27,7 @@ from ossbot.runner.stages import common, fetch, review, scout
 from tests.conftest import insert_contribution
 from tests.fakes.fake_github import FakeGitHub
 from tests.unit.gatekeeper.test_proposals import sample, start
-from tests.unit.runner.conftest import FakeSbx, fenced, fetch_json
+from tests.unit.runner.conftest import MODELS, FakeSbx, fenced, fetch_json
 
 ROOT = Path(__file__).resolve().parents[3]
 VETTING = {"ai_policy": "allowed", "claim_status": "unclaimed", "suitability": 0.8}
@@ -50,9 +51,7 @@ def ready(sc: StageContext, ctx: AppContext) -> Scheduler:
 
 
 def list_models_ok(spec: dict[str, Any], out: Path) -> int:
-    (out / "models.json").write_text(
-        json.dumps({"models": [{"model_id": m} for m in ("claude-opus-5.5", "claude-sonnet-5")]})
-    )
+    (out / "models.json").write_text(json.dumps({"models": [{"model_id": m} for m in MODELS]}))
     return 0
 
 
@@ -96,7 +95,8 @@ def test_first_start_order_catalog_then_probes_then_stages(sc: StageContext, ctx
     scheduler.tick()
     assert sbx.calls[:4] == ["list_models", "probes_status", "probes_run", "probes_status"]
     assert sbx.calls[4] == "kiro:vetter"  # the first stage only after the probes passed
-    assert sbx.probe_runs == [{"planner": "claude-opus-5.5", "coder": "claude-opus-5.5"}]
+    test_model = sc.models.resolve(LIVE_TEST_ROLE, Catalog.from_rows(sc.gk.catalog())).model
+    assert sbx.probe_runs == [{"planner": test_model, "coder": test_model}]  # roles.test, never planner/coder
     assert state(ctx, cid) == "VETTED"
 
 

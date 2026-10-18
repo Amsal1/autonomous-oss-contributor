@@ -4566,6 +4566,8 @@ roles:
   summarizer: { model: claude-sonnet-5.5, effort: low }
   scout:      { model: planner, effort: high }   # revision 5 (CR-004); a role name as model = inherit that role
   vision:     { model: claude-sonnet-5.5, effort: medium } # revision 5 (CR-002 Amendment A); must be an image-capable catalog id
+  test:       { model: claude-haiku-4.5, effort: low, fallback: none }  # every live check that calls a model
+  test_vision: { model: test }                    # the live image check; inherits test unless pointed elsewhere
 fallbacks: [claude-opus-5.5, claude-sonnet-5.5]   # tried in order when a role's model is missing; a fallback equal to
                                                  # the role's own model is skipped
 catalog:
@@ -4576,6 +4578,8 @@ catalog:
 `require_distinct_from` stays enforced after fallback: when no catalog model distinct from the coder's is available,
 `resolve()` raises `DistinctUnavailable` and the runner pauses the pipeline (`model_collision:<role>`, owner alert)
 instead of reviewing with the coder's own model (FEAT-006, owner decision 2026-10-18).
+
+Test roles (owner decisions 2026-10-18). Every live check or test that actually prompts a model resolves `roles.test`: `ossctl kiro smoke`, the doctor's live checks, the safety probes (`POST /v1/probes/run` gets the test model for both probe agents; the gate checks enforcement, not model quality), the Hermes and V3 ACP live round-trips, live e2e/system tests and gate or finalize re-runs. The live image check resolves `roles.test_vision`, which inherits `test` and can be pointed at an image-capable id (kiro-cli 2.32's `--list-models` reports no input types, so capability is not visible in the catalog). Production roles are verified from the catalog only (`--list-models`, no prompt). The test model is named only in `config/models.yaml` (`tests/unit/test_no_hardcoded_models.py` fails on a model id anywhere in `src/`, `scripts/`, `sandbox/`, `prompts/` or `.kiro/`); it is switched like any role (`ossctl model set test <id>`, Telegram `/model`: audited, FYI, catalog-validated). Per-role `fallback`: `none` (fail with a clear message instead of using an expensive model; the default for `test`), an explicit id list, or unset (inherited along the role-name chain, else the global `fallbacks`).
 
 Revision 5: roles `scout` and `vision` are added; `/model` and `ossctl model set` switch them like any other role. Every role and the Hermes provider resolve through this one file (the global switch, user decision); new catalog models produce one Telegram card each (16.3). Every LLM role is told to web-search unknowns (FR-12), and token usage is unlimited.
 

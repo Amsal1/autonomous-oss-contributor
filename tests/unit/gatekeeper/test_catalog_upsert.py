@@ -79,7 +79,7 @@ async def test_model_set_requires_catalog_id_unless_forced(ctx: AppContext) -> N
         assert ok.status_code == 200
         assert "claude-next" in ok.json()["diff"]
         assert (await c.get("/v1/models")).json()["roles"]["coder"] == {
-            "model": "claude-next", "effort": "xhigh", "require_distinct_from": None,
+            "model": "claude-next", "effort": "xhigh", "require_distinct_from": None, "fallback": None,
         }  # fmt: skip
     text = path.read_text()
     assert "# Global model switch" in text  # comments kept (ruamel round-trip)

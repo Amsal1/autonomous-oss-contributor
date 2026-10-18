@@ -35,6 +35,11 @@ Source = Literal["role", "default", "inherited", "fallback"]
 CATALOG_MAX = 200  # POST /v1/models/catalog accepts at most this many entries (R4-N3)
 
 
+# Every live check that calls a model (kiro smoke, doctor, the safety probes, live e2e/system tests)
+# resolves this role; its id lives only in config/models.yaml (owner decision 2026-10-18).
+LIVE_TEST_ROLE = "test"
+
+
 class ModelUnavailable(RuntimeError):
     """No model of the role (nor any fallback) is in the catalog or force-set."""
 
@@ -95,6 +100,22 @@ def _chain(cfg: ModelsConfig, role: str) -> tuple[str, Effort, Source]:
     return entry.model, effort or cfg.default.effort, source
 
 
+def role_fallbacks(cfg: ModelsConfig, role: str) -> list[str]:
+    """``roles.<r>.fallback`` along the role-name chain: "none" -> [], a list -> it, unset -> the
+    global ``fallbacks`` (e.g. ``test_vision: {model: test}`` inherits test's "none")."""
+    entry: RoleModel = getattr(cfg.roles, role)
+    seen = {role}
+    while True:
+        if entry.fallback == "none":
+            return []
+        if isinstance(entry.fallback, list):
+            return list(entry.fallback)
+        if entry.model not in ROLE_NAMES or entry.model in seen:
+            return list(cfg.fallbacks)
+        seen.add(entry.model)
+        entry = getattr(cfg.roles, entry.model)
+
+
 def resolve_config(cfg: ModelsConfig, role: str, catalog: Catalog) -> ResolvedModel:
     """Resolve one role against the catalog. ``require_distinct_from`` (reviewer vs coder) moves
     to the first accepted fallback that differs from the other role's model, when there is one."""
@@ -108,7 +129,11 @@ def resolve_config(cfg: ModelsConfig, role: str, catalog: Catalog) -> ResolvedMo
             avoid = resolve_config(cfg, distinct, catalog).model
     if catalog.accepts(requested) and requested != avoid:
         return ResolvedModel(role, requested, effort, source, requested)
-    for fallback in cfg.fallbacks:
+    fallbacks = role_fallbacks(cfg, role)
+    if not fallbacks and not catalog.accepts(requested):
+        raise ModelUnavailable(f"{role}: {requested} is not in the Kiro catalog and roles.{role} allows no fallback"
+                               f" (set it with: ossctl model set {role} <catalog id>)")  # fmt: skip
+    for fallback in fallbacks:
         # a fallback equal to the role's own (missing or colliding) model is no fallback at all
         if fallback != requested and catalog.accepts(fallback) and fallback != avoid:
             return ResolvedModel(role, fallback, effort, "fallback", requested)

@@ -37,13 +37,15 @@ roles:
   summarizer: { model: claude-sonnet-5.5, effort: low }
   scout:      { model: planner, effort: high }
   vision:     { model: claude-sonnet-5.5, effort: medium }
+  test:       { model: cheap-model-1, effort: low, fallback: none }
+  test_vision: { model: test }
 fallbacks: [claude-opus-5.5, claude-sonnet-5.5]
 catalog:
   refresh_hours: 24
   notify_new_models: true
 """
 CFG = parse_models(TEXT.encode())
-ALL = Catalog(frozenset({"claude-opus-5.5", "claude-sonnet-5.5", "claude-opus-5", "claude-haiku-4.5", "glm-5"}))
+ALL = Catalog(frozenset({"claude-opus-5.5", "claude-sonnet-5.5", "claude-opus-5", "cheap-model-1", "glm-5"}))
 # The live catalog of 2026-10-18 (kiro-cli 2.32 list_models with the sandbox key, docs/VERIFICATION.md)
 LIVE = Catalog(frozenset({
     "auto", "claude-opus-5.5", "claude-sonnet-5.5", "claude-opus-5", "claude-sonnet-5", "claude-opus-4.8",
@@ -59,7 +61,7 @@ def test_repo_models_yaml_resolves_every_role_without_fallback() -> None:
     want = {"planner": "claude-opus-5.5", "scout": "claude-opus-5.5", "coder": "claude-opus-5.5",
             "reviewer": "claude-sonnet-5.5", "vetter": "claude-sonnet-5.5", "summarizer": "claude-sonnet-5.5",
             "chat": "claude-sonnet-5.5", "vision": "claude-sonnet-5.5"}  # fmt: skip
-    assert set(ROLE_NAMES) == set(want)
+    assert set(ROLE_NAMES) == {*want, "test", "test_vision"}
     for role, model in want.items():
         res = resolve_config(cfg, role, LIVE)
         assert (res.model, res.source != "fallback") == (model, True), role
@@ -136,6 +138,40 @@ def test_reviewer_distinct_from_coder_after_fallback() -> None:
     with pytest.raises(DistinctUnavailable):
         resolve_config(CFG, "reviewer", sonnet_gone)
     assert resolve_config(CFG, "coder", sonnet_gone).model == "claude-opus-5.5"
+
+
+def test_test_role_never_falls_back_to_an_expensive_model() -> None:
+    """roles.test (live checks): fallback none -> a clear error, never opus or sonnet; test_vision
+    inherits test (model, effort and the fallback rule) unless pointed elsewhere."""
+    res = resolve_config(CFG, "test", ALL)
+    assert (res.model, res.effort, res.source) == ("cheap-model-1", "low", "role")
+    vis = resolve_config(CFG, "test_vision", ALL)
+    assert (vis.model, vis.source) == ("cheap-model-1", "inherited")
+    no_cheap = Catalog(frozenset({"claude-opus-5.5", "claude-sonnet-5.5"}))
+    for role in ("test", "test_vision"):
+        with pytest.raises(ModelUnavailable, match="allows no fallback"):
+            resolve_config(CFG, role, no_cheap)
+    listed = parse_models(TEXT.replace("fallback: none }", "fallback: [claude-sonnet-5.5] }").encode())
+    assert resolve_config(listed, "test", no_cheap).model == "claude-sonnet-5.5"  # the owner's explicit choice
+    pointed = parse_models(TEXT.replace("test_vision: { model: test }", "test_vision: { model: claude-sonnet-5.5 }")
+                           .encode())  # fmt: skip
+    assert resolve_config(pointed, "test_vision", ALL).model == "claude-sonnet-5.5"
+    with pytest.raises(ConfigError, match="fallback"):
+        parse_models(TEXT.replace("fallback: none }", "fallback: [planner] }").encode())
+
+
+def test_live_checks_resolve_roles_test() -> None:
+    """kiro smoke, doctor --probes and the runner's M11 probe run all name the role, never an id."""
+    import inspect
+
+    from ossbot.common import models as models_mod
+    from ossbot.ctl import cli, doctor
+    from ossbot.runner import scheduler
+
+    assert models_mod.LIVE_TEST_ROLE == "test"
+    assert "resolve(LIVE_TEST_ROLE" in inspect.getsource(cli.kiro_smoke)
+    assert "resolve(LIVE_TEST_ROLE" in inspect.getsource(doctor._run_probes)
+    assert "resolve(LIVE_TEST_ROLE" in inspect.getsource(scheduler.Scheduler._probes)
 
 
 @pytest.mark.parametrize(

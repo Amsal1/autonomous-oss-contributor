@@ -98,6 +98,9 @@ def test_doctor_probe_rerun_reads_the_runner_shape(
 
     monkeypatch.setattr(doctor, "uds_client", lambda sock, timeout: httpx.Client(
         transport=httpx.MockTransport(handler), base_url="http://sandboxd"))  # fmt: skip
-    got = doctor._run_probes([{"model_id": m, "forced": False} for m in ("claude-opus-5.5", "claude-sonnet-5")])
+    from ossbot.common.config import parse_models
+
+    test_model = parse_models((paths.config_dir / "models.yaml").read_bytes()).roles.test.model
+    got = doctor._run_probes([{"model_id": m, "forced": False} for m in ("claude-opus-5.5", test_model)])
     assert got.status == status
-    assert set(sent[0]["models"]) == {"planner", "coder"}
+    assert sent[0]["models"] == {"planner": test_model, "coder": test_model}  # roles.test only
