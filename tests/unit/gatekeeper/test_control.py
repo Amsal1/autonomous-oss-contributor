@@ -22,8 +22,9 @@ from ossbot.common.schemas import (
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.control import ModeChanged
 from ossbot.gatekeeper.state_machine import ALLOWED, BLOCKED_WHILE_STOPPED, Actor, TransitionError
-from tests.conftest import UID_OPERATOR, UID_REQUESTER, UID_SANDBOX, UID_WORKER
+from tests.conftest import UID_OPERATOR, UID_REQUESTER, UID_SANDBOX, UID_WORKER, packaged_contribution
 from tests.unit.gatekeeper.api_helpers import client
+from tests.unit.gatekeeper.decision_helpers import install_sources, skill_card, status_of
 from tests.unit.gatekeeper.test_authz import outbox_texts
 from tests.unit.gatekeeper.test_state_machine import guard_columns, make
 
@@ -151,6 +152,44 @@ async def test_egress_mode_api_is_operator_only(ctx: AppContext) -> None:
     assert resp.status_code == 200
     assert resp.json() == {"mode": "research", "default": "open", "previous": "open"}
     assert _audits(ctx, "egress_mode_changed")[-1] == {"from": "open", "to": "research"}
+
+
+def test_set_hermes_tier_audits_fyis_and_invalidates_skill_approvals(ctx: AppContext) -> None:
+    """§15.5 + delta 9: a tier switch invalidates every open skill approval with tier_changed, in the
+    same transaction as the flag write and its audit row; PR and proposal approvals are untouched."""
+    install_sources(ctx)
+    sid, tokens = skill_card(ctx)
+    ctx.decisions.skills.approve(tokens["skill_approve"], tg_user_id=4242, chat_id=4242, message_id=800)
+    sid2, _ = skill_card(ctx, skill="other", message_id=801, review_id="sr_2")
+    _, action = packaged_contribution(ctx)
+    pr = ctx.create_approval(action, "system")
+    default = ctx.config.policy.hermes.capability_tier_default
+    assert default == "self_improve" and ctx.control.hermes_tier(default) == "self_improve"
+    previous, invalidated = ctx.control.set_hermes_tier("locked", "uid:1000/operator", default)
+    assert previous == "self_improve" and ctx.control.hermes_tier(default) == "locked"
+    assert {i.approval_id for i in invalidated} == {sid, sid2}
+    rows = ctx.conn.execute("SELECT status, invalidated_reason FROM skill_approvals").fetchall()
+    assert {tuple(r) for r in rows} == {("invalidated", "tier_changed")}
+    assert status_of(ctx, "approvals", pr) == "pending"
+    flag = json.loads((ctx.paths.control_dir / "hermes-tier").read_text())
+    assert flag["tier"] == "locked" and flag["actor"] == "uid:1000/operator"
+    [audit] = _audits(ctx, "hermes_tier_changed")
+    assert audit["from"] == "self_improve" and audit["to"] == "locked" and set(audit["invalidated"]) == {sid, sid2}  # type: ignore[arg-type]
+    assert any("Hermes tier self_improve → locked" in t for t in outbox_texts(ctx))
+
+
+async def test_hermes_tier_api_is_operator_only(ctx: AppContext) -> None:
+    for uid in (UID_WORKER, UID_SANDBOX, UID_REQUESTER):
+        async with client(ctx, uid) as c:
+            assert (await c.post("/v1/control/hermes-tier", json={"tier": "locked"})).status_code == 403
+            view = (await c.get("/v1/control/hermes-tier")).json()
+            assert view["tier"] == "self_improve" and "skills" in view["toolsets"]
+    async with client(ctx, UID_OPERATOR) as c:
+        assert (await c.post("/v1/control/hermes-tier", json={"tier": "god"})).status_code == 400
+        resp = await c.post("/v1/control/hermes-tier", json={"tier": "research"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["tier"] == "research" and body["previous"] == "self_improve" and "skills" not in body["toolsets"]
 
 
 def test_dry_run_default_on_and_resume_does_not_change_it(ctx: AppContext) -> None:

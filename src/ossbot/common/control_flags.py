@@ -217,6 +217,25 @@ def read_egress_mode(control_dir: Path, default: EgressMode) -> EgressMode:
     return "allowlist"
 
 
+# --------------------------------------------------------- Hermes capability tier (CR-002, §15.5)
+# ``hermes-tier`` in the control dir: JSON {tier, actor, ts}. Absent = policy.yaml
+# ``hermes.capability_tier_default``; unparseable, oversize, a symlink or an unknown tier = ``locked``
+# (fail closed: the §15.1 allowlist). Applying a tier (render, restart, probe) is PLAN item 36.
+HermesTier = Literal["locked", "research", "self_improve"]
+HERMES_TIERS: tuple[HermesTier, ...] = ("locked", "research", "self_improve")
+HERMES_TIER_FILE = "hermes-tier"
+
+
+def read_hermes_tier(control_dir: Path, default: HermesTier) -> HermesTier:
+    value = _read_choice(control_dir / HERMES_TIER_FILE, "tier")
+    if value is None:
+        return default
+    for tier in HERMES_TIERS:
+        if value == tier:
+            return tier
+    return "locked"
+
+
 def write_flag(path: Path, payload: dict[str, Any]) -> None:
     """Atomically write a flag file with mode 0640 (writers: gatekeeper and root only)."""
     tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}")

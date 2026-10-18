@@ -144,6 +144,20 @@ class EgressModeView(ApiModel):
     previous: Literal["allowlist", "research", "open"] | None = None
 
 
+class HermesTierRequest(ApiModel):
+    """§15.5: ossctl hermes tier <tier> (TTY-confirmed); Telegram /hermes tier is FEAT-009."""
+
+    tier: Literal["locked", "research", "self_improve"]
+
+
+class HermesTierView(ApiModel):
+    tier: Literal["locked", "research", "self_improve"]
+    default: Literal["locked", "research", "self_improve"]
+    toolsets: list[str]
+    previous: Literal["locked", "research", "self_improve"] | None = None
+    invalidated_skill_approvals: int = 0
+
+
 class ReloadRequest(ApiModel):
     confirm_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
 

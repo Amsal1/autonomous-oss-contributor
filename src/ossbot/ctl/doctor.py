@@ -465,6 +465,20 @@ def check_egress_mode() -> Result:
     return Result(PASS, "egress mode", f"{data.get('mode')} (default {data.get('default')})")
 
 
+def check_hermes_tier() -> Result:
+    """§15.5: the active Hermes capability tier and its toolsets (applied to Hermes in FEAT-007)."""
+    try:
+        with uds_client(Paths.default().gatekeeper_sock, timeout=httpx.Timeout(5.0)) as client:
+            resp = client.get("/v1/control/hermes-tier")
+            data = resp.json() if resp.status_code == 200 else {}
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        return Result(FAIL, "hermes tier", str(exc), "systemctl status ossbot-gatekeeper")
+    if not data:
+        return Result(FAIL, "hermes tier", f"HTTP {resp.status_code}")
+    tools = ", ".join(data.get("toolsets", []))
+    return Result(PASS, "hermes tier", f"{data.get('tier')} (default {data.get('default')}): {tools}")
+
+
 def _github_login(token: str) -> tuple[int, str, str]:
     resp = httpx.get("https://api.github.com/user", headers={"Authorization": f"Bearer {token}",
                      "X-GitHub-Api-Version": "2022-11-28"}, timeout=15)  # fmt: skip
@@ -589,7 +603,8 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     if not quick:
         steps.append(check_proxy_dns)
     steps += [
-        check_firewall, check_gatekeeper, check_egress_mode, lambda: check_github(quick), lambda: check_telegram(quick),
+        check_firewall, check_gatekeeper, check_egress_mode, check_hermes_tier, lambda: check_github(quick),
+        lambda: check_telegram(quick),
         check_identity_snapshot, check_audit, check_disk, check_lock_drift,
     ]  # fmt: skip
     if probes:

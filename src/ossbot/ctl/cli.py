@@ -22,7 +22,14 @@ import httpx
 import typer
 
 from ossbot.common.config import ConfigError, LifecyclePolicy, parse_bundle
-from ossbot.common.control_flags import EGRESS_MODES, lifecycle_name, read_flags, read_lifecycle, write_flag
+from ossbot.common.control_flags import (
+    EGRESS_MODES,
+    HERMES_TIERS,
+    lifecycle_name,
+    read_flags,
+    read_lifecycle,
+    write_flag,
+)
 from ossbot.common.paths import Paths
 from ossbot.common.snapshot import read_current
 from ossbot.common.uds import uds_client
@@ -31,9 +38,11 @@ app = typer.Typer(add_completion=False, no_args_is_help=True, help="ossbot opera
 config_app = typer.Typer(no_args_is_help=True, help="config snapshot")
 audit_app = typer.Typer(no_args_is_help=True, help="audit log")
 egress_app = typer.Typer(no_args_is_help=True, help="egress mode (allowlist | research | open)")
+hermes_app = typer.Typer(no_args_is_help=True, help="Hermes (capability tier)")
 app.add_typer(config_app, name="config")
 app.add_typer(audit_app, name="audit")
 app.add_typer(egress_app, name="egress")
+app.add_typer(hermes_app, name="hermes")
 
 BIN = Path("/opt/ossbot/bin")
 SANDBOXD_SOCK = Path("/run/ossbot/sandboxd.sock")
@@ -366,6 +375,25 @@ def egress_status() -> None:
     code, data = api("GET", "/v1/control/egress-mode")
     if code != 200:
         _fail(f"gatekeeper answered {code}: {data}")
+    _show(data)
+
+
+@hermes_app.command("tier")
+def hermes_tier(tier: Annotated[str | None, typer.Argument(help="locked | research | self_improve")] = None) -> None:
+    """Show (no argument) or switch the Hermes capability tier (TTY confirm; DESIGN §15.5). A switch
+    invalidates open skill approvals; applying it to Hermes arrives with the Hermes install (FEAT-007)."""
+    if tier is None:
+        code, data = api("GET", "/v1/control/hermes-tier")
+        if code != 200:
+            _fail(f"gatekeeper answered {code}: {data}")
+        _show(data)
+        return
+    if tier not in HERMES_TIERS:
+        _fail(f"usage: ossctl hermes tier [{'|'.join(HERMES_TIERS)}]", 2)
+    _confirm(f"TIER {tier.upper()}")
+    code, data = api("POST", "/v1/control/hermes-tier", {"tier": tier})
+    if code != 200:
+        _fail(f"tier change refused ({code}): {data}")
     _show(data)
 
 

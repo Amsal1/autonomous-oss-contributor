@@ -13,11 +13,14 @@ from ossbot.common.schemas import (
     DryRunRequest,
     EgressModeRequest,
     EgressModeView,
+    HermesTierRequest,
+    HermesTierView,
     ReasonRequest,
     UpRequest,
 )
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
+from ossbot.gatekeeper.chat.hermes_surface import allowed_toolsets
 
 router = APIRouter(prefix="/v1")
 OP, WK, SB, RQ = Role.OPERATOR, Role.WORKER, Role.SANDBOX, Role.REQUESTER
@@ -107,3 +110,24 @@ async def set_egress_mode(
     default = c.config.egress.mode_default
     previous = c.control.set_egress_mode(body.mode, caller.actor, default)  # audits and FYIs
     return EgressModeView(mode=c.control.egress_mode(default), default=default, previous=previous)
+
+
+@router.get("/control/hermes-tier")
+async def get_hermes_tier(request: Request, caller: Annotated[Caller, Depends(require())]) -> HermesTierView:
+    c = ctx(request)
+    default = c.config.policy.hermes.capability_tier_default
+    tier = c.control.hermes_tier(default)
+    return HermesTierView(tier=tier, default=default, toolsets=list(allowed_toolsets(tier)))
+
+
+@router.post("/control/hermes-tier")
+async def set_hermes_tier(
+    request: Request, body: HermesTierRequest, caller: Annotated[Caller, Depends(require(OP))]
+) -> HermesTierView:
+    """§15.5: ossctl asks for the TTY confirm first; applying the tier to Hermes is PLAN item 36."""
+    c = ctx(request)
+    default = c.config.policy.hermes.capability_tier_default
+    previous, invalidated = c.control.set_hermes_tier(body.tier, caller.actor, default)  # audits, FYIs
+    tier = c.control.hermes_tier(default)
+    return HermesTierView(tier=tier, default=default, toolsets=list(allowed_toolsets(tier)), previous=previous,
+                          invalidated_skill_approvals=len(invalidated))  # fmt: skip

@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from ossbot.common.control_flags import EGRESS_MODES, EgressMode
+from ossbot.common.control_flags import EGRESS_MODES, EgressMode, HermesTier
 from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
 from ossbot.common.yamlio import YamlError, safe_load
 
@@ -190,6 +190,12 @@ class TelegramPolicy(Strict):
     mode: Literal["single"] = "single"  # 'dual' is phase 2
 
 
+class HermesPolicy(Strict):
+    """§15.5: the default tier; the active one is the ``hermes-tier`` control flag (fail closed ``locked``)."""
+
+    capability_tier_default: HermesTier = "self_improve"
+
+
 class BackupPolicy(Strict):
     include_secrets: bool = False
     keep: PosInt = 8
@@ -224,6 +230,7 @@ class PolicyConfig(Strict):
     proposal: ProposalPolicy = ProposalPolicy()
     discovery: DiscoveryPolicy = DiscoveryPolicy()
     telegram: TelegramPolicy = TelegramPolicy()
+    hermes: HermesPolicy = HermesPolicy()
     backup: BackupPolicy = BackupPolicy()
 
     @model_validator(mode="after")

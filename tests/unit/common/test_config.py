@@ -50,6 +50,7 @@ def test_shipped_policy_size_blocks() -> None:
     assert p.discovery_filters.validation_tier_max == "T1"
     assert p.proposal.ttl_hours == 72 and p.proposal.claim_comment == "off"
     assert p.discovery.proposals_per_cycle == 3
+    assert p.hermes.capability_tier_default == "self_improve"  # §15.5, PLAN item 23a
     # the shipped file matches the model defaults (the §9.14 values)
     assert p.size == PolicyConfig(version=1).size
     assert p.discovery_filters == PolicyConfig(version=1).discovery_filters
@@ -136,6 +137,7 @@ def test_targets_seed_resolves_defaults() -> None:
         (PolicyConfig, "version: 1\nsize: {bogus: 1}\n", "bogus"),
         (PolicyConfig, "version: 1\ndiscovery_filters: {validation_tier_max: T3}\n", "validation_tier_max"),
         (PolicyConfig, "version: 1\nproposal: {claim_comment: maybe}\n", "claim_comment"),
+        (PolicyConfig, "version: 1\nhermes: {capability_tier_default: god}\n", "capability_tier_default"),
         # the validator: a class whose bounds exceed the ceiling
         (PolicyConfig, "version: 1\ndiff: {max_changed_lines: 200}\nsize: {autonomous_max_class: m}\n", "ceiling"),
         (PolicyConfig, "version: 1\ndiff: {max_files: 10}\nsize: {autonomous_max_class: l}\n", "ceiling"),

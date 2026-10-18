@@ -21,9 +21,11 @@ from typing import Any, Literal
 from ossbot.common.clock import Clock, to_iso
 from ossbot.common.control_flags import (
     EGRESS_MODE_FILE,
+    HERMES_TIER_FILE,
     Blocked,
     EgressMode,
     FlagState,
+    HermesTier,
     KillLevel,
     LifecycleInfo,
     LifecycleScope,
@@ -31,6 +33,7 @@ from ossbot.common.control_flags import (
     lifecycle_name,
     read_egress_mode,
     read_flags,
+    read_hermes_tier,
     read_lifecycle,
     write_flag,
 )
@@ -287,6 +290,32 @@ class ControlService:
             self.audit.append(actor, "egress_mode_changed", {"from": previous, "to": mode})
         self.notify(f"🌐 Egress mode {previous} → {mode} by {actor} (fetch/validate unchanged)")
         return previous
+
+    # ------------------------------------------------------ Hermes tier (§15.5, PLAN 23a)
+    def hermes_tier(self, default: HermesTier) -> HermesTier:
+        """The active tier: the flag, else ``hermes.capability_tier_default``; unparseable = locked."""
+        return read_hermes_tier(self.paths.control_dir, default)
+
+    def set_hermes_tier(
+        self, tier: HermesTier, actor: str, default: HermesTier
+    ) -> tuple[HermesTier, list[Invalidated]]:
+        """Human-confirmed (ossctl TTY, Telegram /hermes tier later): write the flag, audit, FYI, and in
+        the same transaction invalidate every open skill approval with ``tier_changed`` (delta 9).
+        Applying the tier (config render, Hermes restart, probes) is PLAN item 36."""
+        with db.transaction(self.conn):
+            previous = self.hermes_tier(default)
+            write_flag(
+                self.paths.control_dir / HERMES_TIER_FILE,
+                {"tier": tier, "actor": actor, "ts": to_iso(self.clock.now())},
+            )
+            invalidated = self.decisions.skills.invalidate_all_open("tier_changed", actor) if self.decisions else []
+            self.audit.append(
+                actor,
+                "hermes_tier_changed",
+                {"from": previous, "to": tier, "invalidated": [i.approval_id for i in invalidated]},
+            )
+        self.notify(f"🧠 Hermes tier {previous} → {tier} by {actor} ({len(invalidated)} skill card(s) invalidated)")
+        return previous, invalidated
 
     def set_config_hash(self, config_hash: str) -> None:
         """Called inside the snapshot manager's transaction."""

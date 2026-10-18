@@ -154,3 +154,10 @@ forbidden_modules = [
     "ossbot.gatekeeper", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools",
     "ossbot.dockerfilter", "ossbot.ctl", "ossbot.watchdog",
 ]
+
+[[tool.importlinter.contracts]]
+# PLAN item 23a / DESIGN §15: the chat relay and the Hermes surface never reach a GitHub write path.
+name = "The chat relay never imports the submit path"
+type = "forbidden"
+source_modules = ["ossbot.gatekeeper.chat"]
+forbidden_modules = ["ossbot.gatekeeper.submit", "ossbot.gatekeeper.github_writer"]

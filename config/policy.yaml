@@ -81,6 +81,8 @@ discovery:
   proposals_per_cycle: 3           # proposal cards per discovery cycle
 telegram:
   mode: single
+hermes:                            # §15.5; switch with ossctl hermes tier <tier> (TTY confirm) or /hermes tier
+  capability_tier_default: self_improve   # locked | research | self_improve; unparseable flag = locked
 backup:
   include_secrets: false
   keep: 8

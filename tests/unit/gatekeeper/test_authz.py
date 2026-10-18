@@ -37,6 +37,9 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     # §11.5 egress mode (Telegram /egress is FEAT-009; the API switch is operator only)
     ("GET", "/v1/control/egress-mode"): ANY,
     ("POST", "/v1/control/egress-mode"): frozenset({O}),
+    # §15.5 Hermes capability tier (Telegram /hermes tier is FEAT-009; applying it is FEAT-007)
+    ("GET", "/v1/control/hermes-tier"): ANY,
+    ("POST", "/v1/control/hermes-tier"): frozenset({O}),
     # CR-001 lifecycle (operator only: ossctl up|down|status as root/ossadmin)
     ("GET", "/v1/control/lifecycle"): frozenset({O}),
     ("POST", "/v1/control/drain"): frozenset({O}),
