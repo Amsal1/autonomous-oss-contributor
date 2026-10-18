@@ -154,6 +154,85 @@ def _text(value: Any) -> str:
     return json.dumps(value, sort_keys=True, default=str)
 
 
+# V3 ACP stream-json (kiro-cli 2.32 `chat --v3 --output-format stream-json`, recorded live in
+# FEAT-006 item 32): {"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "tool_call" |
+# "tool_call_update", "toolCallId", "title", "kind", "rawInput", "status", "content": [...]}}}.
+# Built-in tools carry a `kind`; MCP tools go through the engine's loader ("Tool Load") and a call
+# whose rawInput is {"tool_id": "<server>::<tool>", "arguments": {...}}.
+ACP_KIND_TOOL = {"read": "read", "edit": "write", "delete": "write", "move": "write", "execute": "shell",
+                 "fetch": "web_fetch", "search": "web_search"}  # fmt: skip
+ACP_BRIDGE_TITLES = {"tool load": "tool_load", "tool search": "tool_search", "tool describe": "tool_describe"}
+
+
+def _acp_tool_id(update: dict[str, Any]) -> str:
+    title = str(update.get("title") or "")
+    raw = update.get("rawInput")
+    if isinstance(raw, dict) and isinstance(raw.get("tool_id"), str):
+        server, sep, tool = str(raw["tool_id"]).partition("::")
+        return f"@{server}/{tool}" if sep else str(raw["tool_id"])
+    if title.lower() in ACP_BRIDGE_TITLES:
+        return ACP_BRIDGE_TITLES[title.lower()]
+    if title.startswith("@"):
+        return title
+    kind = str(update.get("kind") or "")
+    return ACP_KIND_TOOL.get(kind, f"unknown:{kind or title[:40]}")
+
+
+def _acp_input(update: dict[str, Any]) -> Any:
+    raw = update.get("rawInput")
+    if isinstance(raw, dict) and "tool_id" in raw and "arguments" in raw:
+        return raw["arguments"]
+    return raw if raw is not None else update.get("locations")
+
+
+def _acp_update(doc: Any) -> dict[str, Any] | None:
+    if not isinstance(doc, dict) or doc.get("type") != "sessionUpdate":
+        return None
+    update = (doc.get("data") or {}).get("update") if isinstance(doc.get("data"), dict) else None
+    if isinstance(update, dict) and update.get("sessionUpdate") in {"tool_call", "tool_call_update"}:
+        return update
+    return None
+
+
+def _acp_event(update: dict[str, Any], calls: dict[str, ToolEvent], order: list[ToolEvent]) -> None:
+    call_id = str(update.get("toolCallId") or "")
+    event = calls.get(call_id)
+    if event is None:  # a tool_call, or an update whose call line was not streamed (the loader)
+        event = ToolEvent(tool_id=_acp_tool_id(update), input=_acp_input(update), call_id=call_id or None)
+        order.append(event)
+        if call_id:
+            calls[call_id] = event
+    elif update.get("rawInput") is not None and event.input is None:
+        event.input = _acp_input(update)
+    for item in update.get("content") or []:
+        inner = item.get("content") if isinstance(item, dict) else None
+        if isinstance(inner, dict) and isinstance(inner.get("text"), str):
+            event.output += inner["text"]
+        elif item is not None:
+            event.output += _text(item)
+    if str(update.get("status", "")).lower() in {"failed", "error", "denied", "rejected"}:
+        event.error = True
+
+
+def loader_targets(event: ToolEvent) -> list[str] | None:
+    """Tool ids the engine's "Tool Load" step loaded (None if its output is unreadable)."""
+    try:
+        doc = json.loads(event.output)
+    except ValueError:
+        return None
+    loaded = doc.get("loaded") if isinstance(doc, dict) else None
+    if not isinstance(loaded, list):
+        return None
+    out: list[str] = []
+    for item in loaded:
+        tool_id = item.get("tool_id") if isinstance(item, dict) else None
+        if not isinstance(tool_id, str):
+            return None
+        server, sep, tool = tool_id.partition("::")
+        out.append(f"@{server}/{tool}" if sep else tool_id)
+    return out
+
+
 def parse_events(text: str) -> list[ToolEvent] | None:
     """Tool calls with their results; None if the stream is not JSONL (fail closed)."""
     calls: dict[str, ToolEvent] = {}
@@ -166,6 +245,12 @@ def parse_events(text: str) -> list[ToolEvent] | None:
             doc = json.loads(line)
         except ValueError:
             return None
+        update = _acp_update(doc)
+        if update is not None:
+            _acp_event(update, calls, order)
+            continue
+        if isinstance(doc, dict) and doc.get("type") in {"sessionUpdate", "runStarted", "runFinished", "runError"}:
+            continue  # other ACP updates (text chunks, config options) carry no tool calls
         for node in _walk(doc):
             result_id = next((str(node[k]) for k in _RESULT_ID_KEYS if k in node), None)
             name = next((node[k] for k in _NAME_KEYS if isinstance(node.get(k), str)), None)
@@ -265,6 +350,11 @@ def eval_coder_surface(ev: ProbeEvidence, scanner: KeyScanner, trusted: Iterable
     trusted_ids = set(trusted)
     for event in events:
         tool = event.tool_id
+        if tool == "tool_load":  # V3 loads MCP tool schemas first; only the trusted tools may be loaded
+            targets = loader_targets(event)
+            if targets is None or not set(targets) <= trusted_ids:
+                return False
+            continue
         if any(m in tool for m in BRIDGE_MARKERS) or tool not in trusted_ids:
             if tool in BUILTIN_FORBIDDEN and _denied(event):
                 continue  # a denied built-in is the expected outcome
@@ -287,7 +377,9 @@ def parse_settings(text: str) -> dict[str, Any]:
         return doc if isinstance(doc, dict) else {}
     out: dict[str, Any] = {}
     for line in stripped.splitlines():
-        match = re.match(r"^\s*([A-Za-z0-9_.]+)\s*[=:]\s*(.+?)\s*$", line)
+        # kiro-cli 2.32 appends the scope: "telemetry.enabled = false (global)" (verified live, FEAT-006)
+        match = re.match(r"^\s*([A-Za-z0-9_.]+)\s*[=:]\s*(.+?)(?:\s+\((?:global|workspace|local|default)\))?\s*$",
+                         line)  # fmt: skip
         if match:
             raw = match.group(2).strip().strip('"')
             out[match.group(1)] = {"true": True, "false": False}.get(raw.lower(), raw)

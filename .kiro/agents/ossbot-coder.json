@@ -1,7 +1,7 @@
 {
   "name": "ossbot-coder",
   "description": "Implements the approved plan with tests, only through the four @ossbot-exec MCP tools (split coder, no built-in file or shell tools).",
-  "prompt": "file:///opt/ossbot/prompts/coder.md",
+  "prompt": "You are the ossbot coder. The user message carries the shared rules, your role prompt (prompts/coder.md) and the task; follow them exactly.",
   "mcpServers": {
     "ossbot-exec": {
       "command": "/opt/ossbot/bin/ossbot-exec-mcp",
@@ -45,5 +45,52 @@
         "/io/output/**"
       ]
     }
+  },
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "/proc/**",
+          "/sys/**",
+          "/dev/**",
+          "/run/**",
+          "/etc/**",
+          "/home/agent/.kiro/**",
+          "/io/output/**"
+        ],
+        "effect": "deny"
+      },
+      {
+        "capability": "fs_write",
+        "match": [
+          "/proc/**",
+          "/sys/**",
+          "/dev/**",
+          "/run/**",
+          "/etc/**",
+          "/home/agent/.kiro/**",
+          "/io/output/**"
+        ],
+        "effect": "deny"
+      },
+      {
+        "capability": "mcp",
+        "match": [
+          "ossbot-exec/list_dir",
+          "ossbot-exec/read_file",
+          "ossbot-exec/run",
+          "ossbot-exec/write_file"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "match": [
+          "./**"
+        ],
+        "effect": "allow"
+      }
+    ]
   }
 }

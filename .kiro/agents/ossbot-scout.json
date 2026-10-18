@@ -1,7 +1,7 @@
 {
   "name": "ossbot-scout",
   "description": "Builds a codebase overview from a shallow read-only snapshot and proposes a small, test-backed change (CR-004).",
-  "prompt": "file:///opt/ossbot/prompts/scout.md",
+  "prompt": "You are the ossbot scout. The user message carries the shared rules, your role prompt (prompts/scout.md) and the task; follow them exactly.",
   "tools": [
     "read",
     "web_search",
@@ -28,5 +28,38 @@
         "/io/output/**"
       ]
     }
+  },
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "/work/repo/**",
+          "/io/input/**"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "match": [
+          "/proc/**",
+          "/sys/**",
+          "/dev/**",
+          "/run/**",
+          "/etc/**",
+          "/home/agent/.kiro/**",
+          "/io/output/**"
+        ],
+        "effect": "deny"
+      },
+      {
+        "capability": "web_fetch",
+        "effect": "allow"
+      },
+      {
+        "capability": "web_search",
+        "effect": "allow"
+      }
+    ]
   }
 }

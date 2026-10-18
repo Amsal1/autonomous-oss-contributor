@@ -1,27 +1,19 @@
 # Global Kiro CLI permission rules baked into sandbox-llm (DESIGN §15.3, §10.4, H1 step 3).
 # Second layer only: no key-holding container can see an attacker-controlled path (I5).
-# DENY_SYS applies to the built-in file tools' deniedPaths; the coder additionally has the
-# built-in tools denied outright (its tools are the four @ossbot-exec/* MCP tools only).
-# [VERIFY §23 item 5: exact V3 permissions schema and whether denies hold under trust flags;
-#  the research_deny and coder_surface safety probes (§10.9) gate on the live behaviour.]
-version: 1
-deny_sys: &deny_sys
-  - /proc/**
-  - /sys/**
-  - /dev/**
-  - /run/**
-  - /etc/**
-  - /home/agent/.kiro/**
-  - /io/output/**
-tools:
-  read:
-    deniedPaths: *deny_sys
-  write:
-    deniedPaths: *deny_sys
-  glob:
-    deniedPaths: *deny_sys
-  grep:
-    deniedPaths: *deny_sys
-agents:
-  ossbot-coder:
-    deniedTools: [read, write, shell, glob, grep]
+# Format verified live on kiro-cli 2.32.0 / KAS 0.66.43 (FEAT-006 item 32, ADR-0011 addendum): the
+# V3 permission loader accepts only a top-level `rules:` list of {capability, match?, effect}
+# (capabilities fs_read, fs_write, shell, mcp, web_fetch, web_search, subagent); any other layout
+# fails to parse and denies every tool call. The per-agent rules in .kiro/agents/*.json allow the
+# role's own paths and tools; these global rules deny the system paths for every file tool and
+# shell and sub-agents for every role. The research_deny and coder_surface probes gate on it.
+rules:
+  - capability: fs_read
+    match: [/proc/**, /sys/**, /dev/**, /run/**, /etc/**, /home/agent/.kiro/**, /io/output/**]
+    effect: deny
+  - capability: fs_write
+    match: [/proc/**, /sys/**, /dev/**, /run/**, /etc/**, /home/agent/.kiro/**, /io/output/**]
+    effect: deny
+  - capability: shell
+    effect: deny
+  - capability: subagent
+    effect: deny

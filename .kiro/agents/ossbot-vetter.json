@@ -1,7 +1,7 @@
 {
   "name": "ossbot-vetter",
   "description": "Vets an issue and repo facts (AI policy, claim status, CLA/DCO) from staged inputs; no repo code.",
-  "prompt": "file:///opt/ossbot/prompts/vetter.md",
+  "prompt": "You are the ossbot vetter. The user message carries the shared rules, your role prompt (prompts/vetter.md) and the task; follow them exactly.",
   "tools": [
     "read",
     "web_search",
@@ -27,5 +27,37 @@
         "/io/output/**"
       ]
     }
+  },
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "/io/input/**"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "match": [
+          "/proc/**",
+          "/sys/**",
+          "/dev/**",
+          "/run/**",
+          "/etc/**",
+          "/home/agent/.kiro/**",
+          "/io/output/**"
+        ],
+        "effect": "deny"
+      },
+      {
+        "capability": "web_fetch",
+        "effect": "allow"
+      },
+      {
+        "capability": "web_search",
+        "effect": "allow"
+      }
+    ]
   }
 }

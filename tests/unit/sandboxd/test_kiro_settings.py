@@ -34,10 +34,17 @@ def test_settings_probe_checks_a_subset_of_the_baked_values() -> None:
 
 
 def test_permissions_deny_sys_on_every_file_tool() -> None:
+    """V3 policy layout (kiro-cli 2.32, verified live): only a top-level ``rules`` list."""
     doc = safe_load((SETTINGS / "permissions.yaml").read_bytes())
-    for tool in ("read", "write", "glob", "grep"):
-        assert doc["tools"][tool]["deniedPaths"] == DENY_SYS, tool
-    assert set(doc["agents"]["ossbot-coder"]["deniedTools"]) == {"read", "write", "shell", "glob", "grep"}
+    assert set(doc) == {"rules"}
+    rules = doc["rules"]
+    for cap in ("fs_read", "fs_write"):
+        assert {"capability": cap, "match": DENY_SYS, "effect": "deny"} in rules, cap
+    assert {"capability": "shell", "effect": "deny"} in rules
+    assert {"capability": "subagent", "effect": "deny"} in rules
+    assert not [r for r in rules if r["effect"] != "deny"]  # the global layer only ever denies
+    assert {r["capability"] for r in rules} <= {"fs_read", "fs_write", "shell", "mcp", "web_fetch", "web_search",
+                                                "subagent"}  # fmt: skip
 
 
 def test_probe_hashes_change_with_content() -> None:
@@ -70,12 +77,36 @@ def test_agents_match_the_fixed_trust_tools() -> None:
     assert names == {f"ossbot-{role}" for role in TRUST_TOOLS}
     for role, trusted in TRUST_TOOLS.items():
         doc = json.loads((agents_dir / f"ossbot-{role}.json").read_text(encoding="utf-8"))
-        assert doc["name"] == f"ossbot-{role}" and doc["prompt"] == f"file:///opt/ossbot/prompts/{role}.md"
+        # V3 refuses absolute file:// prompts: the role prompt is inlined in the task (runner/prompts.py)
+        assert doc["name"] == f"ossbot-{role}" and f"prompts/{role}.md" in doc["prompt"]
+        assert "file://" not in doc["prompt"]
         assert doc["tools"] == doc["allowedTools"] == trusted.split(",")
         assert doc["toolsSettings"]["read"]["deniedPaths"] == DENY_SYS
         assert (ROOT / "prompts" / f"{role}.md").is_file()
+        # universal format (V3 engine, kiro-cli 2.32 `agent upgrade`): the same denials as V3 rules,
+        # and no catch-all read allow (reads stay limited to the allowed paths)
+        rules = doc["permissions"]["rules"]
+        assert {"capability": "fs_read", "match": DENY_SYS, "effect": "deny"} in rules
+        assert not [r for r in rules if r.get("effect") == "allow" and "match" not in r
+                    and r.get("capability") in {"fs_read", "fs_write", "shell"}]  # fmt: skip
         if role == "coder":
             assert set(doc["mcpServers"]) == {"ossbot-exec"}
             assert not {"read", "write", "shell", "glob", "grep", "web_search", "web_fetch"} & set(doc["tools"])
         else:
             assert "mcpServers" not in doc and "shell" not in doc["tools"]
+
+
+def test_settings_list_parser_reads_the_live_2_32_format() -> None:
+    """kiro-cli 2.32 prints ``key = value (global)`` (recorded live by the FEAT-006 probe run)."""
+    from ossbot.sandboxd.probes import SETTINGS_REQUIRED, parse_settings
+
+    live = (
+        "telemetry.enabled = false (global)\napp.disableAutoupdates = true (global)\n"
+        "chat.enableKnowledge = false (global)\nchat.enableCodeIntelligence = false (global)\n"
+        "chat.enableDelegate = false (global)\nchat.enableMainAgentSubagentTool = false (global)\n"
+        "chat.enableWorkflows = false (global)\nchat.enableCheckpoint = false (global)\n"
+        "toolSearch.enabled = false (global)\n"
+    )
+    values = parse_settings(live)
+    assert all(values.get(k) is v for k, v in SETTINGS_REQUIRED.items())
+    assert parse_settings("telemetry.enabled = true (global)")["telemetry.enabled"] is True

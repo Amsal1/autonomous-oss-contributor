@@ -34,6 +34,20 @@ PROMPT="$PROMPT_DIR/$PROMPT_FILE"
 mkdir -p "$HOME/.kiro/settings" "$HOME/.kiro/agents" "$HOME/cwd"
 cp /opt/ossbot/kiro/settings/cli.json /opt/ossbot/kiro/settings/permissions.yaml "$HOME/.kiro/settings/"
 find /opt/ossbot/kiro/agents -maxdepth 1 -name 'ossbot-*.json' -type f -exec cp {} "$HOME/.kiro/agents/" \;
+# The V3 engine baked into the image (node + KAS bundle; HOME is noexec, so it is never extracted
+# there): links to the read-only copy, a fresh lock file per bundle.
+ENGINE=/opt/kiro-cli/engine
+if [[ -d "$ENGINE/kas" ]]; then
+  DATA="$HOME/.local/share/kiro-cli"
+  mkdir -p "$DATA/kas"
+  ln -sfn "$ENGINE/node" "$DATA/node"
+  ln -sfn "$ENGINE/node.sha256" "$DATA/node.sha256"
+  for bundle in "$ENGINE"/kas/*/; do
+    bundle=${bundle%/}
+    ln -sfn "$bundle" "$DATA/kas/${bundle##*/}"
+    : >"$DATA/kas/${bundle##*/}.lock"
+  done
+fi
 
 if [[ "${OSSBOT_LIST_REPO:-}" == 1 ]]; then
   find /work/repo -mindepth 1 -printf '%y %P\n' | LC_ALL=C sort >"$OUT/repo-listing.txt"

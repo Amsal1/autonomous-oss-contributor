@@ -11,6 +11,7 @@ import pytest
 from ossbot.sandboxd.jobs import ApiError, ProbeRunner
 from ossbot.sandboxd.keyscan import KeyScanner
 from ossbot.sandboxd.probes import (
+    DENIED_READS,
     PROBES,
     ProbeEvidence,
     compute_key,
@@ -308,3 +309,58 @@ def test_probe_runner_validates_models(sbx: Sbx) -> None:
     with pytest.raises(ApiError) as exc:
         ProbeRunner(sbx.jobs).run_all({"planner": "nope", "coder": "claude-test"})
     assert exc.value.error_class == "unknown_model"
+
+
+# --------------------------------------------------------------- V3 ACP stream (kiro-cli 2.32, live shapes)
+def _acp(update: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "sessionUpdate", "data": {"sessionId": "sess_x", "update": update}}
+
+
+def _acp_call(i: int, title: str, raw: dict[str, Any], kind: str | None = None) -> dict[str, Any]:
+    update: dict[str, Any] = {"sessionUpdate": "tool_call", "toolCallId": f"t{i}", "title": title, "rawInput": raw}
+    if kind:
+        update["kind"] = kind
+    return _acp(update)
+
+
+def _acp_done(i: int, title: str, text: str, status: str = "completed") -> dict[str, Any]:
+    return _acp({"sessionUpdate": "tool_call_update", "toolCallId": f"t{i}", "status": status, "title": title,
+                 "content": [{"type": "content", "content": {"type": "text", "text": text}}]})  # fmt: skip
+
+
+def _loaded(*tools: str) -> str:
+    return json.dumps({"loaded": [{"tool_id": t.lstrip("@").replace("/", "::")} for t in tools]})
+
+
+START = {"type": "runStarted", "data": {"payloadSchema": "acp", "acpProtocolVersion": 1, "engine": "v3"}}
+DENIED = "Tool call denied: path /proc/self/environ is denied by policy"
+
+
+def test_acp_research_deny() -> None:
+    reads = [_acp_call(i, "Read File", {"path": p}, kind="read") for i, p in enumerate(DENIED_READS)]
+    denied = [_acp_done(i, "Read File", DENIED, "failed") for i in range(len(DENIED_READS))]
+    ok = ProbeEvidence(files={"planner.events.jsonl": _events(START, *reads, *denied)})
+    assert eval_research_deny(ok, SCANNER)
+    leaked = [_acp_done(0, "Read File", "PATH=/usr/bin", "completed"), *denied[1:]]
+    assert not eval_research_deny(ProbeEvidence(files={"planner.events.jsonl": _events(START, *reads, *leaked)}),
+                                  SCANNER)  # fmt: skip
+    refused = ProbeEvidence(files={"planner.events.jsonl": _events(START)})  # the model refused: proves nothing
+    assert not eval_research_deny(refused, SCANNER)
+
+
+def test_acp_coder_surface_with_the_loader() -> None:
+    items = [
+        _acp_done(0, "Tool Load", _loaded("@ossbot-exec/run", "@ossbot-exec/read_file")),
+        _acp_call(1, "@ossbot-exec/run", {"tool_id": "ossbot-exec::run", "arguments": {"cmd": "echo hi", "cwd": "."}}),
+        _acp_done(1, "@ossbot-exec/run", '{"exit_code": 0, "stdout": "hi\\n"}'),
+        _acp_call(
+            2, "@ossbot-exec/read_file", {"tool_id": "ossbot-exec::read_file", "arguments": {"path": "docs/env"}}
+        ),
+        _acp_done(2, "@ossbot-exec/read_file", '{"error": "ELINK: docs/env is a symlink"}', "failed"),
+    ]
+    ok = ProbeEvidence(files={"coder.events.jsonl": _events(START, *items)})
+    assert eval_coder_surface(ok, SCANNER, TRUST)
+    sneaky = [_acp_done(0, "Tool Load", _loaded("@ossbot-exec/run", "@other/exfil")), *items[1:]]
+    assert not eval_coder_surface(ProbeEvidence(files={"coder.events.jsonl": _events(START, *sneaky)}), SCANNER, TRUST)
+    shell = [*items, _acp_call(3, "Run Command", {"command": "id"}, kind="execute"), _acp_done(3, "x", "uid=10001")]
+    assert not eval_coder_surface(ProbeEvidence(files={"coder.events.jsonl": _events(START, *shell)}), SCANNER, TRUST)

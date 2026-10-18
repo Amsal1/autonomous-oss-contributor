@@ -1,7 +1,7 @@
 {
   "name": "ossbot-reviewer",
   "description": "Self-reviews the change: style, scope, tests that exercise it; read-only snapshot.",
-  "prompt": "file:///opt/ossbot/prompts/reviewer.md",
+  "prompt": "You are the ossbot reviewer. The user message carries the shared rules, your role prompt (prompts/reviewer.md) and the task; follow them exactly.",
   "tools": [
     "read",
     "web_search",
@@ -28,5 +28,38 @@
         "/io/output/**"
       ]
     }
+  },
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "/work/repo/**",
+          "/io/input/**"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "match": [
+          "/proc/**",
+          "/sys/**",
+          "/dev/**",
+          "/run/**",
+          "/etc/**",
+          "/home/agent/.kiro/**",
+          "/io/output/**"
+        ],
+        "effect": "deny"
+      },
+      {
+        "capability": "web_fetch",
+        "effect": "allow"
+      },
+      {
+        "capability": "web_search",
+        "effect": "allow"
+      }
+    ]
   }
 }

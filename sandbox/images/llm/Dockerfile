@@ -29,6 +29,22 @@ RUN curl -fsSL -o /tmp/kiro.tar.gz "${KIRO_CLI_URL}" \
  && rm -rf /tmp/kiro /tmp/kiro.tar.gz \
  && /opt/kiro-cli/bin/kiro-cli --version | grep -F "${KIRO_CLI_VERSION}"
 
+# `chat --v3` extracts its engine (a node binary and the KAS bundle, ~270 MB) into
+# $HOME/.local/share/kiro-cli and executes node from there (ADR-0011 addendum, FEAT-006 item 32).
+# Job HOMEs are noexec tmpfs, so the engine is extracted once here, offline (no network) with a
+# placeholder key that never leaves the build, into /opt/kiro-cli/engine (root-owned, read-only);
+# kiro.sh links it into each job's HOME. A missing node or KAS bundle fails the build.
+RUN --network=none mkdir -p /tmp/bake /opt/kiro-cli/engine/kas \
+ && (echo hi | HOME=/tmp/bake KIRO_API_KEY="ksk_$(printf 'x%.0s' $(seq 32))" timeout 120 \
+      /opt/kiro-cli/bin/kiro-cli chat --v3 --no-interactive --output-format stream-json >/tmp/bake.log 2>&1 || true) \
+ && d=/tmp/bake/.local/share/kiro-cli \
+ && test -x "$d/node" && test -s "$d/node.sha256" \
+ && for k in "$d"/kas/*; do if [ -d "$k" ]; then cp -a "$k" /opt/kiro-cli/engine/kas/; fi; done \
+ && ls -d /opt/kiro-cli/engine/kas/*/ \
+ && cp -a "$d/node" "$d/node.sha256" /opt/kiro-cli/engine/ \
+ && chown -R 0:0 /opt/kiro-cli/engine && chmod -R a+rX,go-w /opt/kiro-cli/engine \
+ && rm -rf /tmp/bake /tmp/bake.log
+
 RUN groupadd -g 10001 agent \
  && useradd -u 10001 -g 10001 -d /home/agent -s /bin/bash -M agent \
  && install -d -o 10001 -g 10001 -m 0700 /work /work/repo /io/output /run/exec /snap /home/agent \

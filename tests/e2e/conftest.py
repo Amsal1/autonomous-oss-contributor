@@ -131,7 +131,7 @@ class StubProbes:
         assert key is not None
         for probe in PROBES:
             self.jobs.probes.record(key, probe, True, "e" * 64)
-        return {p: {"passed": True} for p in PROBES}
+        return dict.fromkeys(PROBES, True)  # ProbeRunner.run_all shape
 
 
 @dataclass

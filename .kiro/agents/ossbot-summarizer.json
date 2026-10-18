@@ -1,7 +1,7 @@
 {
   "name": "ossbot-summarizer",
   "description": "Drafts the commit message, PR title and PR body from the staged diff; no web.",
-  "prompt": "file:///opt/ossbot/prompts/summarizer.md",
+  "prompt": "You are the ossbot summarizer. The user message carries the shared rules, your role prompt (prompts/summarizer.md) and the task; follow them exactly.",
   "tools": [
     "read"
   ],
@@ -23,5 +23,29 @@
         "/io/output/**"
       ]
     }
+  },
+  "permissions": {
+    "rules": [
+      {
+        "capability": "fs_read",
+        "match": [
+          "/io/input/**"
+        ],
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "match": [
+          "/proc/**",
+          "/sys/**",
+          "/dev/**",
+          "/run/**",
+          "/etc/**",
+          "/home/agent/.kiro/**",
+          "/io/output/**"
+        ],
+        "effect": "deny"
+      }
+    ]
   }
 }

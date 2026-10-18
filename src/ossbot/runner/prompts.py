@@ -47,8 +47,13 @@ def human(text: str, limit: int = 4000) -> str:
 
 
 def task(role: str, instruction: str, sections: list[str], schema_hint: str) -> str:
+    """The shared rules, the role prompt (also the agent's ``file://`` prompt; inlined because
+    kiro-cli 2.32's V3 engine flags ``file://`` agent prompts, ADR-0011 addendum), the task."""
     common = (prompts_dir() / "_common.md").read_text(encoding="utf-8")
-    parts = [common.rstrip(), f"## Task ({role})\n\n{instruction.strip()}", *sections,
+    role_file = prompts_dir() / f"{role}.md"
+    role_prompt = role_file.read_text(encoding="utf-8").rstrip() if role_file.is_file() else ""
+    parts = [common.rstrip(), *([role_prompt] if role_prompt else []), f"## Task ({role})\n\n{instruction.strip()}",
+             *sections,
              f"## Answer\n\nOne fenced ```json block matching the {role} schema:\n{schema_hint}"]  # fmt: skip
     return "\n\n".join(parts) + "\n"
 
