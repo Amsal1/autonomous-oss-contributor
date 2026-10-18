@@ -26,9 +26,10 @@ limits:
   max_implement_attempts: 2          # extra implement attempts after a validation failure (§9.1)
   max_review_rounds: 2
   max_change_rounds: 5
-diff:
-  max_files: 25
-  max_changed_lines: 600
+diff:                              # hard safety ceiling (CR-004 Amendment B): runaway-agent guard, config file only
+  max_files: 80                    # every changed path counts, excluded globs included
+  max_changed_lines: 3000          # non-test lines (size.exclude_globs excluded)
+  max_test_lines: 3000             # test lines (size.test_globs), counted separately
   forbidden_paths: [".github/workflows/**", ".github/actions/**", "**/CODEOWNERS", "LICENSE*", "COPYING*", "**/*.pem", "**/*.key", "**/.env*", ".kiro/**", ".git*/hooks/**"]
   forbid_binary: true
   forbid_submodule_changes: true
@@ -53,10 +54,31 @@ anomaly:
 validation:
   stack:
     enabled: false                 # phase 2 (§10.7)
+size:                              # §9.14: soft preference for what the bot picks on its own, never a rule against you
+  autonomous_max_class: s          # xs…xl (xxl never selectable); autonomous discovery only; must fit the ceiling
+  preferred_classes: [xs, s]       # ranking preference
+  overrun_tolerance: 0.5           # flag on the preview card when code lines exceed the estimate by > 50 %
+  on_overrun: flag                 # flag (default) | reapprove (back to gate 1 when the class grows)
+  exclude_globs: ["**/*.lock", "**/package-lock.json", "**/go.sum", "**/__snapshots__/**", "**/vendor/**", "**/*.min.js", "**/*_generated.*", "**/*.pb.go"]
+  test_globs: ["**/test/**", "**/tests/**", "**/*_test.*", "**/test_*.py", "**/*.test.*", "**/*.spec.*", "**/__tests__/**"]
+discovery_filters:                 # autonomous discovery only; /filters and per-repo overrides
+  allowed_kinds: [bug, docs, tests, small-feature, ci-fix, refactor-small]
+  excluded_kinds: [breaking-change, new-dependency, api-redesign, security-sensitive-crypto]
+  require_labels_any: []           # e.g. good first issue, help wanted, bug; per target too
+  max_issue_age_days: 180
+  min_maintainer_activity_days: 60
+  languages: []
+  validation_tier_max: T1          # T0 | T1 | T2
+proposal:                          # gate 1 (§9.5b)
+  ttl_hours: 72
+  max_per_day: 5
+  claim_comment: off               # off | on (claim comment only after gate 1)
+  max_concurrent_scouts: 2
 discovery:
   proactive: false
   interval_hours: 6
   top_n: 5
+  proposals_per_cycle: 3           # proposal cards per discovery cycle
 telegram:
   mode: single
 backup:

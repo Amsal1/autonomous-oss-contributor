@@ -15,6 +15,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
 from ossbot.common.yamlio import YamlError, safe_load
 
 SNAPSHOT_FILES: tuple[str, ...] = ("egress.yaml", "policy.yaml", "profile.yaml", "targets.yaml")
@@ -73,8 +74,15 @@ class Limits(Strict):
 
 
 class DiffPolicy(Strict):
-    max_files: PosInt = 25
-    max_changed_lines: PosInt = 600
+    """The hard ceiling (CR-004 Amendment B): a runaway-agent guard, changed only in policy.yaml.
+
+    ``max_changed_lines`` counts non-test lines and ``max_test_lines`` test lines (split by
+    ``size.test_globs``, ``size.exclude_globs`` dropped from both); every path counts toward
+    ``max_files`` (decision B5)."""
+
+    max_files: PosInt = 80
+    max_changed_lines: PosInt = 3000
+    max_test_lines: PosInt = 3000
     forbidden_paths: list[str] = Field(default_factory=list)
     forbid_binary: bool = True
     forbid_submodule_changes: bool = True
@@ -124,10 +132,57 @@ class ValidationPolicy(Strict):
     stack: StackValidation = StackValidation()
 
 
+DEFAULT_EXCLUDE_GLOBS: tuple[str, ...] = (
+    "**/*.lock", "**/package-lock.json", "**/go.sum", "**/__snapshots__/**", "**/vendor/**",
+    "**/*.min.js", "**/*_generated.*", "**/*.pb.go",
+)  # fmt: skip
+DEFAULT_TEST_GLOBS: tuple[str, ...] = (
+    "**/test/**", "**/tests/**", "**/*_test.*", "**/test_*.py", "**/*.test.*", "**/*.spec.*", "**/__tests__/**",
+)  # fmt: skip
+DEFAULT_PREFERRED_CLASSES: tuple[SelectableSizeClass, ...] = ("xs", "s")
+
+
+class SizePolicy(Strict):
+    """Soft size preference for autonomous discovery (DESIGN §9.14); never a rule against the user."""
+
+    autonomous_max_class: SelectableSizeClass = "s"
+    preferred_classes: list[SelectableSizeClass] = Field(default_factory=lambda: list(DEFAULT_PREFERRED_CLASSES))
+    overrun_tolerance: Annotated[float, Field(ge=0.0, le=10.0)] = 0.5
+    on_overrun: Literal["flag", "reapprove"] = "flag"
+    exclude_globs: list[str] = Field(default_factory=lambda: list(DEFAULT_EXCLUDE_GLOBS))
+    test_globs: list[str] = Field(default_factory=lambda: list(DEFAULT_TEST_GLOBS))
+
+
+class DiscoveryFilters(Strict):
+    """Autonomous discovery only (DESIGN §9.14); user-directed work skips them."""
+
+    allowed_kinds: list[str] = Field(
+        default_factory=lambda: ["bug", "docs", "tests", "small-feature", "ci-fix", "refactor-small"]
+    )
+    excluded_kinds: list[str] = Field(
+        default_factory=lambda: ["breaking-change", "new-dependency", "api-redesign", "security-sensitive-crypto"]
+    )
+    require_labels_any: list[str] = Field(default_factory=list)
+    max_issue_age_days: PosInt = 180
+    min_maintainer_activity_days: PosInt = 60
+    languages: list[str] = Field(default_factory=list)
+    validation_tier_max: Literal["T0", "T1", "T2"] = "T1"
+
+
+class ProposalPolicy(Strict):
+    """Gate 1 (DESIGN §9.5b, §9.14)."""
+
+    ttl_hours: PosInt = 72
+    max_per_day: PosInt = 5
+    claim_comment: Literal["off", "on"] = "off"
+    max_concurrent_scouts: PosInt = 2
+
+
 class DiscoveryPolicy(Strict):
     proactive: Literal[False] = False  # phase 2
     interval_hours: PosInt = 6
     top_n: PosInt = 5
+    proposals_per_cycle: PosInt = 3  # §9.14: proposal cards per discovery cycle
 
 
 class TelegramPolicy(Strict):
@@ -163,9 +218,22 @@ class PolicyConfig(Strict):
     secrets: SecretsPolicy = SecretsPolicy()
     anomaly: AnomalyPolicy = AnomalyPolicy()
     validation: ValidationPolicy = ValidationPolicy()
+    size: SizePolicy = SizePolicy()
+    discovery_filters: DiscoveryFilters = DiscoveryFilters()
+    proposal: ProposalPolicy = ProposalPolicy()
     discovery: DiscoveryPolicy = DiscoveryPolicy()
     telegram: TelegramPolicy = TelegramPolicy()
     backup: BackupPolicy = BackupPolicy()
+
+    @model_validator(mode="after")
+    def _size_class_within_ceiling(self) -> PolicyConfig:
+        max_lines, max_files = CLASS_BOUNDS[self.size.autonomous_max_class]
+        if max_lines > self.diff.max_changed_lines or max_files > self.diff.max_files:
+            raise ValueError(
+                f"size.autonomous_max_class {self.size.autonomous_max_class!r} ({max_lines} lines, {max_files} files)"
+                f" exceeds the hard ceiling diff ({self.diff.max_changed_lines} lines, {self.diff.max_files} files)"
+            )
+        return self
 
 
 # ----------------------------------------------------------------------------------- targets
@@ -178,7 +246,9 @@ class TargetDefaults(Strict):
     labels: list[str] = Field(default_factory=list)
     skip_labels: list[str] = Field(default_factory=list)
     clone_depth: PosInt = 200
-    max_changed_lines: PosInt = 400
+    # Autonomous-discovery preference only (§17.1, CR4-2o); None = size.autonomous_max_class.
+    # Never a hard limit: the only cap is the policy.diff ceiling.
+    size_class: SelectableSizeClass | None = None
     validation: list[ValidationKind] = Field(default_factory=lambda: list(DEFAULT_VALIDATION))
     stack_validation: Literal["none"] = "none"  # compose | kind are phase 2
     cla_signed: bool = False
@@ -194,7 +264,7 @@ class RepoEntry(Strict):
     note: str | None = None
     extra_labels: list[str] = Field(default_factory=list)
     clone_depth: PosInt | None = None
-    max_changed_lines: PosInt | None = None
+    size_class: SelectableSizeClass | Literal["inherit"] | None = None  # autonomous preference only
     validation: list[ValidationKind] | None = None
     cla_signed: bool | None = None
     ai_policy_override: Literal["allowed"] | None = None
@@ -246,7 +316,7 @@ class ResolvedTarget:
     labels: tuple[str, ...]
     skip_labels: tuple[str, ...]
     clone_depth: int
-    max_changed_lines: int
+    size_class: str | None  # autonomous preference; None = inherit size.autonomous_max_class
     validation: tuple[str, ...]
     cla_signed: bool
     ai_policy_override: str | None
@@ -272,7 +342,7 @@ def resolve_target(targets: TargetsConfig, repo: str) -> ResolvedTarget | None:
                 labels=tuple(dict.fromkeys([*d.labels, *e.extra_labels])),
                 skip_labels=tuple(d.skip_labels),
                 clone_depth=e.clone_depth or d.clone_depth,
-                max_changed_lines=e.max_changed_lines or d.max_changed_lines,
+                size_class=None if e.size_class == "inherit" else (e.size_class or d.size_class),
                 validation=tuple(e.validation or d.validation),
                 cla_signed=d.cla_signed if e.cla_signed is None else e.cla_signed,
                 ai_policy_override=e.ai_policy_override or d.ai_policy_override,

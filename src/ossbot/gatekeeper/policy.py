@@ -11,15 +11,15 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from functools import lru_cache
 from typing import Literal
 
 from ossbot.common.clock import Clock, to_iso
 from ossbot.common.config import ConfigBundle, PolicyConfig, ProfileConfig, ResolvedTarget
 from ossbot.common.hashing import sha256_text
 from ossbot.common.redact import DEFAULT_SECRET_PATTERNS
+from ossbot.common.size import path_matches, split_numstat  # globs shared with size measurement
 
 FORBIDDEN_PATHS_FLOOR: tuple[str, ...] = (".github/workflows/**",)
 DISCLOSURE_MARKER = "<!-- ossbot:cid="
@@ -103,54 +103,18 @@ def effective_forbidden_paths(policy: PolicyConfig) -> tuple[str, ...]:
     return tuple(dict.fromkeys([*FORBIDDEN_PATHS_FLOOR, *policy.diff.forbidden_paths]))
 
 
-# --------------------------------------------------------------------- path globs
-@lru_cache(maxsize=512)
-def _glob_regex(pattern: str) -> re.Pattern[str]:
-    """gitignore-style: a pattern without '/' matches the basename at any depth; '**' spans dirs."""
-    anchored = "/" in pattern.rstrip("/")
-    pat = pattern.lstrip("/")
-    out = []
-    i = 0
-    while i < len(pat):
-        if pat.startswith("**/", i):
-            out.append("(?:.*/)?")
-            i += 3
-        elif pat.startswith("**", i):
-            out.append(".*")
-            i += 2
-        elif pat[i] == "*":
-            out.append("[^/]*")
-            i += 1
-        elif pat[i] == "?":
-            out.append("[^/]")
-            i += 1
-        else:
-            out.append(re.escape(pat[i]))
-            i += 1
-    body = "".join(out)
-    return re.compile(f"^{body}$" if anchored else f"^(?:.*/)?{body}$")
-
-
-def path_matches(path: str, patterns: Iterable[str]) -> str | None:
-    norm = path.lstrip("/")
-    for pattern in patterns:
-        if _glob_regex(pattern).match(norm):
-            return pattern
-    return None
-
-
 # ----------------------------------------------------------------------- checks
-def check_diff(
-    entries: Sequence[DiffEntry], policy: PolicyConfig, target: ResolvedTarget | None = None
-) -> list[Violation]:
+def check_diff(entries: Sequence[DiffEntry], policy: PolicyConfig) -> list[Violation]:
+    """The hard ceiling (§12.6) plus path/mode rules. Nothing target-level moves the ceiling (B6)."""
     out: list[Violation] = []
     rules = policy.diff
     if len(entries) > rules.max_files:
         out.append(Violation("too_many_files", f"{len(entries)} > {rules.max_files}"))
-    max_lines = min(rules.max_changed_lines, target.max_changed_lines) if target else rules.max_changed_lines
-    changed = sum((e.added or 0) + (e.deleted or 0) for e in entries)
-    if changed > max_lines:
-        out.append(Violation("too_many_lines", f"{changed} > {max_lines}"))
+    measure = split_numstat(entries, policy.size.test_globs, policy.size.exclude_globs)
+    if measure.code_lines > rules.max_changed_lines:
+        out.append(Violation("too_many_code_lines", f"{measure.code_lines} > {rules.max_changed_lines}"))
+    if measure.test_lines > rules.max_test_lines:
+        out.append(Violation("too_many_test_lines", f"{measure.test_lines} > {rules.max_test_lines}"))
     forbidden = effective_forbidden_paths(policy)
     for e in entries:
         hit = path_matches(e.path, forbidden)

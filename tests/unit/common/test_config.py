@@ -41,6 +41,36 @@ def test_shipped_config_files_validate() -> None:
     assert parse_models(load("models.yaml")).default.model
 
 
+def test_shipped_policy_size_blocks() -> None:
+    p = parse_bundle(bundle_files()).policy
+    assert (p.diff.max_files, p.diff.max_changed_lines, p.diff.max_test_lines) == (80, 3000, 3000)
+    assert p.size.autonomous_max_class == "s" and p.size.preferred_classes == ["xs", "s"]
+    assert p.size.overrun_tolerance == 0.5 and p.size.on_overrun == "flag"
+    assert "**/package-lock.json" in p.size.exclude_globs and "**/tests/**" in p.size.test_globs
+    assert p.discovery_filters.validation_tier_max == "T1"
+    assert p.proposal.ttl_hours == 72 and p.proposal.claim_comment == "off"
+    assert p.discovery.proposals_per_cycle == 3
+    # the shipped file matches the model defaults (the §9.14 values)
+    assert p.size == PolicyConfig(version=1).size
+    assert p.discovery_filters == PolicyConfig(version=1).discovery_filters
+    assert p.proposal == PolicyConfig(version=1).proposal
+
+
+def test_xl_fits_the_default_ceiling() -> None:
+    policy = parse_yaml_model(PolicyConfig, "policy.yaml", b"version: 1\nsize: {autonomous_max_class: xl}\n")
+    assert policy.size.autonomous_max_class == "xl"
+
+
+def test_repo_size_class_resolution() -> None:
+    text = (
+        "version: 1\ndefaults: {size_class: m}\ncategories: [{id: a, priority: 1, why: x, repos: ["
+        "{repo: a/one}, {repo: a/two, size_class: xs}, {repo: a/three, size_class: inherit}]}]\n"
+    )
+    targets = parse_yaml_model(TargetsConfig, "targets.yaml", text.encode())
+    sizes = {r: getattr(resolve_target(targets, r), "size_class", "?") for r in ("a/one", "a/two", "a/three")}
+    assert sizes == {"a/one": "m", "a/two": "xs", "a/three": None}
+
+
 def test_profile_example_validates_with_placeholders_only() -> None:
     profile = parse_yaml_model(ProfileConfig, "profile.yaml", load("profile.example.yaml"))
     assert profile.github_login == "your-github-login"
@@ -89,6 +119,26 @@ def test_targets_seed_resolves_defaults() -> None:
             "denylist",
         ),
         (TargetsConfig, "version: 1\ndefaults: {stack_validation: kind}\ncategories: []\n", "stack_validation"),
+        # CR4-2o: the per-target line cap is gone (extra=forbid), size_class is a preference
+        (TargetsConfig, "version: 1\ndefaults: {max_changed_lines: 400}\ncategories: []\n", "max_changed_lines"),
+        (
+            TargetsConfig,
+            "version: 1\ncategories: [{id: a, priority: 1, why: x, repos: [{repo: a/b, max_changed_lines: 9}]}]\n",
+            "max_changed_lines",
+        ),
+        (
+            TargetsConfig,
+            "version: 1\ncategories: [{id: a, priority: 1, why: x, repos: [{repo: a/b, size_class: xxl}]}]\n",
+            "size_class",
+        ),
+        (PolicyConfig, "version: 1\nsize: {autonomous_max_class: xxl}\n", "autonomous_max_class"),
+        (PolicyConfig, "version: 1\nsize: {on_overrun: block}\n", "on_overrun"),
+        (PolicyConfig, "version: 1\nsize: {bogus: 1}\n", "bogus"),
+        (PolicyConfig, "version: 1\ndiscovery_filters: {validation_tier_max: T3}\n", "validation_tier_max"),
+        (PolicyConfig, "version: 1\nproposal: {claim_comment: maybe}\n", "claim_comment"),
+        # the validator: a class whose bounds exceed the ceiling
+        (PolicyConfig, "version: 1\ndiff: {max_changed_lines: 200}\nsize: {autonomous_max_class: m}\n", "ceiling"),
+        (PolicyConfig, "version: 1\ndiff: {max_files: 10}\nsize: {autonomous_max_class: l}\n", "ceiling"),
         (ModelsConfig, "version: 1\ndefault: {model: m}\nroles: {}\n", "roles"),
     ],
 )

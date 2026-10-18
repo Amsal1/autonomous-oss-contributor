@@ -65,16 +65,52 @@ def test_binary_symlink_submodule(ctx: AppContext, entry: DiffEntry, code: str) 
     assert code in codes(policy.check_diff([entry], ctx.config.policy))
 
 
-def test_max_files_and_lines(ctx: AppContext) -> None:
-    many = [DiffEntry(f"f{i}.py", 1, 0) for i in range(26)]
-    assert "too_many_files" in codes(policy.check_diff(many, ctx.config.policy))
-    big = [DiffEntry("a.py", 500, 101)]
-    assert "too_many_lines" in codes(policy.check_diff(big, ctx.config.policy))
+def test_ceiling_is_80_3000_3000(ctx: AppContext) -> None:
+    rules = ctx.config.policy.diff
+    assert (rules.max_files, rules.max_changed_lines, rules.max_test_lines) == (80, 3000, 3000)
+
+
+@pytest.mark.parametrize(("n", "hit"), [(80, False), (81, True)])
+def test_max_files_edge(ctx: AppContext, n: int, hit: bool) -> None:
+    entries = [DiffEntry(f"f{i}.py", 1, 0) for i in range(n)]
+    assert ("too_many_files" in codes(policy.check_diff(entries, ctx.config.policy))) is hit
+
+
+@pytest.mark.parametrize(("added", "deleted", "hit"), [(2000, 1000, False), (2000, 1001, True)])
+def test_max_code_lines_edge(ctx: AppContext, added: int, deleted: int, hit: bool) -> None:
+    result = codes(policy.check_diff([DiffEntry("src/a.py", added, deleted)], ctx.config.policy))
+    assert ("too_many_code_lines" in result) is hit
+    assert "too_many_test_lines" not in result
+
+
+@pytest.mark.parametrize(("added", "hit"), [(3000, False), (3001, True)])
+def test_max_test_lines_edge(ctx: AppContext, added: int, hit: bool) -> None:
+    result = codes(policy.check_diff([DiffEntry("tests/test_a.py", added, 0)], ctx.config.policy))
+    assert ("too_many_test_lines" in result) is hit
+    assert "too_many_code_lines" not in result  # test lines never count as code
+
+
+def test_test_lines_never_count_as_code(ctx: AppContext) -> None:
+    entries = [DiffEntry("src/a.py", 3000, 0), DiffEntry("pkg/a_test.go", 3000, 0), DiffEntry("ui/x.spec.ts", 0, 0)]
+    assert codes(policy.check_diff(entries, ctx.config.policy)) == set()
+
+
+def test_excluded_lines_dropped_but_files_counted(ctx: AppContext) -> None:
+    """Decision B5: lockfiles and vendored code add no lines but still count toward max_files."""
+    lock = [DiffEntry("package-lock.json", 50000, 40000), DiffEntry("vendor/x/y.go", 9000, 0)]
+    assert codes(policy.check_diff(lock, ctx.config.policy)) == set()
+    many = [DiffEntry(f"deps/{i}/Cargo.lock", 1, 1) for i in range(81)]
+    assert codes(policy.check_diff(many, ctx.config.policy)) == {"too_many_files"}
+
+
+def test_target_cannot_lower_the_ceiling(ctx: AppContext) -> None:
+    """CR4-2o: no per-target line cap; check_diff takes no target (decision B6)."""
+    import inspect
+
+    assert list(inspect.signature(policy.check_diff).parameters) == ["entries", "policy"]
     target = resolve_target(ctx.config.targets, "langfuse/langfuse")
-    assert target is not None
-    medium = [DiffEntry("a.py", 401, 0)]  # within policy 600 but over the target's 400
-    assert codes(policy.check_diff(medium, ctx.config.policy)) == set()
-    assert "too_many_lines" in codes(policy.check_diff(medium, ctx.config.policy, target))
+    assert target is not None and not hasattr(target, "max_changed_lines")
+    assert codes(policy.check_diff([DiffEntry("a.py", 2999, 0)], ctx.config.policy)) == set()
 
 
 @pytest.mark.parametrize(

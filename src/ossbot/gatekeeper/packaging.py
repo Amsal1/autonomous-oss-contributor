@@ -279,7 +279,7 @@ class Packager:
         message = derived.commit_message.decode("utf-8", "replace")
         confidentiality = policy.effective_confidentiality(ctx.conn, ctx.config)
         target = resolve_target(ctx.config.targets, upstream)
-        violations = policy.check_diff(derived.entries, ctx.config.policy, target)
+        violations = policy.check_diff(derived.entries, ctx.config.policy)
         violations += policy.check_text("commit_message", message, ctx.config, confidentiality, ctx.kiro_key_sha256)
         if kind == "open_pr":
             violations += policy.check_text("title", eff_title or "", ctx.config, confidentiality, ctx.kiro_key_sha256)

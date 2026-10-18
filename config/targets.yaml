@@ -8,7 +8,7 @@ defaults:
   labels: ["good first issue", "help wanted", "bug", "documentation", "kind/bug", "area/docs"]
   skip_labels: ["wontfix", "duplicate", "needs-triage", "stale", "question", "blocked", "discussion"]
   clone_depth: 200
-  max_changed_lines: 400
+  size_class: null                # optional autonomous-discovery preference xs|s|m|l|xl (null = inherit size.autonomous_max_class); never a hard limit
   validation: [static, unit, smoke]
   stack_validation: none          # compose | kind are phase 2
   cla_signed: false
