@@ -350,8 +350,11 @@ Add `github/github-mcp-server` as a read-only GitHub tool for **scout**, **self-
   - local `stdio` binary, pinned release with sha256 in versions.lock; not the hosted remote server
   - flags `--read-only` and `--toolsets repos,issues,pull_requests,actions` (actions only for CI run/log reads), plus explicit `--tools` for search
   - verify the exact tool and toolset names against the pinned release
-- **Token:** a separate fine-grained PAT, "Public repositories (read-only)", named `GITHUB_MCP_READ_TOKEN`, added via setup-secrets.
+- **Token:** reuse the existing `GITHUB_READ_TOKEN` (fine-grained, "Public repositories (read-only)"). The user decided this (2026-10-18); no new secret.
+  - sandboxd hands it only to MCP-enabled research jobs (scout/self-review). Hermes gets it through its own env file.
+  - Add its sha256 to the output key-scan, so a leaked read token is detected like a Kiro key.
   - It never reuses the write token, and is never present in fetch/validate sandboxes.
+  - Accepted trade-off: if it ever has to be revoked, the runner's discovery reads stop too, until a new token is set.
   - Two layers protect writes: the `--read-only` flag, and a token that can't write.
 - **Where it runs:**
   - in the scout and self-review jobs, under the `research` profile; `api.github.com` is already reachable there
