@@ -460,9 +460,10 @@ class ProfileConfig(Strict):
 
 # ------------------------------------------------------------------------------------ models
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
-RoleName = Literal["chat", "planner", "vetter", "coder", "reviewer", "summarizer"]
-ROLE_NAMES: tuple[str, ...] = ("chat", "planner", "vetter", "coder", "reviewer", "summarizer")
-ModelRef = Annotated[str, Field(pattern=MODEL_ID_RE)]
+# scout (CR-004) and vision (CR-002 Amendment A) are revision-5 roles (DESIGN §16.1).
+RoleName = Literal["chat", "planner", "vetter", "coder", "reviewer", "summarizer", "scout", "vision"]
+ROLE_NAMES: tuple[str, ...] = ("chat", "planner", "vetter", "coder", "reviewer", "summarizer", "scout", "vision")
+ModelRef = Annotated[str, Field(pattern=MODEL_ID_RE)]  # 'default', a role name (inherit) or a catalog id
 
 
 class DefaultModel(Strict):
@@ -471,7 +472,7 @@ class DefaultModel(Strict):
 
 
 class RoleModel(Strict):
-    model: ModelRef  # 'default' or a catalog id
+    model: ModelRef  # 'default', another role's name (inherit that role) or a catalog id
     effort: Effort | None = None
     require_distinct_from: RoleName | None = None
 
@@ -483,6 +484,8 @@ class RolesConfig(Strict):
     coder: RoleModel
     reviewer: RoleModel
     summarizer: RoleModel
+    scout: RoleModel
+    vision: RoleModel
 
 
 class CatalogConfig(Strict):
@@ -496,6 +499,27 @@ class ModelsConfig(Strict):
     roles: RolesConfig
     fallbacks: list[ModelRef] = Field(default_factory=list)
     catalog: CatalogConfig = CatalogConfig()
+
+    @model_validator(mode="after")
+    def _references(self) -> ModelsConfig:
+        """``default`` names a model id; a role may name ``default`` or another role (no cycles)."""
+        refs = {"default", *ROLE_NAMES}
+        if self.default.model in refs:
+            raise ValueError(f"default.model must be a model id, not {self.default.model!r}")
+        for ref in self.fallbacks:
+            if ref in refs:
+                raise ValueError(f"fallbacks must be model ids, not {ref!r}")
+        for name in ROLE_NAMES:
+            entry: RoleModel = getattr(self.roles, name)
+            if entry.require_distinct_from == name:
+                raise ValueError(f"roles.{name}.require_distinct_from names the role itself")
+            seen = [name]
+            while entry.model in ROLE_NAMES:
+                if entry.model in seen:
+                    raise ValueError(f"roles.{name}: role reference cycle {' -> '.join([*seen, entry.model])}")
+                seen.append(entry.model)
+                entry = getattr(self.roles, entry.model)
+        return self
 
 
 # ----------------------------------------------------------------------------------- loading

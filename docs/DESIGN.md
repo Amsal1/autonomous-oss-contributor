@@ -1478,6 +1478,8 @@ POST /v1/models/catalog                 worker         {models: [{model_id, name
 POST /v1/discovery-requests             requester, operator {url}
 POST /v1/notify {text}                  worker, requester (10/h)
 GET  /v1/models  · PUT /v1/models/{role} {model, effort, force}   operator
+POST /v1/models/refresh                 operator       (ossctl models refresh: held for the runner's next tick, 16.3)
+POST /v1/models/refresh/claim           worker         -> {requested} (consumes the pending refresh request)
 GET  /v1/audit/verify                   operator
 ```
 

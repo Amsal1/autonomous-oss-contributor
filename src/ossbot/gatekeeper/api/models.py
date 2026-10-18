@@ -25,6 +25,20 @@ async def upsert_catalog(
     return {"new_ids": ctx(request).models.upsert_catalog(body.models, caller.actor)}
 
 
+@router.post("/models/refresh", status_code=202)
+async def request_refresh(
+    request: Request, caller: Annotated[Caller, Depends(require(Role.OPERATOR))]
+) -> dict[str, Any]:
+    """``ossctl models refresh``: the runner runs the catalog job on its next scheduler tick."""
+    return {"requested_at": ctx(request).models.request_refresh(caller.actor)}
+
+
+@router.post("/models/refresh/claim")
+async def claim_refresh(request: Request, caller: Annotated[Caller, Depends(require(Role.WORKER))]) -> dict[str, Any]:
+    """Runner: consume a pending refresh request (``requested`` false when there is none)."""
+    return {"requested": ctx(request).models.claim_refresh(caller.actor)}
+
+
 @router.get("/models")
 async def get_models(request: Request, caller: Annotated[Caller, Depends(require(Role.OPERATOR))]) -> dict[str, Any]:
     return ctx(request).models.read().model_dump()

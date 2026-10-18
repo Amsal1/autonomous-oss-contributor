@@ -247,6 +247,10 @@ class ProbeResult(ApiModel):
 class CatalogEntry(ApiModel):
     model_id: Annotated[str, Field(pattern=MODEL_ID_RE)]
     name: Annotated[str, Field(max_length=200)] | None = None
+    # kiro-cli ModelInfo.supported_input_types (e.g. TEXT, IMAGE); the vision role needs IMAGE
+    input_types: Annotated[list[Annotated[str, Field(pattern=r"^[A-Za-z_]{1,32}$")]], Field(max_length=16)] | None = (
+        None
+    )
 
 
 class CatalogUpsert(ApiModel):

@@ -10,6 +10,8 @@ from ossbot.gatekeeper import db
 
 DECISION_TABLES = {"proposal_approvals", "skill_approvals", "tg_views", "tg_thread_seq"}
 OUTBOX_COLUMNS = {"result_message_id", "bind_tokens_json", "view_json"}
+CR004_TABLES = {"runner_requests"}
+LATEST = 3
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -22,10 +24,10 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def test_from_empty(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "a.db")
-    assert db.migrate(conn) == 2
-    assert _tables(conn) >= DECISION_TABLES
+    assert db.migrate(conn) == LATEST
+    assert _tables(conn) >= DECISION_TABLES | CR004_TABLES
     assert _columns(conn, "tg_outbox") >= OUTBOX_COLUMNS
-    assert db.migrate(conn) == 2  # idempotent
+    assert db.migrate(conn) == LATEST  # idempotent
 
 
 def test_from_version_1_keeps_rows(tmp_path: Path) -> None:
@@ -35,6 +37,6 @@ def test_from_version_1_keeps_rows(tmp_path: Path) -> None:
     conn.execute(
         "INSERT INTO tg_outbox (method, payload_json, status, next_attempt_at) VALUES ('m', '{}', 'sent', 'x')"
     )
-    assert db.migrate(conn) == 2
+    assert db.migrate(conn) == LATEST
     row = conn.execute("SELECT method, result_message_id, bind_tokens_json, view_json FROM tg_outbox").fetchone()
     assert tuple(row) == ("m", None, None, None)

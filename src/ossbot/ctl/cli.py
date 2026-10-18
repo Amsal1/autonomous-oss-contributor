@@ -43,6 +43,10 @@ app.add_typer(config_app, name="config")
 app.add_typer(audit_app, name="audit")
 app.add_typer(egress_app, name="egress")
 app.add_typer(hermes_app, name="hermes")
+model_app = typer.Typer(no_args_is_help=True, help="global model switch (config/models.yaml)")
+models_app = typer.Typer(no_args_is_help=True, help="Kiro model catalog")
+app.add_typer(model_app, name="model")
+app.add_typer(models_app, name="models")
 
 BIN = Path("/opt/ossbot/bin")
 SANDBOXD_SOCK = Path("/run/ossbot/sandboxd.sock")
@@ -395,6 +399,66 @@ def hermes_tier(tier: Annotated[str | None, typer.Argument(help="locked | resear
     if code != 200:
         _fail(f"tier change refused ({code}): {data}")
     _show(data)
+
+
+@model_app.command("list")
+def model_list() -> None:
+    """Every role: configured model, effort and what it resolves to against the current catalog."""
+    from ossbot.common.config import ROLE_NAMES, ModelsConfig  # noqa: PLC0415
+    from ossbot.common.models import Catalog, ModelUnavailable, resolve_config  # noqa: PLC0415
+
+    code, data = api("GET", "/v1/models")
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
+    code, rows = api("GET", "/v1/models/catalog")
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {rows}")
+    cfg = ModelsConfig.model_validate(data)
+    catalog = Catalog.from_rows(rows)
+    typer.echo(f"default: {cfg.default.model} (effort {cfg.default.effort})")
+    for role in ROLE_NAMES:
+        entry = getattr(cfg.roles, role)
+        try:
+            res = resolve_config(cfg, role, catalog)
+            resolved = f"{res.model} [{res.effort}, {res.source}]"
+        except ModelUnavailable:
+            resolved = "UNAVAILABLE (model_unavailable)"
+        typer.echo(f"{role:<11} {entry.model:<28} -> {resolved}")
+    typer.echo(f"catalog: {len(catalog.ids)} models, {len(catalog.forced)} forced")
+
+
+@model_app.command("set")
+def model_set(
+    role: Annotated[str, typer.Argument(help="role name or 'default'")],
+    model: Annotated[str, typer.Argument(help="catalog id, 'default' or a role name (inherit)")],
+    effort: Annotated[str | None, typer.Option(help="low | medium | high | xhigh | max")] = None,
+    force: Annotated[bool, typer.Option("--force", help="accept an id outside the catalog (recorded)")] = False,
+    commit: Annotated[bool, typer.Option("--commit", help="git commit config/models.yaml as ossadmin")] = False,
+) -> None:
+    """Switch a role's model (DESIGN §16.2). The gatekeeper rewrites models.yaml and prints the diff."""
+    body: dict[str, Any] = {"model": model, "force": force}
+    if effort is not None:
+        body["effort"] = effort
+    code, data = api("PUT", f"/v1/models/{role}", body)
+    if code != 200:
+        _fail(f"model set refused ({code}): {data}")
+    typer.echo(data.get("diff") or "models.yaml unchanged")
+    if commit:
+        repo = Paths.default().repo
+        argv = ["/usr/bin/git", "-C", str(repo), "commit", "-m", f"chore(models): {role} -> {model}", "--",
+                "config/models.yaml"]  # fmt: skip
+        if os.geteuid() == 0:
+            argv = ["/usr/sbin/runuser", "-u", "ossadmin", "--", *argv]
+        raise typer.Exit(subprocess.run(argv, check=False).returncode)
+
+
+@models_app.command("refresh")
+def models_refresh() -> None:
+    """Ask the runner to run the catalog job (sandboxd list_models) on its next scheduler tick."""
+    code, data = api("POST", "/v1/models/refresh")
+    if code != 202:
+        _fail(f"refresh request refused ({code}): {data}")
+    typer.echo(f"catalog refresh requested at {data.get('requested_at')}; the runner picks it up on its next tick")
 
 
 @config_app.command("reload")

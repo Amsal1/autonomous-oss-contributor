@@ -253,7 +253,7 @@ def build_context(
         state_machine=StateMachine(conn, clock, audit, approvals, control, limits, notify),
         contributions=ContributionService(conn, clock, audit, lambda: snapshots.current.bundle),
         anomaly=AnomalyHandler(conn, clock, audit, control, notify),
-        models=ModelsAdmin(paths.config_dir / "models.yaml", conn, clock, audit),
+        models=ModelsAdmin(paths.config_dir / "models.yaml", conn, clock, audit, notify),
         anchors=AnchorClient(paths.anchor_sock),
         gitops=gitops,
         kiro_key_sha256=os.environ.get("KIRO_KEY_SHA256") or None,
