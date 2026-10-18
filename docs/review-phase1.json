@@ -1,41 +1,20 @@
 {
   "verdict": "CHANGES_REQUESTED",
-  "round": 2,
+  "round": 3,
   "findings": [
     {
-      "id": "P1-6",
+      "id": "P1-11",
       "severity": "HIGH",
-      "where": "scripts/provision.sh / scripts/lib/wsl.sh (systemd-resolved left enabled); src/ossbot/ctl/render.py:198-215; tests/system/test_egress_per_uid.sh:22-53; src/ossbot/ctl/doctor.py:248-275",
-      "title": "DNS exfiltration through systemd-resolved IPC (varlink /run/systemd/resolve/io.systemd.Resolve 0666 and D-Bus org.freedesktop.resolve1) for every service uid, past OSSBOT-OUT",
-      "fix": "Mask systemd-resolved in an idempotent provision step (disable --now + mask, changed/unchanged; resolv.conf is the WSL file naming 10.255.255.254, nothing needs resolved). Add per-uid varlink and D-Bus ResolveHostname probes (expect failure; root control still resolves) to test_egress_per_uid.sh and doctor's per-uid check, have doctor/watchdog flag resolved unmasked/active, and record it in an ADR-0005 addendum."
+      "where": "sandbox/proxy/squid.conf.j2:31,33; src/ossbot/ctl/render.py (render_squid); tests/unit/ctl/golden/squid.conf",
+      "title": "PTR-based allowlist bypass: squid dstdomain matches IP-literal CONNECTs through the reverse name",
+      "fix": "Render '-n' on every dstdomain ACL (categories and denied_domains) so an IP literal never matches a category by its PTR. Add a render test asserting -n on every dstdomain, a system/sandbox probe that an IP-literal CONNECT per port and per pool returns 403 with no proxy DNS packet, and an ADR-0005 addendum."
     },
     {
-      "id": "P1-7",
-      "severity": "NIT",
-      "where": "src/ossbot/gatekeeper/control.py:226-235,314-319; src/ossbot/gatekeeper/app.py:35",
-      "title": "Root kill followed by a resume within one 10 s housekeeping tick never reaches reconcile, so an armed approval and its confirm token survive",
-      "fix": "Invalidate armed/confirmed in request_resume() when a kill flag exists and in reconcile() whenever offline resume.log entries are read; correct the comment that nothing can be armed while killed (ApprovalService.approve has no running check, only the Telegram handler)."
-    },
-    {
-      "id": "P1-8",
-      "severity": "NIT",
-      "where": "src/ossbot/watchdog/tick.py:208-216,228",
-      "title": "Watchdog lifecycle 'down' exemption ignores scope: a workers-scope down (gatekeeper still running, persists across reboots) disables the gatekeeper-unhealthy pause and restart_failed",
-      "fix": "Exempt only scope == 'distro', or keep check_health for the workers scope."
-    },
-    {
-      "id": "P1-9",
-      "severity": "NIT",
-      "where": "scripts/down.ps1:35-36; systemd/ossbot-sandboxd.service (OSSBOT_DRAIN_TIMEOUT_S=120, TimeoutStopSec=150); src/ossbot/common/config.py LifecyclePolicy.drain_timeout_s (le=3600)",
-      "title": "Configurable drain timeout is honoured only by ossctl down: down.ps1 caps at a hard-coded 120+90 s and the unit drain/stop timeouts are static",
-      "fix": "Either cap lifecycle.drain_timeout_s at 120, or make down.ps1 use the effective value and render the sandboxd drain env + TimeoutStopSec (drop-in) from the policy so TimeoutStopSec >= drain + 30 s holds for any value."
-    },
-    {
-      "id": "P1-10",
-      "severity": "NIT",
-      "where": "scripts/lib/services.sh:49-55",
-      "title": "app-deploy reported 'rsync (1 items)' changed and restarted four units with no deploy-source file newer than the previous unchanged run; only the count is logged, so the cause cannot be traced",
-      "fix": "Log the itemized rsync lines to the provision log and ignore metadata-only differences (e.g. --omit-dir-times or a content checksum) so they do not trigger uv sync and service restarts."
+      "id": "P1-12",
+      "severity": "HIGH",
+      "where": "sandbox/proxy/squid.conf.j2:34,39,43",
+      "title": "Squid resolves every requested hostname, including denied ones (DNS exfiltration via the proxy for 3140, 3150 and the fetch/llm sandbox pools)",
+      "fix": "Evaluate the resolved-IP deny only after a category match: per rule 'http_access allow port_X src_Y cat_Z !denied_dst', or a fast 'deny !<union of the port/pool categories>' ahead of 'deny denied_dst'. Add a probe that a random-label CONNECT per port and per pool leaves the OSSBOT-IN proxy-DNS counter (or squid ipcache) unchanged, a render test that no dst ACL is evaluated before a category ACL, and an ADR-0005 addendum."
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.md"
