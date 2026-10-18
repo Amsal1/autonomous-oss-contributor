@@ -347,7 +347,11 @@ Coder steps can run out of context and stop mid-task, leaving uncommitted work. 
 Add `github/github-mcp-server` as a read-only GitHub tool for **scout**, **self-review** and **Hermes**. Owner FEAT: the one that owns Kiro agent configs and the scout stage. If that FEAT is already closed, the next open pipeline FEAT. Add TRACEABILITY rows.
 
 - **Setup:**
-  - local `stdio` binary, pinned release with sha256 in versions.lock; not the hosted remote server
+  - local `stdio` binary, not the hosted remote server, pinned in versions.lock:
+    - **Release:** **v2.0.2**, published 2026-10-08. An immutable GitHub release; tag commit `eb47a99`, signed and verified.
+    - **Asset:** `github-mcp-server_Linux_x86_64.tar.gz`
+    - **sha256:** `815e27d931c796af0c97f24fd211e14f8a4607d4528377719a5ad2352086b0b0` (from the release API asset digest)
+    - **Install:** provision downloads it via the github_read egress, verifies the sha256 and installs it root-owned 0755 into the sandbox-llm image and the Hermes host path. Upgrade only via a versions.lock bump.
   - flags `--read-only` and `--toolsets repos,issues,pull_requests,actions` (actions only for CI run/log reads), plus explicit `--tools` for search
   - verify the exact tool and toolset names against the pinned release
 - **Token:** reuse the existing `GITHUB_READ_TOKEN` (fine-grained, "Public repositories (read-only)"). The user decided this (2026-10-18); no new secret.
