@@ -9,6 +9,7 @@ failure fails the stage.
 
 from __future__ import annotations
 
+import contextlib
 import secrets
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -17,10 +18,10 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from ossbot.common.models import Catalog, ModelsFile, ModelUnavailable, ResolvedModel
+from ossbot.common.models import Catalog, DistinctUnavailable, ModelsFile, ModelUnavailable, ResolvedModel
 from ossbot.runner import output_parse, prompts
-from ossbot.runner.errors import StageFailed, sandbox_run
-from ossbot.runner.gk_client import Gatekeeper
+from ossbot.runner.errors import Interrupted, StageFailed, sandbox_run
+from ossbot.runner.gk_client import Gatekeeper, GkError
 from ossbot.runner.sbx_client import Sandbox
 
 __all__ = ["ROLE_PROFILE", "Kiro", "LlmResult", "StageFailed", "as_prompt", "new_run_id"]
@@ -53,16 +54,23 @@ class Kiro:
         models: ModelsFile,
         inputs_root: Path,
         tick: Callable[[], None] | None = None,
+        on_job: Callable[[str], None] | None = None,
     ) -> None:
         self.gk = gk
         self.sbx = sbx
         self.models = models
         self.inputs_root = inputs_root
         self.tick = tick
+        self.on_job = on_job  # cid -> None, before each job (the sandbox-resource sweep note)
 
     def resolve(self, role: str) -> ResolvedModel:
         try:
             return self.models.resolve(role, Catalog.from_rows(self.gk.catalog()))
+        except DistinctUnavailable as exc:
+            # never a review by the coder's own model: pause (owner alert) and re-queue the stage
+            with contextlib.suppress(GkError):
+                self.gk.pause(f"model_collision:{role}")
+            raise Interrupted(f"model_collision: {exc}") from exc
         except ModelUnavailable as exc:
             raise StageFailed("model_unavailable", str(exc)) from exc
 
@@ -90,6 +98,8 @@ class Kiro:
             "args": {"role": role, "prompt_file": prompt_file, "model": model.model, "effort": model.effort},
             "inputs": inputs, "timeout_s": timeout_s,
         }  # fmt: skip
+        if self.on_job is not None:
+            self.on_job(cid)
         job = sandbox_run(self.sbx, spec, self.tick)
         if job.get("state") != "succeeded":
             raise StageFailed(str(job.get("error_class") or "kiro_failed"), f"{role} job {run_id}")

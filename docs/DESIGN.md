@@ -4558,19 +4558,24 @@ default:
   model: claude-opus-5.5        # exact id as printed by `kiro-cli chat --list-models --format json` [VERIFY id format]
   effort: high                  # low | medium | high | xhigh | max (model-dependent)
 roles:
-  chat:       { model: default, effort: medium }
+  chat:       { model: claude-sonnet-5.5, effort: medium }  # owner 2026-10-18: opus for deep reasoning, sonnet elsewhere
   planner:    { model: default, effort: high }
-  vetter:     { model: claude-sonnet-5, effort: medium }
+  vetter:     { model: claude-sonnet-5.5, effort: medium }
   coder:      { model: default, effort: high }
-  reviewer:   { model: claude-sonnet-5.5, effort: high, require_distinct_from: coder }
-  summarizer: { model: claude-haiku-4.5, effort: low }
+  reviewer:   { model: claude-sonnet-5.5, effort: xhigh, require_distinct_from: coder }  # enforced after fallback
+  summarizer: { model: claude-sonnet-5.5, effort: low }
   scout:      { model: planner, effort: high }   # revision 5 (CR-004); a role name as model = inherit that role
-  vision:     { model: default, effort: medium } # revision 5 (CR-002 Amendment A); must be an image-capable catalog id
-fallbacks: [claude-opus-5, claude-sonnet-5]   # tried in order when a role's model is missing from the catalog
+  vision:     { model: claude-sonnet-5.5, effort: medium } # revision 5 (CR-002 Amendment A); must be an image-capable catalog id
+fallbacks: [claude-opus-5.5, claude-sonnet-5.5]   # tried in order when a role's model is missing; a fallback equal to
+                                                 # the role's own model is skipped
 catalog:
   refresh_hours: 24
   notify_new_models: true
 ```
+
+`require_distinct_from` stays enforced after fallback: when no catalog model distinct from the coder's is available,
+`resolve()` raises `DistinctUnavailable` and the runner pauses the pipeline (`model_collision:<role>`, owner alert)
+instead of reviewing with the coder's own model (FEAT-006, owner decision 2026-10-18).
 
 Revision 5: roles `scout` and `vision` are added; `/model` and `ossctl model set` switch them like any other role. Every role and the Hermes provider resolve through this one file (the global switch, user decision); new catalog models produce one Telegram card each (16.3). Every LLM role is told to web-search unknowns (FR-12), and token usage is unlimited.
 

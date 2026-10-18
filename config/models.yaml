@@ -1,22 +1,24 @@
 # Global model switch (DESIGN §16). The only config file read live (mtime-cached); written by
 # the gatekeeper (`ossctl model set`, Telegram /model). Ids must match the Kiro catalog
 # (`kiro-cli chat --list-models --format json`; dot notation for minor versions, ADR-0009
-# addendum); spelling is confirmed by the first catalog refresh. A role name as model inherits
-# that role's model (scout follows planner until set).
+# addendum); spelling confirmed against the live catalog on 2026-10-18 (FEAT-006 item 32). A role
+# name as model inherits that role's model (scout follows planner until set).
+# Owner rule (2026-10-18): claude-opus-5.5 wherever deep reasoning is needed (planner, scout,
+# coder), claude-sonnet-5.5 everywhere else; the reviewer stays a different model from the coder.
 version: 1
 default:
   model: claude-opus-5.5
   effort: high                  # low | medium | high | xhigh | max (model-dependent)
 roles:
-  chat: {model: default, effort: medium}
+  chat: {model: claude-sonnet-5.5, effort: medium}        # Hermes assistant; /model switches it
   planner: {model: default, effort: high}
-  vetter: {model: claude-sonnet-5, effort: medium}
+  vetter: {model: claude-sonnet-5.5, effort: medium}
   coder: {model: default, effort: high}
-  reviewer: {model: claude-sonnet-5.5, effort: high, require_distinct_from: coder}
-  summarizer: {model: claude-haiku-4.5, effort: low}
+  reviewer: {model: claude-sonnet-5.5, effort: xhigh, require_distinct_from: coder}
+  summarizer: {model: claude-sonnet-5.5, effort: low}
   scout: {model: planner, effort: high}           # CR-004 scout stage; inherits planner
-  vision: {model: default, effort: medium}        # assistant image turns; must be image-capable
-fallbacks: [claude-opus-5, claude-sonnet-5]   # tried in order when a role's model is missing from the catalog
+  vision: {model: claude-sonnet-5.5, effort: medium}      # assistant image turns; must be image-capable
+fallbacks: [claude-opus-5.5, claude-sonnet-5.5]   # tried in order when a role's model is missing from the catalog
 catalog:
   refresh_hours: 24
   notify_new_models: true

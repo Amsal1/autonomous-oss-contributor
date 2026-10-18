@@ -67,6 +67,10 @@ class Gatekeeper:
     def notify(self, text: str) -> None:
         self._call("POST", "/v1/notify", {"text": text[:3500]})
 
+    def pause(self, reason: str) -> None:
+        """A soft stop the owner resumes (the gatekeeper announces it on Telegram)."""
+        self._call("POST", "/v1/control/pause", {"reason": reason[:200]})
+
     # --------------------------------------------------------------- contributions
     def contributions(self, state: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
         params: dict[str, Any] = {"limit": limit}

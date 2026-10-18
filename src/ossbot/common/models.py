@@ -41,6 +41,13 @@ class ModelUnavailable(RuntimeError):
     error_class = "model_unavailable"
 
 
+class DistinctUnavailable(ModelUnavailable):
+    """``require_distinct_from`` cannot be met (the reviewer would run on the coder's model): the
+    runner pauses the pipeline and alerts instead of running a non-independent review."""
+
+    error_class = "model_collision"
+
+
 @dataclass(frozen=True)
 class Catalog:
     """The ids sandboxd accepts: the latest refresh plus force-set ids (N6)."""
@@ -102,10 +109,12 @@ def resolve_config(cfg: ModelsConfig, role: str, catalog: Catalog) -> ResolvedMo
     if catalog.accepts(requested) and requested != avoid:
         return ResolvedModel(role, requested, effort, source, requested)
     for fallback in cfg.fallbacks:
-        if catalog.accepts(fallback) and fallback != avoid:
+        # a fallback equal to the role's own (missing or colliding) model is no fallback at all
+        if fallback != requested and catalog.accepts(fallback) and fallback != avoid:
             return ResolvedModel(role, fallback, effort, "fallback", requested)
-    if catalog.accepts(requested):  # nothing distinct available: keep it (the runner flags it)
-        return ResolvedModel(role, requested, effort, source, requested)
+    if avoid is not None and (catalog.accepts(requested) or catalog.accepts(avoid)):
+        # require_distinct_from stays enforced after fallback: never run the reviewer on the coder's model
+        raise DistinctUnavailable(f"{role}: no catalog model distinct from {distinct} ({avoid}) is available")
     raise ModelUnavailable(f"{role}: {requested} is not in the Kiro catalog and no fallback is")
 
 
