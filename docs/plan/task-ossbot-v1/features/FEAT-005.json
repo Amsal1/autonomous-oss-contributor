@@ -11,6 +11,8 @@
     "DEV pytest -m telegram passes AC 14: no message > 4096 chars, HTML always well-formed (hypothesis), every callback_data <= 64 bytes, diff pages correctly, .patch sent when the diff exceeds one page, PR body verbatim in <pre>, Approve only after every body part was delivered",
     "Golden cards exist and pass for open_pr, push_update, comment and issue_claim in LIVE and DRY RUN, plus long, non-ASCII, edited-by-you and import variants",
     "test_hermes_surface.py passes AC 25 (terminal, file/read_file, bridge tools, 404 -> kill; allowlist and allowlist-with-extra-fields -> pass); test_relay.py proves Hermes text is rendered escaped with no buttons and never executed as a command",
+    "Phase 1 review P1-4: Edit title / Edit body run policy.check_text on the edited text and refuse the edit (nothing stored) on any violation before ApprovalService.set_text_override; a test proves an edited body containing a confidentiality-floor value or lacking the disclosure is refused",
+    "CR-001 (DESIGN 13.5, PLAN item 22): /drain, /undrain, /down (scope workers, gatekeeper stays up) and /up work from Telegram with the existing safety classes; /status shows lifecycle and Telegram poll health",
     "ruff, mypy strict, lint-imports clean; git status --porcelain empty after the commit"
   ],
   "verification": [

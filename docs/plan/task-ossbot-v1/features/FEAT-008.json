@@ -14,6 +14,7 @@
     "README.md, AGENTS.md, docs/SETUP.md, docs/ARCHITECTURE.md exist with the §18.5/§18.7 content; ossctl lint personal finds no profile value in tracked files outside docs/; ossctl docs commands --check passes",
     "A commit containing a fake ghp_ token is refused by .githooks/pre-commit in the throwaway clone (AC 17)",
     "ci.yml has permissions contents: read, every action pinned by full commit SHA, jobs lint/test/secrets; its commands pass locally via DEV",
+    "CR-001 (DESIGN 13.5, PLAN item 30): README/SETUP 'Daily use' and AGENTS.md lifecycle invariants; Windows shutdown layers 6a (shutdown blocker, verified live on this Windows 11 Home 26100 laptop, ADR) and 6b (User32 1074 task running down.ps1 -Timeout 20 -Kind hook) installed by bootstrap.ps1, removed by -Uninstall, checked by ossctl.ps1 doctor; status.ps1 shows the last shutdown type",
     "Every check of docs/PLAN.md 'Required overall verification' passes; gitleaks git --redact --config .gitleaks.toml . exits 0; git status --porcelain empty"
   ],
   "verification": [

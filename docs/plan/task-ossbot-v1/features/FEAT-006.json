@@ -12,6 +12,7 @@
     "DEV pytest -m \"unit or telegram or e2e\" passes, including AC 4 (dry-run card, zero writes, audit 'would' payload), AC 5 (live against fake: exact SHA pushed, title/body hashes, identity Amsal Khan from the test profile), AC 8 (injection fixture has no effect), AC 13 (ossctl model set and /model rewrite models.yaml with comments preserved, next coder invocation uses --model <id>, non-catalog id rejected without --force, new model -> one notification), AC 28 (fix-round failure returns to WATCHING), AC 30 (re-discovery rules)",
     "ROOTDEV pytest -m e2e_docker passes through real sandboxd + dockerfilter + Docker + proxy with the stub kiro-cli",
     "After bootstrap, ossbot-runner is active and idles with catalog_empty while no Kiro key exists; tests/system/test_config_write.sh still passes",
+    "CR-001 (DESIGN 13.5, PLAN item 25): no stage is scheduled while the lifecycle flag exists (require_up); sandbox jobs ending failed/interrupted re-queue their stage from the last completed one on up; ossctl up reports the real resumed count; an e2e SIGKILLs the runner mid-stage and the stage re-queues with no duplicate public write",
     "ruff, mypy, lint-imports (runner never imports gatekeeper) clean; git status --porcelain empty after the commit"
   ],
   "verification": [
