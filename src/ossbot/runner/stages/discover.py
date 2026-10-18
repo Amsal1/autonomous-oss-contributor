@@ -50,7 +50,7 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
     now = now or datetime.now(UTC)
     bundle = sc.config()
     refused = refused if refused is not None else set()
-    active = {str(c["upstream"]).lower() for c in sc.gk.contributions(limit=200)
+    active = {str(c["upstream"]).lower() for c in sc.gk.active_contributions()
               if c.get("state") in ACTIVE_PR_STATES}  # fmt: skip
     prefs = sc.gk.prefs()
     filters = DiscoveryFilters.model_validate(prefs["filters"])

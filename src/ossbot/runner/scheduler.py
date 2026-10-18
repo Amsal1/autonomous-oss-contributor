@@ -12,10 +12,12 @@ Discovery every ``discovery.interval_hours``; then every contribution whose stat
 within ``limits.max_concurrent_pipelines`` and ``proposal.max_concurrent_scouts`` (one stage per
 contribution at a time); autonomous first scouts wait while ``proposal.max_per_day`` is used up.
 Stage failures move the item to FAILED (the gatekeeper redirects to WATCHING while a PR is open);
-interruptions (control state, a sandbox job cut by a drain or crash, sandboxd unreachable) only
-end the stage run as ``interrupted`` and the next tick re-queues it (max 3 by the gatekeeper). On
-start, stage runs left ``running`` by a crashed runner become ``interrupted``; ``resumed`` counts
-them (``ossctl up`` reports it).
+in a gate-owned state (a re-scout from PROPOSED or RESCOPE_REQUIRED) the item keeps its state and
+the stage is retried after 10 min, doubling up to 6 h, with one owner message; interruptions
+(control state, a sandbox job cut by a drain or crash, sandboxd unreachable) only end the stage
+run as ``interrupted`` and the next tick re-queues it (max 3 by the gatekeeper). On start, stage
+runs left ``running`` by a crashed runner become ``interrupted``; ``resumed`` counts them
+(``ossctl up`` reports it).
 """
 
 from __future__ import annotations
@@ -49,6 +51,8 @@ CATALOG_RETRY = timedelta(hours=1)  # §20: catalog_empty is retried hourly
 PROBE_RETRY = timedelta(minutes=30)  # probes that ran but did not all pass (a failure also pauses, §10.9)
 CAP_RECHECK = timedelta(hours=1)  # daily cap without a known next slot
 PROBE_ROLES = ("planner", "coder")  # the agents the five probes exercise (§10.9)
+HELD_RETRY = timedelta(minutes=10)  # first retry of a stage that failed in a NO_FAIL state (re-scout)
+HELD_RETRY_MAX = timedelta(hours=6)  # doubling up to this
 
 
 @dataclasses.dataclass
@@ -80,6 +84,9 @@ class Scheduler:
         self.last_catalog: datetime | None = None
         self.refused: set[str] = set()
         self.resumed = 0
+        # cid -> (failures, next try): a stage error in a NO_FAIL state cannot fail the item, so it
+        # is retried with backoff and the owner is told once instead of a silent retry every tick
+        self.held: dict[str, tuple[int, datetime]] = {}
 
     # ------------------------------------------------------------------ start
     def recover_interrupted(self) -> int:
@@ -174,8 +181,8 @@ class Scheduler:
         noted = common.volume_cids(self.sc)
         if not noted:
             return 0
-        try:
-            states = {str(c["id"]): str(c.get("state")) for c in self.sc.gk.contributions(limit=200)}
+        try:  # terminal ones are not listed: they are looked up one by one below
+            states = {str(c["id"]): str(c.get("state")) for c in self.sc.gk.active_contributions()}
         except GkError:
             return 0
         done = 0
@@ -260,12 +267,15 @@ class Scheduler:
         max_scouts = bundle.policy.proposal.max_concurrent_scouts
         with self.lock:
             self.running = {cid: v for cid, v in self.running.items() if v[1] is None or not v[1].done()}
-        for c in self.sc.gk.contributions(limit=200):
+        for c in self.sc.gk.active_contributions():  # every non-terminal item, not a window of recent ones
             if not self.first_start_done:
                 break  # a probe-gate refusal during this tick: hold the rest
             cid, state = str(c["id"]), str(c.get("state"))
             if state in TERMINAL or cid in self.running:
                 continue
+            held = self.held.get(cid)
+            if held is not None and self.now() < held[1]:
+                continue  # repeated stage errors in a gate-owned state: backing off
             stage = stages.stage_for(c)
             if stage is None or not self._eligible(c, stage):
                 continue
@@ -290,6 +300,7 @@ class Scheduler:
             if stage is None:
                 return
             stage(sc, c)
+            self.held.pop(cid, None)
         except ProbesNotReady:
             log.warning("probe gate refused a Kiro job for %s; holding stages", cid,
                         extra={"event": "probe_gate", "cid": cid})  # fmt: skip
@@ -321,14 +332,33 @@ class Scheduler:
 
     def fail(self, sc: StageContext, cid: str, error_class: str) -> None:
         try:
-            state = str(sc.gk.contribution(cid)["state"])
-            if state in TERMINAL or state in NO_FAIL:
+            c = sc.gk.contribution(cid)
+            state = str(c["state"])
+            if state in TERMINAL:
+                return
+            if state in NO_FAIL:
+                self._hold(sc, c, error_class)
                 return
             sc.gk.transition(cid, state, "FAILED", {"error_class": error_class[:64]})
             if error_class == "model_unavailable":
                 sc.say(f"⚠️ {cid}: no model of its role is in the Kiro catalog (model_unavailable).")
         except GkError as exc:
             log.warning("could not fail %s: %s", cid, exc.code, extra={"event": "fail_refused", "cid": cid})
+
+    def _hold(self, sc: StageContext, c: dict[str, Any], error_class: str) -> None:
+        """A gate-owned state (a re-scout from PROPOSED or RESCOPE_REQUIRED) keeps its state; the
+        stage is retried after 10 min, doubling up to 6 h, and the owner is told on the first one."""
+        cid = str(c["id"])
+        count = self.held.get(cid, (0, self.now()))[0] + 1
+        delay = min(HELD_RETRY * 2 ** (count - 1), HELD_RETRY_MAX)
+        self.held[cid] = (count, self.now() + delay)
+        log.warning("stage failed for %s in %s (%s); retry #%d in %s", cid, c.get("state"), error_class, count, delay,
+                    extra={"event": "stage_held", "cid": cid})  # fmt: skip
+        if count == 1:
+            where = f"{c['upstream']}#{c['issue_number']}" if c.get("issue_number") else str(c.get("upstream"))
+            minutes = int(delay.total_seconds() // 60)
+            sc.say(f"⚠️ {where}: revising the proposal failed ({error_class[:64]}). It stays at"
+                   f" {c.get('state')}; retrying in {minutes} min, then less often.")  # fmt: skip
 
     def shutdown(self, wait: bool = True) -> None:
         self.pool.shutdown(wait=wait, cancel_futures=True)

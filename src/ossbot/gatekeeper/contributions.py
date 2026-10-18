@@ -225,16 +225,25 @@ class ContributionService:
             ]
         return doc
 
-    def list(self, state: str | None, limit: int) -> list[dict[str, Any]]:
+    def list(self, state: str | None, limit: int, *, active: bool = False, offset: int = 0) -> list[dict[str, Any]]:
+        """Newest first; ``active`` leaves out terminal items (the runner's dispatch view, paged
+        with ``offset``, so long-waiting items never fall out of a window of recent ones)."""
         sql = "SELECT id, upstream, issue_number, source, state, state_reason, pr_number, pr_url, updated_at," \
               " kind, est_class, approved_class, proposal_version, snooze_until, work_url, work_ref," \
               " proposal_feedback_json IS NOT NULL AS feedback_pending FROM contributions"  # fmt: skip
+        where: list[str] = []
         params: list[Any] = []
         if state:
-            sql += " WHERE state = ?"
+            where.append("state = ?")
             params.append(state)
-        sql += " ORDER BY updated_at DESC LIMIT ?"
-        params.append(limit)
+        if active:
+            terminal = sorted(s.value for s in TERMINAL_STATES)
+            where.append(f"state NOT IN ({', '.join('?' * len(terminal))})")
+            params.extend(terminal)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY updated_at DESC, id LIMIT ? OFFSET ?"
+        params.extend((limit, offset))
         return [dict(r) for r in self.conn.execute(sql, params)]
 
     def package_ts(self, cid: str, rev: int) -> str:

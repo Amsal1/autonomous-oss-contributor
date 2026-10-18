@@ -11,7 +11,11 @@ no tags, no submodules, no LFS, https only, no hooks, no credentials; nothing fr
 the scout session reads it as a read-only snapshot in the ``research`` profile (no shell). A clone
 over ``SCOUT_MAX_MB`` skips the item (``snapshot_too_large``, with a note). The task volume is
 destroyed when the stage ends, whatever the outcome, so gate 1 waits without one; the real fetch
-after Start work clones afresh (DESIGN §9.5a, ADR-0005 addendum). Its ``fetch.json`` says whether the repo has a
+after Start work clones afresh (DESIGN §9.5a, ADR-0005 addendum). A re-scout from RESCOPE_REQUIRED (work
+has started) clones nothing: it reads the build tree of the earlier attempt as its snapshot, keeps
+the volume if it fails (Continue still needs it) and, once the new version is stored, destroys it
+and clears the runner's build notes, so the next Start work fetches, plans and packages afresh.
+Its ``fetch.json`` (for a rescope, the build's) says whether the repo has a
 test suite; a proposal listing no tests for such a repo gets one repair retry. The gatekeeper
 validates and stores the proposal and moves the item to PROPOSED; autonomous proposals above
 ``autonomous_max_class``, an excluded kind or a "never" repo are refused there and the item is
@@ -43,6 +47,9 @@ STAGE = "scout"
 SCOUT_MAX_MB = 2048  # sandbox/entrypoints/fetch.sh SCOUT_MAX_MB (error_class snapshot_too_large)
 SKIP_CODES = {"above_autonomous_max": "too_big_for_auto", "kind_filtered": "kind_filtered",
               "never_repo": "never_repo", "above_ceiling": "above_ceiling"}  # fmt: skip
+# runner notes of a build attempt, cleared when a rescope ends in a new proposal version
+BUILD_NOTES = ("fetch", "fetch_artifacts", "implement", "validation", "diff", "review", "package_body", "packaged",
+               "watch_fix")  # fmt: skip
 TESTS_REQUIRED = (
     "the repository has a test suite: `tests` must list the tests to add or update (leave `no_suite_reason` null)"
 )
@@ -106,10 +113,15 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         sc.transition(cid, state, "SCOUTING")
         state = "SCOUTING"
     user = c.get("source") == "user"
+    keep = state == "RESCOPE_REQUIRED"  # work has started: the volume holds the build tree
     try:
         skip = _scout(sc, c, state, user)
+        keep = False  # a new version (PROPOSED) or SKIPPED: the old build tree is not needed any more
     finally:  # the scout clone never outlives the stage: gate 1 waits without a task volume
-        destroy_volume(sc, cid)
+        if not keep:  # still RESCOPE_REQUIRED after a failure: Continue / a retry need the build tree
+            destroy_volume(sc, cid)
+    if state == "RESCOPE_REQUIRED":  # the next Start work begins a new build (fresh fetch, rev notes cleared)
+        sc.save(cid, **dict.fromkeys(BUILD_NOTES))
     if skip is None:
         return
     sc.transition(cid, "SCOUTING", "SKIPPED", {"reason": skip})
@@ -129,14 +141,18 @@ def _scout(sc: StageContext, c: dict[str, Any], state: str, user: bool) -> str |
     cid, repo = str(c["id"]), str(c["upstream"])
     feedback = json.loads(c["proposal_feedback_json"]) if c.get("proposal_feedback_json") else None
     with StageRun(sc, cid, STAGE, profile="research") as run_:
-        depth_args = {"repo": repo, "clone_depth": 1, "prefetch": False}
-        try:
-            clone = job(sc, cid, STAGE, "fetch", "fetch", depth_args, "rw")
-        except StageFailed as exc:
-            if exc.error_class != "snapshot_too_large" or state != "SCOUTING":
-                raise
-            return "snapshot_too_large"
-        suite = has_test_suite(artifact_json(clone, "fetch.json"))
+        rescope = state == "RESCOPE_REQUIRED"
+        if rescope:  # the snapshot is the build tree of the earlier attempt: no second clone into it
+            suite = has_test_suite(sc.load(cid).get("fetch"))
+        else:
+            depth_args = {"repo": repo, "clone_depth": 1, "prefetch": False}
+            try:
+                clone = job(sc, cid, STAGE, "fetch", "fetch", depth_args, "rw")
+            except StageFailed as exc:
+                if exc.error_class != "snapshot_too_large" or state != "SCOUTING":
+                    raise
+                return "snapshot_too_large"
+            suite = has_test_suite(artifact_json(clone, "fetch.json"))
         issue, comments = issue_text(sc, c)
         merged, open_prs = _prs(sc, repo)
         if user:
@@ -151,6 +167,10 @@ def _scout(sc: StageContext, c: dict[str, Any], state: str, user: bool) -> str |
             sections.append("## Tests\n\nThe repository has a test suite: list the tests you will add or update.")
         if c.get("vetting_json"):
             sections.append(prompts.untrusted("vet facts", str(c["vetting_json"])))
+        if rescope:
+            sections.append("## Snapshot\n\nThe snapshot is the working tree of the earlier attempt: it already"
+                            " contains the changes made for the approved version. Propose against the upstream"
+                            " base; the new version starts from a fresh clone.")  # fmt: skip
         if feedback is not None:
             sections.append(prompts.human(f"Revise proposal v{feedback['version']}: {feedback['text']}"))
         text = prompts.task("scout", "Study the repository snapshot and propose one change for approval.",

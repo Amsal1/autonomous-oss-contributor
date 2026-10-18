@@ -58,6 +58,13 @@ def test_fetch_sh_clone_is_plain_shallow_https_only() -> None:
     assert "https://github.com/$SLUG.git" in FETCH_SH
 
 
+def test_every_fetch_starts_from_a_fresh_clone() -> None:
+    """A re-queued fetch finds a partial clone and a new version after a rescope finds the old
+    build tree (F006-R2-1): git clone refuses a non-empty directory, so fetch.sh always clears it."""
+    assert re.search(r'^rm -rf "\$REPO" "\$SCOUT_MARK"$', FETCH_SH, re.MULTILINE)
+    assert FETCH_SH.index('rm -rf "$REPO" "$SCOUT_MARK"') < FETCH_SH.index("clone -q --single-branch")
+
+
 def test_scout_clone_args_are_fixed_and_carry_no_credentials() -> None:
     args = profiles.FetchArgs(repo="langfuse/langfuse", clone_depth=1, prefetch=False)
     for bad in ({"clone_depth": 2}, {"base_ref": "main"}):

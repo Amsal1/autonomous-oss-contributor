@@ -40,8 +40,10 @@ async def list_contributions(
     caller: Annotated[Caller, Depends(require())],
     state: Annotated[State | None, Query()] = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    active: Annotated[bool, Query()] = False,
+    offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
 ) -> list[dict[str, Any]]:
-    return ctx(request).contributions.list(state.value if state else None, limit)
+    return ctx(request).contributions.list(state.value if state else None, limit, active=active, offset=offset)
 
 
 @router.get("/contributions/{cid}")

@@ -79,6 +79,20 @@ class Gatekeeper:
         doc: list[dict[str, Any]] = self._call("GET", "/v1/contributions", params=params)
         return doc
 
+    def active_contributions(self, page: int = 200, max_pages: int = 50) -> list[dict[str, Any]]:
+        """Every non-terminal contribution, newest first, paged (the dispatch view: an old WATCHING
+        or snoozed item never falls out behind a pile of terminal ones)."""
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for n in range(max_pages):
+            params = {"limit": page, "active": "true", "offset": n * page}
+            rows: list[dict[str, Any]] = self._call("GET", "/v1/contributions", params=params)
+            out.extend(r for r in rows if str(r["id"]) not in seen)  # an update between pages may repeat one
+            seen.update(str(r["id"]) for r in rows)
+            if len(rows) < page:
+                break
+        return out
+
     def contribution(self, cid: str) -> dict[str, Any]:
         doc: dict[str, Any] = self._call("GET", f"/v1/contributions/{cid}")
         return doc

@@ -38,7 +38,9 @@ mkdir -p "$OUT"
 [[ -z "$BASE_SHA" || -n "$BASE_REF" ]] || fail bad_args "BASE_SHA requires BASE_REF"
 [[ "$DEPTH" =~ ^[1-9][0-9]{0,4}$ ]] || fail bad_args "OSSBOT_ARG_CLONE_DEPTH"
 [[ "$PREFETCH_ON" =~ ^[01]$ ]] || fail bad_args "OSSBOT_ARG_PREFETCH"
-if [[ -f "$SCOUT_MARK" ]]; then rm -rf "$REPO" "$SCOUT_MARK"; fi  # the scout clone is not the build clone
+# Every fetch starts from a fresh clone: a scout clone is not the build clone, a re-queued
+# fetch finds a partial clone, and a new version after a rescope finds the old build tree.
+rm -rf "$REPO" "$SCOUT_MARK"
 
 mkdir -p "$REPO" "$WORK/cache" "$WORK/venv" "$WORK/.home"
 export HOME="$WORK/.home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
