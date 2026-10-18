@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="900" viewBox="0 0 1260 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup S2–S4: explorer, file view, line comment and draft review</title>
+  <desc id="desc">Left phone: the explorer message on section 3 of 9 (Signals) with its navigation keyboard and the section picker. Right phone: a per-file diff message with highlighted hunk, a collapsed hunk, the user's reply with a quote, and the comment acknowledgement. Notes show the draft-review message and the limits.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
+    .b{font-weight:700}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:11px;fill:#1b1b1b;white-space:pre}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#fff;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .rq{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:11px;fill:#2f7fe0;font-weight:700}
+    .add{fill:#116329}
+    .del{fill:#a40e26}
+  </style>
+
+  <!-- ============ LEFT PHONE: explorer ============ -->
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">9:41</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="40" y="130" width="300" height="302" rx="16" fill="#ffffff"/>
+  <rect x="50" y="140" width="3" height="30" fill="#2f7fe0"/>
+  <text class="rq" x="58" y="152">ossbot</text>
+  <text class="s" x="58" y="166">🧩 Ready for review · c_01JABC · r2</text>
+  <text class="t b" x="52" y="192">🧭 c_01JABC r2 · 3/9 Signals</text>
+  <text class="t b" x="52" y="212">langfuse/langfuse</text>
+  <text class="t" x="52" y="230">⭐ 36.0k · pushed 2 h ago · 412 contributors</text>
+  <text class="t" x="52" y="248">✅ 14 external PRs merged in 90 days</text>
+  <text class="t" x="52" y="266">✅ median first maintainer review ≈ 9 h</text>
+  <text class="t" x="52" y="284">✅ CONTRIBUTING found · DCO → signed</text>
+  <text class="t" x="52" y="302">✅ AI policy: disclosure required → present</text>
+  <text class="t" x="52" y="320">✅ CLA not required · issue unclaimed</text>
+  <text class="t" x="52" y="338">✅ no competing PR · our open PRs here: 0</text>
+  <text class="t b" x="52" y="358">CODEOWNERS (touched paths)</text>
+  <text class="m" x="52" y="374">web/src/** → @langfuse/web-team</text>
+  <rect x="50" y="384" width="280" height="24" rx="6" fill="#eef1ec"/>
+  <text class="t" x="58" y="401">▸ Maintainer thread · 3 comments</text>
+  <text class="s" x="330" y="424" text-anchor="end">r2 · updated 10:21</text>
+
+  <rect x="40" y="438" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="458">◀</text>
+  <rect x="141" y="438" width="98" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="458">3/9 ▾</text>
+  <rect x="243" y="438" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="458">▶</text>
+  <rect x="40" y="474" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="494">🧾 Files</text>
+  <rect x="141" y="474" width="98" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="494">🧪 Tests</text>
+  <rect x="243" y="474" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="494">🤖 Review</text>
+  <rect x="40" y="510" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="530">💬 Comment</text>
+  <rect x="192" y="510" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="530">⬇️ Show card</text>
+
+  <text class="s" x="40" y="566" style="fill:#3f5a3f">↓ after tapping 3/9 ▾ — the same message, keyboard swapped</text>
+  <rect x="40" y="576" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="596">1 Summary</text>
+  <rect x="141" y="576" width="98" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="596">2 Why</text>
+  <rect x="243" y="576" width="97" height="32" rx="10" fill="#2f7fe0"/>
+  <text class="btn" x="291" y="596">3 Signals ✓</text>
+  <rect x="40" y="612" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="632">4 Risk</text>
+  <rect x="141" y="612" width="98" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="632">5 Files</text>
+  <rect x="243" y="612" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="632">6 Diff</text>
+  <rect x="40" y="648" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="88" y="668">7 Tests</text>
+  <rect x="141" y="648" width="98" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="668">8 Review</text>
+  <rect x="243" y="648" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="291" y="668">9 PR text</text>
+  <rect x="40" y="684" width="300" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="704">↩️ Back</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ RIGHT PHONE: file view ============ -->
+  <rect x="440" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="450" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="450" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="450" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="478" y="54" class="t b">9:42</text>
+  <circle cx="506" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="506" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="532" y="90" class="hdr">ossbot</text>
+  <text x="532" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="450" y1="118" x2="820" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="460" y="128" width="300" height="306" rx="16" fill="#ffffff"/>
+  <rect x="470" y="138" width="3" height="30" fill="#2f7fe0"/>
+  <text class="rq" x="478" y="150">ossbot</text>
+  <text class="s" x="478" y="164">🧩 Ready for review · c_01JABC · r2</text>
+  <text class="hdr" x="472" y="190">🧾 web/src/export/trace.ts</text>
+  <text class="t" x="472" y="208">file 1/3 · +30 −5 · 2 hunks · r2</text>
+  <text class="t b" x="472" y="228" style="font-size:11.5px">Hunk 1 · @@ -40,7 +40,12 @@ toOtel</text>
+  <rect x="470" y="236" width="280" height="126" rx="6" fill="#f6f8fa"/>
+  <text class="m" x="476" y="252">  export function toOtel(t: Trace) {</text>
+  <rect x="470" y="256" width="280" height="15" fill="#ffebe9"/>
+  <text class="m del" x="476" y="267">-   const spans = t.spans.map(conv);</text>
+  <rect x="470" y="271" width="280" height="75" fill="#dafbe1"/>
+  <text class="m add" x="476" y="282">+   if (!t.spans?.length) {</text>
+  <text class="m add" x="476" y="297">+     log.debug('no spans', t.id);</text>
+  <text class="m add" x="476" y="312">+     return emptyExport(t.id);</text>
+  <text class="m add" x="476" y="327">+   }</text>
+  <text class="m add" x="476" y="342">+   const spans = t.spans.map(conv);</text>
+  <text class="m" x="476" y="357">    return { resourceSpans: spans };</text>
+  <rect x="470" y="368" width="280" height="24" rx="6" fill="#eef1ec"/>
+  <text class="t" x="478" y="385">▸ Hunk 2 · @@ -88,3 +93,5 @@ · 64 lines</text>
+  <text class="s" x="472" y="408">Long-press lines → Reply with quote to comment</text>
+  <text class="s" x="472" y="424">r2 · derived by gatekeeper · base def5678</text>
+
+  <rect x="460" y="440" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="508" y="460">◀ Prev file</text>
+  <rect x="561" y="440" width="98" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="610" y="460">📂 1/3</text>
+  <rect x="663" y="440" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="711" y="460">Next file ▶</text>
+  <rect x="460" y="476" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="508" y="496">💬 Comment</text>
+  <rect x="561" y="476" width="98" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="610" y="496">📄 .patch</text>
+  <rect x="663" y="476" width="97" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="711" y="496">🌐 HTML</text>
+
+  <!-- user reply with quote -->
+  <rect x="530" y="524" width="280" height="96" rx="16" fill="#e1ffc7"/>
+  <rect x="540" y="534" width="3" height="32" fill="#3a9a3a"/>
+  <text class="rq" x="548" y="546" style="fill:#3a9a3a">ossbot</text>
+  <text class="m" x="548" y="561" style="fill:#2f5f2f">+   if (!t.spans?.length) {</text>
+  <text class="t" x="542" y="586">Return early before logging, and use</text>
+  <text class="t" x="542" y="604">warn instead of debug?</text>
+  <text class="s" x="800" y="614" text-anchor="end" style="fill:#4f9a4f">10:23 ✓✓</text>
+
+  <!-- ack -->
+  <rect x="460" y="632" width="300" height="46" rx="16" fill="#ffffff"/>
+  <text class="t" x="472" y="652">📝 <tspan class="b">Comment 1 saved</tspan> · trace.ts L42 (new)</text>
+  <text class="s" x="472" y="668">quote matched 1 line · 1 pending in draft review</text>
+  <rect x="460" y="682" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="702">↩️ Undo</text>
+
+  <rect x="450" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="462" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="497" y="834">☰ Menu</text>
+  <rect x="540" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="554" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ NOTES ============ -->
+  <text class="note nh" x="860" y="58">S2 explorer · S3 file · S4 comments</text>
+  <text class="note" x="860" y="80">Both are sent as replies to the card, so the</text>
+  <text class="note" x="860" y="96">quote header jumps back to it. No Approve here.</text>
+  <text class="note b" x="860" y="124">Explorer (one message, edited in place)</text>
+  <text class="note" x="860" y="142">1 Summary · 2 Why · 3 Signals · 4 Risk · 5 Files</text>
+  <text class="note" x="860" y="158">6 Diff · 7 Tests · 8 Self-review · 9 PR text</text>
+  <text class="note" x="860" y="176">• nav tokens: multi-use, 24 h, message-bound,</text>
+  <text class="note" x="860" y="192">  24-byte callback_data; ≤ 3 per row.</text>
+  <text class="note b" x="860" y="220">File view (one message per file)</text>
+  <text class="note" x="860" y="238">• Rich: pre language="diff", details for hunks</text>
+  <text class="note" x="860" y="254">  &gt; 60 lines; ≤ 30,000 chars / ≤ 450 blocks;</text>
+  <text class="note" x="860" y="270">  skip_entity_detection = true (U1).</text>
+  <text class="note" x="860" y="288">• Classic fallback: &lt;pre&gt;&lt;code class=</text>
+  <text class="note" x="860" y="304">  "language-diff"&gt; pages ≤ 3,500 chars.</text>
+  <text class="note" x="860" y="322">• Hunk text = derived patch bytes, with hidden</text>
+  <text class="note" x="860" y="338">  and bidi characters shown as ⟦U+XXXX⟧.</text>
+  <text class="note b" x="860" y="366">Comments</text>
+  <text class="note" x="860" y="384">• Reply + quote: quote.text (≤ 1,024) searched in</text>
+  <text class="note" x="860" y="400">  the page text → path + lines; ties broken by</text>
+  <text class="note" x="860" y="416">  quote.position; ambiguous → line picker.</text>
+  <text class="note" x="860" y="434">• 💬 Comment → hunk picker → ForceReply</text>
+  <text class="note" x="860" y="450">  (placeholder ≤ 60 chars, text ≤ 4,000).</text>
+  <text class="note b" x="860" y="480">Draft review (reply to card, edited in place)</text>
+  <rect x="860" y="490" width="370" height="98" rx="14" fill="#ffffff" stroke="#c9d3c4"/>
+  <text class="t b" x="872" y="510">📝 Draft review · c_01JABC r2 · 2 comments</text>
+  <text class="t" x="872" y="530">1. trace.ts L42 — return early, warn level</text>
+  <text class="t" x="872" y="548">2. general — add a test for empty spans</text>
+  <text class="s" x="872" y="576">source: telegram · stored in review_comments</text>
+  <rect x="860" y="594" width="370" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="1045" y="614">📨 Send 2 comments</text>
+  <rect x="860" y="630" width="183" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="951" y="650">👁 Show all</text>
+  <rect x="1047" y="630" width="183" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="1138" y="650">🗑 Discard</text>
+  <text class="note" x="860" y="684">• Send → one change_requests row (text +</text>
+  <text class="note" x="860" y="700">  comments_json) → CHANGES_REQUESTED → S5.</text>
+  <text class="note" x="860" y="718">• Mirror (opt-in) single comments join here,</text>
+  <text class="note" x="860" y="734">  with source = mirror.</text>
+  <text class="note" x="860" y="752">• While Confirm is armed, new comments wait; the</text>
+  <text class="note" x="860" y="768">  Confirm panel warns they will be discarded.</text>
+  <text class="note" x="860" y="796">Labels ≤ 20 chars; ≤ 2 per row when a label</text>
+  <text class="note" x="860" y="812">is over 12 chars (so Send gets its own row).</text>
+</svg>

@@ -1,0 +1,180 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="900" viewBox="0 0 1260 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup: offline, back-online, killed and assistant-unavailable states</title>
+  <desc id="desc">Left phone: the laptop was down overnight. The pinned dashboard shows DOWN with an ageing relative time, the user's messages got no reply, then the bot comes back online, announces the gap and answers the waiting messages with their age. Right phone: a soft-kill P0 alert, a refused command in killed mode, and an assistant-unavailable reply with Retry when Hermes is down.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
+    .b{font-weight:700}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:11px;fill:#1b1b1b;white-space:pre}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#fff;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .rq{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:11px;fill:#2f7fe0;font-weight:700}
+    .ghost{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#3f5a3f}
+    .red{fill:#b71c1c;font-weight:700}
+  </style>
+
+  <!-- ============ LEFT: offline → back online ============ -->
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">07:06</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">🚦 Control · bot</text>
+  <rect x="30" y="118" width="370" height="40" fill="#ffffff"/>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#e1e6dd"/>
+  <rect x="44" y="124" width="3" height="28" fill="#2f7fe0"/>
+  <text class="s" x="54" y="135" style="fill:#2f7fe0;font-weight:700">📌 Pinned message</text>
+  <text class="t" x="54" y="150" style="font-size:11.5px">💤 DOWN (graceful) since 22:14 · updated 9 hours ago</text>
+  <line x1="30" y1="158" x2="400" y2="158" stroke="#d0d6cc"/>
+
+  <rect x="40" y="170" width="300" height="56" rx="16" fill="#ffffff"/>
+  <text class="t b" x="52" y="190">💤 Going down: 2 finished, 1 re-queued</text>
+  <text class="t" x="52" y="208">Approvals stay valid. /up from here or up.ps1.</text>
+  <text class="s" x="330" y="220" text-anchor="end">22:14</text>
+
+  <rect x="290" y="236" width="100" height="34" rx="16" fill="#e1ffc7"/>
+  <text class="t" x="302" y="258">/status</text>
+  <text class="s" x="384" y="264" text-anchor="end" style="fill:#4f9a4f">23:40 ✓</text>
+  <rect x="270" y="278" width="120" height="34" rx="16" fill="#e1ffc7"/>
+  <text class="t" x="282" y="300">you there?</text>
+  <text class="s" x="384" y="306" text-anchor="end" style="fill:#4f9a4f">07:05 ✓</text>
+
+  <text class="ghost" x="110" y="334">— laptop wakes · gatekeeper polls at 07:06 —</text>
+
+  <rect x="40" y="344" width="300" height="74" rx="16" fill="#ffffff"/>
+  <text class="t b" x="52" y="364">⏰ Back online</text>
+  <text class="t" x="52" y="382">offline 8 h 52 m (graceful down)</text>
+  <text class="t" x="52" y="400">2 messages waiting · handling them now</text>
+  <text class="s" x="330" y="412" text-anchor="end">07:06</text>
+
+  <rect x="40" y="428" width="300" height="94" rx="16" fill="#ffffff"/>
+  <rect x="50" y="438" width="3" height="28" fill="#3a9a3a"/>
+  <text class="rq" x="58" y="450" style="fill:#3a9a3a">You</text>
+  <text class="s" x="58" y="463">/status</text>
+  <text class="t" x="52" y="486">↪️ /status (sent 7 hours ago)</text>
+  <text class="t" x="52" y="504"><tspan class="b">🟢 UP</tspan> · 🧪 DRY RUN · 0 running · 2 approvals</text>
+  <text class="s" x="330" y="516" text-anchor="end">07:06</text>
+
+  <rect x="40" y="532" width="300" height="74" rx="16" fill="#ffffff"/>
+  <rect x="50" y="542" width="3" height="28" fill="#3a9a3a"/>
+  <text class="rq" x="58" y="554" style="fill:#3a9a3a">You</text>
+  <text class="s" x="58" y="567">you there?</text>
+  <text class="t" x="52" y="590">🤖 Yes, back now. Anything you need?</text>
+  <text class="s" x="330" y="600" text-anchor="end">07:06</text>
+
+  <text class="ghost" x="40" y="632">go/config commands older than 10 min only produce</text>
+  <text class="ghost" x="40" y="646">their confirm prompt, with the age shown:</text>
+  <rect x="40" y="654" width="300" height="56" rx="16" fill="#ffffff"/>
+  <text class="t" x="52" y="674">▶️ Resume? You sent /resume 6 hours ago</text>
+  <text class="t" x="52" y="692">while I was offline.</text>
+  <rect x="40" y="716" width="148" height="32" rx="10" fill="#2f7fe0"/>
+  <text class="btn" x="114" y="736">✅ Resume now</text>
+  <rect x="192" y="716" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="736">↩️ Cancel</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ RIGHT: killed + Hermes down ============ -->
+  <rect x="440" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="450" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="450" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="450" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="478" y="54" class="t b">14:03</text>
+  <circle cx="506" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="506" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="532" y="90" class="hdr">ossbot</text>
+  <text x="532" y="107" class="s">🚦 Control · bot</text>
+  <rect x="450" y="118" width="370" height="40" fill="#ffffff"/>
+  <line x1="450" y1="118" x2="820" y2="118" stroke="#e1e6dd"/>
+  <rect x="464" y="124" width="3" height="28" fill="#d93025"/>
+  <text class="s" x="474" y="135" style="fill:#d93025;font-weight:700">📌 Pinned message</text>
+  <text class="t" x="474" y="150" style="font-size:11.5px">🛑 KILLED (soft) · hermes_tool_surface · since 14:02</text>
+  <line x1="450" y1="158" x2="820" y2="158" stroke="#d0d6cc"/>
+
+  <rect x="460" y="170" width="300" height="114" rx="16" fill="#fff4f3"/>
+  <text class="t red" x="472" y="190">🚨 Soft kill · hermes_tool_surface</text>
+  <text class="t" x="472" y="208">Unexpected Hermes tool: <tspan class="m">terminal</tspan></text>
+  <text class="t" x="472" y="226">Chat relay off · runner, sandboxd, Hermes</text>
+  <text class="t" x="472" y="244">stopped · armed/confirmed approvals voided.</text>
+  <text class="t" x="472" y="262">P0: loud even in quiet hours.</text>
+  <text class="s" x="750" y="278" text-anchor="end">14:02 · 🔔</text>
+  <rect x="460" y="290" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="310">▶️ Resume…</text>
+  <rect x="612" y="290" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="310">📜 Logs</text>
+
+  <rect x="740" y="334" width="70" height="34" rx="16" fill="#e1ffc7"/>
+  <text class="t" x="752" y="356">/queue</text>
+  <rect x="460" y="378" width="300" height="74" rx="16" fill="#ffffff"/>
+  <text class="t" x="472" y="398"><tspan class="b">🛑 Killed (soft)</tspan> since 14:02 · reason</text>
+  <text class="t" x="472" y="416"><tspan class="m">hermes_tool_surface</tspan>. Only /status,</text>
+  <text class="t" x="472" y="434">/resume, /logs and /help work.</text>
+  <text class="s" x="750" y="446" text-anchor="end">14:03</text>
+
+  <text class="ghost" x="460" y="482">— another day, 💬 Assistant: Hermes down, not killed —</text>
+  <rect x="620" y="492" width="190" height="34" rx="16" fill="#e1ffc7"/>
+  <text class="t" x="632" y="514">summarize today's PRs</text>
+  <rect x="460" y="536" width="300" height="92" rx="16" fill="#ffffff"/>
+  <text class="t b" x="472" y="556">🤖 Assistant unavailable</text>
+  <text class="t" x="472" y="574">Hermes not responding since 09:12.</text>
+  <text class="t" x="472" y="592">OSS commands and approvals still work.</text>
+  <text class="t" x="472" y="610">I'll post once when it's back.</text>
+  <text class="s" x="750" y="622" text-anchor="end">09:15</text>
+  <rect x="460" y="634" width="300" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="610" y="654">🔁 Retry</text>
+  <rect x="460" y="678" width="300" height="38" rx="16" fill="#ffffff"/>
+  <text class="t" x="472" y="702">🤖 Assistant is back.</text>
+  <text class="s" x="750" y="710" text-anchor="end">09:31 · silent</text>
+
+  <rect x="450" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="462" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="497" y="834">☰ Menu</text>
+  <rect x="540" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="554" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ NOTES ============ -->
+  <text class="note nh" x="860" y="58">Offline and error states (CR-003 §10)</text>
+  <text class="note b" x="860" y="86">Laptop asleep, off or offline</text>
+  <text class="note" x="860" y="104">• No one can answer: the gatekeeper is the only</text>
+  <text class="note" x="860" y="120">  poller (long polling, no webhook, no server).</text>
+  <text class="note" x="860" y="138">• Signals that still work: the dashboard's relative</text>
+  <text class="note" x="860" y="154">  &lt;tg-time&gt; keeps ageing; after a graceful down</text>
+  <text class="note" x="860" y="170">  it says 💤 DOWN, and the bot's short description</text>
+  <text class="note" x="860" y="186">  (≤ 120 chars) reads:</text>
+  <rect x="860" y="194" width="370" height="28" rx="8" fill="#ffffff" stroke="#c9d3c4"/>
+  <text class="t" x="870" y="213">💤 Offline since 22:14 — wake the laptop to reconnect</text>
+  <text class="note" x="860" y="242">• Telegram keeps unfetched updates ≤ 24 h; older</text>
+  <text class="note" x="860" y="258">  ones are lost (documented in README).</text>
+  <text class="note b" x="860" y="288">Back online</text>
+  <text class="note" x="860" y="306">• One "⏰ Back online" with the gap and the cause</text>
+  <text class="note" x="860" y="322">  (graceful / hook / unclean, from CR-001's marker).</text>
+  <text class="note" x="860" y="340">• Pending updates handled in order with their age:</text>
+  <text class="note" x="860" y="356">  read → answered; stop → executed (safe);</text>
+  <text class="note" x="860" y="372">  go/config → confirm prompt only; chat → answered.</text>
+  <text class="note b" x="860" y="402">Killed (soft)</text>
+  <text class="note" x="860" y="420">• P0 alert ignores quiet hours (U7); the menu shrinks</text>
+  <text class="note" x="860" y="436">  to /status /resume /logs /help; other commands get</text>
+  <text class="note" x="860" y="452">  the killed reply; chat says Hermes is stopped.</text>
+  <text class="note" x="860" y="470">• Full kill (kill.ps1) = offline: no answers; the FYI</text>
+  <text class="note" x="860" y="486">  arrives at the next gatekeeper start.</text>
+  <text class="note b" x="860" y="516">Hermes outage (not a kill)</text>
+  <text class="note" x="860" y="534">• Reply within 2 s; Retry is a token holding a</text>
+  <text class="note" x="860" y="550">  reference to your message; never auto-resent.</text>
+  <text class="note" x="860" y="568">• "Assistant is back" once, silent (P1 only if a</text>
+  <text class="note" x="860" y="584">  chat was interrupted). Probe pending → "safety</text>
+  <text class="note" x="860" y="600">  probe pending", no kill.</text>
+  <text class="note b" x="860" y="630">Other failures, invisible to you</text>
+  <text class="note" x="860" y="648">• Rich message refused → classic fallback (24 h).</text>
+  <text class="note" x="860" y="664">• Topic thread missing → re-create once, then flat.</text>
+  <text class="note" x="860" y="680">• 429 → retry_after; outbox rows persist across</text>
+  <text class="note" x="860" y="696">  restarts and Telegram outages.</text>
+</svg>

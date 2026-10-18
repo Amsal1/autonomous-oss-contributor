@@ -1,0 +1,121 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="900" viewBox="0 0 840 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup: pinned live dashboard in the Control topic</title>
+  <desc id="desc">The Control topic with the pinned-message bar and the dashboard message showing lifecycle, mode, egress and Hermes tier, running stages, pending approvals, queue, Telegram poll health and models, with a relative updated time. Its keyboard has Refresh, Approvals, Pause, Quiet, Down and a red Kill. Below, the keyboard after one Kill tap asks for a second tap within 10 seconds.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
+    .b{font-weight:700}
+    .i{font-style:italic}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#fff;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .dry{fill:#0d47a1;font-weight:700}
+    .ghost{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#3f5a3f}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:11px;fill:#1b1b1b;white-space:pre}
+  </style>
+
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">14:20</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">🚦 Control · bot</text>
+  <!-- pinned bar -->
+  <rect x="30" y="118" width="370" height="40" fill="#ffffff"/>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#e1e6dd"/>
+  <rect x="44" y="124" width="3" height="28" fill="#2f7fe0"/>
+  <text class="s" x="54" y="135" style="fill:#2f7fe0;font-weight:700">📌 Pinned message</text>
+  <text class="t" x="54" y="150" style="font-size:11.5px">🟢 ossbot · UP · 🧪 DRY RUN · updated 12 s ago</text>
+  <line x1="30" y1="158" x2="400" y2="158" stroke="#d0d6cc"/>
+
+  <!-- dashboard -->
+  <rect x="40" y="170" width="300" height="250" rx="16" fill="#ffffff"/>
+  <text class="t" x="52" y="192"><tspan class="b">🟢 ossbot · UP</tspan> · <tspan class="dry">🧪 DRY RUN</tspan></text>
+  <text class="t" x="52" y="212">Egress: open · Hermes: self_improve · Rich: on</text>
+  <text class="t b" x="52" y="232">Running</text>
+  <text class="t" x="52" y="250">c_01JDEF implement · 12 min</text>
+  <text class="t" x="52" y="268">c_01JGHI validate · 3 min</text>
+  <text class="t" x="52" y="288">Approvals: <tspan class="b">2 pending</tspan> · oldest expires in 1 day</text>
+  <text class="t" x="52" y="306">Queue: 5 vetted · 1 watching (PR #5678)</text>
+  <text class="t" x="52" y="324">Telegram: last poll 2 s ago · 1 reconnect today</text>
+  <text class="t" x="52" y="342">Models: chat sonnet-5.5 · coder opus-5</text>
+  <text class="t" x="52" y="360">Hermes ✅ surface check · ✅ probe 14:00</text>
+  <text class="t i s" x="52" y="384" style="font-size:11px">Updated 12 seconds ago</text>
+  <text class="s" x="330" y="410" text-anchor="end">📌 pinned · edited</text>
+  <rect x="40" y="426" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="446">🔄 Refresh</text>
+  <rect x="192" y="426" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="446">📥 Approvals (2)</text>
+  <rect x="40" y="462" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="482">⏸ Pause</text>
+  <rect x="192" y="462" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="482">🌙 Quiet 1h</text>
+  <rect x="40" y="498" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="518">⬇️ Down…</text>
+  <rect x="192" y="498" width="148" height="32" rx="10" fill="#d93025"/>
+  <text class="btn" x="266" y="518">🛑 Kill</text>
+
+  <text class="ghost" x="40" y="556">↓ after one tap on 🛑 Kill — keyboard edited in place</text>
+  <rect x="40" y="566" width="300" height="32" rx="10" fill="#d93025"/>
+  <text class="btn" x="190" y="586">🛑 Tap again to kill (10 s)</text>
+  <rect x="40" y="602" width="300" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="622">↩️ Cancel</text>
+
+  <!-- typed kill -->
+  <rect x="250" y="652" width="140" height="34" rx="16" fill="#e1ffc7"/>
+  <text class="t" x="262" y="674">/kill flaky runner</text>
+  <rect x="40" y="696" width="300" height="78" rx="16" fill="#ffffff"/>
+  <text class="t b" x="52" y="716">🛑 Killed (soft) · reason: flaky runner</text>
+  <text class="t" x="52" y="734">Typed /kill is immediate. Only /status,</text>
+  <text class="t" x="52" y="752">/resume, /logs and /help work now.</text>
+  <text class="s" x="330" y="768" text-anchor="end">14:21</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- notes -->
+  <text class="note nh" x="440" y="58">Pinned live dashboard (🚦 Control)</text>
+  <text class="note b" x="440" y="88">Update rules</text>
+  <text class="note" x="440" y="106">• One message (tg_views kind=dashboard), pinned.</text>
+  <text class="note" x="440" y="122">  Pin notifications are always off in private chats.</text>
+  <text class="note" x="440" y="140">• Edited ≤ 1 per 30 s, only when the content</text>
+  <text class="note" x="440" y="156">  sha256 changes; skipped while P0/P1 rows are due.</text>
+  <text class="note" x="440" y="174">• Footer and expiries are &lt;tg-time format="r"&gt;:</text>
+  <text class="note" x="440" y="190">  rendered by the client, so a stale dashboard ages</text>
+  <text class="note" x="440" y="206">  ("Updated 3 hours ago") while the laptop sleeps.</text>
+  <text class="note" x="440" y="224">• Deleted dashboard → re-sent and re-pinned;</text>
+  <text class="note" x="440" y="240">  /dashboard does the same on demand.</text>
+  <text class="note b" x="440" y="270">Header variants</text>
+  <text class="note" x="440" y="288">🟡 DRAINING · 2 stages finishing (≤ 120 s)</text>
+  <text class="note" x="440" y="306">💤 DOWN (graceful) since 22:14 · [⬆️ Up…]</text>
+  <text class="note" x="440" y="324">⏸ PAUSED · gatekeeper_unhealthy · [▶️ Resume…]</text>
+  <text class="note" x="440" y="342">🛑 KILLED (soft) · flaky runner · since 14:21</text>
+  <text class="note" x="440" y="360">🔴 LIVE replaces 🧪 DRY RUN when dry-run is off.</text>
+  <text class="note b" x="440" y="390">Kill and other danger actions</text>
+  <text class="note" x="440" y="408">• Typed /kill: immediate (stopping is always safe).</text>
+  <text class="note" x="440" y="424">• Dashboard 🛑: two taps; the second-tap token</text>
+  <text class="note" x="440" y="440">  expires after 10 s (a stray tap won't kill).</text>
+  <text class="note" x="440" y="458">• ⬇️ Down… → timeout picker [60 s] [90 s] [120 s]</text>
+  <text class="note" x="440" y="474">  → confirm (gatekeeper stays up, so /up works).</text>
+  <text class="note" x="440" y="492">• ▶️ Resume… is go-class: a confirm tap, then the</text>
+  <text class="note" x="440" y="508">  root resume path (unchanged).</text>
+  <text class="note b" x="440" y="538">Command menu (owner scope only)</text>
+  <text class="note" x="440" y="556">• Default scope is empty; owner scope = registry.</text>
+  <text class="note" x="440" y="572">• Killed → menu reset to /status /resume /logs /help.</text>
+  <text class="note" x="440" y="588">• Down/draining → adds /up or /undrain.</text>
+  <text class="note b" x="440" y="618">Telegram constraints</text>
+  <text class="note" x="440" y="636">• ≤ 1,500 chars; 3 rows × 2; labels ≤ 20 chars.</text>
+  <text class="note" x="440" y="652">• Kill uses style "danger" and still says "Kill".</text>
+  <text class="note" x="440" y="668">• Edits share the ~1 msg/s per-chat budget, so the</text>
+  <text class="note" x="440" y="684">  outbox lane outranks dashboard edits.</text>
+  <text class="note" x="440" y="702">• On graceful down the bot short description</text>
+  <text class="note" x="440" y="718">  (≤ 120 chars) becomes "💤 Offline since 22:14 —</text>
+  <text class="note" x="440" y="734">  wake the laptop to reconnect".</text>
+</svg>

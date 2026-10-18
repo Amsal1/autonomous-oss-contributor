@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="900" viewBox="0 0 840 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup S10 and S11: live PR status card, maintainer event, drafted reply, merged summary</title>
+  <desc id="desc">A live status card for an open PR with CI counts, review state and watch info, edited in place. A maintainer requested-changes event arrives as a reply to it, followed by a drafted reply approval card that uses the normal two-tap flow. Notes show the merged and closed summaries.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
+    .b{font-weight:700}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:11px;fill:#1b1b1b;white-space:pre}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#fff;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .rq{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:11px;fill:#2f7fe0;font-weight:700}
+    .live{fill:#b71c1c;font-weight:700}
+    .claim{fill:#555;font-style:italic}
+  </style>
+
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">16:08</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
+
+  <!-- status card -->
+  <rect x="40" y="128" width="300" height="214" rx="16" fill="#ffffff"/>
+  <text class="t" x="52" y="148"><tspan class="b">🚀 PR #5678 open</tspan> · langfuse/langfuse</text>
+  <text class="t live" x="52" y="166">🔴 LIVE</text>
+  <text class="t b" x="52" y="184">fix(web): handle empty spans in trace…</text>
+  <text class="t" x="52" y="204">CI: ✅ 9 · ⏳ 2 · ❌ 0</text>
+  <rect x="50" y="212" width="280" height="40" rx="6" fill="#eef1ec"/>
+  <rect x="50" y="212" width="3" height="40" fill="#8fb58a"/>
+  <text class="t" x="60" y="228" style="font-size:11.5px">✅ build · ✅ lint · ✅ unit · ⏳ e2e (chromium)</text>
+  <text class="t" x="60" y="244" style="font-size:11.5px">⏳ e2e (firefox) · ✅ typecheck …  ▾</text>
+  <text class="t" x="52" y="272">Reviews: 👀 @maintainer requested changes</text>
+  <text class="t" x="52" y="290">Comments: 2 from maintainers · last 8 min ago</text>
+  <text class="t" x="52" y="308">Watch: round 1/3 · next poll in 1 min</text>
+  <text class="s" x="52" y="330">Updated 1 min ago · edited in place (≤ 1/min)</text>
+  <rect x="40" y="348" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="368">🔗 Open PR ↗</text>
+  <rect x="192" y="348" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="368">🔄 Refresh</text>
+  <rect x="40" y="384" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="404">📜 Timeline</text>
+  <rect x="192" y="384" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="404">🛑 Stop watching</text>
+
+  <!-- P1 event reply -->
+  <rect x="40" y="428" width="300" height="118" rx="16" fill="#ffffff"/>
+  <rect x="50" y="438" width="3" height="30" fill="#2f7fe0"/>
+  <text class="rq" x="58" y="450">ossbot</text>
+  <text class="s" x="58" y="464">🚀 PR #5678 open · langfuse/langfuse</text>
+  <text class="t b" x="52" y="488">👀 @maintainer requested changes</text>
+  <rect x="50" y="496" width="280" height="36" rx="6" fill="#f3f5f1"/>
+  <rect x="50" y="496" width="3" height="36" fill="#b0b8ad"/>
+  <text class="t" x="60" y="511" style="font-size:11.5px">Could you also handle traces where spans</text>
+  <text class="t" x="60" y="526" style="font-size:11.5px">is null, not just empty?</text>
+  <text class="s" x="330" y="540" text-anchor="end">16:00 · 🔔 P1</text>
+
+  <!-- drafted reply card -->
+  <rect x="40" y="556" width="300" height="156" rx="16" fill="#ffffff"/>
+  <rect x="50" y="566" width="3" height="30" fill="#2f7fe0"/>
+  <text class="rq" x="58" y="578">ossbot</text>
+  <text class="s" x="58" y="592">👀 @maintainer requested changes</text>
+  <text class="t" x="52" y="616"><tspan class="b">💬 Comment ready</tspan> · c_01JABC · <tspan class="live">🔴 LIVE</tspan></text>
+  <text class="t" x="52" y="634">Target: langfuse/langfuse#5678 (our PR)</text>
+  <text class="t" x="52" y="652">In reply to @maintainer, 8 min ago</text>
+  <text class="t" x="52" y="670">✅ comments today 1/10 · secret scan · AI note</text>
+  <text class="t" x="52" y="688">Body: 212 chars, 1 part below ↓</text>
+  <text class="s" x="330" y="704" text-anchor="end">16:07</text>
+  <rect x="40" y="718" width="148" height="32" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="114" y="738">✅ Approve &amp; Post</text>
+  <rect x="192" y="718" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="738">❌ Reject</text>
+  <rect x="40" y="754" width="300" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="774">📝 Edit text</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- notes -->
+  <text class="note nh" x="440" y="58">S9 → S10 → S11 · after submission</text>
+  <text class="note b" x="440" y="88">Live status card (one per open PR)</text>
+  <text class="note" x="440" y="106">• Sent as a reply to the finalized card; edited in</text>
+  <text class="note" x="440" y="122">  place ≤ 1 per 60 s, only when content changes.</text>
+  <text class="note" x="440" y="140">• CI detail in an expandable blockquote.</text>
+  <text class="note" x="440" y="158">• Open PR is a URL button; Stop watching keeps its</text>
+  <text class="note" x="440" y="174">  confirm tap (M4); Timeline edits in place.</text>
+  <text class="note b" x="440" y="204">Events</text>
+  <text class="note" x="440" y="222">• P1 (maintainer review, mention, blocking CI ❌):</text>
+  <text class="note" x="440" y="238">  a new message replying to the status card; loud</text>
+  <text class="note" x="440" y="254">  unless quiet hours. Other updates edit the card.</text>
+  <text class="note" x="440" y="272">• Maintainer text is untrusted: quoted, escaped,</text>
+  <text class="note" x="440" y="288">  ≤ 500 chars, bot commands defused (U8).</text>
+  <text class="note" x="440" y="306">• Drafted replies (comment) and fixes (push_update)</text>
+  <text class="note" x="440" y="322">  are normal approval cards: verbatim parts, Approve</text>
+  <text class="note" x="440" y="338">  after delivery, two taps, LIVE/DRY RUN stated.</text>
+  <text class="note" x="440" y="356">• Same topic for the whole PR: replies can't cross</text>
+  <text class="note" x="440" y="372">  topics (ReplyParameters).</text>
+
+  <text class="note b" x="440" y="404">S11 · merged (status card finalized + summary)</text>
+  <rect x="440" y="414" width="370" height="96" rx="12" fill="#ffffff" stroke="#c9d3c4"/>
+  <text class="t b" x="452" y="436">🎉 Merged by @maintainer · 2 d 4 h after submit</text>
+  <text class="t" x="452" y="456">langfuse/langfuse #5678 · +62 −7 · 2 review rounds</text>
+  <text class="t" x="452" y="476">Contribution #7 this month · streak 4 days</text>
+  <text class="s" x="452" y="498">message_effect_id 🎉 only if configured ([VERIFY] id)</text>
+  <rect x="440" y="514" width="370" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="625" y="533">🔗 Open PR ↗</text>
+
+  <text class="note b" x="440" y="572">Closed without merge</text>
+  <rect x="440" y="582" width="370" height="58" rx="12" fill="#ffffff" stroke="#c9d3c4"/>
+  <text class="t b" x="452" y="602">🗂 Closed by @maintainer · 3 d after submit</text>
+  <text class="t" x="452" y="622">"Superseded by #5701, thanks!" (quoted, untrusted)</text>
+  <rect x="440" y="644" width="183" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="531" y="663">🔁 Re-attempt later</text>
+  <rect x="627" y="644" width="183" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="718" y="663">🗑 Forget</text>
+  <text class="note" x="440" y="696">• Re-attempt later is config-class (re-attempt</text>
+  <text class="note" x="440" y="712">  rules of DESIGN §5 AC 30 still apply).</text>
+  <text class="note b" x="440" y="742">Limits</text>
+  <text class="note" x="440" y="760">• Each message ≤ 3,900 escaped chars; ≤ 2 buttons</text>
+  <text class="note" x="440" y="776">  per row; labels ≤ 20; callback_data 24 bytes.</text>
+  <text class="note" x="440" y="794">• Merged and closed summaries also feed the digest.</text>
+</svg>

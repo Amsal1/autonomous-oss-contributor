@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="900" viewBox="0 0 840 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup S5, S6, S12: revised candidate with interdiff, and the stale card</title>
+  <desc id="desc">The r2 card is shown stale: struck-through header, Superseded label, a disabled Not approvable button and Show current. Below, the r3 card replies to it, listing what the user asked for with deterministic touched flags and labelled coder claims, the gatekeeper interdiff summary and the full-change line. Notes show the interdiff file view and other stale variants.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
+    .b{font-weight:700}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:11px;fill:#1b1b1b;white-space:pre}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#fff;font-weight:600;text-anchor:middle}
+    .dis{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#f2f4f0;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .rq{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:11px;fill:#2f7fe0;font-weight:700}
+    .claim{fill:#555;font-style:italic}
+    .dry{fill:#0d47a1;font-weight:700}
+    .grey{fill:#8a8f88}
+    .add{fill:#116329}
+    .del{fill:#a40e26}
+  </style>
+
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">10:52</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
+
+  <!-- stale r2 card -->
+  <rect x="40" y="128" width="300" height="78" rx="16" fill="#f3f5f1"/>
+  <text class="t grey" x="52" y="148" style="text-decoration:line-through">🧩 Ready for review · c_01JABC · r2</text>
+  <text class="t b" x="52" y="168">⚪ Superseded · r3 is newer</text>
+  <text class="t grey" x="52" y="186">✏️ changes requested 10:25 · 2 comments</text>
+  <text class="s" x="330" y="200" text-anchor="end">edited 10:51</text>
+  <rect x="40" y="210" width="148" height="32" rx="10" fill="#b9c3b5"/>
+  <text class="dis" x="114" y="230">⛔ Not approvable</text>
+  <rect x="192" y="210" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="230">⬇️ Show current</text>
+
+  <!-- r3 card -->
+  <rect x="40" y="254" width="300" height="368" rx="16" fill="#ffffff"/>
+  <rect x="50" y="264" width="3" height="30" fill="#2f7fe0"/>
+  <text class="rq" x="58" y="276">ossbot</text>
+  <text class="s" x="58" y="290">⚪ Superseded · c_01JABC · r2</text>
+  <text class="t" x="52" y="316"><tspan class="b">🔁 Revised for review</tspan> · c_01JABC · r3</text>
+  <text class="t dry" x="52" y="334">🧪 DRY RUN — nothing is published</text>
+  <text class="t" x="52" y="352"><tspan class="b">langfuse/langfuse</tspan> · Issue #1234</text>
+  <text class="t b" x="52" y="374">You asked (2 comments, 10:25):</text>
+  <text class="t" x="52" y="392">1. trace.ts L42 — return early, warn level</text>
+  <text class="t" x="64" y="410">✅ touched · <tspan class="claim">🤖 coder: switched to warn</tspan></text>
+  <text class="t" x="52" y="428">2. general — add a test for empty spans</text>
+  <text class="t" x="64" y="446">✅ new file · <tspan class="claim">🤖 coder: added 2 tests</tspan></text>
+  <text class="t b" x="52" y="468">What changed since r2 ✅ (base unchanged)</text>
+  <text class="t" x="52" y="486">trace.ts +1 −1 · trace.test.ts +18 (new)</text>
+  <text class="t" x="52" y="506"><tspan class="b">Full change vs base:</tspan> 4 files +60 −7</text>
+  <text class="s" x="52" y="522">You approve the full patch, not the interdiff.</text>
+  <text class="t" x="52" y="544">Tests ✅ lint · unit 214 · smoke</text>
+  <text class="t" x="52" y="562">Self-review 🤖 PASS · 0 blocking</text>
+  <text class="t" x="52" y="580">Commit <tspan class="m">7e9f210</tspan> on main@def5678</text>
+  <text class="t" x="52" y="600">⏳ Approval expires <tspan class="b">in 3 days</tspan></text>
+  <text class="s" x="330" y="614" text-anchor="end">10:51</text>
+  <rect x="40" y="628" width="148" height="32" rx="10" fill="#2e9d4f"/>
+  <text class="btn" x="114" y="648">✅ Approve &amp; Submit</text>
+  <rect x="192" y="628" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="648">❌ Reject</text>
+  <rect x="40" y="664" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="684">🔀 Interdiff</text>
+  <rect x="192" y="664" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="684">🧭 Explore</text>
+  <rect x="40" y="700" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="114" y="720">✏️ Request changes</text>
+  <rect x="192" y="700" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="720">📝 Edit text</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- notes -->
+  <text class="note nh" x="440" y="58">S5 → S6: revision round · S12: stale card</text>
+  <text class="note b" x="440" y="88">S5 (while r3 is built), on the r2 card</text>
+  <rect x="440" y="98" width="370" height="58" rx="12" fill="#ffffff" stroke="#c9d3c4"/>
+  <text class="t b" x="452" y="118">✏️ Changes requested · c_01JABC · r2 → r3</text>
+  <text class="t" x="452" y="138">✅ implement 6m · ⏳ validate · ⬜ review · ⬜ package</text>
+  <text class="note" x="440" y="176">• Progress edits ≤ 1 per 5 s; keyboard = disabled</text>
+  <text class="note" x="440" y="192">  "⛔ Not approvable" (Bot API 10.3, raw call).</text>
+
+  <text class="note b" x="440" y="222">S6 rules</text>
+  <text class="note" x="440" y="240">• Sent as a reply to the old card (tap → jump).</text>
+  <text class="note" x="440" y="256">• "✅ touched" is deterministic: the interdiff</text>
+  <text class="note" x="440" y="272">  changes the commented lines ±3 (or adds the</text>
+  <text class="note" x="440" y="288">  file); else "⚠️ not touched".</text>
+  <text class="note" x="440" y="306">• "🤖 coder:" is the implementer's report,</text>
+  <text class="note" x="440" y="322">  ≤ 120 chars, untrusted (U6).</text>
+  <text class="note" x="440" y="340">• Interdiff = gitcmd.INTERDIFF (same base) or</text>
+  <text class="note" x="440" y="356">  RANGE_DIFF (base moved), in the rev-3 mirror</text>
+  <text class="note" x="440" y="372">  with a temporary alternate to the rev-2 mirror.</text>
+  <text class="note" x="440" y="390">• Display-only (U4): the binding is still the full</text>
+  <text class="note" x="440" y="406">  derived patch + head SHA + title/body hashes.</text>
+
+  <text class="note b" x="440" y="436">🔀 Interdiff → file-view message (comments work)</text>
+  <rect x="440" y="446" width="370" height="138" rx="12" fill="#ffffff" stroke="#c9d3c4"/>
+  <text class="t b" x="452" y="466">🔀 Interdiff r2 → r3 · web/src/export/trace.ts</text>
+  <rect x="450" y="474" width="350" height="100" rx="6" fill="#f6f8fa"/>
+  <text class="m" x="456" y="490">@@ -42,3 +42,3 @@ export function toOtel</text>
+  <text class="m" x="456" y="505">     if (!t.spans?.length) {</text>
+  <rect x="450" y="509" width="350" height="15" fill="#ffebe9"/>
+  <text class="m del" x="456" y="520">-      log.debug('no spans', t.id);</text>
+  <rect x="450" y="524" width="350" height="15" fill="#dafbe1"/>
+  <text class="m add" x="456" y="535">+      log.warn('trace has no spans', t.id);</text>
+  <text class="m" x="456" y="550">       return emptyExport(t.id);</text>
+  <text class="s" x="456" y="568">file 1/2 · next: trace.test.ts (new, +18)</text>
+
+  <text class="note b" x="440" y="614">S12 stale variants (same keyboard)</text>
+  <text class="note" x="440" y="632">⌛ Expired · approval was valid 72 h</text>
+  <text class="note" x="440" y="650">⚪ Invalidated · dry-run turned off → new LIVE card</text>
+  <text class="note" x="440" y="668">⚪ Invalidated · config reloaded / title edited / kill</text>
+  <text class="note" x="440" y="686">• Body-part messages become "⚪ part of superseded</text>
+  <text class="note" x="440" y="702">  c_01JABC r2", so stale bytes can't be mistaken.</text>
+  <text class="note" x="440" y="720">• A tap on any old token: toast "Superseded: content</text>
+  <text class="note" x="440" y="736">  or mode changed since this card; review the new card."</text>
+  <text class="note" x="440" y="754">• "⬇️ Show current" re-sends the live card at the</text>
+  <text class="note" x="440" y="770">  bottom (token rotation, N4).</text>
+  <text class="note" x="440" y="800">Keyboard: 3 rows × 2 · labels ≤ 20 · 24-byte data.</text>
+</svg>

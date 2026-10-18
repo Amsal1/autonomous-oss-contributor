@@ -1,0 +1,157 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1260" height="900" viewBox="0 0 1260 900" role="img" aria-labelledby="title desc">
+  <title id="title">ossbot mockup S8: Approve then Confirm, DRY RUN and LIVE</title>
+  <desc id="desc">Two phones. Left: the card edited in place into the DRY RUN Confirm panel with a blue banner and a primary Confirm dry run button, then the dry-run-done state. Right: the LIVE Confirm panel with a red banner, a review-coverage warning, an unsent-comment warning, a red Confirm LIVE button, then the submitting progress and the submitted state.</desc>
+  <style>
+    .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
+    .b{font-weight:700}
+    .m{font-family:"SF Mono",Consolas,"Roboto Mono",monospace;font-size:11px;fill:#1b1b1b;white-space:pre}
+    .s{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#6f7f6f}
+    .btn{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#fff;font-weight:600;text-anchor:middle}
+    .note{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12px;fill:#222}
+    .nh{font-size:15px;font-weight:700}
+    .hdr{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:14px;font-weight:700;fill:#111}
+    .dry{fill:#0d47a1;font-weight:700}
+    .live{fill:#b71c1c;font-weight:700}
+    .warn{fill:#8a4b00}
+    .ghost{font-family:-apple-system,"Segoe UI",Roboto,sans-serif;font-size:10.5px;fill:#3f5a3f}
+  </style>
+
+  <!-- ============ LEFT: DRY RUN ============ -->
+  <rect x="20" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="30" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="30" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="30" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="58" y="54" class="t b">9:44</text>
+  <circle cx="86" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="86" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="112" y="90" class="hdr">ossbot</text>
+  <text x="112" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="30" y1="118" x2="400" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="40" y="130" width="300" height="236" rx="16" fill="#ffffff"/>
+  <text class="t" x="52" y="150"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r2</text>
+  <text class="t" x="52" y="168"><tspan class="b">langfuse/langfuse</tspan> · Issue #1234</text>
+  <text class="t" x="52" y="186">PR: <tspan class="m">fix(web): handle empty spans…</tspan></text>
+  <rect x="50" y="198" width="280" height="34" rx="8" fill="#e3f0ff"/>
+  <text class="t dry" x="60" y="220">🧪 DRY RUN — nothing will be published</text>
+  <text class="t b" x="52" y="254">Confirm: DRY RUN — nothing will be</text>
+  <text class="t b" x="52" y="272">published. Expires in 5 min.</text>
+  <text class="t" x="52" y="296">Reviewed: summary ✅ · files 3/3 ✅ · tests ✅</text>
+  <text class="t" x="52" y="316">⏳ Expires <tspan class="b">in 5 minutes</tspan></text>
+  <text class="s" x="52" y="340">binding v2 · head abc1234 · mode recomputed at tap</text>
+  <text class="s" x="330" y="356" text-anchor="end">10:30 edited</text>
+  <rect x="40" y="372" width="148" height="32" rx="10" fill="#2f7fe0"/>
+  <text class="btn" x="114" y="392">🧪 Confirm dry run</text>
+  <rect x="192" y="372" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="266" y="392">↩️ Cancel</text>
+
+  <text class="ghost" x="40" y="432">↓ after Confirm — the same message is edited</text>
+  <rect x="40" y="442" width="300" height="104" rx="16" fill="#ffffff" stroke="#9fb39a" stroke-dasharray="4 3"/>
+  <text class="t" x="52" y="462"><tspan class="b">🧩 c_01JABC · r2</tspan> · langfuse/langfuse</text>
+  <text class="t dry" x="52" y="484">🧪 Dry run done — nothing was published</text>
+  <text class="t" x="52" y="504">would: fork Amsal1/langfuse (exists)</text>
+  <text class="t" x="52" y="522">· push ossbot/1234-fix-trace-export-01jabc</text>
+  <text class="t" x="52" y="540">· open PR on langfuse/langfuse</text>
+  <rect x="40" y="552" width="300" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="190" y="572">📄 Would-be payload</text>
+
+  <text class="ghost" x="40" y="612">Toast if Approve is tapped while paused:</text>
+  <rect x="48" y="622" width="284" height="46" rx="12" fill="#2b2b2b" fill-opacity="0.88"/>
+  <text class="btn" x="190" y="641" style="font-weight:500">Paused or killed: nothing was approved.</text>
+  <text class="btn" x="190" y="658" style="font-weight:500">/resume first.</text>
+
+  <rect x="30" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="42" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="77" y="834">☰ Menu</text>
+  <rect x="120" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="134" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ RIGHT: LIVE ============ -->
+  <rect x="440" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
+  <rect x="450" y="30" width="370" height="840" rx="38" fill="#d9e4c8"/>
+  <rect x="450" y="30" width="370" height="88" rx="38" fill="#ffffff"/>
+  <rect x="450" y="80" width="370" height="38" fill="#ffffff"/>
+  <text x="478" y="54" class="t b">9:44</text>
+  <circle cx="506" cy="93" r="17" fill="#2f7fe0"/>
+  <text x="506" y="98" class="btn" style="font-size:13px">ob</text>
+  <text x="532" y="90" class="hdr">ossbot</text>
+  <text x="532" y="107" class="s">✅ Reviews · bot</text>
+  <line x1="450" y1="118" x2="820" y2="118" stroke="#d0d6cc"/>
+
+  <rect x="460" y="130" width="300" height="272" rx="16" fill="#ffffff"/>
+  <text class="t" x="472" y="150"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r2</text>
+  <text class="t" x="472" y="168"><tspan class="b">langfuse/langfuse</tspan> · Issue #1234</text>
+  <text class="t" x="472" y="186">PR: <tspan class="m">fix(web): handle empty spans…</tspan></text>
+  <rect x="470" y="198" width="280" height="34" rx="8" fill="#fde7e7"/>
+  <text class="t live" x="480" y="220">🔴 LIVE — this opens a public PR</text>
+  <text class="t b" x="472" y="254">Confirm: LIVE — open PR on</text>
+  <text class="t b" x="472" y="272">langfuse/langfuse as Amsal1 (author</text>
+  <text class="t b" x="472" y="290">Amsal Khan). Expires in 5 min.</text>
+  <text class="t" x="472" y="314">Reviewed: summary ✅ · files 2/3 ⚠️ · tests ✅</text>
+  <text class="t warn" x="472" y="334">⚠️ 1 unsent comment will be discarded</text>
+  <text class="t" x="472" y="354">⏳ Expires <tspan class="b">in 5 minutes</tspan></text>
+  <text class="s" x="472" y="378">binding v2 · head abc1234 · mode recomputed at tap</text>
+  <text class="s" x="750" y="394" text-anchor="end">10:31 edited</text>
+  <rect x="460" y="408" width="148" height="32" rx="10" fill="#d93025"/>
+  <text class="btn" x="534" y="428">🚀 Confirm LIVE</text>
+  <rect x="612" y="408" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="428">↩️ Cancel</text>
+
+  <text class="ghost" x="460" y="468">↓ after Confirm — progress edits (≤ 1 per 5 s)</text>
+  <rect x="460" y="478" width="300" height="62" rx="16" fill="#ffffff" stroke="#9fb39a" stroke-dasharray="4 3"/>
+  <text class="t b" x="472" y="500">⏳ Submitting (LIVE)…</text>
+  <text class="t" x="472" y="520">fork ✅ · push ✅ · PR ⏳</text>
+  <text class="ghost" x="460" y="564">↓ final state of the card</text>
+  <rect x="460" y="574" width="300" height="62" rx="16" fill="#ffffff" stroke="#9fb39a" stroke-dasharray="4 3"/>
+  <text class="t" x="472" y="596"><tspan class="b">🚀 Submitted · PR #5678</tspan> · 🔴 LIVE</text>
+  <text class="t" x="472" y="616">live status card follows as a reply ↓</text>
+  <rect x="460" y="642" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="534" y="662">🔗 Open PR ↗</text>
+  <rect x="612" y="642" width="148" height="32" rx="10" fill="#5f7d64"/>
+  <text class="btn" x="686" y="662">📋 Copy link</text>
+
+  <rect x="450" y="800" width="370" height="70" fill="#ffffff"/>
+  <rect x="462" y="814" width="70" height="30" rx="15" fill="#2f7fe0"/>
+  <text class="btn" x="497" y="834">☰ Menu</text>
+  <rect x="540" y="814" width="230" height="30" rx="15" fill="#f1f3f1"/>
+  <text class="s" x="554" y="834" style="font-size:12px">Message</text>
+
+  <!-- ============ NOTES ============ -->
+  <text class="note nh" x="860" y="58">S8 · Approve → Confirm (two taps)</text>
+  <text class="note" x="860" y="80">Tap 1 (Approve) edits the card in place into</text>
+  <text class="note" x="860" y="96">this panel; tap 2 (Confirm) starts submission.</text>
+  <text class="note b" x="860" y="126">Safety (unchanged core, S1–S3)</text>
+  <text class="note" x="860" y="146">• Confirm token: single-use, 5 min TTL, bound to</text>
+  <text class="note" x="860" y="162">  this message id, owner + private chat only.</text>
+  <text class="note" x="860" y="180">• The sentence is the DESIGN §12.4 string,</text>
+  <text class="note" x="860" y="196">  computed now; dry_run recomputed at Approve,</text>
+  <text class="note" x="860" y="212">  at Confirm and before every write.</text>
+  <text class="note" x="860" y="230">• Any toggle, reload, edit or new rev between the</text>
+  <text class="note" x="860" y="246">  taps → "Superseded: content or mode changed".</text>
+  <text class="note" x="860" y="264">• Refused while paused, killed, draining or down,</text>
+  <text class="note" x="860" y="280">  with a toast; nothing changes state.</text>
+  <text class="note b" x="860" y="310">Presentation</text>
+  <text class="note" x="860" y="330">• Banner and button state the mode in words;</text>
+  <text class="note" x="860" y="346">  colour repeats it (primary blue / danger red).</text>
+  <text class="note" x="860" y="364">• "Reviewed …" comes from tg_views opens; it is</text>
+  <text class="note" x="860" y="380">  informational and never gates Confirm.</text>
+  <text class="note" x="860" y="398">• Unsent draft-review comments are listed; on</text>
+  <text class="note" x="860" y="414">  Confirm they are marked discarded.</text>
+  <text class="note" x="860" y="432">• Cancel or expiry → back to S1 with rotated</text>
+  <text class="note" x="860" y="448">  tokens; toast "Cancelled; nothing was submitted."</text>
+  <text class="note b" x="860" y="478">Telegram constraints</text>
+  <text class="note" x="860" y="498">• Classic message ≤ 3,900 escaped chars; never</text>
+  <text class="note" x="860" y="514">  a rich message, draft or ephemeral (U3).</text>
+  <text class="note" x="860" y="532">• 2 buttons, 1 row; labels ≤ 20 chars.</text>
+  <text class="note" x="860" y="550">• Toasts via answerCallbackQuery: limit 200, ossbot</text>
+  <text class="note" x="860" y="566">  ≤ 180; show_alert only for refusals.</text>
+  <text class="note" x="860" y="584">• "in 5 minutes" is &lt;tg-time format="r"&gt;.</text>
+  <text class="note" x="860" y="602">• URL buttons (Open PR) and copy_text (Copy</text>
+  <text class="note" x="860" y="618">  link, ≤ 256) need no token.</text>
+  <text class="note b" x="860" y="648">Other action kinds</text>
+  <text class="note" x="860" y="668">push_update: "Confirm: LIVE — push 1 commit to</text>
+  <text class="note" x="860" y="684">PR #5678 (langfuse/langfuse) as Amsal1."</text>
+  <text class="note" x="860" y="702">comment / claim: "Confirm: LIVE — post comment</text>
+  <text class="note" x="860" y="718">on langfuse/langfuse#1234 as Amsal1."</text>
+  <text class="note" x="860" y="736">skill: "Confirm: activate skill … (sha256 …)".</text>
+</svg>
