@@ -1,0 +1,32 @@
+{
+  "name": "ossbot-scout",
+  "description": "Builds a codebase overview from a shallow read-only snapshot and proposes a small, test-backed change (CR-004).",
+  "prompt": "file:///opt/ossbot/prompts/scout.md",
+  "tools": [
+    "read",
+    "web_search",
+    "web_fetch"
+  ],
+  "allowedTools": [
+    "read",
+    "web_search",
+    "web_fetch"
+  ],
+  "toolsSettings": {
+    "read": {
+      "allowedPaths": [
+        "/work/repo/**",
+        "/io/input/**"
+      ],
+      "deniedPaths": [
+        "/proc/**",
+        "/sys/**",
+        "/dev/**",
+        "/run/**",
+        "/etc/**",
+        "/home/agent/.kiro/**",
+        "/io/output/**"
+      ]
+    }
+  }
+}

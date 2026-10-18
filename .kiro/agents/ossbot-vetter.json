@@ -1,0 +1,31 @@
+{
+  "name": "ossbot-vetter",
+  "description": "Vets an issue and repo facts (AI policy, claim status, CLA/DCO) from staged inputs; no repo code.",
+  "prompt": "file:///opt/ossbot/prompts/vetter.md",
+  "tools": [
+    "read",
+    "web_search",
+    "web_fetch"
+  ],
+  "allowedTools": [
+    "read",
+    "web_search",
+    "web_fetch"
+  ],
+  "toolsSettings": {
+    "read": {
+      "allowedPaths": [
+        "/io/input/**"
+      ],
+      "deniedPaths": [
+        "/proc/**",
+        "/sys/**",
+        "/dev/**",
+        "/run/**",
+        "/etc/**",
+        "/home/agent/.kiro/**",
+        "/io/output/**"
+      ]
+    }
+  }
+}

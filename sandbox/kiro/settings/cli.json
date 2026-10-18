@@ -6,5 +6,6 @@
   "chat.enableDelegate": false,
   "chat.enableMainAgentSubagentTool": false,
   "chat.enableWorkflows": false,
-  "chat.enableCheckpoint": false
+  "chat.enableCheckpoint": false,
+  "toolSearch.enabled": false
 }

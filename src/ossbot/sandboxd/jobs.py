@@ -133,6 +133,8 @@ def _env_for(job: ValidatedJob, trust_mode: TrustMode) -> dict[str, str]:
     a = job.args
     if isinstance(a, FetchArgs):
         env = {"OSSBOT_ARG_REPO": a.repo, "OSSBOT_ARG_CLONE_DEPTH": str(a.clone_depth)}
+        if not a.prefetch:  # scout clone (CR-004 §9.5a); absent = the default, so Phase 1 argv is unchanged
+            env["OSSBOT_ARG_PREFETCH"] = "0"
         if a.base_ref is not None:
             env["OSSBOT_ARG_BASE_REF"] = a.base_ref
         if a.base_sha is not None:

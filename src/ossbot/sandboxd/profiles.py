@@ -18,8 +18,8 @@ from ossbot.common.schemas import BASE_REF_RE, SHA1_RE
 JobProfile = Literal["fetch", "research", "coder", "validate", "package", "catalog", "stack"]
 JobEntrypoint = Literal["fetch", "kiro", "validate", "package", "unbundle", "list_models", "probe"]
 RepoMode = Literal["none", "snapshot", "rw"]
-ResearchRole = Literal["vetter", "planner", "reviewer", "summarizer"]
-KiroRole = Literal["vetter", "planner", "reviewer", "summarizer", "coder"]
+ResearchRole = Literal["vetter", "scout", "planner", "reviewer", "summarizer"]  # scout: decision B8 (CR-004)
+KiroRole = Literal["vetter", "scout", "planner", "reviewer", "summarizer", "coder"]
 
 RUN_ID_RE = r"^[a-z0-9][a-z0-9_-]{0,30}$"
 CID_RE = r"^(c_[0-9A-Z]{10}|sys-catalog)$"
@@ -73,7 +73,8 @@ EGRESS_PROFILE: dict[str, str] = {
 }  # fmt: skip
 
 ROLE_REPO_MODE: dict[str, RepoMode] = {
-    "vetter": "none", "summarizer": "none", "planner": "snapshot", "reviewer": "snapshot", "coder": "rw",
+    "vetter": "none", "summarizer": "none", "scout": "snapshot", "planner": "snapshot", "reviewer": "snapshot",
+    "coder": "rw",
 }  # fmt: skip
 PROFILE_REPO_MODE: dict[str, RepoMode] = {
     "fetch": "rw",
@@ -96,6 +97,7 @@ PROFILE_MAX_TIMEOUT: dict[str, int] = {
 # Fixed per role, never caller-supplied (§15.3). [VERIFY §23 item 5: exact V3 internal tool ids]
 TRUST_TOOLS: dict[str, str] = {
     "vetter": "read,web_search,web_fetch",
+    "scout": "read,web_search,web_fetch",  # shallow snapshot ro + web per egress mode (§9.5a)
     "planner": "read,web_search,web_fetch",
     "reviewer": "read,web_search,web_fetch",
     "summarizer": "read",
@@ -115,6 +117,9 @@ class FetchArgs(Strict):
     base_ref: Annotated[str, Field(pattern=BASE_REF_RE)] | None = None
     base_sha: Annotated[str, Field(pattern=SHA1_RE)] | None = None
     clone_depth: Annotated[int, Field(ge=1, le=10000)] = 200
+    # CR-004 scout: a shallow clone without dependency prefetch (no repo code runs), replaced by
+    # the real fetch after Start work (fetch.sh removes the scout clone first).
+    prefetch: bool = True
 
     @model_validator(mode="after")
     def _sha_needs_ref(self) -> FetchArgs:

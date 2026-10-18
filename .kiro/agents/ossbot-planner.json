@@ -1,0 +1,32 @@
+{
+  "name": "ossbot-planner",
+  "description": "Plans an approved change against the real code (read-only snapshot).",
+  "prompt": "file:///opt/ossbot/prompts/planner.md",
+  "tools": [
+    "read",
+    "web_search",
+    "web_fetch"
+  ],
+  "allowedTools": [
+    "read",
+    "web_search",
+    "web_fetch"
+  ],
+  "toolsSettings": {
+    "read": {
+      "allowedPaths": [
+        "/work/repo/**",
+        "/io/input/**"
+      ],
+      "deniedPaths": [
+        "/proc/**",
+        "/sys/**",
+        "/dev/**",
+        "/run/**",
+        "/etc/**",
+        "/home/agent/.kiro/**",
+        "/io/output/**"
+      ]
+    }
+  }
+}

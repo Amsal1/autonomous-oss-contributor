@@ -20,7 +20,7 @@ result() { # result <ok> <error_class|null> <exit>
 fail() { echo "kiro: $2" >&2; result false "$1" 2; exit 2; }
 
 mkdir -p "$OUT"
-[[ "${ROLE:-}" =~ ^(vetter|planner|reviewer|summarizer|coder)$ ]] || fail bad_args "ROLE"
+[[ "${ROLE:-}" =~ ^(vetter|scout|planner|reviewer|summarizer|coder)$ ]] || fail bad_args "ROLE"
 [[ "${PROMPT_FILE:-}" =~ ^[a-z0-9_-]{1,64}\.md$ ]] || fail bad_args "PROMPT_FILE"
 [[ "${MODEL:-}" =~ ^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$ ]] || fail bad_args "MODEL"
 [[ "${EFFORT:-}" =~ ^(low|medium|high|xhigh|max)$ ]] || fail bad_args "EFFORT"

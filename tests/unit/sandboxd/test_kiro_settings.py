@@ -1,4 +1,5 @@
-"""Baked Kiro settings (DESIGN §10.1 M1, §15.3): the eight cli.json keys and the DENY_SYS rules."""
+"""Baked Kiro settings (DESIGN §10.1 M1, §15.3): the nine cli.json keys (N8 ``toolSearch.enabled``
+since FEAT-006 item 30) and the DENY_SYS rules."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ from ossbot.sandboxd.probes import SETTINGS_REQUIRED, agent_configs_hash, settin
 
 ROOT = Path(__file__).resolve().parents[3]
 SETTINGS = ROOT / "sandbox" / "kiro" / "settings"
-EIGHT = {
+NINE = {
     "telemetry.enabled": False,
     "app.disableAutoupdates": True,
     "chat.enableKnowledge": False,
@@ -19,16 +20,17 @@ EIGHT = {
     "chat.enableMainAgentSubagentTool": False,
     "chat.enableWorkflows": False,
     "chat.enableCheckpoint": False,
+    "toolSearch.enabled": False,  # §23 item 5 N8: no Tool Search bridge (ADR-0005 addendum, FEAT-006)
 }
 DENY_SYS = ["/proc/**", "/sys/**", "/dev/**", "/run/**", "/etc/**", "/home/agent/.kiro/**", "/io/output/**"]
 
 
-def test_cli_json_has_exactly_the_eight_keys() -> None:
-    assert json.loads((SETTINGS / "cli.json").read_text(encoding="utf-8")) == EIGHT
+def test_cli_json_has_exactly_the_nine_keys() -> None:
+    assert json.loads((SETTINGS / "cli.json").read_text(encoding="utf-8")) == NINE
 
 
 def test_settings_probe_checks_a_subset_of_the_baked_values() -> None:
-    assert all(EIGHT[k] is v for k, v in SETTINGS_REQUIRED.items())
+    assert all(NINE[k] is v for k, v in SETTINGS_REQUIRED.items())
 
 
 def test_permissions_deny_sys_on_every_file_tool() -> None:
@@ -56,3 +58,24 @@ def test_llm_image_bakes_these_files_and_kiro_only_there() -> None:
     for marker in ("KIRO_CLI", "/opt/kiro-cli", "kiro.sh", "list_models.sh", "kiro/settings", "exec_mcp"):
         assert marker not in full, marker
     assert "KIRO_CLI_SHA256" in llm
+
+
+def test_agents_match_the_fixed_trust_tools() -> None:
+    """§15.3 table: one agent per Kiro role, tools == TRUST_TOOLS, DENY_SYS on file tools, the coder
+    has only the four @ossbot-exec MCP tools (FEAT-006 item 30)."""
+    from ossbot.sandboxd.profiles import TRUST_TOOLS
+
+    agents_dir = ROOT / ".kiro" / "agents"
+    names = {p.stem for p in agents_dir.glob("ossbot-*.json")}
+    assert names == {f"ossbot-{role}" for role in TRUST_TOOLS}
+    for role, trusted in TRUST_TOOLS.items():
+        doc = json.loads((agents_dir / f"ossbot-{role}.json").read_text(encoding="utf-8"))
+        assert doc["name"] == f"ossbot-{role}" and doc["prompt"] == f"file:///opt/ossbot/prompts/{role}.md"
+        assert doc["tools"] == doc["allowedTools"] == trusted.split(",")
+        assert doc["toolsSettings"]["read"]["deniedPaths"] == DENY_SYS
+        assert (ROOT / "prompts" / f"{role}.md").is_file()
+        if role == "coder":
+            assert set(doc["mcpServers"]) == {"ossbot-exec"}
+            assert not {"read", "write", "shell", "glob", "grep", "web_search", "web_fetch"} & set(doc["tools"])
+        else:
+            assert "mcpServers" not in doc and "shell" not in doc["tools"]

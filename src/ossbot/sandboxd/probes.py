@@ -41,6 +41,7 @@ SETTINGS_REQUIRED: dict[str, bool] = {
     "chat.enableDelegate": False,
     "chat.enableWorkflows": False,
     "telemetry.enabled": False,
+    "toolSearch.enabled": False,  # §23 item 5 N8 (FEAT-006 item 30)
     "app.disableAutoupdates": True,
 }
 KSK_RE = re.compile(rb"ksk_")

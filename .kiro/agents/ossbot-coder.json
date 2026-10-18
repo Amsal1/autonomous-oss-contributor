@@ -1,0 +1,49 @@
+{
+  "name": "ossbot-coder",
+  "description": "Implements the approved plan with tests, only through the four @ossbot-exec MCP tools (split coder, no built-in file or shell tools).",
+  "prompt": "file:///opt/ossbot/prompts/coder.md",
+  "mcpServers": {
+    "ossbot-exec": {
+      "command": "/opt/ossbot/bin/ossbot-exec-mcp",
+      "args": [
+        "/run/exec/exec.sock"
+      ]
+    }
+  },
+  "tools": [
+    "@ossbot-exec/read_file",
+    "@ossbot-exec/write_file",
+    "@ossbot-exec/list_dir",
+    "@ossbot-exec/run"
+  ],
+  "allowedTools": [
+    "@ossbot-exec/read_file",
+    "@ossbot-exec/write_file",
+    "@ossbot-exec/list_dir",
+    "@ossbot-exec/run"
+  ],
+  "toolsSettings": {
+    "read": {
+      "deniedPaths": [
+        "/proc/**",
+        "/sys/**",
+        "/dev/**",
+        "/run/**",
+        "/etc/**",
+        "/home/agent/.kiro/**",
+        "/io/output/**"
+      ]
+    },
+    "write": {
+      "deniedPaths": [
+        "/proc/**",
+        "/sys/**",
+        "/dev/**",
+        "/run/**",
+        "/etc/**",
+        "/home/agent/.kiro/**",
+        "/io/output/**"
+      ]
+    }
+  }
+}

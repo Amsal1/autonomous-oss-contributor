@@ -14,6 +14,10 @@ SLUG="${OSSBOT_ARG_REPO:-}"
 BASE_REF="${OSSBOT_ARG_BASE_REF:-}"
 BASE_SHA="${OSSBOT_ARG_BASE_SHA:-}"
 DEPTH="${OSSBOT_ARG_CLONE_DEPTH:-200}"
+# OSSBOT_ARG_PREFETCH=0: the CR-004 scout clone (shallow, no dependency prefetch, so no repo code
+# runs). It is marked, and the real fetch after Start work replaces it with a fresh clone.
+PREFETCH_ON="${OSSBOT_ARG_PREFETCH:-1}"
+SCOUT_MARK="$WORK/.scout-clone"
 
 result() { # result <ok> <error_class|null> [head]
   local err_json="null" head_json="null"
@@ -29,6 +33,8 @@ mkdir -p "$OUT"
 [[ -z "$BASE_SHA" || "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail bad_args "OSSBOT_ARG_BASE_SHA"
 [[ -z "$BASE_SHA" || -n "$BASE_REF" ]] || fail bad_args "BASE_SHA requires BASE_REF"
 [[ "$DEPTH" =~ ^[1-9][0-9]{0,4}$ ]] || fail bad_args "OSSBOT_ARG_CLONE_DEPTH"
+[[ "$PREFETCH_ON" =~ ^[01]$ ]] || fail bad_args "OSSBOT_ARG_PREFETCH"
+if [[ -f "$SCOUT_MARK" ]]; then rm -rf "$REPO" "$SCOUT_MARK"; fi  # the scout clone is not the build clone
 
 mkdir -p "$REPO" "$WORK/cache" "$WORK/venv" "$WORK/.home"
 export HOME="$WORK/.home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
@@ -60,6 +66,7 @@ ECOS=()
 PREFETCH=()
 prefetch() { # prefetch <name> <cmd...>
   local name=$1 code=0
+  [[ "$PREFETCH_ON" == 1 ]] || return 0
   shift
   timeout 900 "$@" >"$OUT/prefetch-$name.log" 2>&1 || code=$?
   PREFETCH+=("$name=$code")
@@ -104,4 +111,5 @@ jq -n --arg base_sha "$HEAD_SHA" --arg base_ref "$BASE_REF" \
     ecosystems: ($ecos | split(" ") | map(select(. != ""))),
     prefetch: ($prefetch | split(" ") | map(select(. != "") | split("=") | {(.[0]): (.[1] | tonumber)}) | add // {}),
     agent_config: ($agent | split(" ") | map(select(. != "")))}' >"$OUT/fetch.json"
+[[ "$PREFETCH_ON" == 1 ]] || : >"$SCOUT_MARK"
 result true null "$HEAD_SHA"

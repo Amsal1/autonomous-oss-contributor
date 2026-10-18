@@ -245,6 +245,7 @@ def test_settings_probe() -> None:
     text = (
         b"telemetry.enabled = false\napp.disableAutoupdates = true\nchat.enableKnowledge = false\n"
         b"chat.enableCodeIntelligence = false\nchat.enableDelegate = false\nchat.enableWorkflows = false\n"
+        b"toolSearch.enabled = false\n"
     )
     assert eval_settings(ProbeEvidence(files={"settings.txt": text}), SCANNER)
     assert not eval_settings(
@@ -258,6 +259,7 @@ def test_settings_probe() -> None:
             "chat.enableCodeIntelligence": False,
             "chat.enableDelegate": False,
             "chat.enableWorkflows": False,
+            "toolSearch.enabled": False,
         }
     ).encode()
     assert eval_settings(ProbeEvidence(files={"settings.txt": as_json}), SCANNER)
@@ -283,6 +285,7 @@ def test_probe_runner_records_and_pauses_on_failure(sbx: Sbx) -> None:
             "chat.enableCodeIntelligence = false",
             "chat.enableDelegate = false",
             "chat.enableWorkflows = false",
+            "toolSearch.enabled = false",
         ]
         if c.spec.env and dict(c.spec.env).get("OSSBOT_PROBE") == "settings":
             (out / "settings.txt").write_text("\n".join(lines))

@@ -1,0 +1,27 @@
+{
+  "name": "ossbot-summarizer",
+  "description": "Drafts the commit message, PR title and PR body from the staged diff; no web.",
+  "prompt": "file:///opt/ossbot/prompts/summarizer.md",
+  "tools": [
+    "read"
+  ],
+  "allowedTools": [
+    "read"
+  ],
+  "toolsSettings": {
+    "read": {
+      "allowedPaths": [
+        "/io/input/**"
+      ],
+      "deniedPaths": [
+        "/proc/**",
+        "/sys/**",
+        "/dev/**",
+        "/run/**",
+        "/etc/**",
+        "/home/agent/.kiro/**",
+        "/io/output/**"
+      ]
+    }
+  }
+}

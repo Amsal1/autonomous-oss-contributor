@@ -189,6 +189,22 @@ def test_job_spec_never_takes_flags_from_values() -> None:
     assert "OSSBOT_ARG_REPO=--privileged" in argv
 
 
+def test_scout_fetch_env_only_when_prefetch_is_off() -> None:
+    """CR-004 scout clone: OSSBOT_ARG_PREFETCH=0 only for prefetch false; the default env is unchanged."""
+    from ossbot.sandboxd.jobs import _env_for
+    from ossbot.sandboxd.profiles import validate_job
+
+    base = {"run_id": "r1", "cid": "c_01ABCDEFGH", "profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw",
+            "timeout_s": 600}  # fmt: skip
+    normal = _env_for(validate_job(JobSpec.model_validate({**base, "args": {"repo": "o/r"}})), "ids")
+    scout = _env_for(
+        validate_job(JobSpec.model_validate({**base, "args": {"repo": "o/r", "clone_depth": 1, "prefetch": False}})),
+        "ids",
+    )
+    assert "OSSBOT_ARG_PREFETCH" not in normal
+    assert scout["OSSBOT_ARG_PREFETCH"] == "0" and scout["OSSBOT_ARG_CLONE_DEPTH"] == "1"
+
+
 # ------------------------------------------------------------------- JobSpec rules
 def _spec(**kw: Any) -> JobSpec:
     base: dict[str, Any] = {
@@ -213,6 +229,20 @@ def _spec(**kw: Any) -> JobSpec:
         (
             {"args": {"role": "vetter", "prompt_file": "vet.md", "model": "m", "effort": "low"}, "repo_mode": "none"},
             True,
+        ),
+        # decision B8: scout is a research role on the read-only snapshot (CR-004 §9.5a)
+        ({"args": {"role": "scout", "prompt_file": "scout.md", "model": "m", "effort": "high"}}, True),
+        (
+            {"args": {"role": "scout", "prompt_file": "scout.md", "model": "m", "effort": "high"}, "repo_mode": "none"},
+            False,
+        ),
+        (
+            {
+                "profile": "coder",
+                "repo_mode": "rw",
+                "args": {"role": "scout", "prompt_file": "s.md", "model": "m", "effort": "low"},
+            },
+            False,
         ),
         ({"args": {"role": "planner", "prompt_file": "../x.md", "model": "m", "effort": "low"}}, False),
         ({"args": {"role": "planner", "prompt_file": "plan.txt", "model": "m", "effort": "low"}}, False),
