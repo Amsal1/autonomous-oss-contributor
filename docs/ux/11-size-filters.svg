@@ -267,8 +267,8 @@
   <text class="note b" x="1280" y="532">/work and link cards</text>
   <text class="note" x="1280" y="550">• Accepts github.com repo, /issues/N, /pull/N</text>
   <text class="note" x="1280" y="566">  (query and fragment stripped); notes ≤ 1,000.</text>
-  <text class="note" x="1280" y="584">• ≤ 3 link cards per message; built only from the</text>
-  <text class="note" x="1280" y="600">  parsed URL + GitHub read facts, never your text.</text>
+  <text class="note" x="1280" y="584">• ≤ 3 link cards per message: URL + GitHub facts, plus</text>
+  <text class="note" x="1280" y="600">  Notes: "…" of your typed text (≤ 80 shown); forwards: none.</text>
   <text class="note" x="1280" y="618">• Class "request": queues a scout only; nothing</text>
   <text class="note" x="1280" y="634">  runs or publishes before gate 1 and gate 2.</text>
   <text class="note" x="1280" y="652">• 👤 proposals sort in class 1 and arrive loud.</text>

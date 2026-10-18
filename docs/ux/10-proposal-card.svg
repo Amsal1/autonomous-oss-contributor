@@ -183,8 +183,9 @@
   <text class="note" x="860" y="384">  CLA / open-PR warnings are added to this panel.</text>
   <text class="note" x="860" y="402">• Adjust plan → ForceReply (≤ 2,000) or reply to the</text>
   <text class="note" x="860" y="418">  card; Make it smaller → "fit the next class".</text>
-  <text class="note" x="860" y="436">• Skip / Later: immediate + Undo; Never: confirm.</text>
-  <text class="note" x="860" y="452">• Details: one reply message, no decision buttons.</text>
+  <text class="note" x="860" y="436">• Skip / Later: reject (Start work dies) + Undo ≤ 10 min</text>
+  <text class="note" x="860" y="452">  → fresh card, same expiry; Never: confirm, no Undo.</text>
+  <text class="note" x="860" y="468">• Details: one reply message, no decision buttons.</text>
   <text class="note b" x="860" y="480">Versions (§5.16)</text>
   <text class="note" x="860" y="498">• v(N+1) replies to vN; vN goes ⚪ Superseded.</text>
   <text class="note" x="860" y="514">• "Changed since" is a field-by-field diff of the two</text>
@@ -200,8 +201,8 @@
   <text class="note" x="860" y="702">• RESCOPE_REQUIRED card only with on_overrun:</text>
   <text class="note" x="860" y="718">  reapprove: [✅ Continue at m] [📏 Make it smaller]</text>
   <text class="note" x="860" y="734">  [🧭 Explore] [🗑 Drop].</text>
-  <text class="note" x="860" y="752">• Ceiling: config-only (U13); Re-check re-runs only</text>
-  <text class="note" x="860" y="768">  the deterministic size check after /reload.</text>
+  <text class="note" x="860" y="752">• Ceiling: config-only (U13); Re-check re-runs the size</text>
+  <text class="note" x="860" y="768">  check. Split: fixed feedback + optional ForceReply.</text>
   <text class="note" x="860" y="786">• Overrun % = round(100 × (code − est) / est), code =</text>
   <text class="note" x="860" y="802">  added + deleted code: (172 − 48) / 48 → +258%. est 0</text>
   <text class="note" x="860" y="818">  → "est 0 code"; ⚠️ when code > est × (1 + tolerance)</text>

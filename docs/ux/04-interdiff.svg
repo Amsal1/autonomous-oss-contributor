@@ -118,16 +118,17 @@
   <text class="s" x="456" y="568">file 1/2 · next: trace.test.ts (new, +18)</text>
 
   <text class="note b" x="440" y="614">S12 variants (label from the reason code)</text>
-  <text class="note" x="440" y="632">⌛ Expired · valid 72 h → [🔁 Retry] (fresh card)</text>
-  <text class="note" x="440" y="650">⚪ dry_run_toggled → "dry-run turned off" + current</text>
-  <text class="note" x="440" y="668">⚪ config reloaded · title/body edited · kill · moved</text>
-  <text class="note" x="440" y="686">• Body-part messages become "⚪ part of superseded</text>
-  <text class="note" x="440" y="702">  c_01JABC r2", so stale bytes can't be mistaken.</text>
-  <text class="note" x="440" y="720">• A tap on any old token: toast "Superseded: content</text>
-  <text class="note" x="440" y="736">  or mode changed since this card; review the new card."</text>
-  <text class="note" x="440" y="754">• "⬇️ Show current" re-sends the live card at the</text>
-  <text class="note" x="440" y="770">  bottom via reissue() (N4); drafts survive; the</text>
-  <text class="note" x="440" y="786">  expiry is kept; every open card of the cid is re-sent</text>
-  <text class="note" x="440" y="802">  (toast "Re-sent 2 cards"). Retry after ⌛ = fresh 72 h.</text>
-  <text class="note" x="440" y="832">Keyboard: 3 rows × 2 · labels ≤ 20 · 24-byte data.</text>
+  <text class="note" x="440" y="632">⌛ Expired · valid 72 h → [🔁 Retry] only while the</text>
+  <text class="note" x="440" y="648">  action is eligible; none after the EXPIRED sweep.</text>
+  <text class="note" x="440" y="666">⚪ dry_run_toggled → "dry-run turned off" + current</text>
+  <text class="note" x="440" y="684">⚪ config reloaded · title/body edited · kill · moved</text>
+  <text class="note" x="440" y="702">• Body parts → "⚪ part of superseded c_01JABC r2".</text>
+  <text class="note" x="440" y="720">• Old token tap: "Superseded: content or mode changed…"</text>
+  <text class="note" x="440" y="738">• "⬇️ Show current" (stale_show_current) resolves by</text>
+  <text class="note" x="440" y="754">  contribution: on r2 it re-sends r3 (r2's action is</text>
+  <text class="note" x="440" y="770">  cancelled). Shown only while an open card exists.</text>
+  <text class="note" x="440" y="786">• AppContext.reissue(): each card its own part count</text>
+  <text class="note" x="440" y="802">  (Approve after all its parts), expiry kept, eligible</text>
+  <text class="note" x="440" y="818">  actions only; confirmed sibling → "Submitting…".</text>
+  <text class="note" x="440" y="846">Keyboard: 3 rows × 2 · labels ≤ 20 · 24-byte data.</text>
 </svg>

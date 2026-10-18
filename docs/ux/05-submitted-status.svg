@@ -102,8 +102,9 @@
   <text class="note" x="440" y="306">• Drafted replies (comment) and fixes (push_update)</text>
   <text class="note" x="440" y="322">  are normal approval cards: verbatim parts, Approve</text>
   <text class="note" x="440" y="338">  after delivery, two taps, LIVE/DRY RUN stated.</text>
-  <text class="note" x="440" y="356">• Same topic for the whole PR: replies can't cross</text>
-  <text class="note" x="440" y="372">  topics (ReplyParameters).</text>
+  <text class="note" x="440" y="356">• Reply to a drafted-reply card → "Replace the comment</text>
+  <text class="note" x="440" y="372">  text with your reply?" [✅ Replace] [↩️ Cancel]; never a</text>
+  <text class="note" x="440" y="388">  review comment. One topic per PR (no cross-topic replies).</text>
 
   <text class="note b" x="440" y="404">S11 · merged (status card finalized + summary)</text>
   <rect x="440" y="414" width="370" height="96" rx="12" fill="#ffffff" stroke="#c9d3c4"/>

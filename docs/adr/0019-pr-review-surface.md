@@ -1,5 +1,5 @@
 # ADR-0019: PR review surface: native Telegram explorer by default, private GitHub review mirror as the opt-in rich layer
-Status: Proposed (CR-003), revision 3 after design review rounds 1 and 2 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, CR-004 · Addendum A (Telegram client library) is the content of the planned ADR-0020
+Status: Proposed (CR-003), revision 4 after design review rounds 1–3 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, ADR-0020 (Telegram client library and Pillow, formerly Addendum A of this ADR), CR-004
 
 ## Context
 Amsal reviews almost every candidate on his phone. Today's review surface (DESIGN §14.4) is one card, the verbatim PR body and commit message in `<pre>` parts, a diff paged through `editMessageText`, and a `.patch` file. It is safe, but on a phone it is flat. It has no per-file navigation, no way to comment on a line, and no "what changed since my last review".
@@ -16,7 +16,7 @@ Hard constraints that any surface must keep:
 - A user's reply can carry a `quote` (`TextQuote`: the selected text plus its UTF-16 position). That anchors a comment to the exact lines the user selected.
 - Mini Apps can be validated without the bot token, using the Ed25519 `signature` field and Telegram's published public key. They also offer `DeviceStorage` (5 MB per user), `SecureStorage` (Keychain/Keystore, 10 items), Main and Secondary buttons, fullscreen mode and theme parameters. Since 2026-07-20, Mini App methods can't be called from foreign origins.
 - **Telegram Serverless** (2026-10-06) hosts JavaScript handlers, endpoints, a SQLite database and Mini App files at `app<id>.tgcloud.ai`. BotFather manages a **webhook** for the bot, and the Bot API refuses `getUpdates` while a webhook is set. Turning Serverless on for the ossbot bot would therefore break ADR-0004.
-- python-telegram-bot 22.8 (2026-06-12, still the latest release) fully supports Bot API 10.0. The 10.1–10.3 features need raw calls through `Bot.do_api_request`, which the outbox already uses for every send. Whether to keep PTB at all was re-evaluated against aiogram and pyTelegramBotAPI in Addendum A: PTB stays.
+- python-telegram-bot 22.8 (2026-06-12, still the latest release) fully supports Bot API 10.0. The 10.1–10.3 features need raw calls through `Bot.do_api_request`, which the outbox already uses for every send. Whether to keep PTB at all was re-evaluated against aiogram and pyTelegramBotAPI in **ADR-0020**: PTB stays, with a typed adapter for 10.1–10.3.
 - `Telegram.WebApp.sendData` is "only available for Mini Apps launched via a Keyboard button" (a reply-keyboard `web_app` button). It sends ≤ 4,096 bytes as a `web_app_data` service message and closes the Mini App. Mini Apps opened from an inline button or the menu button can't use it.
 - Prior art: `SanNw/opencode-telegram` routes only an authenticated "Bridge" through an HTTPS tunnel and keeps the OpenCode server on loopback. Access is protected by Telegram-signed init data, an owner check and a trusted-device key. HTML previews are static and sandboxed. Even that design adds an internet-reachable component. ossbot does not need one by default.
 
@@ -96,7 +96,10 @@ stateDiagram-v2
   [*] --> Proposed: scout proposal (CR-004 gate 1, CR-003 §5.15)
   Proposed --> Proposed: Adjust plan / Make it smaller (new version, old card stale)
   Proposed --> Delivering: Start work + Confirm → plan, implement, validate, /package
-  Proposed --> [*]: Skip / Never / Later / expiry
+  Proposed --> Declined: Skip / Later (ProposalApprovals.reject; PROPOSAL_REJECTED / PROPOSAL_SNOOZED)
+  Declined --> Proposed: Undo within 10 min (new p_ approval, expiry kept; CR-003 §5.15)
+  Declined --> [*]
+  Proposed --> [*]: Never (after its confirm) / expiry
   Delivering --> Ready: all body parts delivered (Approve token minted)
   Ready --> Exploring: Explore / Files / Tests
   Exploring --> Ready
@@ -117,7 +120,7 @@ stateDiagram-v2
   Ready --> Stale: any invalidation (dry-run toggle, reload, new rev, edit, expiry)
   Armed --> Stale: kill / dry-run toggle / reload / edit / new rev (Confirm token dies with the approval)
   Delivering --> Stale: kill / dry-run toggle / reload / edit / new rev (no Approve is ever minted)
-  Stale --> Delivering: Show current / Retry (new approval via reissue(), expiry kept per action, CR-003 §12.4 delta 7)
+  Stale --> Delivering: Show current (resolved by contribution) / Retry (eligible actions only); AppContext.reissue(), per-action part counts, expiry kept (CR-003 §12.4 delta 7)
   Stale --> [*]
 ```
 
@@ -135,7 +138,7 @@ stateDiagram-v2
 | S9 Submitting | Submitting | Progress lines: fork, push, PR | `05-submitted-status.svg` |
 | S10 Live status | Live | A status card edited in place (CI, reviews, maintainer comments); P1 events arrive as replies; drafted replies use S1/S8 | `05-submitted-status.svg` |
 | S11 Merged/closed | Merged/Closed | Status card finalized; summary message (with a message effect when configured) | `05-submitted-status.svg` |
-| S12 Stale | Stale | Card header "⚪ Superseded/Expired/Invalidated: <label>" (label from the real reason code, CR-003 §5.12), disabled button "⛔ Not approvable", "⬇️ Show current" or "🔁 Retry" (a fresh card via `reissue()`) | `04-interdiff.svg` |
+| S12 Stale | Stale | Card header "⚪ Superseded/Expired/Invalidated: <label>" (label from the real reason code, CR-003 §5.12), disabled button "⛔ Not approvable", "⬇️ Show current" (shown only when the contribution has an open card, which it re-sends whatever rev or version that is) or "🔁 Retry" (a fresh card via `AppContext.reissue()`, only while the action is still eligible, CR-003 §12.4.3) | `04-interdiff.svg` |
 
 Queue and priority (CR-003 §5.13): pending approvals sort by `(class_rank, expires_at, -target_priority, created_at)`. Classes, highest first:
 0. Someone is waiting: a reply to a maintainer, or a `push_update` a maintainer asked for.
@@ -206,7 +209,13 @@ At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; 
   - Their tokens are multi-use navigation tokens (24 h, message-bound) with `approval_id = NULL` and `{cid, rev, action_id}` in their argument. They resolve the current approval of **their own outbound action**, which stays unambiguous when a claim or a drafted comment is open beside the PR. So a Cancel or a re-sent card never kills them (CR-003 §12.2, §12.4).
   - After Confirm, they stay usable read-only.
   - Model-authored text is always labelled 🤖 and quoted. Gatekeeper-verified facts carry ✅ and no label.
-- **Re-sending a card** (Show card, Show current, `/queue → Open`, `/approve`) uses `reissue()` and keeps each approval's expiry. It re-sends every open card of the contribution (CR-003 §5.2, §12.4 deltas 5 and 7).
+- **Re-sending a card** (Show card, Show current, `/queue → Open`, `/approve`, Retry) always goes through the one wrapper `AppContext.reissue(cid, actor, keep_expiry=True)` (CR-003 §5.2, §12.4 deltas 5 and 7, §12.4.3):
+  - **Part counts per action.** It re-creates every **eligible** open card of the contribution, each with its own `body_parts_total` from `cards.part_count(action_id)`. So a re-sent `open_pr` card (≥ 2 parts) gets Approve only after all its verbatim parts are delivered, as ADR-0004 requires, and a one-part sibling claim gets it after its one part.
+  - **Expiry.** Each approval keeps its expiry.
+  - **Publishing.** It publishes every new card after the transaction commits.
+  - **Eligibility.** An action is eligible when it is `pending_approval` and its contribution is in a state where the action can still be submitted. A re-send is refused while any approval of the contribution is `confirmed` ("Submitting… try again in a moment"); a re-send never invalidates a confirmed approval.
+  - **Stale cards.** S12 "Show current" resolves by contribution (purpose `stale_show_current`), so after r3 is packaged it re-sends r3, and after proposal v2 it re-sends v2.
+- **Replies to `comment` and `issue_claim` cards** are not review comments. They open a confirm panel, "Replace the comment text with your reply?", whose Replace runs FEAT-005's `edit_comment` path (a new card; the old one goes stale `text_edited`). Review comments exist only for `open_pr` and `push_update` (CR-003 §4.4 rule 5).
 - **Comments:**
   - A reply to a file message becomes a comment on that file.
   - A `quote` resolves to lines by searching the quoted text in that page's diff text. Ties are broken by `position`. An ambiguous match opens a line picker. No match anchors the comment to the file only.
@@ -224,7 +233,7 @@ At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; 
 ## Consequences
 - **Good:** the default needs no setup and no new exposure. Phone review gets per-file navigation, line comments, interdiffs and test evidence. The approval code path keeps its rules (token format and checks, binding, Confirm sentences); the UI needs nine bounded deltas, each tested, listed in CR-003 §12.4. The richest layer (C) reuses GitHub's mature mobile reviewer, with no inbound path and a token that cannot write anywhere else.
 - **Costs:**
-  - Raw Bot API calls for 10.1–10.3 features, behind a typed adapter (`telegram/rawapi.py`, pydantic models), until PTB v23 ships typed support. This was chosen over switching libraries (Addendum A): it keeps lenient decoding on the safety-critical polling path and costs no migration.
+  - Raw Bot API calls for 10.1–10.3 features, behind a typed adapter (`telegram/rawapi.py`, pydantic models), until PTB v23 ships typed support. This was chosen over switching libraries (ADR-0020): it keeps lenient decoding on the safety-critical polling path and costs no migration.
   - Two renderers (rich and classic) with property tests.
   - Interdiff needs the previous mirror kept a little longer.
   - C adds a second GitHub credential to rotate.
@@ -240,66 +249,15 @@ At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; 
 4. The foreign-write probe's status codes for a fine-grained token.
 5. Whether GitHub creates any cross-reference from code-span URLs (expected: none).
 6. The Serverless webhook behaviour, recorded only if B2 is ever reconsidered.
-7. End-to-end: `stopped_message_generation` arrives through PTB 22.8 in `api_kwargs` and is accepted in `allowed_updates` (the PTB side is verified from source, Addendum A).
+7. End-to-end: `stopped_message_generation` arrives through PTB 22.8 in `api_kwargs` and is accepted in `allowed_updates` (the PTB side is verified from source, ADR-0020).
 
-## Addendum A: Telegram client library (content of the planned ADR-0020)
-Status: Proposed · Date: 2026-10-18 · Facts verified on the web on 2026-10-18 (sources in A.6) · Related: ADR-0004, CR-003 §1, §6.5, §14.1, §14.4
-
-### A.1 Context
-The gatekeeper is the only Telegram poller (ADR-0004). One `getUpdates` stream carries Approve, Confirm, `/kill`, `/pause` and every assistant message. The code today is built on python-telegram-bot 22.8: `telegram/bot.py` (`TelegramSender`, `PollTrackingRequest`, `build_application`), `handlers.py` (PTB `CallbackQueryHandler`/`MessageHandler`), `auth.py` (PTB `Update`), and the fake-Bot-API tests in `tests/telegram` (an injected `BaseRequest`). CR-003 uses Bot API 10.1–10.3 features (rich messages and rich drafts, `can_stop`, `stopped_message_generation`, `DisabledButton`, `force_reply` on inline keyboards, `RichTextButton` in incoming rich messages) plus 9.3/9.4 private-chat topics. The earlier "no new runtime dependency" constraint has been lifted by the user, so the library is chosen on its merits; a swap is acceptable if the code is refactored cleanly.
-
-### A.2 Candidates (current facts)
-
-| | python-telegram-bot | aiogram 3.x | pyTelegramBotAPI (telebot) |
-|---|---|---|---|
-| Latest release | 22.8 (2026-06-12) | 3.31.0 (2026-08-26) | 4.37.1 (2026-10-17) |
-| Bot API level | 10.0. Issue #5261 "Full Support for Bot API 10.1" is open; on 2026-06-18 the maintainers paused it "until we complete major refactors" (tracked for v23); community PRs #5263, #5275, #5356, #5359 are pending | 10.3 (3.29.0 = 10.1 on 2026-06-14, 3.30.0 = 10.2 on 2026-07-17, 3.31.0 = 10.3 on 2026-08-25) | 10.3 (4.35.0 = 10.1 on 2026-07-12, 4.36.0 = 10.2 on 2026-07-18, 4.37.0 = 10.3 on 2026-09-21) |
-| Adoption speed of new Bot API versions | Slow now (10.1 still missing after 4 months) | Fastest: 1–3 days | 3–4 weeks |
-| Unknown or new fields in updates | **Lenient.** `TelegramObject._de_json` moves keys that are not constructor parameters into `api_kwargs` instead of raising (v22.8 source); unknown `Update` keys such as `stopped_message_generation` survive there | **Strict.** Models are pydantic with `extra="allow"`, so unknown *fields* pass, but a new **union member** or a missing required field fails validation of the whole `Response[list[Update]]`. #1890: the 10.3 `RichTextButton` raised `ClientDecodeError` and "the polling offset never advances", blocking the bot until the upgrade to 3.31. #1840 (a `MessageOriginHiddenUser` without `sender_user_name` blocks polling) is open, and the generic fix PR #1848 (skip invalid updates) is unmerged | Lenient: `de_json` reads known keys with `obj.get(...)` and ignores the rest (unknown keys are dropped, not kept) |
-| Typed coverage of what CR-003 uses | Topics, `style`, reactions, scopes, pins, `copy_text`, drafts without `can_stop`: yes. Rich messages, `can_stop`/`keep_on_stop`, `stopped_message_generation`, `DisabledButton`, `force_reply` on inline keyboards, `RichTextButton`: no (raw) | All of them, including ephemeral messages and guest mode | All of them at 10.3 (e.g. `Update.stopped_message_generation` → `MessageGenerationStopped`) |
-| asyncio beside FastAPI over UDS | Native asyncio `Application`; we already run it next to FastAPI | Native asyncio; good fit | `AsyncTeleBot` exists (aiohttp); the sync `TeleBot` is the primary API |
-| Maintenance and bus factor | Team project; top contributors Bibo-Joshi (532 commits), leandrotoledo (526), jh0ker (486), tsnoam, jsmnbom; dependency and security updates landing weekly (Oct 2026) | One dominant maintainer: JrooTJunior 1,662 commits vs 91 for the next | Two active maintainers: Badiboy (1,027), coder2020official (892) |
-| Licence (open-source-later goal) | LGPL-3.0-only: fine as an unmodified dependency of a project under any licence | MIT | **GPL-2.0**: distributing ossbot with it ties ossbot to GPL-2.0-compatible terms (not Apache-2.0, not GPL-3.0-only) |
-| Test and mocking support | Injected `BaseRequest`, which `tests/telegram` already uses | Custom `BaseSession` or aiohttp mocking; tests to rewrite | Monkeypatching `apihelper`; tests to rewrite |
-| Migration cost from `src/ossbot/gatekeeper/telegram/` | **None** | High: `bot.py`, `handlers.py`, `auth.py`, the poll-health tracking and every Telegram test rewritten against aiogram's dispatcher/router model | High: the same, against a less typed API |
-
-### A.3 Options
-1. **Keep PTB 22.8 and add a thin typed adapter** (`telegram/rawapi.py` + `telegram/ui/blocks.py`): pydantic request models (`extra="forbid"`) for every 10.1–10.3 method and field we send, and response models with `extra="ignore"` for the few results we read; called through `Bot.do_api_request` as the outbox already does. Incoming 10.x shapes (`stopped_message_generation`) are read from `api_kwargs` with a pydantic model.
-2. **Switch to aiogram 3.31.** Full typed 10.3 today and the fastest adoption, MIT. But its strict decoding has already blocked long polling twice in 2026 (#1890 fixed by an upgrade, #1840 still open), and ossbot pins exact versions, so every future Bot API union addition could stop Approve, Confirm and `/kill` until a rebuild. Bus factor 1.
-3. **Switch to pyTelegramBotAPI 4.37.** Typed 10.3 and tolerant decoding, but GPL-2.0 constrains the open-source-later licence, the async API is secondary, and the migration cost is as high as aiogram's.
-4. **Own minimal client** (httpx + our pydantic models, our own poll loop). Maximum control and tolerance by design, but it rewrites the transport, retry, rate-limit and poll-health code that PTB already provides and that Phase 1 reviewed. The adapter in option 1 gives the same typing for the new features without that.
-
-### A.4 Decision
-**Option 1: keep python-telegram-bot 22.8, with the typed adapter.**
-- Lenient decoding is the property that matters most for a long-polling safety bot: one unknown field must never stop the update stream that carries `/kill`. PTB has it; aiogram has shown in production that it lacks it.
-- Zero migration cost, and the Phase 1-reviewed transport, auth and tests stay as they are.
-- LGPL-3.0 as an unmodified dependency keeps every licence option open for ossbot.
-- The adapter is small and bounded: the 10.1–10.3 surface CR-003 uses is about a dozen methods and fields. When PTB v23 ships typed 10.1+ support, the adapter's call sites switch to typed methods behind the same kit API, as a separate reviewed change.
-- Revisit triggers: PTB v23 released (switch the adapter to typed calls); PTB still without 10.1 support by 2027-04 **and** aiogram merging tolerant `getUpdates` (#1848 or equivalent) — then re-run this evaluation.
-
-### A.5 Pillow
-**Not added to the gatekeeper.**
-- The only needs are metadata stripping and resizing for vision input. Resizing is unnecessary: Telegram already supplies re-encoded JPEG `PhotoSize` variants, and the gatekeeper picks the largest ≤ 1,600 px. Image *documents* are capped at 5 MB, so they need no resizing either.
-- Metadata stripping does not need pixel decoding. A pure-Python container walker (JPEG markers, PNG chunks, WebP RIFF chunks) removes EXIF/XMP/text chunks without decoding pixels, so no image decoder (Pillow 13.0.0 is current; image decoders have a long CVE history) runs in the TCB that holds the approval keys. It is fuzzed with Hypothesis (CR-003 §6.5).
-- HEIC needs a Pillow plugin anyway; it is rejected with "send it as a photo".
-- Image tools that do need decoding (OCR, background removal; phase 2) run in a `--network none` sandbox job, whose image may include Pillow.
-
-### A.6 Sources (accessed 2026-10-18)
-- PyPI JSON for python-telegram-bot, aiogram, pyTelegramBotAPI and Pillow (versions, upload dates, licence classifiers): https://pypi.org/project/python-telegram-bot/ , https://pypi.org/project/aiogram/ , https://pypi.org/project/pyTelegramBotAPI/ , https://pypi.org/project/Pillow/
-- PTB #5261 and its comments (pause on 2026-06-18; pending PRs): https://github.com/python-telegram-bot/python-telegram-bot/issues/5261
-- PTB v22.8 source, `TelegramObject._de_json` and `Update.de_json`: https://github.com/python-telegram-bot/python-telegram-bot/blob/v22.8/src/telegram/_telegramobject.py , https://github.com/python-telegram-bot/python-telegram-bot/blob/v22.8/src/telegram/_update.py
-- PTB releases: https://github.com/python-telegram-bot/python-telegram-bot/releases
-- aiogram releases (Bot API levels per version): https://github.com/aiogram/aiogram/releases ; base model config (`extra="allow"`): https://github.com/aiogram/aiogram/blob/v3.31.0/aiogram/types/base.py
-- aiogram #1890, #1840, PR #1848: https://github.com/aiogram/aiogram/issues/1890 , https://github.com/aiogram/aiogram/issues/1840 , https://github.com/aiogram/aiogram/pull/1848
-- pyTelegramBotAPI releases and `types.py` (`Update.de_json` with `stopped_message_generation`): https://github.com/eternnoir/pyTelegramBotAPI/releases , https://github.com/eternnoir/pyTelegramBotAPI/blob/master/telebot/types.py
-- Contributor counts: the GitHub contributors API for each repository
-- Bot API changelog (10.3 on 2026-08-24 is the latest; `RichTextButton`, `DisabledButton`, `force_reply`, `can_stop`, `MessageGenerationStopped`): https://core.telegram.org/bots/api-changelog
-- Mini Apps `sendData`: https://core.telegram.org/bots/webapps
+## Addendum A: Telegram client library (moved to ADR-0020)
+The library evaluation that was Addendum A in revisions 2 and 3 of this ADR is now **[ADR-0020](0020-telegram-library.md)**, unchanged in substance. It covers python-telegram-bot vs aiogram vs pyTelegramBotAPI vs an own client, and decides to keep python-telegram-bot 22.8 with a typed Bot API 10.1–10.3 adapter. It also holds the Pillow decision (not added to the gatekeeper; allowed only in `--network none` sandbox images) and the sources. Earlier references to "Addendum A" or "§A.n" mean the matching section of ADR-0020.
 
 ## Responses to design review round 1
 - **Finding 9 (combinations not evaluated):** addressed. The combinations table above covers A+C, A+B3 and A+C+B3 on every row with marginal exposure and effort, and states "Recommended: A+C" and why A+C+B3 is rejected.
 - **Finding 10 (`sendData`):** addressed. The constraint is stated in Research and in B3; B3 starts view-only (B3-view), B3-batch uses a temporary one-button reply keyboard with one ≤ 4 KB batch per open; the evaluation cell and Decision 3 are corrected.
-- **Finding 13 (library evaluation, user-required):** addressed as Addendum A with web-verified facts, URLs and the access date. It is written here because this revision step may edit only CR-003, this ADR and `docs/ux/`; it moves verbatim to `docs/adr/0020-telegram-library.md` in the next docs commit that may create ADR files.
+- **Finding 13 (library evaluation, user-required):** addressed as Addendum A with web-verified facts, URLs and the access date. It is written here because this revision step may edit only CR-003, this ADR and `docs/ux/`; it moves verbatim to `docs/adr/0020-telegram-library.md` in the next docs commit that may create ADR files. (Done in revision 4: ADR-0020.)
 - **Finding 22 (mirror graph, late URL row):** addressed in Option C (`H'` parent `B'`) and Option A (row 4 via `editMessageReplyMarkup` with the same tokens).
 - **Finding 1 (token core) and finding 3 (base-moved interdiff):** reflected in the state diagram (confirm-expiry disarm), Option A (kit tokens with `approval_id NULL`) and the interdiff summary; the normative text is CR-003 §12.4 and §5.7.
 - **CR-004 (orchestrator-relayed user requirement):** the review flow now starts at the proposal card (S0), and the queue classes and size behaviour follow CR-004 Amendment B (overrun highlighted, not blocked; `RESCOPE_REQUIRED` only with `reapprove`; ceiling-hit card).
@@ -311,3 +269,13 @@ The normative fixes are in CR-003 (§21 maps each of the 22 findings). This ADR 
 - **Finding 3 (re-sends reset the TTL):** reflected in Option A and the queue paragraph. Re-sends keep the expiry, so `/queue` order is stable (CR-003 §12.4 delta 7).
 - **Finding 22 (queue mockup):** the queue paragraph points to the new `docs/ux/12-queue.svg`.
 - **Findings 4–19 and 21:** none of them changes this ADR's decision (A by default, C opt-in, B deferred, Serverless and Telegraph rejected for review content). Their fixes are CR-003-only.
+
+## Responses to design review round 3
+The normative fixes are in CR-003 (§22 maps all 16 findings). This ADR changes where its text depends on them:
+- **Finding 1 (re-sent cards arming early):** Option A "Re-sending a card" now names the one wrapper `AppContext.reissue()`, which passes a per-action part count, so Approve still appears only after every verbatim part of each re-sent card is delivered (ADR-0004). The state diagram's `Stale --> Delivering` edge says so.
+- **Finding 3 (Show current):** the S12 row and the diagram say Show current resolves by contribution and is shown only when an open card exists.
+- **Finding 4 (replies to comment and claim cards):** Option A states that such a reply opens the replace-text confirm, never a review comment.
+- **Finding 5 (eligibility):** Option A and the S12 row restrict re-sends and Retry to eligible actions, and refuse while a sibling is confirmed.
+- **Finding 6 (proposal Skip/Later/Never):** the diagram gains the `Declined` state, the reject call and the 10-minute Undo edge.
+- **User requirement (library ADR):** Addendum A is filed as ADR-0020, and this ADR keeps a back-reference.
+- **Findings 2 and 7–16:** they don't change this ADR's decision. Their fixes are CR-003-only.

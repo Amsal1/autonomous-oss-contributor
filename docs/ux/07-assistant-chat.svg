@@ -151,10 +151,10 @@
   <text class="note" x="860" y="104">• Draft within 1 s ("Thinking…"), then ≤ 1 per s,</text>
   <text class="note" x="860" y="120">  heartbeat ≤ 20 s (a draft lives 30 s); coalesced,</text>
   <text class="note" x="860" y="136">  never queued in tg_outbox; yields to cards.</text>
-  <text class="note" x="860" y="154">• can_stop → stopped_message_generation → Hermes</text>
-  <text class="note" x="860" y="170">  run stopped; partial saved with "⏹ Stopped by you".</text>
-  <text class="note" x="860" y="188">• Status line = tool names + domains only; never</text>
-  <text class="note" x="860" y="204">  arguments, results or reasoning.</text>
+  <text class="note" x="860" y="154">• Turn = a task (§12.5): /kill and Stop handled ≤ 2 s;</text>
+  <text class="note" x="860" y="170">  partial saved "⏹ Stopped by you"; a 2nd message mid-turn</text>
+  <text class="note" x="860" y="186">  → "⏳ Still answering — tap ⏹ Stop or wait".</text>
+  <text class="note" x="860" y="204">• Status line: tool names + domains only, never args.</text>
   <text class="note b" x="860" y="232">Rendering (U1)</text>
   <text class="note" x="860" y="250">• Hermes Markdown → our md2blocks → rich blocks of</text>
   <text class="note" x="860" y="266">  plain strings, skip_entity_detection = true. No</text>
@@ -182,7 +182,8 @@
   <text class="note" x="860" y="670">• Rich table ≤ 12 columns; card ≤ 30,000 chars.</text>
   <text class="note" x="860" y="688">• Topics: each user topic is its own Hermes</text>
   <text class="note" x="860" y="704">  session (tg-&lt;uid&gt;-t&lt;thread_id&gt;); /new adds one.</text>
-  <text class="note" x="860" y="722">• Flat mode: 🤖 header on every assistant message.</text>
+  <text class="note" x="860" y="722">• Flat mode (no topics): "🤖 Assistant · …" header, whole</text>
+  <text class="note" x="860" y="738">  body in one quote, buttons kept (U6, U12).</text>
   <text class="note b" x="860" y="750">Answers outside this topic (U6, §4.4 rules 7–8)</text>
   <text class="note" x="860" y="768">• ✅ Reviews: classic, first line "🤖 Assistant · answer</text>
   <text class="note" x="860" y="784">  to your message", whole body in a quote, ≤ 3,500 then</text>

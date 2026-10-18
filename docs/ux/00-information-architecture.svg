@@ -65,6 +65,9 @@
   <text class="s" x="46" y="630">thread ids are stored in tg_topics and re-checked.</text>
   <text class="s" x="46" y="652">Topics off → one flat chat; every message starts with</text>
   <text class="s" x="46" y="667">its section icon (🚦 ✅ 📈 🤖) so streams stay distinct.</text>
+  <text class="s" x="46" y="689">Flat mode: every Hermes message has the gatekeeper</text>
+  <text class="s" x="46" y="704">"🤖 Assistant · …" header and its body in one quote,</text>
+  <text class="s" x="46" y="719">so it can't pass for a card. SETUP recommends topics.</text>
 
   <!-- ============ RIGHT: command menu ============ -->
   <rect x="440" y="20" width="390" height="860" rx="46" fill="#1d1d1f"/>
@@ -119,14 +122,15 @@
   <text class="note b" x="860" y="252">Routing (first match wins)</text>
   <text class="note" x="860" y="270">1 callback → token · 2 stop-generation → stream ·</text>
   <text class="note" x="860" y="286">3 reply to an open prompt → that input (even "/…")</text>
-  <text class="note" x="860" y="302">· 4 "/cmd" → registry · 5 reply to card/file/body/</text>
-  <text class="note" x="860" y="318">proposal → comment or plan adjust · 6 GitHub link</text>
+  <text class="note" x="860" y="302">· 4 "/cmd" → registry · 5 reply: PR view → comment,</text>
+  <text class="note" x="860" y="318">reply/claim card → replace text, proposal → adjust · 6 link</text>
   <text class="note" x="860" y="334">→ 🔗 [🛠 Work on this] · 7 Reviews text → answer under</text>
   <text class="note" x="860" y="350">"🤖 Assistant · answer to your message", quoted, only</text>
   <text class="note" x="860" y="366">[📝 Use as comment] · 8 Control/feed text → answered</text>
   <text class="note" x="860" y="382">in 💬 Assistant · 9 rest → Hermes (topic). Unsolicited</text>
-  <text class="note" x="860" y="398">Hermes messages: Assistant/user topics only (U12).</text>
-  <text class="note" x="860" y="414">Authorization never depends on the topic (U10).</text>
+  <text class="note" x="860" y="398">Hermes messages: Assistant/user topics only (U12);</text>
+  <text class="note" x="860" y="414">flat mode: header + quoted body. Auth never depends</text>
+  <text class="note" x="860" y="430">on the topic (U10).</text>
   <text class="note b" x="860" y="444">Menu button and scopes</text>
   <text class="note" x="860" y="462">• MenuButtonCommands; setMyCommands only for</text>
   <text class="note" x="860" y="478">  BotCommandScopeChat(owner); Default = empty.</text>

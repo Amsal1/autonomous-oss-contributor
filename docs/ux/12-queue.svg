@@ -100,16 +100,17 @@
   <text class="note" x="440" y="204">• ⬆️ Oldest first: expires_at ascending per gate</text>
   <text class="note" x="440" y="220">  (stable under re-sends); ✅ marks the active sort.</text>
   <text class="note b" x="440" y="250">Open (re-send)</text>
-  <text class="note" x="440" y="268">• reissue(cid, keep_expiry=True): the approval is</text>
-  <text class="note" x="440" y="284">  re-created with its expires_at kept, so the item</text>
-  <text class="note" x="440" y="300">  keeps its place here and the 72 h window doesn't</text>
-  <text class="note" x="440" y="316">  restart (§12.4 delta 7).</text>
-  <text class="note" x="440" y="334">• Every open card of that contribution is re-sent:</text>
+  <text class="note" x="440" y="268">• AppContext.reissue(cid, keep_expiry=True): each eligible</text>
+  <text class="note" x="440" y="284">  approval is re-created with its expires_at kept (the</text>
+  <text class="note" x="440" y="300">  item keeps its place; no 72 h restart, §12.4 delta 7)</text>
+  <text class="note" x="440" y="316">  and its own part count: Approve after all its parts.</text>
+  <text class="note" x="440" y="334">• Every eligible open card of the contribution is re-sent:</text>
   <text class="note" x="440" y="350">  toast "Re-sent 2 cards"; an armed one returns to S1.</text>
-  <text class="note" x="440" y="368">• Proposals: ProposalApprovals.reissue, same rule.</text>
-  <text class="note" x="440" y="386">• Expired items are not listed; their S12 card has</text>
-  <text class="note" x="440" y="402">  🔁 Retry (a fresh 72 h approval).</text>
-  <text class="note" x="440" y="420">• Open never approves anything (N4).</text>
+  <text class="note" x="440" y="366">  A confirmed sibling → "Submitting… try again" instead.</text>
+  <text class="note" x="440" y="384">• Proposals: ProposalApprovals.reissue, same rule.</text>
+  <text class="note" x="440" y="402">• Expired items are not listed; their S12 card has</text>
+  <text class="note" x="440" y="418">  🔁 Retry while still eligible (a fresh 72 h approval).</text>
+  <text class="note" x="440" y="434">• Open never approves anything (N4).</text>
   <text class="note b" x="440" y="450">Telegram constraints</text>
   <text class="note" x="440" y="468">• Classic HTML; text ≤ 1,500 chars; 5 items per page;</text>
   <text class="note" x="440" y="484">  each line ≤ 120 escaped chars, repo names middle-</text>
