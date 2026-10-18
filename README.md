@@ -21,6 +21,8 @@ in the repository names a model id, and a unit test enforces this.
 - Each role may set `fallback: none`, an explicit list of ids, or nothing (inherit, else the global
   `fallbacks`).
 
-Switch any role, including `test`, with `ossctl model set <role> <catalog id> [--effort e]` or the
-Telegram `/model` picker. The change is validated against the Kiro catalog, audited and announced.
-`ossctl model list` shows what each role resolves to.
+Switch a production role with `ossctl model set <role> <catalog id> [--effort e]` or the Telegram
+`/model` picker. `test` and `test_vision` change only in `config/models.yaml` or with
+`ossctl model set test <catalog id>`; the `/model` picker never offers them. Every change is
+validated against the Kiro catalog, audited and announced on Telegram. `ossctl model list` shows
+what each role resolves to.
