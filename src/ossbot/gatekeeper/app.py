@@ -114,7 +114,10 @@ def _install_handlers(app: FastAPI) -> None:
 
 async def housekeeping_once(ctx: AppContext) -> None:
     ctx.control.reconcile()
-    ctx.approvals.expire_due()
+    for svc in ctx.decisions.all():  # delta 9: expiry on all three services; delta 2: timed-out Confirms
+        svc.expire_due()
+        svc.disarm_expired()
+    ctx.card_recover()  # delta 8: CardPublisher.recover (no-op until the Telegram front-end starts)
     ctx.state_machine.sweep_expired()
     prune_retention(ctx)
 

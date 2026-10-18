@@ -29,7 +29,7 @@ from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow, OutboxWorker, SendError
 from ossbot.gatekeeper.pollstats import PollStats
-from ossbot.gatekeeper.telegram import cards, keyboards
+from ossbot.gatekeeper.telegram import keyboards
 from ossbot.gatekeeper.telegram.commands.registry import load_plugins, menu
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.handlers import Handlers
@@ -44,6 +44,8 @@ CONNECT_BACKOFF_MIN_S = 2.0
 CONNECT_BACKOFF_MAX_S = 60.0
 CARD_PREFIX = "card:"
 RETRY_PREFIX = "retry:"
+# The three card families (§14.18.4.4): approval id prefix -> table.
+DECISION_TABLES: dict[str, str] = {"a_": "approvals", "p_": "proposal_approvals", "s_": "skill_approvals"}
 
 
 def telegram_enabled(ctx: AppContext, token: str | None) -> bool:
@@ -81,11 +83,12 @@ class CardPublisher:
         self.ctx = ctx
 
     def publish(self, approval_id: str) -> None:
+        """Message 1 of an ``a_``, ``p_`` or ``s_`` card (resolved through ``ctx.decisions.for_id``)."""
         chat = self.ctx.telegram_chat_id
         if chat == 0:
             log.warning("telegram not configured; card %s not sent", approval_id, extra={"event": "card_dropped"})
             return
-        rendered = cards.render(cards.view_for_approval(self.ctx.conn, approval_id))
+        rendered = self.ctx.decisions.for_id(approval_id).card_view(approval_id)
         self.ctx.outbox.enqueue(
             "sendMessage",
             {"chat_id": chat, "text": rendered.card, "parse_mode": ParseMode.HTML, "disable_web_page_preview": True},
@@ -114,38 +117,97 @@ class CardPublisher:
             self._maybe_arm(row.approval_id)
 
     def _card_sent(self, approval_id: str, message_id: int) -> None:
-        self.ctx.approvals.set_card_message(approval_id, message_id)
-        rendered = cards.render(cards.view_for_approval(self.ctx.conn, approval_id))
-        for index, part in enumerate(rendered.parts):
-            self.ctx.outbox.enqueue(
-                "sendMessage",
-                {"chat_id": self.ctx.telegram_chat_id, "text": part, "parse_mode": ParseMode.HTML},
-                dedupe_key=f"part:{approval_id}:{index}",
-                approval_id=approval_id,
-                part_index=index,
-            )
+        """Message id + every part enqueue in one transaction (delta 8); a card without parts
+        (proposals) is armed right away."""
+        svc = self.ctx.decisions.for_id(approval_id)
+        with db.transaction(self.ctx.conn):
+            svc.set_card_message(approval_id, message_id)
+            rendered = svc.card_view(approval_id)
+            for index, part in enumerate(rendered.parts):
+                self.ctx.outbox.enqueue(
+                    "sendMessage",
+                    {"chat_id": self.ctx.telegram_chat_id, "text": part, "parse_mode": ParseMode.HTML},
+                    dedupe_key=f"part:{approval_id}:{index}",
+                    approval_id=approval_id,
+                    part_index=index,
+                )
+        if svc.part_count(approval_id) == 0:
+            self._maybe_arm(approval_id)
+
+    def _decision_row(self, approval_id: str) -> Any:
+        table = DECISION_TABLES.get(approval_id[:2])
+        if table is None:
+            return None
+        return db.one(self.ctx.conn, f"SELECT * FROM {table} WHERE id = ?", (approval_id,))  # noqa: S608
 
     def _maybe_arm(self, approval_id: str) -> None:
-        row = db.one(self.ctx.conn, "SELECT * FROM approvals WHERE id = ?", (approval_id,))
+        """Card tokens + the ``arm:<aid>`` edit in one transaction (delta 8): "no arm row" means "no
+        card tokens", so Approve is minted exactly once."""
+        svc = self.ctx.decisions.for_id(approval_id)
+        row = self._decision_row(approval_id)
         if row is None or row["tg_message_id"] is None or row["status"] != "pending":
             return
-        if row["body_parts_delivered"] < row["body_parts_total"]:
+        if svc.part_count(approval_id) and row["body_parts_delivered"] < row["body_parts_total"]:
             return
         try:
-            tokens = self.ctx.approvals.issue_card_tokens(approval_id)
+            with db.transaction(self.ctx.conn):
+                tokens = svc.issue_card_tokens(approval_id)
+                self.ctx.outbox.enqueue(
+                    "editMessageReplyMarkup",
+                    {
+                        "chat_id": row["tg_chat_id"],
+                        "message_id": row["tg_message_id"],
+                        "reply_markup": keyboards.to_json(svc.card_rows(approval_id, tokens)),
+                    },
+                    dedupe_key=f"arm:{approval_id}",
+                )
         except ApprovalError as exc:
             log.warning("card tokens not issued: %s", exc.code, extra={"event": "card_tokens_refused"})
+
+    def render_s1(self, approval_id: str, armed_at: str, tokens: dict[str, str]) -> None:
+        """Delta 2: a timed-out Confirm goes back to the S1 card with fresh tokens. Called inside the
+        service's disarm transaction; the key carries ``armed_at`` (it can repeat per approval, BA-3)."""
+        svc = self.ctx.decisions.for_id(approval_id)
+        row = self._decision_row(approval_id)
+        if row is None or row["tg_message_id"] is None:
             return
-        kind = cards.view_for_approval(self.ctx.conn, approval_id).kind
         self.ctx.outbox.enqueue(
-            "editMessageReplyMarkup",
-            {
-                "chat_id": row["tg_chat_id"],
-                "message_id": row["tg_message_id"],
-                "reply_markup": keyboards.to_json(keyboards.card_rows(kind, tokens)),
-            },
-            dedupe_key=f"arm:{approval_id}",
-        )
+            "editMessageText",
+            {"chat_id": row["tg_chat_id"], "message_id": row["tg_message_id"],
+             "text": svc.card_view(approval_id).card, "parse_mode": ParseMode.HTML,
+             "disable_web_page_preview": True,
+             "reply_markup": keyboards.to_json(svc.card_rows(approval_id, tokens))},
+            dedupe_key=f"disarm:{approval_id}:{armed_at}",
+        )  # fmt: skip
+
+    def recover(self) -> None:
+        """Delta 8 (§14.18.4.4): heal every crash window of card delivery. Run once before polling
+        starts and on every housekeeping tick (``ctx.card_recover``). Never counts parts."""
+        conn = self.ctx.conn
+        for table in DECISION_TABLES.values():
+            # 0. approval created, card never enqueued (a failed on_approval_created after a commit)
+            for r in conn.execute(
+                f"SELECT d.id FROM {table} d WHERE d.status = 'pending' AND d.tg_message_id IS NULL"  # noqa: S608
+                " AND NOT EXISTS (SELECT 1 FROM tg_outbox o WHERE o.dedupe_key = 'card:' || d.id)"
+            ).fetchall():
+                self.ctx.on_approval_created(str(r["id"]))
+            # 1. card sent, message id lost
+            for r in conn.execute(
+                f"SELECT d.id, o.result_message_id FROM {table} d JOIN tg_outbox o ON o.dedupe_key = 'card:' || d.id"  # noqa: S608
+                " WHERE d.status = 'pending' AND d.tg_message_id IS NULL AND o.status = 'sent'"
+            ).fetchall():
+                if r["result_message_id"] is None:
+                    log.warning("card %s sent before result_message_id existed; reach it through /queue", r["id"],
+                                extra={"event": "card_recover_skipped"})  # fmt: skip
+                    continue
+                self._card_sent(str(r["id"]), int(r["result_message_id"]))
+            # 2. parts delivered (or none), never armed
+            parts = "" if table == "proposal_approvals" else " AND d.body_parts_delivered >= d.body_parts_total"
+            for r in conn.execute(
+                f"SELECT d.id FROM {table} d WHERE d.status = 'pending' AND d.tg_message_id IS NOT NULL{parts}"  # noqa: S608
+                " AND NOT EXISTS (SELECT 1 FROM tg_outbox o WHERE o.dedupe_key = 'arm:' || d.id)"
+            ).fetchall():
+                self._maybe_arm(str(r["id"]))
 
     def _retry_sent(self, action_id: str, message_id: int) -> None:
         chat = self.ctx.telegram_chat_id
@@ -248,6 +310,9 @@ class TelegramFrontend:
         item 1). Cards and notes queue in the persistent outbox meanwhile."""
         load_plugins()
         self.ctx.on_approval_created = self.publisher.publish
+        self.ctx.card_recover = self.publisher.recover
+        for svc in self.ctx.decisions.all():
+            svc.on_disarmed = self.publisher.render_s1
         self._connect_task = asyncio.create_task(self._connect())
 
     async def _connect(self) -> None:
@@ -255,6 +320,10 @@ class TelegramFrontend:
         while True:
             try:
                 await self.application.initialize()
+                try:
+                    self.publisher.recover()  # delta 8: before polling starts
+                except Exception:
+                    log.exception("card recovery failed", extra={"event": "card_recover_failed"})
                 break
             except NetworkError as exc:  # incl. TimedOut: transient, retry with backoff
                 self.ctx.poll_stats.failed(f"initialize: {type(exc).__name__}: {exc.message}")

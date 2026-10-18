@@ -145,7 +145,7 @@ async def test_stored_bytes_equal_hashed_equal_posted(gctx: AppContext, world: G
     doc = await package_ok(gctx, world, cid, out)
     edited = f"Edited body\r\nline two\r\n\n---\nAI assistance disclosure\n<!-- ossbot:cid={cid} -->"
     gctx.approvals.set_text_override(cid, body=edited, actor="tg:4242")
-    (new_approval,) = gctx.approvals.reissue(cid, tg_chat_id=4242, actor="tg:4242", body_parts_total=2)
+    (new_approval,) = gctx.approvals.reissue(cid, tg_chat_id=4242, actor="tg:4242", part_count=lambda a: 2)
     binding = confirm(gctx, new_approval, message_id=11)
     gh.add_repo(FORK, fork=True, parent={"full_name": UPSTREAM})
     assert await submitter(gctx, gh).submit(new_approval) == "done"

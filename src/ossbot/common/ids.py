@@ -59,6 +59,16 @@ def new_action_id() -> str:
     return new_id("x")
 
 
+def new_proposal_approval_id() -> str:
+    """CR-004 gate 1 decisions (``proposal_approvals``, DESIGN §14.18.4.2)."""
+    return new_id("p")
+
+
+def new_skill_approval_id() -> str:
+    """CR-002 skill activation decisions (``skill_approvals``, DESIGN §14.18.4.2)."""
+    return new_id("s")
+
+
 def new_token() -> str:
     token = secrets.token_urlsafe(16)
     assert len(token) == 22

@@ -26,9 +26,10 @@ from ossbot.common.config import Limits, ProfileConfig
 from ossbot.common.control_flags import read_flags
 from ossbot.common.hashing import canonical_json, sha256_hex, sha256_text
 from ossbot.common.ids import TOKEN_RE, new_approval_id, new_token
-from ossbot.common.schemas import OutboundKind
+from ossbot.common.schemas import OutboundKind, State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.audit import AuditLog
+from ossbot.gatekeeper.telegram import cards, keyboards
 
 BINDING_VERSION = 2
 COMMON_FIELDS = ("v", "kind", "cid", "upstream", "dry_run", "policy_hash")
@@ -45,7 +46,53 @@ KIND_FIELDS: dict[str, tuple[str, ...]] = {
     "issue_claim": ("issue_number", "body_sha256"),
 }  # fmt: skip
 OPEN_STATUSES = ("pending", "armed", "confirmed")
-CARD_PURPOSES = ("approve", "reject", "reject_reason", "changes", "edit_title", "edit_body", "clear_edits")
+# Delta 3 (DESIGN §14.18.4.1): decision purposes are single-use; the card's view purposes are
+# multi-use, expire with the approval and die with it (``_kill_tokens``). View handlers call
+# ``check_token``, never ``use_token``. ``edit_title``/``edit_body``/``clear_edits`` moved behind
+# the S7 picker as kit tokens (PLAN item 45).
+DECISION_PURPOSES = ("approve", "reject", "reject_reason", "changes")
+# Shown on the S12 stale card and in toasts (§14.11.12); keys are invalidated_reason values.
+REASON_LABELS: dict[str, str] = {
+    "config_snapshot_changed": "config reloaded",
+    "dry_run_toggled": "dry-run changed",
+    "killed": "killed",
+    "reissued": "re-sent",
+    "text_edited": "text edited",
+    "new_package_rev": "new revision",
+    "binding_changed": "content or mode changed",
+    "tier_changed": "Hermes tier changed",
+    "new_proposal_version": "new proposal version",
+    "new_skill_version": "new skill version",
+    "render_failed": "card could not be rendered",
+}
+# Eligibility of a re-send (§14.18.4.3): the contribution states each kind lives in.
+REISSUE_STATES: dict[str, frozenset[str]] = {
+    "open_pr": frozenset({"AWAITING_APPROVAL"}),
+    "push_update": frozenset({"AWAITING_APPROVAL"}),
+    "comment": frozenset({"VETTED", "PACKAGING", "WATCHING", "AWAITING_APPROVAL"}),
+    "issue_claim": frozenset({"VETTED", "PACKAGING", "WATCHING", "AWAITING_APPROVAL"}),
+}
+
+
+def card_purposes(kind: OutboundKind, has_interdiff: bool) -> tuple[str, ...]:
+    """The tokens one PR-family card carries (§14.18.4.1)."""
+    if kind == "open_pr":
+        return (*DECISION_PURPOSES, "explore", "interdiff" if has_interdiff else "files", "edit_text_pick")
+    if kind == "push_update":
+        return (*DECISION_PURPOSES, "explore", "files")
+    return ("approve", "reject", "reject_reason", "edit_text_pick")  # comment, issue_claim
+
+
+def reissue_eligible(kind: OutboundKind, action_status: str, state: State) -> bool:
+    """One predicate for reissue, stale_retry, typed /approve, Show current and comment_replace."""
+    return action_status == "pending_approval" and state.value in REISSUE_STATES.get(kind, frozenset())
+
+
+def _state_of(value: str) -> State | None:
+    try:
+        return State(value)
+    except ValueError:
+        return None
 
 
 class ApprovalError(RuntimeError):
@@ -164,9 +211,11 @@ def compute_binding(conn: sqlite3.Connection, action_id: str, artifacts: Artifac
 # ------------------------------------------------------------------------------- service
 @dataclass(frozen=True)
 class Invalidated:
+    """``action_id`` is None for proposal and skill approvals, ``cid`` None for skills (§14.18.4.2)."""
+
     approval_id: str
-    action_id: str
-    cid: str
+    action_id: str | None
+    cid: str | None
 
 
 @dataclass(frozen=True)
@@ -178,7 +227,18 @@ class ArmResult:
     live: bool
 
 
+# Called inside disarm_expired's transaction with (approval_id, armed_at, fresh card tokens) so the
+# S1 edit is enqueued atomically with the disarm (CardPublisher.render_s1, delta 2).
+OnDisarmed = Callable[[str, str, dict[str, str]], None]
+
+
+def _no_disarm_hook(approval_id: str, armed_at: str, tokens: dict[str, str]) -> None:
+    return None
+
+
 class ApprovalService:
+    id_prefix = "a"
+
     def __init__(
         self,
         conn: sqlite3.Connection,
@@ -188,6 +248,7 @@ class ApprovalService:
         limits: Callable[[], Limits],
         profile: Callable[[], ProfileConfig],
         artifacts: ArtifactSource | None = None,
+        interdiff: Callable[[str, int], bool] | None = None,
     ) -> None:
         self.conn = conn
         self.clock = clock
@@ -196,6 +257,9 @@ class ApprovalService:
         self.limits = limits
         self.profile = profile
         self.artifacts: ArtifactSource = artifacts or NoArtifacts()
+        # derived/<cid>/<rev>/interdiff.json present and usable (the interdiff ships in PLAN item 44)
+        self.interdiff: Callable[[str, int], bool] = interdiff or (lambda cid, rev: False)
+        self.on_disarmed: OnDisarmed = _no_disarm_hook
 
     # ---------------------------------------------------------------------- helpers
     def _now(self) -> datetime:
@@ -269,6 +333,28 @@ class ApprovalService:
             self._kill_tokens([r["id"] for r in rows])
         return [r["id"] for r in rows]
 
+    def disarm_expired(self) -> list[str]:
+        """Delta 2: an armed approval whose Confirm window passed goes back to pending with a fresh
+        card (S1). The unused confirm/cancel tokens die, the card set is re-minted, the S1 edit is
+        enqueued through ``on_disarmed`` in the same transaction."""
+        cutoff = to_iso(self._now() - timedelta(seconds=self.limits().confirm_ttl_seconds))
+        done: list[str] = []
+        with db.transaction(self.conn):
+            rows = self.conn.execute(
+                "SELECT a.id, a.armed_at, o.cid FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+                " WHERE a.status = 'armed' AND a.armed_at <= ?",
+                (cutoff,),
+            ).fetchall()
+            for r in rows:
+                self.conn.execute("UPDATE approvals SET status = 'pending', armed_at = NULL WHERE id = ?", (r["id"],))
+                tokens = self.rotate_card_tokens(r["id"])  # kills confirm/cancel and the old card set
+                self.audit.append(
+                    "system", "approval_disarmed", {"approval_id": r["id"], "reason": "confirm_expired"}, r["cid"]
+                )
+                self.on_disarmed(r["id"], str(r["armed_at"]), tokens)
+                done.append(str(r["id"]))
+        return done
+
     # ------------------------------------------------------------------ text edits
     def set_text_override(self, cid: str, *, title: str | None = None, body: str | None = None, actor: str) -> None:
         """Store a human title/body edit. The caller (FEAT-005 Edit title/body) must run
@@ -289,20 +375,31 @@ class ApprovalService:
             self.invalidate_contribution(cid, "text_edited", actor)
 
     # ---------------------------------------------------------------------- creation
-    def create(self, action_id: str, *, tg_chat_id: int, body_parts_total: int, actor: str = "system") -> str:
+    def create(
+        self,
+        action_id: str,
+        *,
+        tg_chat_id: int,
+        body_parts_total: int,
+        actor: str = "system",
+        expires_at: datetime | None = None,
+    ) -> str:
+        """A given ``expires_at`` (a re-send keeping the window, delta 7) replaces now + TTL."""
         if body_parts_total < 1:
             raise ApprovalError("bad_parts")
         approval_id = new_approval_id()
         now = self._now()
+        if expires_at is not None and expires_at <= now:
+            raise ApprovalError("bad_expiry", to_iso(expires_at))
         with db.transaction(self.conn):
             binding = compute_binding(self.conn, action_id, self.artifacts)
-            ttl = timedelta(hours=self.limits().approval_ttl_hours)
+            expiry = expires_at or now + timedelta(hours=self.limits().approval_ttl_hours)
             self.conn.execute(
                 "INSERT INTO approvals (id, action_id, binding_json, binding_hash, dry_run_shown, status,"
                 " tg_chat_id, body_parts_total, created_at, expires_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (
                     approval_id, action_id, canonical_json(binding).decode("utf-8"), binding_hash(binding),
-                    int(binding["dry_run"]), "pending", tg_chat_id, body_parts_total, to_iso(now), to_iso(now + ttl),
+                    int(binding["dry_run"]), "pending", tg_chat_id, body_parts_total, to_iso(now), to_iso(expiry),
                 ),
             )  # fmt: skip
             self.audit.append(
@@ -334,15 +431,19 @@ class ApprovalService:
                 raise ApprovalError("no_message")
             if row["body_parts_delivered"] < row["body_parts_total"]:
                 raise ApprovalError("body_not_delivered", f"{row['body_parts_delivered']}/{row['body_parts_total']}")
-            action = db.one(self.conn, "SELECT cid FROM outbound_actions WHERE id = ?", (row["action_id"],))
+            action = db.one(
+                self.conn, "SELECT cid, kind, payload_json FROM outbound_actions WHERE id = ?", (row["action_id"],)
+            )
             assert action is not None
             expires = from_iso(row["expires_at"])
+            rev = json.loads(action["payload_json"]).get("rev")
+            has_interdiff = isinstance(rev, int) and self.interdiff(action["cid"], rev)
             return {
                 purpose: self.mint_token(
                     purpose, chat_id=row["tg_chat_id"], message_id=row["tg_message_id"], expires_at=expires,
-                    approval_id=approval_id, cid=action["cid"],
+                    approval_id=approval_id, cid=action["cid"], single_use=purpose in DECISION_PURPOSES,
                 )
-                for purpose in CARD_PURPOSES
+                for purpose in card_purposes(action["kind"], has_interdiff)
             }  # fmt: skip
 
     # ------------------------------------------------------------------------ tokens
@@ -569,16 +670,82 @@ class ApprovalService:
             self._kill_tokens([approval_id])
             return self.issue_card_tokens(approval_id)
 
-    def reissue(self, cid: str, *, tg_chat_id: int, actor: str, body_parts_total: int = 1) -> list[str]:
-        """``/approve <cid>``: old approvals and their tokens die, fresh approvals are created (N4)."""
+    def reissue(
+        self,
+        cid: str,
+        *,
+        tg_chat_id: int,
+        actor: str,
+        part_count: Callable[[str], int],
+        keep_expiry: bool = False,
+    ) -> list[str]:
+        """Re-send every open card of ``cid`` (N4, delta 7, §14.18.4.3). Only ``AppContext.reissue``
+        calls this (it publishes after the commit). In one transaction: refuse while a sibling is
+        ``confirmed`` (``submitting``); pick the eligible actions (else ``nothing_to_resend``); read
+        each newest expiry before invalidating; invalidate pending/armed with ``reissued``; create
+        one approval per eligible action with its own part count (``part_count(action_id)``)."""
+        now = self._now()
+        keep_floor = now + timedelta(seconds=self.limits().confirm_ttl_seconds)
         with db.transaction(self.conn):
-            self.invalidate_contribution(cid, "reissued", actor)
-            actions = self.conn.execute(
-                "SELECT id FROM outbound_actions WHERE cid = ? AND status IN ('pending_approval','approved')"
-                " ORDER BY created_at",
+            contrib = db.one(self.conn, "SELECT state FROM contributions WHERE id = ?", (cid,))
+            if contrib is None:
+                raise ApprovalError("unknown_contribution", cid)
+            confirmed = db.one(
+                self.conn,
+                "SELECT a.id FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+                " WHERE o.cid = ? AND a.status = 'confirmed' LIMIT 1",
                 (cid,),
-            ).fetchall()
-            return [
-                self.create(a["id"], tg_chat_id=tg_chat_id, body_parts_total=body_parts_total, actor=actor)
-                for a in actions
+            )
+            if confirmed is not None:
+                raise ApprovalError("submitting", str(confirmed["id"]))
+            state = _state_of(str(contrib["state"]))
+            actions = [
+                a
+                for a in self.conn.execute(
+                    "SELECT id, kind, status FROM outbound_actions WHERE cid = ? ORDER BY created_at", (cid,)
+                ).fetchall()
+                if state is not None and reissue_eligible(a["kind"], a["status"], state)
             ]
+            if not actions:
+                raise ApprovalError("nothing_to_resend", str(contrib["state"]))
+            inherited: dict[str, datetime | None] = {}
+            for a in actions:
+                newest = db.one(
+                    self.conn,
+                    "SELECT expires_at FROM approvals WHERE action_id = ? ORDER BY expires_at DESC LIMIT 1",
+                    (a["id"],),
+                )
+                previous = from_iso(newest["expires_at"]) if newest is not None else None
+                keep = keep_expiry and previous is not None and previous > keep_floor
+                inherited[a["id"]] = previous if keep else None
+            ids = [a["id"] for a in actions]
+            marks = ",".join("?" * len(ids))
+            self._invalidate(f"a.status IN ('pending','armed') AND a.action_id IN ({marks})", tuple(ids), "reissued",
+                             actor)  # fmt: skip
+            return [
+                self.create(
+                    a["id"], tg_chat_id=tg_chat_id, body_parts_total=part_count(a["id"]), actor=actor,
+                    expires_at=inherited[a["id"]],
+                )
+                for a in actions
+            ]  # fmt: skip
+
+    # ------------------------------------------------------- card plumbing (§14.18.4.4)
+    def _action_of(self, approval_id: str) -> sqlite3.Row:
+        row = db.one(
+            self.conn,
+            "SELECT o.id, o.kind FROM approvals a JOIN outbound_actions o ON o.id = a.action_id WHERE a.id = ?",
+            (approval_id,),
+        )
+        if row is None:
+            raise ApprovalError("unknown_approval", approval_id)
+        return row
+
+    def card_view(self, approval_id: str) -> cards.CardMessages:
+        return cards.render(cards.view_for_approval(self.conn, approval_id))
+
+    def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
+        return keyboards.card_rows(self._action_of(approval_id)["kind"], tokens)
+
+    def part_count(self, approval_id: str) -> int:
+        return cards.part_count(self.conn, str(self._action_of(approval_id)["id"]))

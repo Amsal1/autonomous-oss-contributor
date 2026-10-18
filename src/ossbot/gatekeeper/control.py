@@ -39,6 +39,7 @@ from ossbot.common.schemas import ControlView
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalService, Invalidated
 from ossbot.gatekeeper.audit import AuditLog
+from ossbot.gatekeeper.decisions import DecisionServices
 
 log = logging.getLogger(__name__)
 Notify = Callable[[str], None]
@@ -69,14 +70,24 @@ class ControlService:
         audit: AuditLog,
         approvals: ApprovalService,
         notify: Notify | None = None,
+        *,
+        decisions: DecisionServices | None = None,
     ) -> None:
         self.conn = conn
         self.paths = paths
         self.clock = clock
         self.audit = audit
         self.approvals = approvals
+        self.decisions = decisions
         self.notify: Notify = notify or (lambda text: None)
         self._resume_pending = False
+
+    def _kill_invalidate(self, actor: str) -> list[Invalidated]:
+        """§12.4 "kill invalidates armed|confirmed", fanned out over all three decision services
+        (delta 9); runs inside the caller's transaction."""
+        if self.decisions is None:
+            return self.approvals.invalidate_armed_confirmed("killed", actor)
+        return self.decisions.invalidate_armed_confirmed("killed", actor)
 
     # ----------------------------------------------------------------- basics
     def flags(self) -> FlagState:
@@ -152,7 +163,7 @@ class ControlService:
                     {"level": effective, "reason": reason, "actor": actor, "ts": to_iso(self.clock.now())},
                 )
             self._set("killed", reason, actor)
-            invalidated = self.approvals.invalidate_armed_confirmed("killed", actor)
+            invalidated = self._kill_invalidate(actor)
             self.audit.append(
                 actor,
                 "killed",
@@ -237,7 +248,7 @@ class ControlService:
             if flags.killed is not None:
                 # A root-written kill resumed before the next housekeeping tick never reaches
                 # reconcile: apply §12.4 here, before the enforcer removes the flag (P1-7).
-                invalidated = self.approvals.invalidate_armed_confirmed("killed", actor)
+                invalidated = self._kill_invalidate(actor)
             write_flag(self.paths.resume_request, {"actor": actor, "reason": reason, "ts": to_iso(self.clock.now())})
             self.audit.append(
                 actor, "resume_requested", {"reason": reason, "invalidated": [i.approval_id for i in invalidated]}
@@ -344,7 +355,7 @@ class ControlService:
             if offline and flags.killed is None:
                 # An offline resume (ossbot-resume) may have removed a root-written kill flag before
                 # any reconcile saw it (P1-7): treat the resume.log line as evidence of that kill.
-                gone = self.approvals.invalidate_armed_confirmed("killed", "resume_log")
+                gone = self._kill_invalidate("resume_log")
                 if gone:
                     self.audit.append(
                         "system",
@@ -358,7 +369,7 @@ class ControlService:
                 # transaction. Repeated reconciles normally find nothing: the Telegram handler refuses
                 # Approve while killed (ApprovalService.approve itself has no running check, so an
                 # approval armed through another path is invalidated on the next tick).
-                invalidated = self.approvals.invalidate_armed_confirmed("killed", "flag")
+                invalidated = self._kill_invalidate("flag")
                 if row["state"] != "killed":
                     self._set("killed", flags.killed.reason, "flag")
                 if row["state"] != "killed" or invalidated:

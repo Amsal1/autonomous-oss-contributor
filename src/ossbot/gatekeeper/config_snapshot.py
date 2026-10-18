@@ -23,6 +23,7 @@ from ossbot.gatekeeper import db, policy
 from ossbot.gatekeeper.approvals import ApprovalService, Invalidated
 from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.control import ControlService
+from ossbot.gatekeeper.decisions import DecisionServices
 
 MAX_CONFIG_FILE = 1 << 20
 
@@ -81,6 +82,8 @@ class SnapshotManager:
         control: ControlService,
         approvals: ApprovalService,
         notify: Callable[[str], None] | None = None,
+        *,
+        decisions: DecisionServices | None = None,
     ) -> None:
         self.conn = conn
         self.paths = paths
@@ -88,6 +91,7 @@ class SnapshotManager:
         self.audit = audit
         self.control = control
         self.approvals = approvals
+        self.decisions = decisions
         self.notify = notify or (lambda text: None)
         self._current: LoadedSnapshot | None = None
 
@@ -96,6 +100,12 @@ class SnapshotManager:
         if self._current is None:
             raise RuntimeError("config snapshot not loaded")
         return self._current
+
+    def _invalidate_all(self, reason: str, actor: str) -> list[Invalidated]:
+        """Both branches (startup reconcile and confirmed reload): all three decision services."""
+        if self.decisions is None:
+            return self.approvals.invalidate_all_open(reason, actor)
+        return self.decisions.invalidate_all_open(reason, actor)
 
     def _validate(self, files: dict[str, bytes]) -> LoadedSnapshot:
         bundle = parse_bundle(files)
@@ -134,7 +144,7 @@ class SnapshotManager:
                 old = self._stored_files(previous)
                 diff, changed = unified_diff(old, snap.files)
                 self.control.set_config_hash(snap.hash)
-                self.approvals.invalidate_all_open("config_snapshot_changed")
+                self._invalidate_all("config_snapshot_changed", "system")
             self._record(snap, "system", diff, changed)
             policy.check_startup(self.conn, snap.bundle.profile)
         self._current = snap
@@ -164,7 +174,7 @@ class SnapshotManager:
         write_snapshot(self.paths.snapshot_root, snap.files)
         with db.transaction(self.conn):
             self.control.set_config_hash(snap.hash)
-            invalidated = self.approvals.invalidate_all_open("config_snapshot_changed", actor)
+            invalidated = self._invalidate_all("config_snapshot_changed", actor)
             self._record(snap, actor, diff, changed)
             policy.check_startup(self.conn, snap.bundle.profile)
         self._current = snap

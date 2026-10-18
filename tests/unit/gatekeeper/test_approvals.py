@@ -377,7 +377,7 @@ def test_approve_resend_rotates_tokens(ctx: AppContext) -> None:
     """N4: after /approve <cid> the old card's tokens are dead; new ones bind to the new message."""
     cid, action = packaged_contribution(ctx)
     old, old_tokens = card(ctx, action)
-    [new] = ctx.approvals.reissue(cid, tg_chat_id=CHAT, actor="tg:4242")
+    [new] = ctx.approvals.reissue(cid, tg_chat_id=CHAT, actor="tg:4242", part_count=lambda a: 1)
     assert status(ctx, old) == "invalidated"
     with pytest.raises(ApprovalError, match="token_used"):
         tap(ctx, old_tokens)

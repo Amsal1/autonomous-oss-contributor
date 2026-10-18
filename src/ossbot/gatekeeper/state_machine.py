@@ -315,10 +315,13 @@ class StateMachine:
         cutoff = self.clock.now() - timedelta(days=days)
         now_iso = to_iso(self.clock.now())
         moved: list[str] = []
+        ttl = timedelta(hours=self.limits().approval_ttl_hours)
         for row in self.conn.execute("SELECT * FROM contributions WHERE state = 'AWAITING_APPROVAL'").fetchall():
+            # Reference = the newest approval's window start (expires_at - TTL, newest by expires_at), so
+            # a re-send that keeps the expiry cannot postpone this sweep (delta 7, §14.18.4.3).
             newest = self.conn.execute(
-                "SELECT a.created_at FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
-                " WHERE o.cid = ? ORDER BY a.created_at DESC LIMIT 1",
+                "SELECT a.expires_at FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+                " WHERE o.cid = ? ORDER BY a.expires_at DESC LIMIT 1",
                 (row["id"],),
             ).fetchone()
             live = self.conn.execute(
@@ -326,17 +329,23 @@ class StateMachine:
                 " AND a.status IN ('pending','armed','confirmed') AND a.expires_at > ? LIMIT 1",
                 (row["id"], now_iso),
             ).fetchone()
-            reference = from_iso(newest["created_at"]) if newest else from_iso(row["updated_at"])
+            reference = from_iso(newest["expires_at"]) - ttl if newest else from_iso(row["updated_at"])
             if live is not None or reference > cutoff:
                 continue
             to = S.EXPIRED if row["pr_number"] is None else S.WATCHING
-            if to is S.WATCHING:
-                with db.transaction(self.conn):
+            with db.transaction(self.conn):
+                if to is S.WATCHING:
                     self.conn.execute(
                         "UPDATE outbound_actions SET status = 'cancelled' WHERE cid = ? AND kind = 'push_update'"
                         " AND status IN ('pending_approval','approved')",
                         (row["id"],),
                     )
-            self.transition(row["id"], S.AWAITING_APPROVAL, to, Actor.GATEKEEPER, {"reason": "expired"})
+                else:  # EXPIRED: nothing of it can be approved any more (no Retry on its S12 cards)
+                    self.conn.execute(
+                        "UPDATE outbound_actions SET status = 'cancelled'"
+                        " WHERE cid = ? AND status = 'pending_approval'",
+                        (row["id"],),
+                    )
+                self.transition(row["id"], S.AWAITING_APPROVAL, to, Actor.GATEKEEPER, {"reason": "expired"})
             moved.append(str(row["id"]))
         return moved

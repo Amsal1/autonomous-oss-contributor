@@ -20,11 +20,14 @@ from ossbot.gatekeeper.authz import Role, interactive_ancestry
 from ossbot.gatekeeper.config_snapshot import SnapshotManager
 from ossbot.gatekeeper.contributions import ContributionService
 from ossbot.gatekeeper.control import ControlService
+from ossbot.gatekeeper.decisions import DecisionServices
 from ossbot.gatekeeper.derive import GitArtifacts
 from ossbot.gatekeeper.gitops import GitOps
 from ossbot.gatekeeper.models_admin import ModelsAdmin
 from ossbot.gatekeeper.outbox import Outbox
 from ossbot.gatekeeper.pollstats import PollStats
+from ossbot.gatekeeper.proposal_approvals import ProposalApprovals
+from ossbot.gatekeeper.skill_approvals import SkillApprovals
 from ossbot.gatekeeper.state_machine import StateMachine
 from ossbot.gatekeeper.telegram import cards
 
@@ -52,6 +55,9 @@ class AppContext:
     secret_scanner: Callable[[bytes], list[str]] | None = None  # None = gitleaks (packaging.gitleaks_scan)
     on_approval_created: Callable[[str], None] = field(default=lambda approval_id: None)
     poll_stats: PollStats = field(default_factory=PollStats)  # Telegram long-poll health (CR-001)
+    decisions: DecisionServices = field(default=None)  # type: ignore[assignment]  # set by build_context
+    # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
+    card_recover: Callable[[], None] = field(default=lambda: None)
 
     @property
     def config(self) -> ConfigBundle:
@@ -71,11 +77,38 @@ class AppContext:
             actor=actor,
         )
 
+    # ------------------------------------------------- re-sends (the only callers, BA-17)
+    def reissue(self, cid: str, actor: str, *, keep_expiry: bool) -> list[str]:
+        """Show card, Show current, /queue -> Open, typed /approve and Retry (§14.18.4.3)."""
+        ids = self.approvals.reissue(
+            cid, tg_chat_id=self.telegram_chat_id, actor=actor, keep_expiry=keep_expiry,
+            part_count=lambda action_id: cards.part_count(self.conn, action_id),
+        )  # fmt: skip
+        for aid in ids:  # after reissue()'s transaction has committed
+            self.on_approval_created(aid)
+        return ids
+
+    def reissue_proposal(self, cid: str, actor: str, *, keep_expiry: bool) -> list[str]:
+        ids = self.decisions.proposals.reissue(cid, actor=actor, keep_expiry=keep_expiry)
+        for pid in ids:  # proposal cards have no parts: armable once sent
+            self.on_approval_created(pid)
+        return ids
+
+    def reissue_skill(self, skill: str, actor: str, *, keep_expiry: bool) -> list[str]:
+        ids = self.decisions.skills.reissue(skill, actor=actor, keep_expiry=keep_expiry)
+        for sid in ids:  # parts follow; Approve after all of them
+            self.on_approval_created(sid)
+        return ids
+
     def reissue_cards(self, invalidated: list[Invalidated], actor: str) -> list[str]:
-        """Fresh cards for actions whose approvals a dry-run toggle or a reload invalidated (§12.4)."""
+        """Fresh cards for approvals a dry-run toggle or a reload invalidated (§12.4). Outbound-action
+        cards get a fresh TTL (the bound mode or policy changed); proposal and skill cards keep their
+        expiry and are re-created only while still open (``reissue_invalidated``, BA-5, BA-17)."""
         created: list[str] = []
+        proposals = [i.cid for i in invalidated if i.approval_id.startswith("p_") and i.cid is not None]
+        skill_ids = [i.approval_id for i in invalidated if i.approval_id.startswith("s_")]
         with db.transaction(self.conn):
-            for action_id in dict.fromkeys(i.action_id for i in invalidated):
+            for action_id in dict.fromkeys(i.action_id for i in invalidated if i.action_id is not None):
                 row = db.one(
                     self.conn,
                     "SELECT o.status, c.state FROM outbound_actions o JOIN contributions c ON c.id = o.cid"
@@ -85,6 +118,13 @@ class AppContext:
                 if row is None or row["status"] != "pending_approval":
                     continue
                 created.append(self.create_approval(action_id, actor))
+            created += self.decisions.proposals.reissue_invalidated(proposals, actor=actor)
+            skills = [
+                str(r["skill"])
+                for sid in skill_ids
+                if (r := db.one(self.conn, "SELECT skill FROM skill_approvals WHERE id = ?", (sid,))) is not None
+            ]
+            created += self.decisions.skills.reissue_invalidated(skills, actor=actor)
         for approval_id in created:
             self.on_approval_created(approval_id)
         return created
@@ -149,8 +189,38 @@ def build_context(
             ctx_ref["ctx"].notify(text)
 
     approvals = ApprovalService(conn, clock, audit, paths.control_dir, limits, profile, artifacts)
-    control = ControlService(conn, paths, clock, audit, approvals, notify)
-    snapshots = SnapshotManager(conn, paths, clock, audit, control, approvals, notify)
+    control_ref: dict[str, ControlService] = {}
+
+    def gate1_refusal() -> str | None:
+        """Proposal Start work: refused while paused, killed, draining or down (§14.18.4.2)."""
+        if not approvals.system_running():
+            return "paused or killed"
+        info = control_ref["control"].lifecycle()
+        return None if info is None else info.state
+
+    def skill_refusal() -> str | None:
+        return None if approvals.system_running() else "paused or killed"
+
+    def confirm_ttl() -> int:
+        return limits().confirm_ttl_seconds
+
+    def owner_chat() -> int:
+        return profile().telegram.user_id
+
+    decisions = DecisionServices(
+        approvals=approvals,
+        proposals=ProposalApprovals(
+            conn, clock, audit, approvals, lambda: holder["snap"].current.bundle.policy.proposal.ttl_hours,
+            confirm_ttl, gate1_refusal, chat_id=owner_chat,
+        ),
+        skills=SkillApprovals(
+            conn, clock, audit, approvals, lambda: limits().approval_ttl_hours, confirm_ttl, skill_refusal,
+            chat_id=owner_chat,
+        ),
+    )  # fmt: skip
+    control = ControlService(conn, paths, clock, audit, approvals, notify, decisions=decisions)
+    control_ref["control"] = control
+    snapshots = SnapshotManager(conn, paths, clock, audit, control, approvals, notify, decisions=decisions)
     holder["snap"] = snapshots
     ctx = AppContext(
         paths=paths,
@@ -170,6 +240,7 @@ def build_context(
         gitops=gitops,
         kiro_key_sha256=os.environ.get("KIRO_KEY_SHA256") or None,
         poll_stats=PollStats(clock),
+        decisions=decisions,
     )
     ctx_ref["ctx"] = ctx
     return ctx
