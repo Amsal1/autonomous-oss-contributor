@@ -306,6 +306,35 @@ def render_squid(
 _SNAPSHOT_LINE_RE = re.compile(r"^# Config snapshot: ([0-9a-f]{64})$", re.MULTILINE)
 
 
+def _snapshot_rejection_pending(snapshot_root: Path, digest: str, now: float | None) -> bool:
+    """A conf whose snapshot the schema rejects is tolerated while that snapshot is still current,
+    or while the newer current one is younger than MODE_APPLY_GRACE_S (proxy restart pending)."""
+    link = snapshot_root / "current"
+    try:
+        if os.readlink(link) == digest:
+            return True
+        return (now or time.time()) - link.lstat().st_mtime < MODE_APPLY_GRACE_S
+    except OSError:
+        return False
+
+
+def squid_snapshot_rejected(conf: Path = DEFAULT_SQUID_OUT, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT) -> str | None:
+    """The snapshot hash the live conf names when the installed schema rejects it (the drift check
+    cannot verify the conf then; doctor reports it), else None."""
+    try:
+        match = _SNAPSHOT_LINE_RE.search(conf.read_text(encoding="utf-8"))
+        files = read_snapshot(snapshot_root, match.group(1)) if match else None
+    except (OSError, UnicodeDecodeError, ValueError):
+        return None  # unreadable or missing: squid_drift reports those itself
+    if match is None or files is None:
+        return None
+    try:
+        parse_bundle(files)
+    except ConfigError:
+        return match.group(1)
+    return None
+
+
 def squid_drift(
     conf: Path = DEFAULT_SQUID_OUT,
     snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT,
@@ -340,8 +369,13 @@ def squid_drift(
         # A deploy changed the schema and the installed code no longer accepts the (hash-verified,
         # gatekeeper-written) snapshot the live conf came from. The gatekeeper writes a new snapshot
         # at its next start and the proxy re-renders at its restart; refusing here would block the
-        # very gatekeeper start that fixes it (every unit runs --check first). Not verifiable yet.
-        return []
+        # very gatekeeper start that fixes it (every unit runs --check first). Not verifiable yet,
+        # but only while that snapshot is still the current one (doctor WARNs meanwhile) or a newer
+        # one is younger than the proxy-restart grace; after that the proxy missed its re-render.
+        if _snapshot_rejection_pending(snapshot_root, digest, now):
+            return []
+        return [f"{tag} {conf} names snapshot {digest[:12]}, which the installed schema rejects, and a "
+                "newer snapshot is current (restart ossbot-proxy)"]  # fmt: skip
     try:
         mode = read_egress_mode(control_dir, bundle.egress.mode_default)
         expected = render_squid(

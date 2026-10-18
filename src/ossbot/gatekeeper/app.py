@@ -117,9 +117,14 @@ async def housekeeping_once(ctx: AppContext) -> None:
     for svc in ctx.decisions.all():  # delta 9: expiry on all three services; delta 2: timed-out Confirms
         svc.expire_due()
         svc.disarm_expired()
-    ctx.card_recover()  # delta 8: CardPublisher.recover (no-op until the Telegram front-end starts)
     ctx.state_machine.sweep_expired()
     prune_retention(ctx)
+    # delta 8: CardPublisher.recover (no-op until the Telegram front-end starts). Last and guarded, so
+    # one card that fails to render cannot stop the expiry sweep on every tick.
+    try:
+        ctx.card_recover()
+    except Exception:
+        log.exception("card recovery failed", extra={"event": "card_recover_failed"})
 
 
 class Service(Protocol):

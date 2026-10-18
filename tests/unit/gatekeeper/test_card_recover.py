@@ -122,6 +122,27 @@ async def test_housekeeping_reaches_the_publisher(ctx: AppContext) -> None:
     assert len(calls) == 1  # BA-4: exactly once per tick
 
 
+async def test_a_failing_card_recover_does_not_stop_the_expiry_sweep(
+    ctx: AppContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    swept: list[int] = []
+    real_sweep = ctx.state_machine.sweep_expired
+
+    def sweep() -> None:
+        swept.append(1)
+        real_sweep()
+
+    def broken() -> None:
+        raise RuntimeError("render failed")
+
+    ctx.state_machine.sweep_expired = sweep  # type: ignore[method-assign]
+    ctx.card_recover = broken
+    await housekeeping_once(ctx)
+    await housekeeping_once(ctx)
+    assert len(swept) == 2
+    assert [r for r in caplog.records if getattr(r, "event", None) == "card_recover_failed"]
+
+
 async def test_pre_migration_card_rows_are_skipped(ctx: AppContext, caplog: pytest.LogCaptureFixture) -> None:
     publisher = CardPublisher(ctx)
     aid = _new_card(ctx, "a")

@@ -161,6 +161,36 @@ async def test_preflight_timeout_is_a_failed_live_check(
     assert row is not None and tuple(row) == ("invalidated", "live_check:timeout")
 
 
+async def test_kill_during_a_slow_preflight_waits_at_most_the_preflight_bound(
+    ctx: AppContext, rig: Rig, preflight_s: list[float], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Review F005-R1-7 / D14: PTB's single update slot holds a typed /kill behind a Confirm whose
+    preflight is still running; the wait is bounded by PREFLIGHT_TIMEOUT_S, then /kill runs within
+    its 2 s budget and nothing is submitted."""
+    monkeypatch.setattr(handlers_mod, "PREFLIGHT_TIMEOUT_S", 0.5)
+    preflight_s[0] = 30.0  # a hung live check
+    approval, tokens = _card(ctx)
+    await rig.tap(tokens["approve"])
+    confirm = db.one(ctx.conn, "SELECT token FROM ui_tokens WHERE approval_id = ? AND purpose = 'confirm'",
+                     (approval,))["token"]  # type: ignore[index]  # fmt: skip
+    slot = asyncio.Lock()  # FIFO, like PTB processing one update at a time
+
+    async def in_slot(update: dict[str, Any]) -> float:
+        async with slot:
+            return await rig.update(update)
+
+    confirm_task = asyncio.create_task(in_slot(callback_update(OWNER, OWNER, CARD_MSG, f"t:{confirm}", "private")))
+    await asyncio.sleep(0.05)  # the Confirm handler holds the slot, its preflight is running
+    arrived = time.monotonic()
+    await in_slot(message_update(OWNER, OWNER, "/kill", "private"))
+    waited = time.monotonic() - arrived
+    assert waited < handlers_mod.PREFLIGHT_TIMEOUT_S + 2.0
+    await confirm_task
+    assert ctx.control.view().state == "killed"
+    row = db.one(ctx.conn, "SELECT status FROM approvals WHERE id = ?", (approval,))
+    assert row is not None and row["status"] == "invalidated"
+
+
 async def test_slow_local_handler_logs_handler_slow(ctx: AppContext, rig: Rig, caplog: pytest.LogCaptureFixture,
                                                     monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
     monkeypatch.setattr(handlers_mod, "HANDLER_SLOW_S", 0.0)  # every handler is over a zero budget

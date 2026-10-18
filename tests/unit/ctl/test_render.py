@@ -415,7 +415,30 @@ def test_squid_drift_tolerates_a_snapshot_the_new_schema_rejects(tmp_path: Path)
     old = write_snapshot(root, files)
     text = conf.read_text()
     conf.write_text(text.replace(text.split("# Config snapshot: ")[1][:64], old))
+    assert (root / "current").readlink().name == old  # write_snapshot repointed current to it
     assert _drift(conf, root, template, resolv, tmp_path / "control") == []
+    assert render.squid_snapshot_rejected(conf, root) == old  # doctor WARNs meanwhile
+
+
+def test_squid_drift_bounds_the_rejected_snapshot_window(tmp_path: Path) -> None:
+    """Review F005-R1-5: once a newer snapshot is current and older than the grace, a conf still
+    naming the rejected one is drift (the proxy missed its re-render)."""
+    conf, root, template, resolv = _snapshot_env(tmp_path, None)
+    good = (root / "current").readlink().name
+    files = {p.name: p.read_bytes() for p in (root / "current").iterdir()}
+    files["targets.yaml"] = files["targets.yaml"].replace(b"  size_class: null", b"  max_changed_lines: 400")
+    old = write_snapshot(root, files)
+    (root / "current").unlink()  # the gatekeeper wrote a newer, valid snapshot
+    os.symlink(good, root / "current")
+    text = conf.read_text()
+    conf.write_text(text.replace(text.split("# Config snapshot: ")[1][:64], old))
+    young = (root / "current").lstat().st_mtime
+    assert _drift(conf, root, template, resolv, tmp_path / "control", now=young + 5) == []
+    [problem] = _drift(conf, root, template, resolv, tmp_path / "control", now=young + render.MODE_APPLY_GRACE_S + 1)
+    assert problem.startswith("firewall_drift:squid_mode") and "rejects" in problem
+    assert render.squid_snapshot_rejected(conf, root) == old
+    conf.write_text(text)
+    assert render.squid_snapshot_rejected(conf, root) is None
 
 
 def test_squid_listeners_and_classes() -> None:

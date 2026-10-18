@@ -494,6 +494,18 @@ def check_egress_mode() -> Result:
     return Result(PASS, "egress mode", f"{data.get('mode')} (default {data.get('default')})")
 
 
+def check_squid_verifiable() -> Result:
+    """The drift check skips a live squid.conf whose snapshot the installed schema rejects (after a
+    deploy, until the gatekeeper and proxy restart); say so instead of passing silently."""
+    from ossbot.ctl.render import squid_snapshot_rejected  # noqa: PLC0415
+
+    digest = squid_snapshot_rejected()
+    if digest is None:
+        return Result(PASS, "squid.conf verifiable", "its snapshot parses with the installed schema")
+    detail = f"snapshot {digest[:12]} is rejected by the installed schema; the drift check cannot verify the conf"
+    return Result(WARN, "squid.conf verifiable", detail, "systemctl restart ossbot-gatekeeper ossbot-proxy")
+
+
 def check_hermes_tier() -> Result:
     """§15.5: the active Hermes capability tier and its toolsets (applied to Hermes in FEAT-007)."""
     try:
@@ -632,7 +644,8 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     if not quick:
         steps.append(check_proxy_dns)
     steps += [
-        check_firewall, check_gatekeeper, check_egress_mode, check_hermes_tier, lambda: check_github(quick),
+        check_firewall, check_squid_verifiable, check_gatekeeper, check_egress_mode, check_hermes_tier,
+        lambda: check_github(quick),
         lambda: check_telegram(quick),
         check_identity_snapshot, check_audit, check_disk, check_lock_drift,
     ]  # fmt: skip
