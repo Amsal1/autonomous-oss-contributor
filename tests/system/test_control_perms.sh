@@ -21,6 +21,11 @@ check "probe file still there" test -e "$probe"
 rm -f "$probe"
 check "no flag was created by the attempts" test ! -e "$CONTROL/killed"
 
+# A later systemd-tmpfiles run (systemd upgrades trigger one) must not narrow the /run/ossbot ACL mask.
+systemd-tmpfiles --create /etc/tmpfiles.d/ossbot.conf
+check "/run/ossbot keeps 1775 (ACL mask rwx) after a tmpfiles re-run" test "$(stat -c %a /run/ossbot)" = 1775
+check "watchdog sees no drift after a tmpfiles re-run" test -z "$(/opt/ossbot/app/.venv/bin/python -I -c 'from ossbot.watchdog.perms import check_sockets; print("\n".join(check_sockets()))')"
+
 # Mode drift -> watchdog kill.
 chmod 2770 "$CONTROL"
 watchdog_tick

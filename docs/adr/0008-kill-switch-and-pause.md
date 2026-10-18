@@ -28,3 +28,7 @@ Need `/kill` on Telegram and `scripts/kill.ps1` that works even with the bot dow
 
 ## Consequences
 Soft kill keeps a minimal network-facing gatekeeper (Telegram + GitHub via one proxy port); acceptable because every outbound path checks the flag. Refines the brief's "stop Hermes+gatekeeper" for Telegram kill only.
+
+## Implementation addendum (Phase 1 integration, 2026-10-18)
+- Observed on this laptop: an unattended-upgrades run of the systemd package (255.4-1ubuntu8.18) re-ran `systemd-tmpfiles --create`. The `d /run/ossbot 1755` line re-chmods the directory, which narrows the ACL mask to `r-x`, and the `a+ u:gatekeeper:rwx,u:ossbox:rwx` line does not widen it again (live probe: fresh create 1775, second create 1755). The watchdog's 30 s permission check saw `/run/ossbot` at 1755 instead of 1775 and soft-killed, as designed (fail closed). With the narrowed mask the gatekeeper and sandboxd could no longer recreate their sockets after a restart.
+- Fix: `systemd/tmpfiles.d/ossbot.conf` sets the mask explicitly (`m::rwx`); re-runs now keep 1775. The provision `systemd` step re-applies tmpfiles whenever `/run/ossbot` is not 1775, and `tests/system/test_control_perms.sh` re-runs tmpfiles and asserts no drift.

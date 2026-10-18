@@ -74,7 +74,8 @@ step_systemd() {
   ensure_file /etc/tmpfiles.d/ossbot.conf root root 0644 <"$OSSBOT_REPO/systemd/tmpfiles.d/ossbot.conf"
   local tmp_changed=$OSSBOT_STEP_CHANGED
   ((before)) && OSSBOT_STEP_CHANGED=1
-  if ((tmp_changed)) || [[ ! -d /run/ossbot ]] || ! getfacl -cp /run/ossbot 2>/dev/null | grep -qx 'user:gatekeeper:rwx'; then
+  if ((tmp_changed)) || [[ ! -d /run/ossbot ]] || [[ $(stat -c %a /run/ossbot) != 1775 ]] \
+     || ! getfacl -cp /run/ossbot 2>/dev/null | grep -qx 'user:gatekeeper:rwx'; then
     systemd-tmpfiles --create /etc/tmpfiles.d/ossbot.conf
     mark_changed "systemd-tmpfiles /run/ossbot"
   fi
