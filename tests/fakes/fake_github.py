@@ -7,6 +7,7 @@ or pause flag right after a given write (AC 29).
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 from collections.abc import Callable
@@ -39,6 +40,7 @@ class FakeGitHub:
     comments: dict[tuple[str, int], list[dict[str, Any]]] = field(default_factory=dict)
     pulls: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     refs: dict[tuple[str, str], str] = field(default_factory=dict)
+    files: dict[tuple[str, str], str] = field(default_factory=dict)  # (repo lower, path) -> text
     requests: list[Recorded] = field(default_factory=list)
     failures: dict[str, list[int]] = field(default_factory=dict)  # "POST /repos/x/y/pulls" -> statuses to return first
     fork_visible_after: int = 0  # GETs of a new fork that still 404
@@ -66,6 +68,12 @@ class FakeGitHub:
 
     def client(self, token: str | None = "ghp_fake_write_token") -> httpx.AsyncClient:
         return make_client(token, transport=httpx.MockTransport(self.router.async_handler))
+
+    def sync_client(self, token: str | None = "github_pat_fake_read_token") -> httpx.Client:
+        """The runner's read client (``runner.github_read``, sync) on the same fake."""
+        from ossbot.runner.github_read import make_client as runner_client
+
+        return runner_client(token, transport=httpx.MockTransport(self.router.handler))
 
     @property
     def writes(self) -> list[Recorded]:
@@ -136,6 +144,19 @@ class FakeGitHub:
             if "head" in params:
                 items = [p for p in items if p["head"]["label"] == params["head"]]
             return httpx.Response(200, json=items)
+        if rest == "/issues" and method == "GET":  # runner discovery (FEAT-006)
+            label = params.get("labels")
+            items = [i for (r, _), i in sorted(self.issues.items()) if r == repo and i.get("state") == "open"]
+            if label:
+                items = [i for i in items if label in {lbl.get("name") for lbl in i.get("labels", [])}]
+            return httpx.Response(200, json=items)
+        m5 = re.fullmatch(r"/contents/(.+)", rest)
+        if m5 and method == "GET":  # CONTRIBUTING, AI policy (runner vet)
+            text = self.files.get((repo, m5.group(1)))
+            if text is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+            return httpx.Response(200, json={"type": "file", "encoding": "base64", "content": encoded})
         m3 = re.fullmatch(r"/pulls/(\d+)", rest)
         if m3:
             pr = next((p for p in self.pulls.get(repo, []) if p["number"] == int(m3.group(1))), None)

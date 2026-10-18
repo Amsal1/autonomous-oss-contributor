@@ -30,6 +30,7 @@ from ossbot.gatekeeper.pollstats import PollStats
 from ossbot.gatekeeper.proposal_approvals import ProposalApprovals
 from ossbot.gatekeeper.secret_scan import SecretScanner
 from ossbot.gatekeeper.skill_approvals import SkillApprovals
+from ossbot.gatekeeper.stage_runs import StageRuns
 from ossbot.gatekeeper.state_machine import StateMachine
 from ossbot.gatekeeper.telegram import cards
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
@@ -62,6 +63,7 @@ class AppContext:
     poll_stats: PollStats = field(default_factory=PollStats)  # Telegram long-poll health (CR-001)
     decisions: DecisionServices = field(default=None)  # type: ignore[assignment]  # set by build_context
     discovery_prefs: DiscoveryPrefs = field(default=None)  # type: ignore[assignment]  # set by build_context
+    stage_runs: StageRuns = field(default=None)  # type: ignore[assignment]  # set by build_context
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
     card_recover: Callable[[], None] = field(default=lambda: None)
 
@@ -272,6 +274,7 @@ def build_context(
         poll_stats=PollStats(clock),
         decisions=decisions,
         discovery_prefs=DiscoveryPrefs(conn, clock, audit, lambda: snapshots.current.bundle, notify),
+        stage_runs=StageRuns(conn, clock, audit, control),
     )
     ctx_ref["ctx"] = ctx
     # BA-16: a snapshot whose secret scanner can't be built refuses the start or the /reload.

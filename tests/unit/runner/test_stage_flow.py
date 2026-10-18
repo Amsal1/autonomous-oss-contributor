@@ -1,0 +1,118 @@
+"""Runner stages against the real gatekeeper (in-process) and a fake sandboxd: vet -> scout ->
+proposal (gate 1) -> Start work -> fetch -> plan, the size budget for autonomous vs 👤 items, and the
+scheduler's dispatch rules (nothing before gate 1, scout concurrency, failures)."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+from ossbot.common.schemas import State
+from ossbot.gatekeeper import db
+from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.proposals import ProposalService
+from ossbot.runner import stages
+from ossbot.runner.pipeline import StageContext
+from ossbot.runner.scheduler import Scheduler
+from ossbot.runner.stages import fetch, plan, scout, vet
+from tests.conftest import insert_contribution
+from tests.fakes.fake_github import FakeGitHub
+from tests.unit.gatekeeper.test_proposals import sample, start
+from tests.unit.runner.conftest import FakeSbx, fenced
+
+VETTING = {"ai_policy": "allowed", "claim_status": "unclaimed", "suitability": 0.8}
+PLAN = {"feasible": True, "summary": "guard", "files_to_touch": ["web/src/export/trace.ts"],
+        "validation_commands": [{"name": "unit", "cmd": "npm test"}]}  # fmt: skip
+
+
+def state(ctx: AppContext, cid: str) -> str:
+    row = db.one(ctx.conn, "SELECT state FROM contributions WHERE id = ?", (cid,))
+    assert row is not None
+    return str(row["state"])
+
+
+def fetch_ok(spec: dict[str, Any], out: Path) -> int:
+    (out / "fetch.json").write_text(json.dumps({"base_sha": "1" * 40, "base_ref": "main", "ecosystems": ["node"]}))
+    return 0
+
+
+def test_vet_scout_propose(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub) -> None:
+    github.add_issue("langfuse/langfuse", 1234, title="Fix trace export when spans are empty", body="steps",
+                     labels=[{"name": "bug"}])  # fmt: skip
+    github.files[("langfuse/langfuse", "CONTRIBUTING.md")] = "Please ask to be assigned before opening a PR."
+    cid = insert_contribution(ctx, State.DISCOVERED, issue_number=1234)
+    sbx.kiro("vetter", fenced(VETTING))
+    vet.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "VETTED"
+    stored = json.loads(db.one(ctx.conn, "SELECT vetting_json FROM contributions WHERE id = ?", (cid,))[0])
+    assert stored["requires_assignment"] is True  # CONTRIBUTING regex, claim only after gate 1
+    sbx.kiro("scout", fenced(sample()))
+    scout.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "PROPOSED"
+    scout_clone = next(j for j in sbx.jobs if j["entrypoint"] == "fetch")
+    assert scout_clone["args"] == {"repo": "langfuse/langfuse", "clone_depth": 1, "prefetch": False}
+    task = Path(next(j for j in sbx.jobs if j["entrypoint"] == "kiro" and j["args"]["role"] == "scout")
+                ["inputs"]["scout-task.md"]).read_text()  # fmt: skip
+    assert "largest class you may propose is s" in task and "<untrusted" in task
+    assert stages.stage_for(sc.gk.contribution(cid)) is None  # waiting for gate 1: nothing runs
+
+
+def test_autonomous_too_big_is_skipped_user_directed_is_not(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
+    big = sample(estimate={"files": 12, "code_lines": 450, "test_lines": 200, "class": "l"})
+    sbx.kiro("scout", fenced(big))
+    auto = insert_contribution(ctx, State.VETTED, vetting_json=json.dumps(VETTING))
+    scout.run(sc, sc.gk.contribution(auto))
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (auto,))
+    assert row is not None and tuple(row) == ("SKIPPED", "too_big_for_auto")
+    user = insert_contribution(ctx, State.VETTED, source="user", notes="please fix it fully")
+    scout.run(sc, sc.gk.contribution(user))
+    assert state(ctx, user) == "PROPOSED"
+    task = Path([j for j in sbx.jobs if j["entrypoint"] == "kiro"][-1]["inputs"]["scout-task.md"]).read_text()
+    assert "no size preference" in task and "<human_instruction>" in task and "please fix it fully" in task
+
+
+def test_start_work_then_fetch_and_plan(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub) -> None:
+    github.add_issue("langfuse/langfuse", 77, title="Bug", body="b", labels=[{"name": "bug"}])
+    cid = insert_contribution(ctx, State.SCOUTING, issue_number=77)
+    sbx.kiro("scout", fenced(sample()))
+    scout.run(sc, sc.gk.contribution(cid))
+    pid = db.one(ctx.conn, "SELECT id FROM proposal_approvals WHERE cid = ?", (cid,))[0]
+    start(ctx, pid)
+    sbx.handlers["fetch"] = fetch_ok
+    fetch.run(sc, sc.gk.contribution(cid))
+    row = db.one(ctx.conn, "SELECT state, base_sha, base_ref FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FETCHED", "1" * 40, "main")
+    assert sbx.jobs[-1]["args"]["clone_depth"] == 200 and "prefetch" not in sbx.jobs[-1]["args"]
+    sbx.kiro("planner", fenced(PLAN))
+    plan.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "PLANNED"
+    assert json.loads(db.one(ctx.conn, "SELECT plan_json FROM contributions WHERE id = ?", (cid,))[0])["feasible"]
+
+
+def test_adjust_plan_re_scouts_a_new_version(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
+    cid = insert_contribution(ctx, State.SCOUTING)
+    sbx.kiro("scout", fenced(sample()), fenced(sample(approach=["Keep the debug log behind a flag"])))
+    scout.run(sc, sc.gk.contribution(cid))
+    ProposalService(ctx).request_revision(cid, 1, "adjust", "keep the debug log, behind a flag", "tg:4242")
+    c = sc.gk.contribution(cid)
+    assert stages.stage_for(c) is scout.run
+    scout.run(sc, c)
+    row = db.one(ctx.conn, "SELECT proposal_version, proposal_feedback_json FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == (2, None)
+    task = Path([j for j in sbx.jobs if j["entrypoint"] == "kiro"][-1]["inputs"]["scout-task.md"]).read_text()
+    assert "Revise proposal v1: keep the debug log, behind a flag" in task
+
+
+def test_scheduler_dispatch_and_failure(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
+    first = [insert_contribution(ctx, State.VETTED) for _ in range(3)]
+    scheduler = Scheduler(sc, synchronous=True)
+    scheduler.first_start_done = True
+    scheduler.last_discovery = scheduler.now()
+    scheduler.last_catalog = scheduler.now()
+    sbx.handlers["fetch"] = lambda spec, out: 3  # the scout clone fails
+    tick = scheduler.tick()
+    assert set(tick.started) == set(first)  # synchronous: each finishes before the next starts
+    assert {state(ctx, cid) for cid in first} == {"FAILED"}
+    reasons = {r[0] for r in ctx.conn.execute("SELECT state_reason FROM contributions WHERE state = 'FAILED'")}
+    assert reasons == {"fetch_exit_3"}

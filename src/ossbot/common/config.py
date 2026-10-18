@@ -332,6 +332,14 @@ class ResolvedTarget:
     disclosure_template: str | None
 
 
+def all_targets(targets: TargetsConfig) -> list[ResolvedTarget]:
+    """Every configured repo with defaults merged (discovery order: category priority, file order)."""
+    out = [
+        resolve_target(targets, e.repo) for c in sorted(targets.categories, key=lambda c: c.priority) for e in c.repos
+    ]
+    return [t for t in out if t is not None]
+
+
 def resolve_target(targets: TargetsConfig, repo: str) -> ResolvedTarget | None:
     """Return the effective settings for ``repo`` (defaults merged), or None if not a target."""
     if targets.is_denied(repo):

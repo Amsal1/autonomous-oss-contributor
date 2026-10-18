@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -121,6 +122,26 @@ ALLOWED: dict[State, dict[State, frozenset[Actor]]] = _build_allowed()
 # Entering one of these requires running control state.
 BLOCKED_WHILE_STOPPED: frozenset[State] = (WORKING | {S.SUBMITTING}) - {S.WATCHING}
 EVIDENCE_MAX_BYTES = 64 * 1024
+
+
+SHA1 = re.compile(r"^[0-9a-f]{40}$")
+REF = re.compile(r"^[A-Za-z0-9._/-]{1,100}$")
+
+
+def _evidence_columns(from_: State, to: State, evidence: dict[str, Any]) -> dict[str, Any]:
+    """Stage results the gatekeeper keeps on the row (the claim guard reads vetting_json; the planner's
+    plan and the fetched base are shown on cards). Only these edges, only these keys, size-bounded
+    by EVIDENCE_MAX_BYTES; the values stay untrusted data."""
+    out: dict[str, Any] = {}
+    if (from_, to) == (S.VETTING, S.VETTED) and isinstance(evidence.get("vetting"), dict):
+        out["vetting_json"] = canonical_json(evidence["vetting"]).decode("utf-8")
+    if (from_, to) == (S.PLANNING, S.PLANNED) and isinstance(evidence.get("plan"), dict):
+        out["plan_json"] = canonical_json(evidence["plan"]).decode("utf-8")
+    if (from_, to) == (S.FETCHING, S.FETCHED):
+        sha, ref = evidence.get("base_sha"), evidence.get("base_ref")
+        if isinstance(sha, str) and SHA1.fullmatch(sha) and isinstance(ref, str) and REF.fullmatch(ref):
+            out.update(base_sha=sha, base_ref=ref)
+    return out
 
 
 def all_edges() -> list[tuple[State, State, frozenset[Actor]]]:
@@ -333,6 +354,9 @@ class StateMachine:
         if from_ in {S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED, S.PROPOSAL_EXPIRED}:
             # Undo or re-scout: the decline record goes with the state (§14.11.15 Undo step 2)
             sets.update({"declined_at": "NULL", "declined_reason": "NULL", "snooze_until": "NULL"})
+        for column, value in _evidence_columns(from_, target.to, evidence).items():
+            sets[column] = "?"
+            params.append(value)
         assignments = ", ".join(f"{k} = {v}" for k, v in sets.items())
         self.conn.execute(f"UPDATE contributions SET {assignments} WHERE id = ?", (*params, cid))
         outcomes.on_transition(self.conn, row, target.to, to_iso(self.clock.now()))

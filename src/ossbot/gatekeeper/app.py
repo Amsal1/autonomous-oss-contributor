@@ -20,7 +20,18 @@ from fastapi.responses import JSONResponse
 from ossbot.common.config import ConfigError
 from ossbot.common.control_flags import Blocked
 from ossbot.gatekeeper import db
-from ossbot.gatekeeper.api import actions, audit, config, contributions, control, models, notify, prefs, work
+from ossbot.gatekeeper.api import (
+    actions,
+    audit,
+    config,
+    contributions,
+    control,
+    models,
+    notify,
+    prefs,
+    stage_runs,
+    work,
+)
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.authz import PEER_SCOPE_KEY, Forbidden, Peer
 from ossbot.gatekeeper.config_snapshot import ReloadConflict
@@ -31,6 +42,7 @@ from ossbot.gatekeeper.discovery_prefs import PrefsRefused
 from ossbot.gatekeeper.models_admin import ModelSetError
 from ossbot.gatekeeper.packaging import prune_retention
 from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
+from ossbot.gatekeeper.stage_runs import StageRunRefused
 from ossbot.gatekeeper.state_machine import TransitionError
 
 log = logging.getLogger(__name__)
@@ -98,6 +110,7 @@ def _install_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProposalRefused)
     @app.exception_handler(PrefsRefused)
+    @app.exception_handler(StageRunRefused)
     async def _cr004(request: Request, exc: Exception) -> JSONResponse:
         return _error(getattr(exc, "status", 400), getattr(exc, "code", "refused"), getattr(exc, "detail", ""))
 
@@ -173,6 +186,6 @@ def create_app(ctx: AppContext, *, housekeeping: bool = True, services: Sequence
                   openapi_url=None)  # fmt: skip
     app.state.ctx = ctx
     _install_handlers(app)
-    for module in (control, config, contributions, actions, models, audit, notify, work, prefs):
+    for module in (control, config, contributions, actions, models, audit, notify, work, prefs, stage_runs):
         app.include_router(module.router)
     return app

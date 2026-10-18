@@ -260,6 +260,27 @@ class PrefsUpdate(ApiModel):
     filters: dict[str, Any] | None = None  # keys checked against discovery_prefs.FILTER_KEYS
 
 
+class StageRunOpen(ApiModel):
+    """``POST /v1/contributions/{id}/stage-runs`` (worker, §9.3): open a stage run before the stage."""
+
+    stage: Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")]
+    profile: Annotated[str, Field(pattern=r"^[a-z-]{1,32}$")] | None = None
+    coder_mode: Literal["split"] | None = None
+    model: Annotated[str, Field(pattern=MODEL_ID_RE)] | None = None
+    effort: Effort | None = None
+
+
+class StageRunUpdate(ApiModel):
+    """``POST /v1/stage-runs/{id}``: heartbeat (no fields) or close with a final status."""
+
+    status: Literal["running", "succeeded", "failed", "interrupted", "cancelled"] | None = None
+    model_actual: Annotated[str, Field(max_length=128)] | None = None
+    exit_code: int | None = None
+    error_class: Annotated[str, Field(pattern=r"^[a-z0-9_:.-]{1,64}$")] | None = None
+    error_message: Annotated[str, Field(max_length=500)] | None = None
+    log_path: Annotated[str, Field(max_length=300)] | None = None
+
+
 class PrefsUndo(ApiModel):
     undo_id: Annotated[str, Field(pattern=r"^u_[0-9A-Z]{10}$")]
 

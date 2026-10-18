@@ -71,6 +71,9 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("GET", "/v1/discovery-prefs"): frozenset({O, W}),
     ("PUT", "/v1/discovery-prefs"): frozenset({O}),
     ("POST", "/v1/discovery-prefs/undo"): frozenset({O}),
+    ("POST", "/v1/contributions/{cid}/stage-runs"): frozenset({W}),
+    ("POST", "/v1/stage-runs/{run_id}"): frozenset({W}),
+    ("GET", "/v1/stage-runs"): frozenset({W, O}),
     ("GET", "/v1/audit/verify"): frozenset({O}),
 }
 UIDS = {O: UID_OPERATOR, W: UID_WORKER, S: UID_SANDBOX, R: UID_REQUESTER}

@@ -178,6 +178,15 @@ class ContributionService:
         if redacted:
             for key in REDACTED_FOR_REQUESTER:
                 doc.pop(key, None)
+        else:  # the owner's open change requests feed the next implement round (§9.8, trusted text)
+            doc["change_requests"] = [
+                {"id": r["id"], "text": r["text"], "created_at": r["created_at"]}
+                for r in self.conn.execute(
+                    "SELECT id, text, created_at FROM change_requests WHERE cid = ? AND consumed_at IS NULL"
+                    " ORDER BY created_at",
+                    (cid,),
+                )
+            ]
         return doc
 
     def list(self, state: str | None, limit: int) -> list[dict[str, Any]]:
