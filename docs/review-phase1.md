@@ -1,113 +1,106 @@
-# Phase 1 review (round 1): safety core, sandbox isolation, provisioning foundation
+# Phase 1 review (round 2): safety core, sandbox isolation, provisioning foundation
 
-Phase 1 (FEAT-001..004 plus fix 1e79583) delivers the deterministic gatekeeper, the two-tap Telegram decision path, the git TCB and submission, the Docker filter, sandboxd with the split coder, squid plus iptables egress, provisioning from zero with WSL confinement, and the kill/resume/watchdog chain. I re-ran every verification command in the bar inside `ossbot` and all of them pass. The second bootstrap run reports only `unchanged`. Two gaps keep the safety bar from being met. Every service uid can query the WSL DNS resolver directly through the loopback ACCEPT rule, which is an open DNS exfiltration channel the egress tests do not cover. Kills that bypass the gatekeeper (watchdog, `ossbot-kill`, `kill.ps1`) leave armed and confirmed approvals alive. The user's change request CR-001 (graceful up/down/drain) is added as a required finding.
+Round 2 checks the fixes for round 1 (commit 703648a, logged in 3ccd9bc) on top of the whole Phase 1 diff since 7624a0c. All five round-1 findings are closed (P1-1 to P1-5, re-probed live). The Phase 1 share of CR-001 is in place, and every command in the bar passes when I re-run it. A new reviewer probe found a second DNS channel that the port-53 fix cannot see. systemd-resolved answers arbitrary names for every service uid over its world-writable varlink socket and over D-Bus. The queries leave the host from resolved's own uid, so the owner-match firewall rules never apply.
 
-Watch for: DNS to `10.255.255.254` from ossrunner/hermes/gatekeeper/ossbox/ossnobody (confirmed, live probe); armed approvals surviving out-of-band kills (confirmed); CR-001 lifecycle not implemented (confirmed, new requirement).
+Watch for: DNS exfiltration through systemd-resolved IPC for ossrunner/hermes/gatekeeper/ossbox/ossnobody (confirmed, live probe); a ≤10 s window where a root kill plus a fast resume keeps an armed approval alive (confirmed by code reading); the watchdog's `down` exemption ignoring scope (confirmed); the drain-timeout knob not reaching `down.ps1` or the sandboxd unit (confirmed); an unexplained app-deploy `changed` that restarted four units (confirmed observation, cause unknown).
 
 **Verdict**: NEEDS_CHANGES
 
 ## High-level view
 
-The gatekeeper's binding, token and checkpoint rules hold against DESIGN §9.2/§12.4 for every trigger the gatekeeper itself sees. The exception is kill. Only the gatekeeper's own kill path invalidates approvals. The root paths (watchdog, `ossbot-kill`, boot gate) write the flag file, and reconcile only mirrors the state. An armed approval therefore survives the kill, and a Confirm tap after a quick resume still submits.
+The host egress layer still has a DNS hole. Raw UDP/TCP 53 is closed for the five service uids (my probes of 10.255.255.254, 127.0.0.53 and 127.0.0.54 all refuse). systemd-resolved, however, takes requests from any uid over its varlink socket and over D-Bus, then queries upstream as `systemd-resolve`, which OSSBOT-OUT does not restrict. Nothing in the distro needs resolved, so masking it is safe. Neither `test_egress_per_uid.sh` nor doctor's per-uid probe tries this path, so both report PASS.
 
-The host egress layer has a hole that the live resolver placement exposed. ADR-0005 records that the WSL resolver sits on `lo`, but `OSSBOT-OUT` still accepts all `-o lo` traffic for the five service uids. That contradicts §11.4 ("No user gets direct UDP 53"). Neither `test_egress_per_uid.sh` nor doctor's per-uid probe looks at the resolver, so both report PASS.
+Kill invalidation now covers every kill path, but it relies on the 10 s reconcile tick seeing the `killed` flag. A root-written kill that is resumed before the next tick keeps an armed approval and its confirm token. The DESIGN §13 claim "a quick resume never revives a confirm token" overstates this.
 
-CR-001 adds a graceful lifecycle (up/drain/down) next to kill. Its gatekeeper state, sandboxd drain, systemd stop timeouts, ossctl and Windows scripts, and crash-safety test belong in Phase 1. Stage re-queue, the Telegram commands and the docs depend on FEAT-005/006/008.
+The CR-001 lifecycle matches DESIGN §13.5 except at two edges. The watchdog treats any `down` as "stopped on purpose", including the workers scope where the gatekeeper keeps running. The configurable drain timeout is honoured only by `ossctl down`, not by `down.ps1` or the sandboxd unit.
 
 <details>
 <summary>Issues (5)</summary>
 
-1. **P1-1 HIGH: DNS exfiltration via the loopback resolver** (`src/ossbot/ctl/render.py:200,204`; `tests/system/test_egress_per_uid.sh:15`; `src/ossbot/ctl/doctor.py:239`). Every service uid gets real DNS answers from `10.255.255.254:53` because of `-o lo -j ACCEPT`. Add per-uid REJECT rules for UDP/TCP 53 to the rendered nameservers (and 127.0.0.53) before the lo ACCEPT, and extend `--check`, the goldens, `test_egress_per_uid.sh` and doctor.
-2. **P1-2 MEDIUM: out-of-band kill keeps approvals alive** (`src/ossbot/gatekeeper/control.py:238`; flag writers `src/ossbot/watchdog/tick.py:95`, `scripts/bin/ossbot-kill`, `scripts/bin/ossbot-boot-gate`). `ControlService.reconcile()` mirrors a kill flag written by root (watchdog, `ossbot-kill`, `kill.ps1`, boot gate) without calling `invalidate_armed_confirmed`. Invalidate in the same transaction when a new kill flag is observed, including at startup, and add tests.
-3. **P1-3 MEDIUM: CR-001 graceful lifecycle (user change request)** (`docs/plan/CR-001-lifecycle-up-down.md`; `src/ossbot/gatekeeper/control.py`, `src/ossbot/sandboxd/jobs.py`, `systemd/*.service`, `scripts/`, `src/ossbot/ctl/cli.py`). Implement `docs/plan/CR-001-lifecycle-up-down.md`: up/draining/down distinct from kill, drain timeout 120 s, `TimeoutStopSec` ≥ drain + 30 s, re-queue interrupted stages, never auto-resume public writes, `scripts/{up,down,status}.ps1`, `ossctl up|down|status`, crash-safety e2e (SIGKILL mid-stage), sleep/hibernate handling, a long-poll reconnect test. Commit the CR file with the implementation and update DESIGN.md. Telegram `/drain /undrain /down /up` and the README/SETUP/AGENTS docs may move to Phase 2 (FEAT-005/008); record the split in PLAN.md.
-4. **P1-4 NIT: human text edits skip the policy text check** (`src/ossbot/gatekeeper/approvals.py:273`). `ApprovalService.set_text_override` stores edited titles/bodies without `policy.check_text`. There is no caller in Phase 1, so FEAT-005 must run the check before storing an edit.
-5. **P1-5 NIT: callback/token regexes accept a trailing newline** (`src/ossbot/gatekeeper/telegram/keyboards.py:10`, `src/ossbot/common/ids.py:19`). `CALLBACK_RE` and `TOKEN_RE` use `$` with `.match`, so `"t:<22>\n"` passes the format check. It fails closed today (no DB row), but `fullmatch` would make §14.2 exact.
+1. **P1-6 HIGH: DNS exfiltration through systemd-resolved IPC** (`scripts/provision.sh` / `scripts/lib/wsl.sh`: resolved left enabled; `src/ossbot/ctl/render.py:198-215`; `tests/system/test_egress_per_uid.sh:22-53`; `src/ossbot/ctl/doctor.py:248-275`). Every service uid resolves arbitrary names via varlink and D-Bus, past the firewall. Mask `systemd-resolved` in an idempotent provision step, probe varlink + D-Bus `ResolveHostname` per uid in the system test and doctor (expect failure, root control still resolves via 10.255.255.254), have doctor/watchdog check that resolved stays masked, and add an ADR-0005 addendum.
+2. **P1-7 NIT: kill-to-resume window keeps approvals armed** (`src/ossbot/gatekeeper/control.py:226-235,314-319`; `src/ossbot/gatekeeper/app.py:35`). A root kill that is resumed within one 10 s housekeeping tick is never seen by reconcile. Invalidate armed/confirmed in `request_resume()` when a kill flag is present and in `reconcile()` whenever offline resume entries are read. Also fix the comment claiming nothing can be armed while killed (`ApprovalService.approve` itself has no running check).
+3. **P1-8 NIT: watchdog `down` exemption ignores scope** (`src/ossbot/watchdog/tick.py:208-216,228`). A workers-scope `down` keeps the gatekeeper running and survives reboots, yet disables the gatekeeper-unhealthy pause and `restart_failed`. Exempt only `scope == "distro"`, or keep `check_health` for workers.
+4. **P1-9 NIT: drain timeout knob not propagated** (`scripts/down.ps1:35-36`; `systemd/ossbot-sandboxd.service` `OSSBOT_DRAIN_TIMEOUT_S=120`, `TimeoutStopSec=150`; `src/ossbot/common/config.py` `LifecyclePolicy.drain_timeout_s le=3600`). Raising `lifecycle.drain_timeout_s` above 120 lets `down.ps1` terminate the distro mid-drain (cap fixed at 210 s), and the SIGTERM drain and stop timeout stay at 120/150. Either cap the policy at 120 or make `down.ps1` and the unit (drop-in) use the effective value.
+5. **P1-10 NIT: unexplained app-deploy `changed`** (`scripts/lib/services.sh:49-55`). My first bootstrap after the fixer's unchanged 08:30 run reported `rsync to /opt/ossbot/app (1 items)` and restarted dockerfilter, gatekeeper, proxy and sandboxd, although no deploy-source file was newer. Only the count is logged, so the cause cannot be traced. Log the itemized lines to the provision log and ignore metadata-only differences (`--omit-dir-times` or a content checksum) so they don't restart services.
 
 </details>
 
 <details>
 <summary>Details</summary>
 
-### Service uids resolve names through the WSL resolver (P1-1, HIGH, confirmed)
+### systemd-resolved is a DNS channel past OSSBOT-OUT (P1-6, HIGH, confirmed)
 
-`src/ossbot/ctl/render.py:200,204` renders, for every service uid, `-m owner --uid-owner <u> -o lo -j ACCEPT` before the final REJECT. FEAT-003 established by live probe that WSL places its resolver `10.255.255.254/32` on `lo`. Traffic to it therefore leaves via `lo` and matches the ACCEPT. A reviewer probe (raw UDP query for `example.com` A, sent as each uid) got a 61-byte answer for all five accounts:
+The round-1 fix (`render.py:198-215`) renders `-p udp|tcp --dport 53 -j REJECT` for each service uid ahead of the `-o lo` ACCEPT. That covers sockets the uid opens itself. systemd-resolved is still `active`, its varlink socket is `srw-rw-rw- systemd-resolve` and its D-Bus API is open to any local user. A resolution request over either path is a unix-socket or bus message. resolved then sends the actual query upstream as uid `systemd-resolve`, which has no owner rule. Reviewer probe, run as each uid:
 
 ```
-ossrunner  udp53->10.255.255.254: ANSWER 61
-hermes     udp53->10.255.255.254: ANSWER 61
-gatekeeper udp53->10.255.255.254: ANSWER 61
-ossbox     udp53->10.255.255.254: ANSWER 61
-ossnobody  udp53->10.255.255.254: ANSWER 61
+ossbox     varlink:  {"addresses":[{"family":2,"address":[104,20,23,154]},...],"name":"example.com"}
+ossbox     resolvectl query rv-ossbox-16871.example.com: ... does not have any RR of the requested type
+ossbox     busctl ... ResolveHostname 'isit' 0 example.com 2 0  ->  a(iiay)st 2 0 2 4 172 66 147 243 ...
+(same for ossrunner, hermes, gatekeeper, ossnobody; getent via nss "files dns" gets nothing)
 ```
 
-Any process running as these uids can tunnel data out over recursive DNS. That includes Hermes in Phase 2 (LLM-driven, holds a Kiro key) and ossbox (holds the sandbox `KIRO_API_KEY`). This bypasses squid and the per-uid port matrix entirely. `tests/system/test_egress_per_uid.sh:15,35` only probes `1.1.1.1:53`, and doctor's "per-uid egress: only owned ports" check (`doctor.py:239`) has the same blind spot, so both report PASS. No service needs host-side name resolution: every HTTP client goes through the proxy by IP literal, and the proxy's own DNS is covered by `OSSBOT-IN`.
+The random-label query returning an upstream NODATA shows that attacker-chosen labels reach the internet. That is enough for DNS tunnelling to an authoritative server the attacker controls. The exposed uids are the same as in P1-1, including Hermes in Phase 2 (LLM-driven, holds a Kiro key) and ossbox (holds the sandbox `KIRO_API_KEY`). Sandbox containers are not affected: they get `--dns 127.0.0.1` on `--internal` networks and no `/run` mounts.
 
-Required fix: for each service uid, render `-d <NS>/32 -p udp --dport 53 -j REJECT` and the TCP equivalent ahead of the `-o lo` ACCEPT, for every nameserver from `/etc/resolv.conf` (and 127.0.0.53 if present). Alternatively, restrict the lo ACCEPT to `-d 127.0.0.0/8`. Then update `--check` normalization and the golden `iptables.rules`, and add resolver probes (UDP and TCP, the resolv.conf address) to `test_egress_per_uid.sh` and the doctor per-uid check. The resolver-change drift detection already exists and keeps the rule in sync.
+Nothing on this distro needs resolved. `/etc/resolv.conf -> /mnt/wsl/resolv.conf` names only `nameserver 10.255.255.254`, nsswitch is `hosts: files dns`, and root/ossadmin resolve directly. Masking it (`systemctl disable --now systemd-resolved` and `systemctl mask systemd-resolved`, printing changed/unchanged) removes both the varlink socket and the bus name. A restrictive D-Bus policy would not cover varlink, so masking is the simpler fix. The probes need the same coverage as P1-1: in `test_egress_per_uid.sh` and doctor's per-uid check, a varlink `ResolveHostname` and a D-Bus `ResolveHostname` per uid, both expected to fail. Doctor and the watchdog should also flag resolved being unmasked again, for example after an apt upgrade.
 
-### Kill invalidation only on the gatekeeper's own path (P1-2, MEDIUM, confirmed)
+### Kill invalidation depends on reconcile seeing the flag (P1-7, NIT, confirmed)
 
-§12.4 says "Kill invalidates `armed|confirmed` approvals". `ControlService.kill()` does this, but only Telegram `/kill` and `POST /v1/control/kill` reach it. The watchdog (`watchdog/tick.py:95`, soft kill on perm/firewall/anchor drift), `ossbot-kill` (`kill.ps1`, `ossctl kill`) and the boot gate write `/var/lib/ossbot/control/killed` directly. `ControlService.reconcile()` (`control.py:238`) then only sets `control_state` to killed and audits `control_reconciled`. It never calls `approvals.invalidate_armed_confirmed`.
+`reconcile()` (`control.py:314-319`) calls `invalidate_armed_confirmed` only while `flags.killed` is present, and housekeeping runs it every `HOUSEKEEPING_SECONDS = 10.0`. Take a soft kill written by root (`ossbot-kill`, `kill.ps1`, watchdog) followed within that tick by either resume path:
 
-After a watchdog soft kill the gatekeeper keeps running with the approval still `armed` and its 5-minute confirm token valid. If the operator resumes within the TTL, the Confirm tap passes `check_token`, `system_running()` and the binding recheck, and submits. A `confirmed` approval whose `consume()` hit the kill stays `confirmed` until its 72 h expiry instead of being invalidated. No current path re-submits it, but the stored state contradicts the invariant. Writes are still blocked while killed, because `checkpoint()` reads the flags, so this is MEDIUM rather than HIGH.
+- an offline `ossbot-resume`, which removes the flags and leaves a `resume.log` line;
+- `/resume` or `ossctl resume`, where `request_resume()` writes `resume-request` and the enforcer removes the flags.
 
-Required fix: in `reconcile()`, when a kill flag is observed that the DB has not yet seen (state not killed, or a newer flag `ts`), call `invalidate_armed_confirmed("killed", "flag")` in the same transaction and FYI the count. Add unit tests in `test_control_reconcile.py` for a root-written soft flag and a full flag at startup.
+Reconcile then sees no flag, and the armed approval and its 5-minute confirm token survive. Confirm still needs a human tap, and writes were blocked for the whole kill, so the impact is small. It does contradict the new DESIGN §13 bullet. Two cheap fixes close it: invalidate in `request_resume()` when a kill flag exists, and in `reconcile()` whenever `offline > 0`. The reconcile comment "nothing can be armed while the flag is present" is also inaccurate. `ApprovalService.approve()` has no running check; only the Telegram handler (`handlers.py` `_approve`) refuses.
 
-### CR-001 graceful lifecycle (P1-3, MEDIUM, required by the user)
+### Lifecycle edges (P1-8, P1-9, NIT, confirmed)
 
-The user filed `docs/plan/CR-001-lifecycle-up-down.md` (uncommitted, required) during this review. Nothing in Phase 1 implements it. Kill is the only stop path, and it is sticky, invalidates approvals and needs a resume. The Phase 1 share is the parts that touch code Phase 1 owns:
+`run_tick()` sets `down = lifecycle.state == "down"` regardless of scope (`tick.py:208-216,228`). It then skips `check_health` and `restart_failed`. That fits the distro scope, where `ossctl down` stops the gatekeeper. In the workers scope the gatekeeper keeps running, and the flag survives restarts until `up`. `/v1/control/down` accepts `scope: workers` today, and `test_lifecycle.sh` uses it. A gatekeeper that dies during a long workers-down is then neither paused nor restarted by the watchdog. systemd's `Restart=` still applies.
 
-- the up/draining/down lifecycle state in the gatekeeper control model, with kill overriding it;
-- drain semantics in sandboxd (no new jobs, wait up to the drain timeout, mark the rest interrupted);
-- `TimeoutStopSec` ≥ drain + 30 s on every unit, with stop ordering that keeps the gatekeeper and proxy last;
-- `scripts/up.ps1`, `down.ps1 [-Timeout] [-All]`, `status.ps1`, and `ossctl up|down|status`;
-- the M5 rule that an interrupted public write becomes `SUBMIT_FAILED (interrupted)`;
-- a crash-safety test that SIGKILLs services and a sandbox mid-job, then checks reconciliation and no duplicate writes;
-- monotonic-time / wall-clock-jump handling for sleep, and the fake-Bot-API long-poll reconnect test.
+`down.ps1` caps the in-distro step at `drain + 90` s, where `drain` falls back to a hard-coded 120 when `-Timeout` is absent (`down.ps1:35-36`). `ossctl down` meanwhile uses `policy.yaml lifecycle.drain_timeout_s`, which `LifecyclePolicy` allows up to 3600. With the policy at, say, 300, the Windows script kills `ossctl down` and terminates the distro during the drain. The SIGTERM drain (`OSSBOT_DRAIN_TIMEOUT_S=120`) and `TimeoutStopSec=150` in the units are also static. The CR-001 rule "TimeoutStopSec ≥ drain timeout + 30 s" then holds only for the default.
 
-Stage re-queue on `up` needs the runner (FEAT-006), the Telegram commands need the FEAT-005 command UX, and the docs belong to FEAT-008. The fixer should implement the Phase 1 parts, commit the CR file with them, update DESIGN.md (§7.5, §7.6, §13) and record the Phase 2 remainder in PLAN.md under FEAT-005/006/008.
+### Provision idempotence observation (P1-10, NIT)
 
-### Minor
+The fixer's last full bootstrap (provision log `20261018T013049Z`, 08:30:53) was all `unchanged`. My first run (`014623Z`) reported `app-deploy: changed` (1 rsync item, then `uv sync`) and restarted four units through `enable-start`. My next run (`014736Z`) was all `unchanged`. No file under `src prompts sandbox/proxy pyproject.toml uv.lock docs/DESIGN.md` was newer than 08:30:40. A dry-run of the same rsync stayed empty after the sandbox pytest, all ten system scripts, the DEV suite, `doctor --quick` and `ossctl status`, so I could not reproduce the cause. Logging the itemized rsync output would make such a change explainable. The restart it triggers also cuts any running sandbox job, which now drains for up to 120 s.
 
-`ApprovalService.set_text_override` (`approvals.py:273`) does not run `policy.check_text`. No Phase 1 code calls it. FEAT-005's Edit title/body must run the check before storing, otherwise an edited body could skip the confidentiality floor and the disclosure check (P1-4).
-
-`keyboards.CALLBACK_RE` (`keyboards.py:10`) and `ids.TOKEN_RE` combine `$` with `re.match`, which accepts one trailing `\n` (P1-5). Lookup fails afterwards, so the path fails closed.
-
-### Verification evidence (re-run by the reviewer, 2026-10-18)
+### Verification evidence (re-run by the reviewer, 2026-10-18 08:40-08:58 +07)
 
 | Bar item | Result |
 |---|---|
-| `DEV pytest -m "unit or telegram"` | 1494 passed |
-| `DEV ruff check` / `ruff format --check` / `mypy` / `lint-imports` | clean / 167 formatted / 100 files no issues / 4 contracts kept |
-| `ROOTDEV pytest -m sandbox` | 8 passed, 2 skipped (`needs_key`, plan-sanctioned) |
-| `ROOT bash tests/system/*.sh` (8 scripts) | all exit 0, 143 PASS, 0 FAIL |
-| `tests\system\test_kill.ps1` | all checks passed (hung kill 36.5 s, resume order, -Hard + resume.ps1) |
-| `wsl --terminate ossbot; scripts\test-isolation.ps1` | PASS 13/13 |
-| second `scripts\bootstrap.ps1` | every step `unchanged`; kiro/hermes `skipped (phase 2)`; Hyper-V WARN (not elevated) |
-| `systemctl is-active` (5 required + boot-gate, firewall x2) | all active |
+| `DEV pytest -m "unit or telegram"` | 1530 passed, 11 deselected (run twice) |
+| `DEV ruff check` / `ruff format --check` / `mypy` / `lint-imports` | clean / 176 formatted / 101 files no issues / 4 contracts kept |
+| `ROOTDEV pytest -m sandbox` | 9 passed, 2 skipped (`needs_key` live Kiro probes, Phase 2), run twice |
+| `ROOT bash tests/system/*.sh` (10 test scripts + `lib.sh`) | all exit 0, 199 PASS, 0 FAIL (run twice) |
+| `wsl --terminate ossbot` + `scripts\test-isolation.ps1` | PASS 13/13 |
+| `scripts\bootstrap.ps1` | first run: `app-deploy`/`enable-start` changed (P1-10); next run: every step `unchanged` (kiro/hermes `skipped (phase 2)`, Hyper-V WARN not elevated) |
+| `systemctl is-active` gatekeeper, dockerfilter, proxy, sandboxd, watchdog.timer (+ boot-gate, firewall x2) | all active |
 | `docker version` / `docker compose version` | 29.9.1 / v5.6.0 |
-| `ossbot-firewall --check` / `ossctl audit verify` | 0 / ok (126 rows, 39 anchors) |
-| `ossctl doctor` and `scripts\ossctl.ps1 doctor` | PASS 23, AWAITING SECRET 7, SKIP 3 (Phase 2), exit 0; Windows part all PASS |
-| `gitleaks git --redact` | no leaks (23 commits) |
-| personal values outside `docs/` (`git grep`) | none (only placeholder/test IdC URLs) |
-| `git status --porcelain` | only `?? docs/plan/CR-001-lifecycle-up-down.md` (the user's CR, to be committed by the implementing step) |
-| pushes | none by this step. `origin/main` reflog shows `update by push` entries including 1e79583 at 07:13; DESIGN §6 says the owner pushes `origin` himself, and this review cannot attribute them |
+| `ossbot-firewall --check` / `ossctl audit verify` | 0 / ok (214 rows, 56 anchors) |
+| `ossctl doctor` (root) | PASS 28, WARN 2, SKIP 3, FAIL 0, exit 0. Secrets now exist (NOTE-live-secrets.md), so the live GitHub/Telegram checks PASS; the WARNs are the runner-owned catalog and the not-yet-run safety probes (Kiro jobs stay refused by the sandboxd probe gate) |
+| `gitleaks git --redact` | no leaks (26 commits) |
+| personal values outside `docs/` | none: `git grep` for the owner's name/login/email/IdC host and every value in the gitignored `config/profile.yaml` found 0 hits; only placeholder/test IdC URLs |
+| `git status --porcelain` | empty before this review's commit |
+| pushes | none by this step. `origin/main` = 3ccd9bc via `update by push` at 08:37:42, the same ~20 s-after-commit pattern as every commit since the design phase. No hooks or push config in the repo; the user pushes `origin` himself (message 10, PLAN "After the build"), so these pushes are not attributable to the build steps |
 
-Bar (a) fails on P1-1 (egress fail-closed) and P1-2 (kill invalidation). Bars (b), (c) and (e) pass. Bar (d) passes apart from the user's own uncommitted CR file.
+Bar (a) fails on P1-6 (egress allowlist fail-closed). Bars (b), (d) and (e) pass. Bar (c) passes on the run after the first; P1-10 covers the first run's change.
 
 </details>
 
 <details>
 <summary>File map</summary>
 
-- `src/ossbot/gatekeeper/{approvals,state_machine,control,submit,policy,ratelimit,audit,anchors,packaging,gitops,derive,live_checks,reconcile}.py`: safety core, git TCB, submission
-- `src/ossbot/gatekeeper/telegram/**`: auth, two-tap handlers, minimal cards, safety commands
-- `src/ossbot/dockerfilter/{main,rules}.py`: root Docker API filter (§10.8)
-- `src/ossbot/sandboxd/**`, `src/ossbot/sandbox_tools/**`, `sandbox/**`: job templates, split coder, entrypoints, images, squid template
-- `src/ossbot/ctl/{render,doctor,cli}.py`: squid/iptables renderers (P1-1), doctor, ossctl
-- `src/ossbot/watchdog/**`: 30 s invariants, anchors, kill re-enforcement (P1-2 source of out-of-band kills)
-- `scripts/**`, `systemd/**`, `config/**`: bootstrap/provision, kill/resume/boot gate, units, pins
-- `tests/**`: unit, telegram, sandbox, system suites
+- `src/ossbot/ctl/render.py`, `tests/unit/ctl/golden/iptables.rules`: per-uid port-53 REJECT/DROP ahead of the lo ACCEPT (P1-1 fix; P1-6 is outside its reach)
+- `src/ossbot/ctl/doctor.py`, `tests/system/test_egress_per_uid.sh`: resolver probes per uid (extend for P1-6)
+- `src/ossbot/gatekeeper/control.py`, `api/control.py`: reconcile kill invalidation (P1-7), lifecycle drain/down/up/status
+- `src/ossbot/common/control_flags.py`, `paths.py`, `schemas.py`, `config.py`: lifecycle flag, requests, `LifecyclePolicy` (P1-9)
+- `src/ossbot/sandboxd/{jobs,main,app}.py`: admission refusal while not up, drain, start-up recovery, SIGTERM drain
+- `src/ossbot/gatekeeper/telegram/{bot,handlers,keyboards}.py`, `commands/builtin.py`, `pollstats.py`: background connect with backoff, poll tracking, Approve/Confirm refusal while not up, exact callback regex
+- `src/ossbot/watchdog/tick.py`: sleep detection, lifecycle `down` exemption (P1-8)
+- `src/ossbot/ctl/cli.py`, `scripts/{up,down,status}.ps1`, `scripts/bin/ossbot-boot-gate`: `ossctl up|down|status`, Windows entry points (P1-9), shutdown classification
+- `systemd/*.service`: `TimeoutStopSec=150`, proxy `ExecStop` 2 s
+- `scripts/lib/services.sh`: app-deploy rsync (P1-10)
+- `tests/**`: lifecycle, drain, crash safety, polling, reconcile, systemd-unit tests
+- `docs/{DESIGN,PLAN,VERIFICATION}.md`, `docs/plan/{CR-001-lifecycle-up-down,NOTE-live-secrets}.md`, ADR-0005 addendum
 
-Full diff: `git -C d:\Work\autonomous-oss-contributor diff 7624a0caa7667aa02a4bccce76f820c5be1fc6f6..HEAD`
+Full diff: `git -C d:\Work\autonomous-oss-contributor diff 7624a0caa7667aa02a4bccce76f820c5be1fc6f6..HEAD` (round-2 delta: `4f4e2a3..HEAD`)
 
 </details>
