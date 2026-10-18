@@ -111,7 +111,26 @@ def test_forced_then_seen_is_not_announced(ctx: AppContext) -> None:
     _upsert(ctx, "m-one")
     ctx.models.set_model("coder", "pre-release", None, True, ACTOR)
     _upsert(ctx, "m-one", "pre-release")
-    assert _texts(ctx) == ["Kiro catalog loaded: 1 models"]
+    assert [t for t in _texts(ctx) if not t.startswith("🧠")] == ["Kiro catalog loaded: 1 models"]
+
+
+@pytest.mark.parametrize("role", ["coder", "test", "default"])
+def test_every_switch_is_audited_and_announced_once(ctx: AppContext, role: str) -> None:
+    _upsert(ctx, "m-one", "m-two")
+    before = parse_models(ctx.models.path.read_bytes())
+    old = before.default if role == "default" else getattr(before.roles, role)
+    ctx.models.set_model(role, "m-two", "xhigh", False, ACTOR)
+    fyis = [t for t in _texts(ctx) if t.startswith("🧠 Model:")]
+    assert fyis == [f"🧠 Model: {role} {old.model} ({old.effort}) → m-two (xhigh) (by {ACTOR})"]
+    assert db.one(ctx.conn, "SELECT 1 FROM audit_events WHERE event = 'model_set'") is not None
+    ctx.models.set_model(role, "m-two", "xhigh", False, ACTOR)  # no change: audited, nothing to announce
+    assert len([t for t in _texts(ctx) if t.startswith("🧠 Model:")]) == 1
+
+
+def test_forced_switch_is_announced_as_forced(ctx: AppContext) -> None:
+    ctx.models.set_model("test", "pre-release", None, True, ACTOR)
+    fyis = [t for t in _texts(ctx) if t.startswith("🧠 Model:")]
+    assert len(fyis) == 1 and "→ pre-release" in fyis[0] and fyis[0].endswith("forced, not in the catalog")
 
 
 def test_notify_disabled_marks_without_sending(ctx: AppContext) -> None:

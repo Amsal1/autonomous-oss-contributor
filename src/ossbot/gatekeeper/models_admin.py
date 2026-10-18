@@ -3,7 +3,9 @@
 The gatekeeper is the only writer of ``config/models.yaml``: ruamel round-trip keeps comments,
 the new content is validated before an atomic ``os.replace`` of a same-directory temp file.
 New catalog ids are announced once each (``model_catalog.notified``); the first fill of an empty
-catalog sends one summary instead (§16.3; the button card is item 47).
+catalog sends one summary instead (§16.3; the button card is item 47). Every switch that changes
+the file (any role, test roles included, forced or not) is audited and announced by one owner FYI
+in the same transaction.
 """
 
 from __future__ import annotations
@@ -140,11 +142,13 @@ class ModelsAdmin:
             raise ModelSetError(f"unknown role {role}")
         if not re.fullmatch(MODEL_ID_RE, model):
             raise ModelSetError("model id does not match the allowed pattern")
+        forced = False  # a forced, non-catalog id (references need no catalog entry)
         if model == "default" or model in ROLE_NAMES:
             if role == "default":
                 raise ModelSetError("the default model must be a model id, not a reference")
             # 'default' and role names are references (inherit); cycles are refused by parse_models
         elif force:
+            forced = True
             with db.transaction(self.conn):
                 now = to_iso(self.clock.now())
                 self.conn.execute(
@@ -164,6 +168,7 @@ class ModelsAdmin:
         old_text = self.path.read_text(encoding="utf-8")
         data = load_roundtrip(old_text)
         node = data["default"] if role == "default" else data["roles"][role]
+        old_model, old_effort = node.get("model"), node.get("effort")
         node["model"] = model
         if effort is not None:
             node["effort"] = effort
@@ -184,9 +189,19 @@ class ModelsAdmin:
         diff = "".join(
             difflib.unified_diff(old_text.splitlines(True), new_text.splitlines(True), "a/models.yaml", "b/models.yaml")
         )
-        with db.transaction(self.conn):
+        with db.transaction(self.conn):  # audited and announced together (§16: audited, FYI, catalog-validated)
             self.audit.append(actor, "model_set", {"role": role, "model": model, "effort": effort, "force": force})
+            if diff:
+                self.notify(_switch_fyi(role, (old_model, old_effort), (model, effort or old_effort), actor, forced))
         return diff
+
+
+def _switch_fyi(role: str, old: tuple[Any, Any], new: tuple[Any, Any], actor: str, force: bool) -> str:
+    def show(model: Any, effort: Any) -> str:
+        return f"{model} ({effort})" if effort else str(model)
+
+    forced = " · forced, not in the catalog" if force else ""
+    return f"🧠 Model: {role} {show(*old)} → {show(*new)} (by {actor}){forced}"
 
 
 def _input_types(raw: str | None) -> list[str] | None:
