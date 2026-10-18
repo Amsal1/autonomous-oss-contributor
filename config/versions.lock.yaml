@@ -62,9 +62,9 @@ images:
   # /etc/ossbot/versions.lock.yaml is what the Docker filter and sandboxd read. 'pending' = not
   # built yet: the filter then allows no image and sandboxd refuses every job (fail closed).
   sandbox_full:
-    digest: "sha256:cb1c81c326ef2d92270d97406b572e664d428b8c30a7a2c12eaaa9d4ddb924f4"
+    digest: "sha256:d78a51a347ac545de0f2447423a0b81a1dc19343fa485b7e113d8d6ff208fd90"
   sandbox_llm:
-    digest: "sha256:3d432929ede50baa7f4d848a12f6f52da01005ba8a77325e71e0a9c4ec9b12fe"
+    digest: "sha256:afef235100751370bd65aab101a43de5b7e166c5b262d29c45e42bf32be5be73"
     kiro_cli_version: "2.32.0"
     agent_configs_sha256: "9c95bb5084c65f8af851f89225d0d0894e1c1597e575c84f7c35bd91c71bb786"
     settings_sha256: "d5704ef956978ee321cf864f22e6406bd945086192c7e39a2f36e16c8a46e5a2"
