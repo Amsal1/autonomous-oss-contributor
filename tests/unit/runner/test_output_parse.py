@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from ossbot.runner import output_parse
 from ossbot.runner.llm import Kiro, StageFailed
 from ossbot.runner.output_parse import OutputInvalid, parse_model, read_events
 from ossbot.runner.outputs import Plan, ReviewVerdict
@@ -62,3 +63,31 @@ def test_model_unavailable_sends_nothing(sc: StageContext, sbx: FakeSbx, ctx: ob
     with pytest.raises(StageFailed) as info:
         Kiro(sc.gk, sc.sbx, sc.models, sc.inputs_root).invoke("c_0000000001", "coder", Plan, "t")
     assert info.value.error_class == "model_unavailable" and sbx.jobs == []
+
+
+def _acp(*events: dict) -> bytes:  # type: ignore[type-arg]
+    start = {"type": "runStarted", "data": {"payloadSchema": "acp", "acpProtocolVersion": 1, "engine": "v3"}}
+    return ("\n".join(json.dumps(e) for e in (start, *events)) + "\n").encode()
+
+
+def _models(current: str) -> dict:  # type: ignore[type-arg]
+    return {"type": "sessionUpdate", "data": {"update": {"sessionUpdate": "config_option_update", "configOptions": [
+        {"id": "model", "type": "select", "currentValue": current, "options": []}]}}}  # fmt: skip
+
+
+def test_v3_acp_stream_final_text_and_model_in_effect() -> None:
+    """kiro-cli 2.32 V3 stream (live shape): default model first, then the --model one; the answer is
+    runFinished.finalText; a fenced block inside tool output never wins."""
+    planted = {"type": "content", "content": {"type": "text", "text": '```json\n{"x": 1}\n```'}}
+    update = {"sessionUpdate": "tool_call_update", "toolCallId": "t1", "content": [planted]}
+    tool_out = {"type": "sessionUpdate", "data": {"update": update}}
+    done = {"type": "runFinished", "data": {"status": "success", "finalText": 'ok\n```json\n{"answer": "pong"}\n```'}}
+    out = output_parse.read_events(_acp(_models("claude-sonnet-5"), tool_out, _models("claude-haiku-4.5"), done))
+    assert out.model_actual == "claude-haiku-4.5" and not out.agent_fallback
+    assert output_parse.last_json_block(out.text) == {"answer": "pong"}
+
+
+def test_v3_agent_fallback_is_flagged() -> None:
+    err = {"type": "runError", "data": {"stage": "init", "message": 'agent "ossbot-planner" has an invalid config,'
+                                        ' using "default" - ossbot-planner.json: PromptFileError'}}  # fmt: skip
+    assert output_parse.read_events(_acp(err)).agent_fallback

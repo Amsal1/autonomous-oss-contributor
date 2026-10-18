@@ -2,10 +2,11 @@
 block -> a pydantic model (``extra=forbid``). LLM output is untrusted data: it is only ever validated,
 stored and rendered escaped, never executed.
 
-The exact V3 stream-json event shape is pending the live smoke (§23 item 5), so text extraction is
-tolerant: it walks every event for assistant text (``text``/``content``/``delta``), records the
-model the CLI reports (``model``/``modelId``) and treats a "could not set model" warning as
-``model_mismatch``. Non-JSON lines count as plain text.
+The V3 ACP stream (kiro-cli 2.32, verified live in FEAT-006 item 32) is read exactly (``_read_acp``:
+final text, model in effect, agent fallback). Any other stream keeps the tolerant reader: it walks
+every event for assistant text (``text``/``content``/``delta``), records the model the CLI reports
+(``model``/``modelId``) and treats a "could not set model" warning as ``model_mismatch``. Non-JSON
+lines count as plain text.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ class KiroOutput:
     model_mismatch: bool = False
     tool_calls: int = 0
     warnings: list[str] = field(default_factory=list)
+    agent_fallback: bool = False  # the CLI ignored our role agent and ran its default agent
 
 
 def _texts(node: Any, out: list[str], depth: int = 0) -> None:
@@ -75,10 +77,73 @@ def _find(node: Any, keys: tuple[str, ...], depth: int = 0) -> str | None:
     return None
 
 
+AGENT_FALLBACK_RE = re.compile(r'agent \\?"ossbot-[a-z]+\\?"[^\n]{0,200}using \\?"default\\?"')
+
+
+def _is_acp(raw: str) -> bool:
+    for line in raw.splitlines()[:5]:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "runStarted":
+            data = event.get("data") or {}
+            return isinstance(data, dict) and data.get("payloadSchema") == "acp"
+    return False
+
+
+def _read_acp(raw: str, stderr: str) -> KiroOutput:
+    """kiro-cli 2.32 ``chat --v3 --output-format stream-json`` (recorded live, FEAT-006 item 32):
+    the answer is ``runFinished.data.finalText`` (agent message chunks as a fallback), the model in
+    effect is the last ``configOptions[id=model].currentValue``, and a ``runError`` saying our agent
+    was replaced by ``default`` means the role ran without its tool restrictions: ``agent_fallback``."""
+    out = KiroOutput(text="")
+    chunks: list[str] = []
+    final: str | None = None
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        kind, data = str(event.get("type", "")), event.get("data")
+        data = data if isinstance(data, dict) else {}
+        if kind == "runFinished" and isinstance(data.get("finalText"), str):
+            final = data["finalText"]
+        elif kind == "runError":
+            message = str(data.get("message", ""))[:500]
+            out.warnings.append(message)
+            if AGENT_FALLBACK_RE.search(message):
+                out.agent_fallback = True
+            if MISMATCH_RE.search(message):
+                out.model_mismatch = True
+        update = data.get("update") if kind == "sessionUpdate" else None
+        if not isinstance(update, dict):
+            continue
+        su = update.get("sessionUpdate")
+        if su == "tool_call":
+            out.tool_calls += 1
+        elif su == "agent_message_chunk":
+            content = update.get("content")
+            if isinstance(content, dict) and isinstance(content.get("text"), str):
+                chunks.append(content["text"])
+        for option in update.get("configOptions") or []:
+            if isinstance(option, dict) and option.get("id") == "model" and isinstance(option.get("currentValue"), str):
+                out.model_actual = option["currentValue"][:128]
+    out.text = (final if final is not None else "".join(chunks))[:MAX_TEXT]
+    if MISMATCH_RE.search(stderr):
+        out.model_mismatch = True
+    return out
+
+
 def read_events(raw: bytes, stderr: bytes = b"") -> KiroOutput:
+    text = raw.decode("utf-8", "replace")
+    if _is_acp(text):
+        return _read_acp(text, stderr.decode("utf-8", "replace"))
     parts: list[str] = []
     out = KiroOutput(text="")
-    for raw_line in raw.decode("utf-8", "replace").splitlines():
+    for raw_line in text.splitlines():
         line = raw_line.strip()
         if not line:
             continue

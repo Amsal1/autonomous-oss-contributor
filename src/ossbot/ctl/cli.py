@@ -53,6 +53,8 @@ contribution_app = typer.Typer(no_args_is_help=True, help="contributions (operat
 app.add_typer(contribution_app, name="contribution")
 targets_app = typer.Typer(no_args_is_help=True, help="targets (config/targets.yaml)")
 app.add_typer(targets_app, name="targets")
+kiro_app = typer.Typer(no_args_is_help=True, help="Kiro CLI checks (sandbox key)")
+app.add_typer(kiro_app, name="kiro")
 
 BIN = Path("/opt/ossbot/bin")
 SANDBOXD_SOCK = Path("/run/ossbot/sandboxd.sock")
@@ -520,6 +522,76 @@ def contribution_import(
     if code != 201:
         _fail(f"import refused ({code}): {doc}")
     _show(doc)
+
+
+SMOKE_CID = "c_KIROSMOKE0"
+SMOKE_PROMPT = (
+    "This is an ossbot connectivity check. Do not use any tool. Reply with exactly this fenced block and"
+    ' nothing else:\n```json\n{"answer": "pong"}\n```\n'
+)
+
+
+@kiro_app.command("smoke")
+def kiro_smoke(timeout: Annotated[int, typer.Option(help="job timeout in s")] = 300) -> None:
+    """Headless ``chat --v3`` round-trip with the sandbox key (root): one sandboxd job, role
+    summarizer, research profile, a canned prompt; the answer is parsed like any stage output."""
+    _require_root("kiro smoke")
+    import secrets as pysecrets  # noqa: PLC0415
+
+    from pydantic import BaseModel, ConfigDict  # noqa: PLC0415
+
+    from ossbot.common.models import Catalog, ModelsFile, ModelUnavailable  # noqa: PLC0415
+    from ossbot.runner import output_parse  # noqa: PLC0415
+
+    class Pong(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        answer: str
+
+    paths = Paths.default()
+    code, rows = api("GET", "/v1/models/catalog")
+    if code != 200:
+        _fail(f"catalog unavailable ({code})")
+    try:
+        model = ModelsFile(paths.config_dir / "models.yaml").resolve("summarizer", Catalog.from_rows(rows))
+    except ModelUnavailable as exc:
+        _fail(f"model_unavailable: {exc}")
+    run_id = f"smoke-{pysecrets.token_hex(6)}"
+    inputs = paths.srv / "runner" / "inputs" / "smoke" / run_id  # sandboxd reads runner/inputs (group osssbx)
+    inputs.mkdir(parents=True, mode=0o750)
+    prompt = inputs / "summarizer-task.md"
+    prompt.write_text(SMOKE_PROMPT, encoding="utf-8")
+    for p in (inputs.parent, inputs, prompt):
+        os.chown(p, -1, (inputs.parent.parent.stat().st_gid))
+    prompt.chmod(0o640)
+    spec = {"run_id": run_id, "cid": SMOKE_CID, "profile": "research", "entrypoint": "kiro", "repo_mode": "none",
+            "args": {"role": "summarizer", "prompt_file": prompt.name, "model": model.model, "effort": model.effort},
+            "inputs": {prompt.name: str(prompt)}, "timeout_s": timeout}  # fmt: skip
+    started = time.monotonic()
+    try:
+        job = _sandboxd("POST", "/v1/jobs", spec, timeout=30.0)
+        while job.get("state") not in {"succeeded", "failed", "cancelled"}:
+            if time.monotonic() - started > timeout + 60:
+                _fail(f"smoke job {run_id} did not finish")
+            time.sleep(2.0)
+            job = _sandboxd("GET", f"/v1/jobs/{run_id}")
+    except httpx.HTTPError as exc:
+        _fail(f"sandboxd refused the smoke job: {exc}")
+    duration = round(time.monotonic() - started, 1)
+    report: dict[str, Any] = {"run_id": run_id, "model": model.model, "effort": model.effort,
+                              "state": job.get("state"), "error_class": job.get("error_class"),
+                              "duration_s": duration}  # fmt: skip
+    if job.get("state") == "succeeded" and job.get("artifact_dir"):
+        art = Path(str(job["artifact_dir"]))
+        stderr = art / "summarizer.stderr"
+        out = output_parse.read_events((art / "summarizer.events.jsonl").read_bytes(),
+                                       stderr.read_bytes() if stderr.is_file() else b"")  # fmt: skip
+        report["model_actual"] = out.model_actual
+        try:
+            report["answer"] = output_parse.parse_model(out.text, Pong).answer
+        except output_parse.OutputInvalid as exc:
+            report["answer_error"] = exc.reason[:200]
+    _show(report)
+    raise typer.Exit(0 if report.get("answer") == "pong" else 1)
 
 
 @targets_app.command("verify")

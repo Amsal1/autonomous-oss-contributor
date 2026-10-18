@@ -18,6 +18,7 @@ import subprocess
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -421,14 +422,66 @@ def check_kiro_cli(quick: bool) -> list[Result]:
     return results
 
 
-def check_sandbox_kiro() -> list[Result]:
-    """M11 order: sandbox auth + catalog (list_models), then the safety-probe status."""
+def _catalog_rows() -> list[dict[str, Any]] | None:
+    try:
+        with uds_client(Paths.default().gatekeeper_sock, timeout=httpx.Timeout(10.0)) as client:
+            resp = client.get("/v1/models/catalog")
+    except (httpx.HTTPError, OSError):
+        return None
+    if resp.status_code != 200:
+        return None
+    rows = resp.json()
+    return rows if isinstance(rows, list) else None
+
+
+def _run_probes(rows: list[dict[str, Any]]) -> Result:
+    """M11 step 3 from doctor: the five probes with the models resolve() picks for planner and coder."""
+    from ossbot.common.models import Catalog, ModelsFile, ModelUnavailable  # noqa: PLC0415
+
+    try:
+        models_file = ModelsFile(Paths.default().config_dir / "models.yaml")
+        cat = Catalog.from_rows(rows)
+        models = {role: models_file.resolve(role, cat).model for role in ("planner", "coder")}
+    except (ModelUnavailable, OSError, ValueError) as exc:
+        return Result(FAIL, "probe re-run", f"model_unavailable: {exc}", "ossctl model set <role> <catalog id>")
+    try:
+        with uds_client(SANDBOXD_SOCK, timeout=httpx.Timeout(5400.0, connect=5.0)) as client:
+            resp = client.post("/v1/probes/run", json={"models": models})
+    except (httpx.HTTPError, OSError) as exc:
+        return Result(FAIL, "probe re-run", f"sandboxd: {type(exc).__name__}", "systemctl status ossbot-sandboxd")
+    if resp.status_code != 200:
+        return Result(FAIL, "probe re-run", f"sandboxd answered {resp.status_code}")
+    results = resp.json().get("results", {})
+    failed = sorted(p for p, passed in results.items() if passed is not True)  # ProbeRunner: {probe: bool}
+    if not results:
+        failed = ["(no results)"]
+    detail = f"planner={models['planner']} coder={models['coder']}"
+    if failed:
+        return Result(FAIL, "probe re-run", f"{detail}; failed: {', '.join(failed)}", "journalctl -u ossbot-sandboxd")
+    return Result(PASS, "probe re-run", f"{detail}; all five passed")
+
+
+def check_sandbox_kiro(probes: bool = False) -> list[Result]:
+    """M11 order: sandbox auth + catalog (the runner's list_models job fills it), then with
+    ``--probes`` the probe run for the resolved models, then the safety-probe status."""
     missing = _secret("sandboxd.env", "KIRO_API_KEY", "sandbox Kiro auth + catalog")
-    out = (
-        [missing]
-        if missing
-        else [Result(WARN, "sandbox Kiro auth + catalog", "key present; catalog runs in the runner (FEAT-006)")]
-    )
+    rows = None if missing else _catalog_rows()
+    if missing:
+        out = [missing]
+    elif rows is None:
+        out = [Result(FAIL, "sandbox Kiro auth + catalog", "gatekeeper catalog unreadable", "ossctl status")]
+    elif not [r for r in rows if not r.get("forced")]:
+        out = [Result(FAIL, "sandbox Kiro auth + catalog", "catalog_empty: the runner's list_models has not filled it",
+                      "journalctl -u ossbot-runner; ossctl models refresh")]  # fmt: skip
+    else:
+        out = [Result(PASS, "sandbox Kiro auth + catalog", f"{len(rows)} models (list_models with the sandbox key)")]
+    if probes:
+        if missing:
+            out.append(Result(AWAITING, "probe re-run", f"{AWAITING}: KIRO_API_KEY"))
+        elif out[0].status != PASS or rows is None:
+            out.append(Result(FAIL, "probe re-run", "not run: no catalog yet (M11 order)"))
+        else:
+            out.append(_run_probes(rows))
     status: dict[str, object] = {}
     try:
         with uds_client(SANDBOXD_SOCK, timeout=httpx.Timeout(10.0)) as client:
@@ -640,7 +693,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     ]  # fmt: skip
     if not quick:
         steps += [check_uid_probes, check_proxy_denies]
-    steps += [check_images, lambda: check_kiro_cli(quick), check_sandbox_kiro, check_hermes]
+    steps += [check_images, lambda: check_kiro_cli(quick), lambda: check_sandbox_kiro(probes), check_hermes]
     if not quick:
         steps.append(check_proxy_dns)
     steps += [
@@ -649,8 +702,6 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
         lambda: check_telegram(quick),
         check_identity_snapshot, check_audit, check_disk, check_lock_drift,
     ]  # fmt: skip
-    if probes:
-        steps.insert(steps.index(check_hermes), lambda: Result(AWAITING, "probe re-run", f"{AWAITING}: KIRO_API_KEY"))
     results: list[Result] = []
     for step in steps:
         try:

@@ -97,7 +97,10 @@ class Kiro:
         events = (artifact / f"{role}.events.jsonl").read_bytes() if artifact else b""
         stderr_path = artifact / f"{role}.stderr" if artifact else None
         stderr = stderr_path.read_bytes() if stderr_path is not None and stderr_path.is_file() else b""
-        return output_parse.read_events(events, stderr), run_id, artifact
+        output = output_parse.read_events(events, stderr)
+        if output.agent_fallback:  # the role ran without its agent (tools, paths): never use its answer
+            raise StageFailed("agent_config_rejected", f"{role} job {run_id}")
+        return output, run_id, artifact
 
     def invoke[T: BaseModel](
         self,

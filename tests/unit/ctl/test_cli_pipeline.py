@@ -71,3 +71,33 @@ def test_targets_verify_rows() -> None:
     expected = [("langfuse/langfuse", "PASS"), ("old/thing", "WARN"), ("gone/archived", "FAIL"), ("no/such", "FAIL")]
     assert [(r["repo"], r["status"]) for r in rows] == expected
     assert rows[1]["detail"].startswith("no push for")
+
+
+RERUN_CASES = [({"symlink": True, "settings": True}, "PASS"), ({"symlink": True, "settings": False}, "FAIL"),
+               ({}, "FAIL")]  # fmt: skip
+
+
+@pytest.mark.parametrize(("results", "status"), RERUN_CASES)
+def test_doctor_probe_rerun_reads_the_runner_shape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, results: dict[str, bool], status: str
+) -> None:
+    """``POST /v1/probes/run`` answers ``{"results": {probe: bool}}`` (ProbeRunner.run_all)."""
+    import httpx
+
+    from ossbot.common.paths import Paths
+    from ossbot.ctl import doctor
+    from tests.conftest import make_repo
+
+    paths = Paths.under(tmp_path, repo=make_repo(tmp_path))
+    monkeypatch.setattr(doctor.Paths, "default", staticmethod(lambda: paths))
+    sent: list[Any] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json={"results": results})
+
+    monkeypatch.setattr(doctor, "uds_client", lambda sock, timeout: httpx.Client(
+        transport=httpx.MockTransport(handler), base_url="http://sandboxd"))  # fmt: skip
+    got = doctor._run_probes([{"model_id": m, "forced": False} for m in ("claude-opus-5.5", "claude-sonnet-5")])
+    assert got.status == status
+    assert set(sent[0]["models"]) == {"planner", "coder"}
