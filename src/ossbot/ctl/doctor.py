@@ -289,6 +289,17 @@ def check_resolved() -> Result:
     )  # fmt: skip
 
 
+def check_io_uring() -> Result:
+    """P1-14: io_uring off for every process (also part of ``ossbot-firewall --check``)."""
+    from ossbot.ctl.render import io_uring_problems  # noqa: PLC0415
+
+    problems = [p.removeprefix("firewall_drift:io_uring ") for p in io_uring_problems()]
+    return Result(
+        PASS if not problems else FAIL, "io_uring disabled", "; ".join(problems) or "kernel.io_uring_disabled = 2",
+        "provision step firewall (/etc/sysctl.d/60-ossbot.conf)",
+    )  # fmt: skip
+
+
 def dns_probe_targets() -> list[str]:
     """Every resolv.conf nameserver plus the systemd-resolved stub address (P1-1)."""
     from ossbot.ctl.render import RenderError, nameservers  # noqa: PLC0415
@@ -557,7 +568,7 @@ def check_lock_drift() -> Result:
 def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps: list[Callable[[], Result | Iterable[Result]]] = [
         check_mounts, check_default_user, check_users, check_perms, check_docker,
-        filter_deny_probe, check_firewall, check_resolved,
+        filter_deny_probe, check_firewall, check_resolved, check_io_uring,
     ]  # fmt: skip
     if not quick:
         steps += [check_uid_probes, check_proxy_denies]

@@ -32,8 +32,26 @@ mask_resolved() {
   fi
 }
 
+# Phase 1 review P1-14 (ADR-0005 addendum): IORING_OP_SOCKET creates sockets without socket(2), so
+# RestrictAddressFamilies (a seccomp filter on socket()) never sees AF_VSOCK, whose Hyper-V sockets
+# reach the Windows host past every IP layer. io_uring is refused to every process (2 = root too);
+# nothing in the stack uses it. systemd-sysctl applies the file at boot; 'ossbot-firewall --check'
+# fails with firewall_drift:io_uring while the value is not 2. The non-root units also filter the
+# io_uring syscalls themselves.
+disable_io_uring() {
+  ensure_file /etc/sysctl.d/60-ossbot.conf root root 0644 <<'EOF'
+# Managed by ossbot scripts/lib/firewall.sh (Phase 1 review P1-14). Do not edit.
+kernel.io_uring_disabled = 2
+EOF
+  if [[ $(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null) != 2 ]]; then
+    sysctl -q -w kernel.io_uring_disabled=2 || die "sysctl kernel.io_uring_disabled=2 failed (kernel 6.6+ needed)"
+    mark_changed "kernel.io_uring_disabled = 2"
+  fi
+}
+
 step_firewall() {
   mask_resolved
+  disable_io_uring
   # The renderer lives in the app venv (step app-deploy); ossbot-firewall is the thin root wrapper.
   ensure_file /opt/ossbot/bin/ossbot-firewall root root 0755 <"$OSSBOT_REPO/scripts/bin/ossbot-firewall"
   install_unit ossbot-firewall.service

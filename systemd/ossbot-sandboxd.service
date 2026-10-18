@@ -36,6 +36,10 @@ SystemCallArchitectures=native
 # P1-13: no AF_VSOCK (Hyper-V sockets to the Windows host: WSL init, the drvfs Plan 9 server,
 # crash dumps; netfilter and the Hyper-V firewall never see them), no AF_NETLINK, no AF_PACKET.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# P1-14: io_uring creates sockets without socket(2) (IORING_OP_SOCKET), past the family filter.
+# Refused here (EPERM, not SIGSYS) and system-wide (kernel.io_uring_disabled=2, ossbot-firewall --check).
+SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

@@ -6,9 +6,10 @@
 #          label and every PTR query), IP literals denied on every port, names resolving to a
 #          denied range refused, the rendered config uses -n on every name ACL
 #   ICMP / raw / IPv6 / direct IP from sandboxes and service uids; the host's listeners (explicit
-#   allowlist); the proxy netns; AF_VSOCK to the Windows host per unit context and per pool, and
-#   the WSL interop sockets (P1-13); the Hyper-V layer (root's non-80/443 egress), a counted SKIP
-#   when not applied.
+#   allowlist, TCP/UDP and abstract unix); the proxy netns; the cache manager; AF_VSOCK to the
+#   Windows host per unit context and per pool, through socket() and through io_uring's
+#   IORING_OP_SOCKET (P1-13, P1-14), and the WSL interop sockets; the Hyper-V layer (root's
+#   non-80/443 egress), a counted SKIP when not applied.
 # shellcheck source=tests/system/lib.sh disable=SC1091,SC2317,SC2016
 source "$(dirname "$0")/lib.sh"
 require_running
@@ -31,6 +32,10 @@ cleanup() {
     docker network disconnect -f "$net" ossbot-proxy >/dev/null 2>&1
     docker network rm "$net" >/dev/null 2>&1
   done
+  if [[ -n ${URING_WINDOW:-} ]]; then  # the io_uring control window below was interrupted
+    sysctl -q -w kernel.io_uring_disabled=2
+    systemctl start ossbot-watchdog.timer
+  fi
 }
 trap cleanup EXIT
 
@@ -86,6 +91,15 @@ raw_connect() {  # raw_connect USER PORT TARGET -> status line of a hand-written
 }
 for target in gist.github.com.:443 GIST.GitHub.COM:443 x.github.io.:443 example.com:8443 example.com:22; do
   expect "hermes via 3141 -> raw CONNECT $target denied" 403 "$(raw_connect hermes 3141 "$target")"
+done
+# Cache manager requests are denied before any allow line (round 5 NIT), so web_public's `all`
+# never decides them (and squid does not resolve the host).
+raw_get() {  # raw_get USER PORT URL -> status line of a hand-written GET through the proxy
+  as "$1" timeout 15 bash -c 'exec 3<>"/dev/tcp/$1/$2"; printf "GET %s HTTP/1.0\r\n\r\n" "$3" >&3
+    head -n 1 <&3 | cut -d" " -f2' _ "$PROXY" "$2" "$3" 2>/dev/null || true
+}
+for url in cache_object://ossbot-proxy/menu http://ossbot-proxy/squid-internal-mgr/menu; do
+  expect "hermes via 3141 -> cache manager $url denied" 403 "$(raw_get hermes 3141 "$url")"
 done
 # The resolved-IP deny still applies to allowed names: localtest.me resolves to 127.0.0.1.
 if getent ahostsv4 localtest.me 2>/dev/null | grep -q '^127\.'; then
@@ -214,6 +228,8 @@ bad=$(awk '$1 == "acl" && ($3 == "dstdomain" || $3 == "dstdom_regex") && $4 != "
 if [[ -z $bad ]]; then pass "live squid.conf: every name ACL is -n"; else fail "live squid.conf: name ACLs without -n: $bad"; fi
 if grep -Eq '^http_access deny .*denied_dst' "$conf"; then fail "live squid.conf: a deny line resolves (denied_dst)"; else pass "live squid.conf: no deny line uses the dst ACL"; fi
 check "live squid.conf: pinger off" grep -qx 'pinger_enable off' "$conf"
+expect "live squid.conf: 'deny manager' comes before the first allow line" yes \
+  "$(awk '/^http_access deny manager$/ {print "yes"; exit} /^http_access allow / {print "no"; exit}' "$conf")"
 refuse "live squid.conf: no TLS interception (ssl_bump / https_port / sslcrtd)" grep -Eq '^(ssl_bump|https_port|sslcrtd_program)' "$conf"
 check "live squid.conf: visible_hostname set (no hostname lookup at start)" grep -Eq '^visible_hostname ' "$conf"
 check "live squid.conf: dns_nameservers is the resolv.conf resolver $NS" grep -qx "dns_nameservers $NS" "$conf"
@@ -265,27 +281,113 @@ except socket.timeout:
     print("timeout")
 except OSError as exc:
     print(f"connect-errno{exc.errno}")'
+# P1-14: io_uring's IORING_OP_SOCKET creates a socket without socket(2), so the family filter never
+# sees it. URING_PY is a ctypes io_uring client: one IORING_OP_SOCKET(AF_VSOCK) submission, then
+# connect to 2:50002. Prints setup-errnoN when io_uring_setup is refused.
+URING_PY='
+import ctypes, mmap, socket, struct
+libc = ctypes.CDLL(None, use_errno=True)
+libc.syscall.restype = ctypes.c_long
+u32 = ctypes.c_uint32
+class Off(ctypes.Structure):
+    _fields_ = [(f"f{i}", u32) for i in range(8)] + [("user_addr", ctypes.c_uint64)]
+class Params(ctypes.Structure):
+    _fields_ = [("sq_entries", u32), ("cq_entries", u32), ("flags", u32), ("sq_thread_cpu", u32),
+                ("sq_thread_idle", u32), ("features", u32), ("wq_fd", u32), ("resv", u32 * 3),
+                ("sq_off", Off), ("cq_off", Off)]
+def uring_socket(family, kind):
+    p = Params()
+    fd = libc.syscall(425, 4, ctypes.byref(p))  # io_uring_setup (x86_64)
+    if fd < 0:
+        return f"setup-errno{ctypes.get_errno()}"
+    sq, cq = p.sq_off, p.cq_off  # f0 head, f1 tail, f2 ring_mask, sq f6 array, cq f5 cqes
+    rw = mmap.PROT_READ | mmap.PROT_WRITE
+    ring = mmap.mmap(fd, max(sq.f6 + p.sq_entries * 4, cq.f5 + p.cq_entries * 16), mmap.MAP_SHARED, rw, offset=0)
+    sqes = mmap.mmap(fd, p.sq_entries * 64, mmap.MAP_SHARED, rw, offset=0x10000000)
+    sqes[0:64] = struct.pack("<BBHiQQIIQHHIQQ", 45, 0, 0, family, kind, 0, 0, 0, 7, 0, 0, 0, 0, 0)  # IORING_OP_SOCKET
+    tail = struct.unpack_from("<I", ring, sq.f1)[0]
+    struct.pack_into("<I", ring, sq.f6 + 4 * (tail & struct.unpack_from("<I", ring, sq.f2)[0]), 0)
+    struct.pack_into("<I", ring, sq.f1, tail + 1)
+    if libc.syscall(426, fd, 1, 1, 1, None, 0) < 0:  # io_uring_enter(to_submit 1, GETEVENTS)
+        return f"enter-errno{ctypes.get_errno()}"
+    head = struct.unpack_from("<I", ring, cq.f0)[0]
+    res = struct.unpack_from("<i", ring, cq.f5 + 16 * (head & struct.unpack_from("<I", ring, cq.f2)[0]) + 8)[0]
+    return f"op-errno{-res}" if res < 0 else socket.socket(fileno=res)
+s = uring_socket(socket.AF_VSOCK, socket.SOCK_STREAM)
+if isinstance(s, str):
+    print(s)
+else:
+    s.settimeout(3)
+    try:
+        s.connect((2, 50002)); print("open")
+    except socket.timeout:
+        print("timeout")
+    except OSError as exc:
+        print(f"connect-errno{exc.errno}")'
 units=()
 for unit in ossbot-gatekeeper ossbot-sandboxd ossbot-runner ossbot-hermes; do
   [[ $(systemctl show -p LoadState --value "$unit.service") == loaded ]] && units+=("$unit")
 done
+in_unit() {  # in_unit UNIT SCRIPT -> output of SCRIPT in a transient unit with UNIT's user and filters
+  local u=$1
+  systemd-run --quiet --wait --pipe --collect -p User="$(systemctl show -p User --value "$u.service")" \
+    -p RestrictAddressFamilies="$(systemctl show -p RestrictAddressFamilies --value "$u.service")" \
+    -p SystemCallFilter="$(systemctl show -p SystemCallFilter --value "$u.service")" \
+    -p SystemCallErrorNumber="$(systemctl show -p SystemCallErrorNumber --value "$u.service")" \
+    -p NoNewPrivileges=yes -p SystemCallArchitectures=native /usr/bin/python3 -I -c "$2" 2>&1 </dev/null
+}
 for unit in "${units[@]}"; do
   user=$(systemctl show -p User --value "$unit.service")
   raf=$(systemctl show -p RestrictAddressFamilies --value "$unit.service")
   expect "$unit: RestrictAddressFamilies (unit context, sorted)" "AF_INET AF_INET6 AF_UNIX" \
     "$(tr ' ' '\n' <<<"$raf" | sort | xargs)"
+  scf=$(systemctl show -p SystemCallFilter --value "$unit.service")
+  expect "$unit: SystemCallFilter denies the io_uring syscalls (unit context, sorted)" \
+    "deny: io_uring_enter io_uring_register io_uring_setup" \
+    "$([[ $scf == '~'* ]] && echo deny || echo allow): $(tr ' ' '\n' <<<"${scf#\~}" | LC_ALL=C sort | xargs)"
   mainpid=$(systemctl show -p MainPID --value "$unit.service")
   if [[ $mainpid != 0 ]]; then
     expect "$unit: running process is under a seccomp filter (MainPID $mainpid)" 2 "$(awk '/^Seccomp:/ {print $2}' "/proc/$mainpid/status")"
   else
     fail "$unit: not running"
   fi
-  got=$(systemd-run --quiet --wait --pipe --collect -p User="$user" -p RestrictAddressFamilies="$raf" \
-    -p NoNewPrivileges=yes -p SystemCallArchitectures=native /usr/bin/python3 -I -c "$VSOCK_PY" 2>&1 </dev/null)
-  expect "$unit context ($user): socket(AF_VSOCK) refused" errno97 "$got"
+  expect "$unit context ($user): socket(AF_VSOCK) refused" errno97 "$(in_unit "$unit" "$VSOCK_PY")"
+  expect "$unit context ($user): io_uring IORING_OP_SOCKET(AF_VSOCK) refused (P1-14)" setup-errno1 \
+    "$(in_unit "$unit" "$URING_PY")"
 done
 expect "control: an unrestricted hermes session reaches host CID 2:50002 over AF_VSOCK" open \
   "$(as hermes python3 -I -c "$VSOCK_PY" 2>&1)"
+# System-wide: kernel.io_uring_disabled = 2 refuses io_uring_setup to every process, root included.
+expect "kernel.io_uring_disabled (P1-14)" 2 "$(cat /proc/sys/kernel/io_uring_disabled)"
+check "/etc/sysctl.d/60-ossbot.conf pins kernel.io_uring_disabled = 2" grep -qx 'kernel.io_uring_disabled = 2' /etc/sysctl.d/60-ossbot.conf
+expect "unrestricted hermes session: io_uring refused by the sysctl" setup-errno1 "$(as hermes python3 -I -c "$URING_PY" 2>&1)"
+expect "root: io_uring refused by the sysctl" setup-errno1 "$(python3 -I -c "$URING_PY" 2>&1)"
+# Each layer alone: with the sysctl briefly at 0 (watchdog timer held, the trap restores it), the
+# unit filter and Docker's default seccomp profile must still refuse io_uring, and the unrestricted
+# control must reach 2:50002 through IORING_OP_SOCKET (so the refusals above are real).
+systemctl stop ossbot-watchdog.timer
+# shellcheck disable=SC2016  # expanded by the inner bash
+wait_for 30 bash -c '[[ $(systemctl show -p ActiveState --value ossbot-watchdog.service) != activating ]]' ||
+  fail "a watchdog tick did not finish"
+URING_WINDOW=1
+sysctl -q -w kernel.io_uring_disabled=0
+for unit in "${units[@]}"; do
+  expect "io_uring enabled: $unit context still refuses io_uring (unit SystemCallFilter, EPERM)" setup-errno1 \
+    "$(in_unit "$unit" "$URING_PY")"
+done
+for pool in fetch research llm; do
+  net="ossbot-t-egresstest-$pool-$$"
+  [[ " ${NETS[*]} " == *" $net "* ]] || continue
+  expect "io_uring enabled: pool $pool refuses io_uring (Docker default seccomp)" setup-errno1 \
+    "$(docker run --rm --network "$net" --dns 127.0.0.1 --user 10001:10001 --cap-drop ALL \
+      --security-opt no-new-privileges --read-only "ossbot/sandbox-full@$FULL" python3 -I -c "$URING_PY" 2>&1)"
+done
+expect "io_uring enabled, control: an unrestricted hermes session reaches 2:50002 via IORING_OP_SOCKET" open \
+  "$(as hermes python3 -I -c "$URING_PY" 2>&1)"
+sysctl -q -w kernel.io_uring_disabled=2
+unset URING_WINDOW
+systemctl start ossbot-watchdog.timer
+expect "io_uring sysctl restored" 2 "$(cat /proc/sys/kernel/io_uring_disabled)"
 # WSL interop sockets (/run/WSL/<pid>_interop, 0777): ossbot-nointerop makes /run/WSL root-only.
 check "/run/WSL is root-only (0700)" test "$(stat -c %a /run/WSL)" = 700
 isock=$(find /run/WSL -maxdepth 1 -type s -name '*_interop' -print -quit)
@@ -302,13 +404,20 @@ fi
 # Every service uid may reach any lo port (OSSBOT-OUT row 26) and a wildcard or bridge listener
 # would be reachable from the bridges but for OSSBOT-IN, so every listener must be on this list:
 # the WSL resolver (port 53 only; refused to service uids by OSSBOT-OUT) and chronyd's loopback
-# command port. UDP sockets on ephemeral ports are client sockets (an NTP query while syncing).
+# command port. An unconnected UDP socket on an ephemeral port is skipped only when it is a root
+# socket of the WSL VM itself (an NTP or DNS-tunnel client outside this distro's PID namespace, so
+# ss shows no owning process and no uid): one owned by any process of this distro must be listed.
 read -r eph _ </proc/sys/net/ipv4/ip_local_port_range
 LISTEN_OK=" udp/$NS:53 tcp/$NS:53 udp/127.0.0.1:323 udp/[::1]:323 "
-bad=$(ss -H -ltnu | awk -v ok="$LISTEN_OK" -v eph="$eph" '{port=$5; sub(/^.*:/, "", port)
-  if ($1 == "udp" && port + 0 >= eph + 0) next
+bad=$(ss -H -ltnupe | awk -v ok="$LISTEN_OK" -v eph="$eph" '{port=$5; sub(/^.*:/, "", port)
+  if ($1 == "udp" && port + 0 >= eph + 0 && $0 !~ /users:\(/ && $0 !~ / uid:/) next
   if (index(ok, " " $1 "/" $5 " ") == 0) print $1 " " $5}')
 if [[ -z $bad ]]; then pass "host listeners: only the allowlist ($LISTEN_OK)"; else fail "host listeners not on the allowlist: $bad"; fi
+# Abstract unix sockets (@name) have no file permissions: any uid in the host netns reaches them
+# (round 5 NIT). None is expected; a new one fails here like a new TCP/UDP listener.
+ABSTRACT_OK=" "
+bad=$(ss -H -xl | awk -v ok="$ABSTRACT_OK" '$5 ~ /^@/ && index(ok, " " $5 " ") == 0 {print $1 " " $5}')
+if [[ -z $bad ]]; then pass "host abstract unix listeners: none (allowlist empty)"; else fail "abstract unix listeners: $bad"; fi
 check "nsswitch hosts: files dns only" grep -Eq '^hosts:[[:space:]]+files dns[[:space:]]*$' /etc/nsswitch.conf
 for p in nscd unscd sssd dnsmasq unbound bind9 avahi-daemon libnss-resolve libnss-mdns; do
   refuse "no caching/forwarding resolver or nss DNS module: $p" bash -c "dpkg-query -W -f='\${Status}' $p 2>/dev/null | grep -q 'install ok installed'"

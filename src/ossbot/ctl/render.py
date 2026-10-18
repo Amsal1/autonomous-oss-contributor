@@ -11,7 +11,8 @@ firewall: ``OSSBOT-IN``/``OSSBOT-OUT`` (+ ip6tables) for ``ossbot-firewall.servi
 1 of its parent; ``--check`` compares chain contents (order included) and jump positions and
 exits 1 on any drift, including a changed resolver (``firewall_drift:resolver_changed``) and,
 for the host part, a systemd-resolved that is not masked or still listening
-(``firewall_drift:resolved_ipc``, Phase 1 review P1-6).
+(``firewall_drift:resolved_ipc``, Phase 1 review P1-6) and io_uring not disabled system-wide
+(``firewall_drift:io_uring``, P1-14).
 
 Usage (root): ``python -I -m ossbot.ctl.render firewall --apply|--check|--print [--part P]`` and
 ``python -I -m ossbot.ctl.render squid [--out PATH] [--hermes-login]``.
@@ -55,6 +56,7 @@ DEFAULT_SQUID_OUT = Path("/etc/ossbot/proxy/squid.conf")
 DEFAULT_SNAPSHOT_ROOT = Path("/srv/ossbot/config-snapshot")
 RESOLVED_UNIT_LINK = Path("/etc/systemd/system/systemd-resolved.service")
 RESOLVED_VARLINK = Path("/run/systemd/resolve/io.systemd.Resolve")
+IO_URING_SYSCTL = Path("/proc/sys/kernel/io_uring_disabled")
 # Request hosts that are IP literals in any form getaddrinfo/inet_aton accepts (dotted, short,
 # decimal, octal, hex; IPv6 with or without brackets). POSIX ERE for squid `dstdom_regex -n -i`;
 # no DNS name can match (a TLD is never all-numeric, and no host name contains ':' or '[').
@@ -386,6 +388,21 @@ def resolved_ipc_problems(unit_link: Path = RESOLVED_UNIT_LINK, varlink: Path = 
     return problems
 
 
+def io_uring_problems(sysctl: Path = IO_URING_SYSCTL) -> list[str]:
+    """io_uring must be off for every process: ``kernel.io_uring_disabled = 2`` (Phase 1 review P1-14).
+
+    ``IORING_OP_SOCKET`` creates sockets without the ``socket()`` syscall, so the seccomp filter of
+    ``RestrictAddressFamilies=`` never sees the family: an ``AF_VSOCK`` socket to the Windows host
+    (WSL init, the drvfs Plan 9 server) from a confined unit. A kernel without the sysctl fails."""
+    try:
+        value = sysctl.read_text(encoding="ascii").strip()
+    except OSError:
+        value = "unavailable"
+    if value == "2":
+        return []
+    return [f"firewall_drift:io_uring kernel.io_uring_disabled is {value}, expected 2"]
+
+
 def resolve_uids() -> dict[str, str]:
     out = {}
     for name in SERVICE_USERS:
@@ -444,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
         problems = check(chains, ns)
         if args.part in ("host", "all"):
             problems.extend(resolved_ipc_problems())
+            problems.extend(io_uring_problems())
         for problem in problems:
             print(f"ossbot-firewall --check: {problem}", file=sys.stderr)
         return 1 if problems else 0

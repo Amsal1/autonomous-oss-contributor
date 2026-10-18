@@ -72,6 +72,8 @@ def test_workers_down_keeps_health_and_restarts_only_the_core(calls: list[str]) 
         ("ossbot-firewall --check: firewall_drift:resolver_changed", "firewall_drift:resolver_changed"),
         ("ossbot-firewall --check: firewall_drift:resolved_ipc systemd-resolved is not masked",
          "firewall_drift:resolved_ipc"),
+        ("ossbot-firewall --check: firewall_drift:io_uring kernel.io_uring_disabled is 0, expected 2",
+         "firewall_drift:io_uring"),
     ],
 )  # fmt: skip
 def test_firewall_drift_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str, reason: str) -> None:

@@ -186,6 +186,8 @@ Phase 1 review round 3 added: `-n` on every squid name ACL, IP-literal targets d
 
 Phase 1 review round 4 added: `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` on every non-root unit, so no `AF_VSOCK` to the Windows host (P1-13, ADR-0005 and ADR-0007 addenda). `tests/unit/test_systemd_units.py` asserts it for every `ossbot-*.service` with a non-root `User=`, so the FEAT-006 runner unit and the FEAT-007 hermes unit must carry the line or the hermetic suite fails, and `test_egress_surface.sh` probes them once they are loaded. `/run/WSL` (interop sockets) is root-only via `ossbot-nointerop.service`. `always_denied.cidrs` gained `198.18.0.0/15`, `192.0.0.0/24`, `224.0.0.0/4` and `240.0.0.0/4`. The host-listener probe is an explicit allowlist, and `tests/system/lib.sh` counts SKIPs separately (`skip`).
 
+Phase 1 review round 5 added: io_uring off system-wide (`kernel.io_uring_disabled = 2` in `/etc/sysctl.d/60-ossbot.conf`, `ossbot-firewall --check` fails with `firewall_drift:io_uring`, doctor `io_uring disabled`) and `SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register` + `SystemCallErrorNumber=EPERM` on every non-root unit, because `IORING_OP_SOCKET` bypassed `RestrictAddressFamilies` (P1-14, ADR-0005/0007 addenda). `tests/unit/test_systemd_units.py` asserts both lines and `SystemCallArchitectures=native` for every non-root unit, so the FEAT-006/007 units inherit them. squid denies cache manager requests ahead of every allow line, and the host-listener probe also covers abstract unix sockets and limits the ephemeral-UDP skip to the WSL VM's own sockets.
+
 ---
 
 ## Phase 2: Telegram UX, pipeline, Kiro and Hermes, model switch, open-source docs, hardening

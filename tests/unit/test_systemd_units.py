@@ -74,6 +74,20 @@ def test_non_root_units_restrict_address_families(path: Path) -> None:
     assert lines == ["RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6"]
 
 
+@pytest.mark.parametrize("path", NON_ROOT, ids=lambda p: p.name)
+def test_non_root_units_filter_io_uring(path: Path) -> None:
+    """P1-14: IORING_OP_SOCKET creates sockets without socket(2), so the address-family filter above
+    never sees them. Every non-root unit refuses the io_uring syscalls (EPERM, so a library that
+    probes io_uring falls back instead of dying on SIGSYS), even if kernel.io_uring_disabled is lost."""
+    service = _unit(path)["Service"]
+    text = path.read_text(encoding="utf-8")
+    lines = [line for line in text.splitlines() if line.startswith("SystemCallFilter=")]
+    assert lines == ["SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register"]
+    assert service["SystemCallErrorNumber"] == "EPERM"
+    # no 32-bit/x32 ABI either: socketcall(2) would be a second socket entry point past both filters
+    assert service["SystemCallArchitectures"] == "native"
+
+
 def test_workers_stop_before_gatekeeper_and_proxy() -> None:
     after = _unit(UNITS / "ossbot-sandboxd.service")["Unit"]["After"].split()
     assert "ossbot-gatekeeper.service" in after and "ossbot-proxy.service" in after  # stop = reverse order
