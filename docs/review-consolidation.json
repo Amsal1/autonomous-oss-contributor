@@ -1,0 +1,105 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": "C-1",
+      "severity": "MEDIUM",
+      "blocking": true,
+      "confidence": "confirmed",
+      "title": "Stale FEAT ids in merged DESIGN §14",
+      "detail": "CR-003 text merged into §14.6-§14.25 (and ADR-0019 line 220) still uses the pre-consolidation PLAN numbering, where FEAT-005 was the Telegram decision-path FEAT and FEAT-009 was CR-002. Examples: 'M1 (extends FEAT-005 item 22)' (item 22 is now the hard ceiling), 'FEAT-005's edit_comment prompt/path' (no current item builds it; item 45 does S7), 'the FEAT-009 tier switch' and 'FEAT-009's skill_reviews' (now FEAT-007 item 36), and 'pending_input is planned in FEAT-005 item 2 (0002_phase2.sql)'. That last one collides with FEAT-005 item 24's 0002_decisions.sql, and the only remaining pending_input/chat_sessions spec is the draft text in FEAT-009.json. Fix: rewrite each reference to the current PLAN item, and give pending_input/chat_sessions an owning item and a non-colliding migration number.",
+      "files": ["docs/DESIGN.md", "docs/adr/0019-pr-review-surface.md", "docs/plan/task-ossbot-v1/features/FEAT-009.json", "docs/PLAN.md"]
+    },
+    {
+      "id": "C-2",
+      "severity": "MEDIUM",
+      "blocking": true,
+      "confidence": "confirmed",
+      "title": "Threat model (§8.4, §8.5) not amended for revision 5",
+      "detail": "The §8.4 T1/T2 key-theft row says agent-llm 'reaches only Kiro hosts', which is false under the default egress mode open (web_public for agent-llm and catalog). §8.4 T6 lists the Hermes surface as memory/todo/session_search/ossbot with skills and web disabled, but the default tier self_improve enables skills (skill_manage) behind the skill gate, and the residual-risk text omits the staging dir, root hasher and skill gate. §8.5 says Hermes text is 'escaped text only, never buttons', which contradicts D8/D9. Fix: amend all three and track them in a matrix row (or extend P1-18).",
+      "files": ["docs/DESIGN.md"]
+    },
+    {
+      "id": "C-3",
+      "severity": "MEDIUM",
+      "blocking": true,
+      "confidence": "confirmed",
+      "title": "§17.1 targets schema keeps the per-target max_changed_lines: 400",
+      "detail": "CR-004 Amendment B, §12.6 and row CR4-2o remove the hidden per-target line cap, and PLAN item 22 deletes it from TargetDefaults, but DESIGN §17.1 still lists defaults.max_changed_lines: 400. Fix: replace it with the optional per-repo size_class preference.",
+      "files": ["docs/DESIGN.md"]
+    },
+    {
+      "id": "C-4",
+      "severity": "MEDIUM",
+      "blocking": true,
+      "confidence": "confirmed",
+      "title": "§14.19 integration hooks have no traceability rows",
+      "detail": "None of the 18 items in the §14.19 integration table has a row. The v1.x items #6-#10 (web clipping, GitHub notifications inbox, release watch, PDF reading, voice transcription) are neither planned (FEAT-010 builds only Telegraph from v1.x) nor deferred. The v1 #1 digest stats (followers, stars, streak) are only partly traced, and the Phase 2 #12-#14 and #17 are missing from DES-DEF-*. Fix: add one row per item with phase P2 FEAT-0nn or deferred, and state in §14.20.8 and FEAT-010 which v1.x items Phase 2 builds.",
+      "files": ["docs/TRACEABILITY.md", "docs/DESIGN.md", "docs/PLAN.md"]
+    },
+    {
+      "id": "C-5",
+      "severity": "MEDIUM",
+      "blocking": true,
+      "confidence": "confirmed",
+      "title": "PLAN item row lists disagree with the matrix phase column",
+      "detail": "TGRW-9 is P1-rework FEAT-005 (rework) in the matrix, but no FEAT-005 item lists it and authorized_chat_only() is built in FEAT-010 item 49, so the FEAT-005 close-out gate ('no FEAT-005 row left rework') cannot pass. TGRW-11 is FEAT-009 in the matrix but claimed by FEAT-005 item 25, which does not build telegram.ui.send. CR3-U13 is FEAT-005 in the matrix but planned in FEAT-009 item 46. CR3-D10 and CR3-V-13 are FEAT-009 in the matrix but in FEAT-010 item 49, and CR3-U9 is FEAT-010 in the matrix but in FEAT-009 item 44. CR3-D5, CR3-D6, CR3-U4 and DES-FR-14 are not named by any item. Fix: align the phase column and the item row lists (move TGRW-9 to FEAT-010).",
+      "files": ["docs/TRACEABILITY.md", "docs/PLAN.md", "docs/plan/task-ossbot-v1/features/FEAT-005.json"]
+    },
+    {
+      "id": "C-6",
+      "severity": "MEDIUM",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "§14.1-§14.5 kept verbatim beside §14.6-§14.25",
+      "detail": "Revision 5 keeps the revision-4 subsections with amendment notes and a 'later section wins' rule instead of replacing them, so readers meet two card layouts, keyboards, /approve semantics and /newchat vs /new. The documented reason (docstrings cite them) is valid. Suggestion: move them into a 'revision-4 baseline (superseded)' appendix and update the docstrings in FEAT-009.",
+      "files": ["docs/DESIGN.md"]
+    },
+    {
+      "id": "C-7",
+      "severity": "NIT",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "Rework rows without an evidence pointer",
+      "detail": "21 rework rows (DES-FR-18, DES-FR-21, CR2-1b, CR3-U3, CR3-U14, CR3-AC-15/29/31/46/47/57/58/59/66/67, CR3-BA-1..5, BA-21) and the done row CR3-CF-2 have evidence '-'. Fix: point each at the matching TGRW row or code location.",
+      "files": ["docs/TRACEABILITY.md"]
+    },
+    {
+      "id": "C-8",
+      "severity": "NIT",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "CR3-S4 marked done without its proving test; S1-S4 location copied",
+      "detail": "CR3-S4 (no inbound exposure) is done with the evidence 'no inbound component exists', while the test rows DES-AC-42, CHAT-33 and CR3-CF-1 are missing, which contradicts the matrix's definition of done. CR3-S1..S4 all share the location 'approvals.py, handlers.py'. Fix: set S4 to missing or link it to those rows, and give each invariant its real location.",
+      "files": ["docs/TRACEABILITY.md"]
+    },
+    {
+      "id": "C-9",
+      "severity": "NIT",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "Tests column names non-test files for P1-15, P1-16, P1-18",
+      "detail": "The tests cells say config/egress.yaml, scripts/hyperv-firewall.ps1 and 'review'. Fix: name the squid golden, the doctor check and the VERIFICATION entry that prove each NIT closed.",
+      "files": ["docs/TRACEABILITY.md"]
+    },
+    {
+      "id": "C-10",
+      "severity": "NIT",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "Conflicting carried planner-draft text in FEAT JSONs",
+      "detail": "The FEAT-005..009 steps end with 'carried detail from the interrupted planner draft' under a precedence rule. FEAT-009 draft item 2 (0002_phase2.sql) and item 3 (the revision-4 /approve N4 semantics) conflict with item 24 and with §14.18.4 deltas 5 and 7. Fix: prune or rewrite the conflicting parts.",
+      "files": ["docs/plan/task-ossbot-v1/features/FEAT-009.json"]
+    },
+    {
+      "id": "C-11",
+      "severity": "NIT",
+      "blocking": false,
+      "confidence": "confirmed",
+      "title": "Minor DESIGN text",
+      "detail": "The §26 ADR index still titles ADR-0002 'Hermes (narrowed role)' although its revision-5 amendment widens the role, and the §14.6 numbered delta 9 runs into the next paragraph.",
+      "files": ["docs/DESIGN.md"]
+    }
+  ],
+  "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-consolidation.md"
+}

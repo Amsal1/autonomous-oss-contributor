@@ -1,4 +1,4 @@
-# ADR-0002: Agent runtime is Hermes (narrowed role) with a vendored kiro-acp provider, V3 ACP primary
+# ADR-0002: Agent runtime is Hermes (OSS-side role narrowed; general multimodal assistant since rev 5) with a vendored kiro-acp provider, V3 ACP primary
 Status: Accepted (amended in design rev 5 on 2026-10-18; revised in design rev 1, rev 2, rev 3 and rev 4) · Date: 2026-10-17 · Design: DESIGN.md §15
 
 ## Context

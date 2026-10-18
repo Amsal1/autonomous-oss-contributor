@@ -5,6 +5,8 @@ Results of the phase verification bars (docs/PLAN.md) and of the live checks of 
 ## Design consolidation, revision 5 (2026-10-18)
 Docs and plan only; no product code changed and no test was run in this step. CR-001…CR-004, NOTE-live-secrets and the user's chat decisions were merged into `docs/DESIGN.md` (revision 5; CR-003 became §14.6–§14.25). `docs/TRACEABILITY.md` was created with one row per requirement and decision, and the Phase 1 code was audited against it (rows with status `rework`, handled first by FEAT-005 in `docs/PLAN.md`). From now on requirement status lives in TRACEABILITY.md; the "CR-001 items still open" and "CR-002 and CR-003 (tracked for Phase 2)" tables below are historical.
 
+Consolidation review fix pass (same day, docs only, no test run): the findings of `docs/review-consolidation.json` (C-1…C-11) were addressed in DESIGN revision 5 (responses in DESIGN §27.0b), TRACEABILITY.md, PLAN.md and the FEAT files. A mechanical cross-check (every open row named by a PLAN item of each FEAT in its phase; every `rework` row has evidence) reports no problems.
+
 ## Phase 1, after review round 5 (2026-10-18)
 
 Fixes for `docs/review-phase1.json` round 5: P1-14 (HIGH) and two NITs. Round 5 found no hole in rows 1-30 and confirmed round 4's four NITs closed, but P1-13 was still open through io_uring. This step's prompt still listed P1-11/P1-12 as the open findings. 109711f closed both, and rounds 4 and 5 confirmed it, so the fixes below follow the review file. The systematic pass this round covered every way to create a socket other than `socket(2)` (rows 39-41) and re-read rows 1-38 against the live system.
@@ -229,7 +231,7 @@ Live checks run in this step (NOTE-live-secrets.md, read-only):
 Incident during this step: adding `lifecycle:` to `config/policy.yaml` before deploying the new schema made the previously deployed gatekeeper refuse to start (config validation, fail closed); the watchdog paused the system (`gatekeeper_unhealthy`) as designed. After the deploy the pause was lifted with the offline resume (`ossbot-resume --offline`, logged in `resume.log`). The same deploy exposed that the gatekeeper's start failed whenever Telegram was unreachable (proxy restarting); the bot now connects in the background with backoff (CR-001 item 1).
 
 ### CR-001 items still open (tracked for Phase 2)
-> Historical (2026-10-18): superseded by docs/TRACEABILITY.md (rows CR1-*, CR2-*, CR3-*).
+> Historical (2026-10-18): superseded by docs/TRACEABILITY.md (rows CR1-*, CR2-*, CR3-*). The FEAT numbers in this table are the pre-consolidation plan's (old FEAT-005 = Telegram decision paths, old FEAT-008 = docs); the current owner of each item is the phase column of its TRACEABILITY row.
 
 | CR-001 item | Owner | Status |
 |---|---|---|
@@ -242,7 +244,7 @@ Incident during this step: adding `lifecycle:` to `config/policy.yaml` before de
 | Done in Phase 1 | | lifecycle states + API (kill overrides), sandboxd drain + crash recovery, `TimeoutStopSec`, `ossctl up/down/status`, `scripts/{up,down,status}.ps1`, boot-gate shutdown classification (graceful/hook/unclean), watchdog sleep handling, monotonic job/drain timeouts, Telegram reconnect tracking + offline start, crash-safety tests |
 
 ### CR-002 and CR-003 (tracked for Phase 2)
-> Historical (2026-10-18): superseded by docs/TRACEABILITY.md (rows CR1-*, CR2-*, CR3-*).
+> Historical (2026-10-18): superseded by docs/TRACEABILITY.md (rows CR1-*, CR2-*, CR3-*). The FEAT numbers in this table are the pre-consolidation plan's (old FEAT-005 = Telegram decision paths, old FEAT-008 = docs); the current owner of each item is the phase column of its TRACEABILITY row.
 
 | Change request | Owner | Status |
 |---|---|---|

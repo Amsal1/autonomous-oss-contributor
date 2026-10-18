@@ -1,6 +1,6 @@
 # ossbot: Autonomous OSS Contributor, Requirements and Technical Design
 
-Status: **Current consolidated spec, revision 5 (2026-10-18).** Revision 5 merges CR-001 (lifecycle, §13.5), CR-002 incl. Amendment A (research egress and modes §11.3/§11.5, Hermes capability tiers §15.5, Hermes as the general multimodal assistant §15.6, `vision` role §16.1), CR-003 (Telegram UX and PR review flow, §14), CR-004 incl. Amendment B (scout, proposal gate, change-size budget, user-directed work, §9.5a/§9.5b/§9.14, §12.6), `docs/plan/NOTE-live-secrets.md` (§22.7b) and the user's chat decisions (§25). The CR files are historical. Every requirement and decision is a row in `docs/TRACEABILITY.md`. Revision 4 was APPROVED in design review round 5. Earlier history: Draft v2 (revision 4; resolves all 8 round-4 findings in `docs/design-review.md` / `docs/design-verdict.json` (0 HIGH, 2 MEDIUM, 6 NIT; responses in Section 27.0a). Revision 3 resolved the 19 round-3 findings and marked deferrable scope as **phase-2** (Section 6.1). Revision 2 resolved the 27 round-2 findings; revision 1 resolved the 34 round-1 findings and added `.wslconfig` and reproducibility/open-source readiness.)
+Status: **Current consolidated spec, revision 5 (2026-10-18).** Revision 5 merges CR-001 (lifecycle, §13.5), CR-002 incl. Amendment A (research egress and modes §11.3/§11.5, Hermes capability tiers §15.5, Hermes as the general multimodal assistant §15.6, `vision` role §16.1), CR-003 (Telegram UX and PR review flow, §14), CR-004 incl. Amendment B (scout, proposal gate, change-size budget, user-directed work, §9.5a/§9.5b/§9.14, §12.6), `docs/plan/NOTE-live-secrets.md` (§22.7b) and the user's chat decisions (§25). The CR files are historical. Every requirement and decision is a row in `docs/TRACEABILITY.md`. The consolidation review (`docs/review-consolidation.md`, findings C-1…C-11) was addressed in place (Section 27.0b). Revision 4 was APPROVED in design review round 5. Earlier history: Draft v2 (revision 4; resolves all 8 round-4 findings in `docs/design-review.md` / `docs/design-verdict.json` (0 HIGH, 2 MEDIUM, 6 NIT; responses in Section 27.0a). Revision 3 resolved the 19 round-3 findings and marked deferrable scope as **phase-2** (Section 6.1). Revision 2 resolved the 27 round-2 findings; revision 1 resolved the 34 round-1 findings and added `.wslconfig` and reproducibility/open-source readiness.)
 Date: 2026-10-17 (revision 4: 2026-10-17; revision 5, consolidation: 2026-10-18)
 Owner: Amsal Khan (GitHub `Amsal1`)
 Repo: `d:\Work\autonomous-oss-contributor` (WSL: `/mnt/d/Work/autonomous-oss-contributor`), branch `main`. Remote `origin` = `https://github.com/Amsal1/autonomous-oss-contributor.git` (private, pushed by the user with his own credential). Workflow steps and ossbot itself never push this repo.
@@ -19,7 +19,7 @@ Revision 5 (2026-10-18) is a consolidation, not a redesign: it folds the approve
 |---|---|
 | CR-001 lifecycle up/down/drain (`docs/plan/CR-001-lifecycle-up-down.md`) | §13.5 (design, including the Windows shutdown hooks 6a/6b), FR-17, AC 31–32 |
 | CR-002 + Amendment A, research egress and Hermes tiers (`docs/plan/CR-002-…`) | §11.3 (`github_user_content`), §11.5 (egress modes, default `open`), §15.5 (capability tiers, default `self_improve`), §15.6 (general multimodal assistant), §16.1 (`vision` role), FR-13, FR-18, FR-19, AC 25 (amended), AC 33–36 |
-| CR-003 Telegram UX and PR review flow (`docs/plan/CR-003-telegram-ux.md`, ADR-0019, ADR-0020, `docs/ux/`) | §14 (§14.6–§14.25 normative; §14.1–§14.5 amended baseline) |
+| CR-003 Telegram UX and PR review flow (`docs/plan/CR-003-telegram-ux.md`, ADR-0019, ADR-0020, `docs/ux/`) | §14 (§14.6–§14.25 normative; §14.1–§14.5 current rules with the revision-4 layouts moved to Appendix A) |
 | CR-004 + Amendment B, proposal gate and change size (`docs/plan/CR-004-…`) | §9.1, §9.2 (new states), §9.5a (scout), §9.5b (proposal gate), §9.14 (size budget, filters, user-directed work, ranking), §12.6 (hard ceiling 80/3000/3000), FR-20, FR-21, AC 37–41 |
 | User decision 2026-10-18: no exposure (no Mini App, no tunnel, no inbound port) | FR-22, §14.8 D4, AC 42 |
 | NOTE-live-secrets (`docs/plan/NOTE-live-secrets.md`) | §22.7b |
@@ -226,6 +226,7 @@ The following parts are fully designed but are **phase-2**: the planner may defe
 | Telegram Mini App (ADR-0019 B3) | 14.8 D4, 14.22 | **not in v1**: needs no-exposure hosting or a fresh user approval (FR-22) |
 | Feature-registry consumers (first: nutrition log), CR-003 §13 phase-2 hooks (guest/inline mode) | 14.12.7, 14.19 | the registry, the plugin-store pattern and the feature-card renderer ship; no consumer feature |
 | A specific reverse-image-search provider | 15.6 | documented secret hook and skill stub only, until the user picks a provider |
+| §14.19 integrations 5–8, 10 (transcription), 12–17 (nutrition log, web clipping, GitHub notifications inbox, release watch, voice transcription, image tools, calendar, heartbeat, inline mode, Mini App, weather/news) | 14.19, 14.20.8 | absent; v1 builds items 1–4, 9, 11's hook and 18 (TRACEABILITY `CR3-IH-*`) |
 
 Revision 5 note on scope. The CR-001, CR-002 (incl. Amendment A), CR-003 and CR-004 (incl. Amendment B) requirements are **v1 Phase 2 scope**, not design phase-2, except the rows above. CR-003's opt-in layers ship off by default but are built in v1: the private review mirror (milestone M4) and Telegraph articles (v1.x, `telegraph.enabled: false`).
 
@@ -527,7 +528,7 @@ T7 scope statement: processes running as the Windows user are root-equivalent ov
 | Threat | Mitigations |
 |---|---|
 | T1 injection tells an LLM to approve/submit | I1, I3, I8, I9, I13: no code path exists from LLM output to approval. Untrusted text is wrapped in `<untrusted_input>` blocks with instructions to treat it as data. Hermes tools cannot approve; its ACP shim rejects every permission request. |
-| T1/T2 injection or hostile code tries to steal a Kiro key | Split coder (Section 10.4): repo code runs only in `agent-exec` (no key, `--network none`). `agent-llm` holds the key but mounts no task volume. It has no shell and no built-in file tools: every file operation goes through `@ossbot-exec/*` tools served by `ossbot-execd` inside `agent-exec`, which holds no key. A symlink to `/proc/self/environ` planted by hostile code is therefore resolved in a container without the key (H1). It reaches only Kiro hosts. kiro-cli cwd is outside the repo, so a hostile `.kiro/settings/mcp.json` or hook is not loaded (**[VERIFY]** workspace discovery rules; test S-ws-1). Knowledge and code intelligence are disabled (M1). sandboxd scans all outputs for the literal key and encodings; gatekeeper hash-checks token-like strings against `KIRO_KEY_SHA256`. Keys are dedicated and revocable. |
+| T1/T2 injection or hostile code tries to steal a Kiro key | Split coder (Section 10.4): repo code runs only in `agent-exec` (no key, `--network none`). `agent-llm` holds the key but mounts no task volume. It has no shell and no built-in file tools: every file operation goes through `@ossbot-exec/*` tools served by `ossbot-execd` inside `agent-exec`, which holds no key. A symlink to `/proc/self/environ` planted by hostile code is therefore resolved in a container without the key (H1). Its egress depends on the egress mode (§11.5): in `allowlist` and `research` it reaches only Kiro hosts; in the default `open` mode `agent-llm` (and `catalog`, its pool-mate) also get `web_public`, so a model that read the key could try to send it to any public host. That residual is bounded by the controls that hold in every mode: the key never enters a tool's reach (ADR-0017: no shell, no file tool, the key only in the kiro-cli process environment), sandboxd's output key scan, the gatekeeper's token-hash check, the safety-probe gate (M2), a dedicated revocable key and the anomaly limits; `fetch`, `validate`, the gatekeeper and the runner never get `web_public` in any mode (§11.5 invariants). kiro-cli cwd is outside the repo, so a hostile `.kiro/settings/mcp.json` or hook is not loaded (**[VERIFY]** workspace discovery rules; test S-ws-1). Knowledge and code intelligence are disabled (M1). sandboxd scans all outputs for the literal key and encodings; gatekeeper hash-checks token-like strings against `KIRO_KEY_SHA256`. Keys are dedicated and revocable. |
 | T1 injection in research profiles (broad web) | Research agents (vetter, planner, reviewer, summarizer) have no shell and no write. They read only a per-run snapshot volume of regular files (symlinks become `*.symlink.txt` text stubs; no devices or FIFOs) plus sandboxd-written inputs, so no repo-controlled path can point at `/proc`, `/sys`, `/dev` or `/run` (H1). `read` also denies `/proc/**`, `/sys/**`, `/dev/**`, `/run/**`, `/etc/**`, `~/.kiro/**`. cwd is outside the repo. A gate refuses Kiro jobs until live probes, including the symlink probe, pass for the current tuple (M2). Residual risk: a Kiro bug that exposes the process environment to the model by other means. Accepted, with a dedicated revocable key and anomaly limits. |
 | T1 injection makes the PR malicious or low quality | Independent reviewer session (different model by default), deterministic diff policy (size, paths, binaries, workflows), human reviews the gatekeeper-derived diff before approval. |
 | T2 hostile code reads secrets or escapes | Code-running containers (fetch, agent-exec, validate, package) hold no secrets; non-root, `--cap-drop ALL`, `no-new-privileges`, read-only rootfs, default seccomp, pids/mem/cpu limits, per-task networks. Docker filter blocks anything outside the template. |
@@ -537,7 +538,7 @@ T7 scope statement: processes running as the Windows user are root-equivalent ov
 | T3 malicious package exfiltrates | Nothing to exfiltrate in fetch/validate; egress allowlist limits destinations; proxy logs every CONNECT; Hyper-V firewall limits ports. |
 | T4 bad change | Validation results come from deterministic re-runs, not agent claims; reviewer loop bounded; risk/confidence shown; human approval. |
 | T5 impersonation | Single allowlisted user ID + private chat check; two-tap confirm; single-use 128-bit tokens bound to message ID; approvals expire (72 h), confirms expire (5 min). Unknown users ignored and rate-alerted. Revision 5 (CR-003 delta 3): view and navigation tokens are multi-use until the approval ends (or 24/72 h for kit views), still message-bound, owner-only and opaque; every decision token (Approve, Confirm, Cancel, Reject, Start work, skill activation, Publish) stays single-use. |
-| T6 compromised Hermes / injection into Hermes | Hermes's tool surface is an **allowlist**: `memory`, `todo`, `session_search` and the `ossbot` plugin. `terminal`, `file`, `code_execution`, `skills`, `delegation`, `cronjob`, `browser`, `web` and the rest are disabled twice (`platform_toolsets` plus `agent.disabled_toolsets`). The gatekeeper verifies the live surface through `GET /v1/toolsets` at start, hourly, and after every Hermes reconnect, and soft-kills on drift (H2). Hermes's Kiro ACP session (`ossbot-chat`) has only `web_search`/`web_fetch`, with no file tool. The V3 adapter refuses to serve a session whose current mode is not `ossbot-chat` (or whose advertised tools exceed the two web tools) and soft-kills `hermes_kiro_surface`; the relay stays disabled until a root-run Hermes-side Kiro probe passes (15.2, M9). Hermes Tool Search is off and its bridge tools are forbidden (M8). The shim rejects every permission request. No tool reachable by the model can read a local file, so `hermes.env` (which `hermes` must be able to read) is reachable only through code execution in the `hermes` uid. That residual risk, a Hermes, plugin or Kiro code bug, is accepted, with a dedicated revocable key, no docker, no sudo, a read-only repo, egress via proxy port 3141 only, and a gatekeeper role limited to reads, discovery requests, notify, pause and kill. |
+| T6 compromised Hermes / injection into Hermes | Hermes's tool surface is an **allowlist per capability tier** (§15.5). Every tier has `memory`, `todo`, `session_search` and the `ossbot` plugin; `research` adds Hermes-native `web` only if it is routed through proxy port 3141; the default tier **`self_improve`** adds `skills` (`skill_manage` writes, `skill_view`, `skills_list`). `terminal`, `file`, `code_execution`, `delegation`, `cronjob`, `browser` and the rest are disabled twice in every tier (`platform_toolsets` plus `agent.disabled_toolsets`). `skill_manage` can write only to the staging dir `~hermes/.hermes/skills-staging/`; nothing staged is loaded. A root hasher records each staged skill's file hashes, declared tools and the tier in `skill_reviews`, and a skill becomes active only after the two-tap skill card (§14.15, `SkillApprovals`), when root copies exactly the bound bytes into the read-only active dir (`root:hermes` 0750/0640); doctor detects drift, a tier change invalidates pending skill approvals, and a skill can never add tools because the rendered config defines the toolsets. A prompt-injected Hermes can therefore stage a hostile skill but cannot activate it; the residual is a human approving a hostile skill from its card, mitigated by the verbatim escaped diff and the `danger`-styled Confirm. The gatekeeper verifies the live surface through `GET /v1/toolsets` at start, hourly, and after every Hermes reconnect, and soft-kills on drift (H2). Hermes's Kiro ACP session (`ossbot-chat`) has only `web_search`/`web_fetch`, with no file tool. The V3 adapter refuses to serve a session whose current mode is not `ossbot-chat` (or whose advertised tools exceed the two web tools) and soft-kills `hermes_kiro_surface`; the relay stays disabled until a root-run Hermes-side Kiro probe passes (15.2, M9). Hermes Tool Search is off and its bridge tools are forbidden (M8). The shim rejects every permission request. No tool reachable by the model can read a local file, so `hermes.env` (which `hermes` must be able to read) is reachable only through code execution in the `hermes` uid. That residual risk, a Hermes, plugin or Kiro code bug, is accepted, with a dedicated revocable key, no docker, no sudo, a read-only repo, egress via proxy port 3141 only, and a gatekeeper role limited to reads, discovery requests, notify, pause and kill. |
 | T7 Windows-user processes | Out of scope as an adversary (root-equivalent). Narrow mitigations against accidental exposure listed in 8.2. No `ossctl approve` exists; every operator go action triggers a Telegram FYI. |
 | T8 maintainer backlash | AI-policy vetting (skip bans, require human decision when unclear), disclosure block, rate limits, one open PR per repo, cooldown after a maintainer closes unmerged, prefer issues labelled for outside help, `discovery.proactive: false`. |
 
@@ -557,7 +558,7 @@ T7 scope statement: processes running as the Windows user are root-equivalent ov
 | Review artifacts shown to the human | yes (gatekeeper mirror) | never |
 | Policy checks, rate limits, approvals, kill/pause/resume, dry-run, config reload, model switch, state machine, audit | yes | never |
 | ACP permission decisions for Hermes's Kiro session | yes (always reject) | never |
-| Telegram rendering and buttons | yes | Hermes text is rendered as escaped text only, never buttons |
+| Telegram rendering and buttons | yes (the kit, §14.18; the routing table, §14.10.4) | Hermes output is data: the gatekeeper renders it from typed blocks (rich `blocks` with `skip_entity_detection`, or escaped and defused classic HTML, §14.12.2, U1, U8) and labels it 🤖 (U6). Hermes never supplies markup or buttons; follow-up buttons are gatekeeper tokens whose only effect is relaying their visible label back to Hermes (D9, U2), and feature cards are typed data validated and rendered by the gatekeeper (D10) |
 
 ## 9. Contribution pipeline
 
@@ -1968,7 +1969,7 @@ if ($Hard) { Disable-ScheduledTask -TaskName ossbot-autostart | Out-Null; wsl.ex
 
 ## 14. Telegram design
 
-Revision 5 (2026-10-18) merges **CR-003** (Telegram user experience and the PR review flow; design loop ended after review round 6, approved by the user on 2026-10-18; the remaining round-6 findings are build acceptance criteria, `docs/ux/cr003-carried-findings.md`) into this section. §14.6–§14.25 are CR-003 §0–§19 verbatim in substance and are **normative**. §14.1–§14.5 are the revision-4 baseline that Phase 1 built and that the code's docstrings cite; each carries an amendment note, and where a baseline rule conflicts with §14.6–§14.25 the later section wins. ADR-0019 (review surface) and ADR-0020 (Telegram library: python-telegram-bot 22.8 stays, typed Bot API 10.1–10.3 adapter, no Pillow in the gatekeeper) are the short forms. CR-003's responses to design review rounds 1–5 stay in `docs/plan/CR-003-telegram-ux.md` (historical).
+Revision 5 (2026-10-18) merges **CR-003** (Telegram user experience and the PR review flow; design loop ended after review round 6, approved by the user on 2026-10-18; the remaining round-6 findings are build acceptance criteria, `docs/ux/cr003-carried-findings.md`) into this section. §14.6–§14.25 are CR-003 §0–§19 verbatim in substance and are **normative**. §14.1–§14.3 (bot ownership, update authorization, rendering) are the current rules, with the CR-003 amendments folded in. §14.4, §14.4a and §14.5 keep only what still applies (card content, verbatim parts, the `comment`/`issue_claim`/`push_update` content, the command registry); their revision-4 layouts, keyboards, flows and command table moved to Appendix A (historical), so there is one card layout (S1), one keyboard set (§14.18.4.1), one `/approve` semantics (`reissue()`) and one command table (§14.14.1). The section numbers §14.1–§14.5 are kept because the Phase 1 code cites them; PLAN item 44 updates those docstrings to the current sections. FEAT and item numbers in §14 are PLAN revision 5 (the mapping is at the top of §14.20.8). ADR-0019 (review surface) and ADR-0020 (Telegram library: python-telegram-bot 22.8 stays, typed Bot API 10.1–10.3 adapter, no Pillow in the gatekeeper) are the short forms. CR-003's responses to design review rounds 1–5 stay in `docs/plan/CR-003-telegram-ux.md` (historical).
 
 Numbering: **CR-003 §N.x = DESIGN §14.(N+6).x** (for example CR-003 §5.15 = §14.11.15, §12.4 = §14.18.4, §4.4 rule 7 = §14.10.4 rule 7). CR-003 acceptance criterion n is cited as "§14.21 AC n" (TRACEABILITY id `CR3-AC-n`); BA-1…BA-22 keep their names (`CR3-BA-n`). "AC n" without a section means Section 5.
 
@@ -1999,151 +2000,73 @@ Numbering: **CR-003 §N.x = DESIGN §14.(N+6).x** (for example CR-003 §5.15 = �
 
 ### 14.1 Decision: one bot, owned by the gatekeeper; Hermes behind its local API
 
-> **Amended in revision 5 (CR-003).** Hermes output is no longer "escaped text with a 🤖 prefix, never with buttons": answers stream through drafts and are rendered by `chat/answer_view.py` from typed blocks (§14.8 D8, U1, U6), follow-up buttons are gatekeeper tokens that relay only their visible label (D9), unsolicited Hermes messages follow U12, and every non-command update is routed by the normative table in §14.10.4 (CR-002 Amendment A, §15.6). `/newchat` is now `/new` (§14.12.6). python-telegram-bot 22.8 stays (D20, ADR-0020). `telegram.mode: dual` remains phase-2.
+The Bot API delivers each update to exactly one consumer per token (a second `getUpdates` poller gets a Conflict; webhooks need public HTTPS, which FR-22 rules out). Whoever polls the token sees every callback, including Approve taps. If Hermes polled the shared bot, approval callbacks would pass through the Hermes process, which runs LLM-driven tools, plugins, self-written skills, and auto-updates; it could replay or synthesize a callback. That breaks I3.
 
-The Bot API delivers each update to exactly one consumer per token (a second `getUpdates` poller gets a Conflict; webhooks need public HTTPS). Whoever polls the token sees every callback, including Approve taps. If Hermes polled the shared bot, approval callbacks would pass through the Hermes process, which runs LLM-driven tools, plugins, self-written skills, and auto-updates; it could replay or synthesize a callback. That breaks I3.
-
-So the single user-facing bot is owned by the gatekeeper:
+So the single user-facing bot is owned by the gatekeeper and uses long polling only:
 
 - Commands and button callbacks are handled deterministically in the gatekeeper.
-- Non-command text (and `/chat ...`) is relayed to Hermes's API server at `127.0.0.1:8642` (`API_SERVER_KEY` shared between gatekeeper and Hermes only) using `POST /v1/responses` with `X-Hermes-Session-Key: tg-<user_id>-<n>` so Hermes keeps conversation memory; `/newchat` increments `n`. The live contract is checked with `GET /v1/capabilities` at startup.
-- Hermes's reply is rendered as escaped text with a `🤖` prefix, never with buttons, never parsed for commands.
-- Hermes can push proactive text only through the `ossbot_notify` tool → `POST /v1/notify`, rate-limited, rendered the same way.
+- Every non-command update is classified by the normative routing table (§14.10.4). Free text, photos and albums, documents, voice notes, locations and replies with quoted context go to Hermes's API server at `127.0.0.1:8642` (`API_SERVER_KEY` shared between gatekeeper and Hermes only) through `POST /v1/responses` with an `X-Hermes-Session-Key` (`tg-<user_id>-<n>` in flat mode, one key per chat topic in topic mode, §14.12.6), so Hermes keeps conversation memory. `/new` (alias `/newchat`) starts a new conversation. GitHub links get a link card with `🛠 Work on this` (§14.11.19). The live contract is checked with `GET /v1/capabilities` at startup.
+- Hermes output is data. The gatekeeper streams it through drafts with Stop and renders the final answer from typed blocks in `chat/answer_view.py` (§14.12, D8, U1, U6). It is never parsed for commands. The only buttons next to it are gatekeeper tokens: follow-ups whose single effect is relaying their visible label (D9) and feature cards rendered from typed data (D10).
+- Hermes can send unsolicited messages only through the `ossbot_notify` tool (`POST /v1/notify`) and feature cards through `POST /v1/features/{feature}/cards`. Both are rate-limited, and the gatekeeper picks where and how loudly they land (U12).
 
-Fallback (config `telegram.mode: dual`): Hermes's native Telegram gateway on a second chat-only bot, `TELEGRAM_ALLOWED_USERS` = the same single ID; the gatekeeper bot keeps all commands and approvals. The relay sits behind `ChatBackend`, so the switch is configuration only. ADR-0004.
+python-telegram-bot 22.8 stays, with a typed adapter for Bot API 10.1–10.3 over `do_api_request` (D20, ADR-0020). Fallback (config `telegram.mode: dual`, phase-2 and rejected by the v1 schema): Hermes's native Telegram gateway on a second chat-only bot, `TELEGRAM_ALLOWED_USERS` = the same single ID, with the gatekeeper bot keeping all commands and approvals. The relay sits behind `ChatBackend`, so the switch is configuration only. ADR-0004.
 
 ### 14.2 Authorization of updates
 
-> **Amended in revision 5 (CR-003).** `ALLOWED_UPDATES` gains `stopped_message_generation`, which carries no `from` and is checked by `authorized_chat_only()` (U10); `authorized()` is unchanged. View and navigation tokens are multi-use until the approval ends (or 24/72 h for kit views), still message-bound, owner-only and opaque; every **decision** token (Approve, Confirm, Cancel, Reject, Start work, skill activation, Publish) stays single-use (§14.18.4 delta 3). Confirm panels disarm after 5 min (delta 2). The update-handler budget is §14.18.5.
+Accept an update only if `effective_user.id == profile.telegram.user_id`, `effective_chat.type == "private"`, and `effective_chat.id == profile.telegram.user_id` (value from the active config snapshot): `auth.authorized()`. The one exception is `stopped_message_generation`, which carries no `from`. It is accepted by `auth.authorized_chat_only()` (private chat whose id is the owner's) and can only cancel the owner's own stream (U10). `ALLOWED_UPDATES = ["message", "callback_query", "stopped_message_generation"]`. Topic routing never changes authorization.
 
-Accept an update only if `effective_user.id == profile.telegram.user_id`, `effective_chat.type == "private"`, and `effective_chat.id == profile.telegram.user_id` (value from the active config snapshot). Everything else: no reply, `answerCallbackQuery` with empty text for callbacks, WARNING log with user id (no message text), counter. Pending updates are processed at startup (`drop_pending_updates=False`). A `callback_query` has no timestamp of its own, so staleness is decided only by token TTLs and status (approve 72 h, confirm 5 min, others ≤ 24 h) and by the message-ID binding (N12). There is no separate age cut-off. Callback handler: `data` must match `^t:[A-Za-z0-9_-]{22}$`; token row must exist, be purpose-appropriate, `tg_message_id == callback.message.message_id`, unused (if single-use), unexpired. Always `answerCallbackQuery` promptly.
+Everything else: no reply, `answerCallbackQuery` with empty text for callbacks, WARNING log with user id (no message text), counter. Pending updates are processed at startup (`drop_pending_updates=False`).
+
+Callback handler: `data` must match `^t:[A-Za-z0-9_-]{22}$`; the token row must exist, be purpose-appropriate, have `tg_message_id == callback.message.message_id`, be unused if single-use, and be unexpired. Every **decision** token (Approve, Confirm, Cancel, Reject, Start work, skill activation, Publish) is single-use. View and navigation tokens are multi-use until the approval ends (or 24/72 h for kit views), still message-bound, owner-only and opaque (§14.18.4 delta 3). A `callback_query` has no timestamp of its own, so staleness is decided only by token TTLs and status (approve 72 h, confirm 5 min, others ≤ 24 h) and by the message-ID binding (N12); there is no separate age cut-off. Confirm panels left untouched disarm after 5 min (delta 2). Always `answerCallbackQuery` promptly; nothing slow runs inside an update handler (§14.18.5).
 
 ### 14.3 Rendering rules
 
-> **Amended in revision 5 (CR-003).** Redaction before any send is the U14 choke point (`telegram/ui/redact.py` over `gatekeeper/secret_scan.py`), including the hold-back rule for drafts, Stop partials and truncated answers. The PR title is publish bytes: it is shown escaped, never cut, dropped, defused or redacted, wrapped to as many lines as it needs (round-6 MEDIUM, `CR3-F6-1`). Rich messages carry untrusted text only as plain `blocks` strings with `skip_entity_detection` (U1); classic untrusted text is defused (U8). Budgets and chunking: §14.17.4.
+- **Modes.** Classic messages use parse mode HTML. Rich messages (`blocks`) carry untrusted text only as plain strings with `skip_entity_detection` (U1); approval cards and Confirm panels are always classic (U3). MarkdownV2 is never used. Details: §14.17.3.
+- **Escaping.** `html.escape(text, quote=False)` for text nodes; attribute values with `quote=True`. Tags used: `b i u s code pre a blockquote tg-spoiler tg-time`. Untrusted text (issue titles, Hermes output, logs) is always escaped, made visible (`make_visible`) and command-defused in classic text (U8). Hermes Markdown goes through our own converter (`md2blocks`, §14.12.2), links only if `http(s)://`.
+- **Publish bytes.** The PR body and commit message are never converted: they are `html.escape`d and wrapped in `<pre>` so every byte that will be posted is visible as source, including `<!-- -->`, `<details>`, image and link syntax, zero-width and bidi control characters (rendered as `⟦U+200B⟧` style escapes by a pre-pass, with a count in the card). The PR title is publish bytes too: it is shown escaped inside `<code>`, never cut, dropped, defused or redacted, and wrapped to as many lines as it needs (`CR3-F6-1`).
+- **Chunking.** Messages are built from blocks; a packer concatenates blocks while the escaped length stays ≤ 3,900 characters; an oversized block is split at line boundaries (hard split at 3,500 if a line is longer), and `<pre>` blocks are closed and reopened across chunks with a `(part i/K)` header. Property tests guarantee balanced tags and length. All budgets: §14.17.4.
+- **Callback data.** Always `t:<22 chars>` = 24 bytes.
+- **Diffs** are rendered from the gatekeeper-derived patch only, through the explorer and file views (S2/S3, §14.11.2–§14.11.3); the derived `.patch` and the HTML diff are documents (§14.11.4).
+- **Test logs.** Summary inline (last 40 lines of each failing command, redacted), full logs as one `.txt` document (zip if > 45 MB), reached from the explorer.
+- **Outbox.** ≤ 1 call/s per chat, honours `429 retry_after`, retries network errors with backoff, persists in `tg_outbox`, binds a message's tokens and writes its `tg_views` row in the same transaction as `mark_sent` (§14.18.4 delta 6), and applies priorities, quiet hours and batching (§14.13), never holding a row that has buttons.
+- **Redaction before any send** is one choke point (U14): `telegram/ui/redact.py` over `gatekeeper/secret_scan.py` (policy token patterns, the gatekeeper's own secret values, the Kiro-key hash check), including the hold-back rule for drafts, Stop partials and truncated answers. Publish bytes are scanned, never altered: a hit withholds the card (§14.18.1).
 
-- Parse mode HTML. Escaping: `html.escape(text, quote=False)` for text nodes; attribute values with `quote=True`. Tags used: `b i u s code pre a blockquote tg-spoiler`. Untrusted text (issue titles, Hermes output, logs) is always escaped; Hermes markdown goes through our minimal converter (fenced code → `<pre><code>`, `**b**` → `<b>`, links only if `http(s)://`) operating on escaped text.
-- **PR body and commit message are never converted**: they are `html.escape`d and wrapped in `<pre>` so every byte that will be posted is visible as source, including `<!-- -->`, `<details>`, image and link syntax, zero-width and bidi control characters (rendered as `⟦U+200B⟧` style escapes by a pre-pass, with a count in the card).
-- Chunking: messages are built from blocks; a packer concatenates blocks while the escaped length stays ≤ 3900 chars; an oversized block is split at line boundaries (hard split at 3500 if a line is longer), and `<pre>` blocks are closed and reopened across chunks with a `(part i/K)` header. Property tests guarantee balanced tags and length.
-- Callback data: always `t:<22 chars>` = 24 bytes.
-- Diff view: rendered from the gatekeeper-derived patch only; per-file sections in `<pre><code class="language-diff">`, pages ≤ 3500 chars, ◀ ▶ navigation by `editMessageText`, page index in the token `arg`. If the diff exceeds 3 pages or 30 KB, the derived `.patch` is also sent via `sendDocument`.
-- Test logs: summary inline (last 40 lines of each failing command, redacted), full logs as one `.txt` document (zip if > 45 MB).
-- Outbox: ≤ 1 msg/s per chat, honours `429 retry_after`, retries network errors with backoff, persists in `tg_outbox`.
-- Redaction before any send: policy token patterns, the gatekeeper's own secret values, and the Kiro key hash check.
+### 14.4 Preview card content (layout: S1, §14.11.1)
 
-### 14.4 Preview card
+The layout, keyboard and flows of the revision-4 preview card are superseded by S1 (§14.11.1), S2–S12 and the per-kind purposes of §14.18.4.1; the revision-4 text is kept in Appendix A.1 for history. What stays normative here is the content FR-5 requires, which S1 renders:
 
-> **Amended in revision 5 (CR-003, CR-004).** The card layout and keyboard are replaced by S1 (§14.11.1) with the per-kind purposes of §14.18.4.1; the content FR-5 requires stays. The card gains the size line (estimate vs gatekeeper-measured diff, code and test lines split, overrun flagged not blocked, §14.11.1, §9.14) and the `👤 requested by you` marker. Request changes, Edit title/body and comments follow §14.11.5–§14.11.8; Edit title/body run `policy.check_text` before anything is stored (Phase 1 review P1-4).
+- header: kind icon and title, contribution id, rev, mode (`DRY RUN` or `LIVE`), and `👤 requested by you` for user-directed work;
+- repo facts (stars, external PRs merged in 90 days, median first review), the issue link and title, the planner's rationale (≤ 300 characters, labelled 🤖), maintainers and CODEOWNERS for the touched paths;
+- checks: CONTRIBUTING, AI policy, CLA, DCO, unclaimed, no competing PR;
+- risk and confidence (🤖), coder mode;
+- the gatekeeper-derived change (files, `+/−`) and the size line (code and test lines split, estimate vs actual, overrun flagged, never blocked; §14.11.1, §9.14);
+- validation results from deterministic re-runs, the self-review verdict and model;
+- commit, base, identity (author, committer and sign-off `Amsal Khan <md.amsalkhan@gmail.com>`), branch and fork (`Amsal1/<repo>`);
+- the PR title (marked "edited by you" when overridden) and the body and commit message sizes.
 
-Message 1 (card), example:
-
-```
-🧩 <b>Ready for review</b> · c_01JABC… · <b>DRY RUN</b> (or <b>LIVE</b>)
-<b>langfuse/langfuse</b> ⭐ 36.0k · pushed 2h ago · 14 external PRs merged/90d · median first review 9h
-Issue <a href="…">#1234</a> <b>Fix trace export when …</b> · labels: bug, good first issue
-Why: <rationale from planner, ≤ 300 chars>
-Maintainers: @a, @b · CODEOWNERS for touched paths: @org/team
-Checks: CONTRIBUTING ✅ · AI policy: disclosure required ✅ · CLA: not required · DCO: required → signed ✅ · Unclaimed ✅ · No competing PR ✅
-Risk: low · Confidence: 0.82 · Coder mode: split
-Change (derived by gatekeeper): 3 files, +42 −7
-  web/src/x.ts +30 −5 · web/src/y.ts +10 −2 · CHANGELOG.md +2
-Validation: ✅ lint (eslint) · ✅ unit 212 passed · ✅ smoke (build + --help) · ⏭ stack n/a · upstream CI after submit
-Self-review (claude-sonnet-5.5, round 1/2): PASS · 0 blocking · 2 nits fixed
-Commit abc1234 = 1 commit on upstream main@def5678 (base as of 10:02 UTC) · author/committer/sign-off: Amsal Khan <md.amsalkhan@gmail.com>
-Branch ossbot/1234-fix-trace-export-01jabc → Amsal1/langfuse
-PR title: <code>fix(web): handle empty spans in trace export</code>   [edited by you]
-Body: 2 140 chars, 1 part below · Commit message: 4 lines, below
-```
-
-Message 2..K+1: the PR body verbatim, escaped in `<pre>`, chunked, each part headed `PR body (i/K)`. If K > 3 or the body exceeds 10 000 chars, `pr_body.md` is also sent via `sendDocument`. Message K+2: the derived commit message verbatim in `<pre>`.
-
-Keyboard (on message 1), in two phases:
-
-- While body parts are still in the outbox: `[⏳ delivering…] [❌ Reject] [🧾 View diff]`. The `approve` token is created only when `body_parts_delivered == body_parts_total` (and the commit message message succeeded); the card is then edited to the full keyboard.
-- Full keyboard:
-
-```
-[✅ Approve & Submit] [❌ Reject]
-[✏️ Request changes] [🧾 View diff]
-[🧪 Test logs] [📝 Edit title] [📝 Edit body]
-[↩️ Clear my edits]   (only when an override exists)
-```
-
-Flows:
-
-- Approve → card edited to the mode-stating confirm (12.4) with `[✅ Confirm] [↩️ Cancel]`. Confirm → submit; progress edits; final link.
-- Reject → reasons `[Not valuable] [Wrong approach] [Repo unsuitable (cooldown)] [Other…]`; Other → ForceReply; text ≤ 500 chars. Repo unsuitable → 7-day cooldown.
-- Request changes → ForceReply "Describe the change (≤ 4000 chars)"; creates `change_requests`; contribution → CHANGES_REQUESTED → implement; old card edited "superseded by change request". Title/body overrides are kept and re-applied to the next package rev; the next card says "title/body edited by you".
-- Edit title/body → ForceReply with the current text quoted; validation (title 1-256 chars, single line; body ≤ 60000, disclosure enforced); stored in `pr_title_override`/`pr_body_override`; new card, old approvals invalidated.
-- Post-submit: "Submitted ✅ PR #N", then watcher updates: CI status, new reviews/comments (with "Draft reply" pending card if created), merged 🎉 / closed.
-
-ForceReply correlation: `pending_input(kind, cid, prompt_message_id, expires 15 min)`; the next message that replies to that prompt message is accepted; other text goes to Hermes.
+Messages 2..K+1 are the PR body verbatim, escaped in `<pre>`, chunked, each part headed `PR body (i/K)`. If K > 3 or the body exceeds 10,000 characters, `pr_body.md` is also sent via `sendDocument`. Message K+2 is the derived commit message verbatim in `<pre>`. The `approve` token is minted only when `body_parts_delivered == body_parts_total` (and the commit-message message succeeded), for re-sends too (§14.18.4 delta 7).
 
 ### 14.4a Cards for `comment`, `issue_claim`, and `push_update` (M11)
 
-> **Amended in revision 5 (CR-003).** Confirm sentences equal `ApprovalService.confirm_text` for the kind and mode (§14.11.9). Comment and claim cards have no Explore, Files or Request changes; their `📝 Edit text` opens the `edit_comment` ForceReply (§14.21 AC 5). Under CR-004 an `issue_claim` is created only after gate 1 (§9.5b).
+Every public action shows the exact bytes it will publish before Approve exists. The same rules apply as for the PR card: escaped `<pre>`, chunking, `body_parts_delivered == body_parts_total` before the `approve` token is minted, the two-tap mode-stating confirm whose sentence is exactly `ApprovalService.confirm_text` for the kind and mode (§14.11.9), and message-ID-bound tokens. Keyboards are §14.11.1 and §14.18.4.1; the revision-4 examples are in Appendix A.2.
 
-Every public action shows the exact bytes it will publish before Approve exists. The same rules apply as for the PR card: escaped `<pre>`, chunking, `body_parts_delivered == body_parts_total` before the `approve` token is minted, two-tap mode-stating confirm, and message-ID-bound single-use tokens.
+- **Comment / claim card** content: header (💬 `Comment ready` or 🙋 `Issue claim ready`, cid, mode), target link and title (issue or our PR), the drafter's rationale (≤ 300 characters, 🤖), "In reply to" with link, checks (target open, our PR or linked issue, comments today vs limit, secret scan, confidentiality, AI note), body size and part count. Messages 2..K+1 hold the body verbatim, escaped in `<pre>`, headed `Comment (i/K)`; invisible and bidi characters are made visible as in §14.3. Under CR-004 an `issue_claim` is created only after gate 1 (§9.5b).
+- **Edit text** (S7 `edit_comment`): normalized at storage, `policy.check_text` runs before anything is stored, the AI note is re-appended if missing, and old approvals are invalidated.
+- **Reject** of a claim → contribution `SKIPPED reason=claim_rejected` (from `VETTED`) or `FAILED claim_rejected` (from `PACKAGING`, §9.2). Reject of a comment → action `cancelled`; the contribution stays `WATCHING`.
+- **`push_update` card** content: header `🔁 Fix ready for PR #N` with "incremental commit on `Amsal1:<branch>`"; the change line derived from `old_head_sha..head` ("+12 −3 in 2 files") and a cumulative line ("PR total vs base: 4 files +54 −10"); `Commit <sha> on top of <sha> (current PR head, verified on fork)`; no PR title/body section (the PR text is unchanged), the commit message verbatim instead; the trigger "Requested by @maintainer: <quoted review comment, escaped, ≤ 500 chars, link>"; Files and the `.patch` use the incremental patch. Reject fix → `AWAITING_APPROVAL→WATCHING` (H).
 
-Comment / claim card (message 1):
+Golden tests in `tests/telegram/test_cards.py` cover comment, claim and `push_update`, each in LIVE and DRY RUN; a long comment (K > 1, Approve hidden until delivered); and hidden or bidi characters in a comment.
 
-```
-💬 <b>Comment ready</b> (or 🙋 <b>Issue claim ready</b>) · c_01JABC… · <b>LIVE</b> (or <b>DRY RUN</b>)
-Target: <a href="…">langfuse/langfuse#1234</a> <b>Fix trace export when …</b> (issue | our PR #5678)
-Why: <drafter rationale, ≤ 300 chars, escaped>  ·  In reply to: @maintainer, 2h ago (link)
-Checks: target open ✅ · our PR/linked issue ✅ · comments today 3/10 ✅ · secret scan ✅ · confidentiality ✅ · AI note ✅
-Body: 412 chars, 1 part below
-```
+### 14.5 Command registry
 
-- Messages 2..K+1 contain the body verbatim, escaped in `<pre>`, headed `Comment (i/K)`. Invisible and bidi characters are made visible as in 14.3.
-- Keyboard: `[✅ Approve & Post] [❌ Reject] [📝 Edit text]`. Edit text works like Edit body: normalized at storage, the AI note is re-appended if missing, and old approvals are invalidated.
-- Confirm text: `Confirm: LIVE — post comment on langfuse/langfuse#1234 as Amsal1. Expires in 5 min.` For a claim, `post claim comment`. For dry-run, `Confirm: DRY RUN — nothing will be posted.`
-- Reject of a claim → contribution `SKIPPED reason=claim_rejected` (from `VETTED`) or `FAILED claim_rejected` (from `PACKAGING`, 9.2). Reject of a comment → action `cancelled`; the contribution stays `WATCHING`.
-
-`push_update` card: the PR card layout (14.4) with these changes.
-
-- The header reads `🔁 <b>Fix ready for PR #5678</b>`, followed by "incremental commit on `Amsal1:<branch>`".
-- The change line is gatekeeper-derived from `old_head_sha..head`, e.g. "+12 −3 in 2 files". A cumulative line follows for context: "PR total vs base: 4 files +54 −10".
-- The commit line reads `Commit def4567 on top of abc1234 (current PR head, verified on fork)`.
-- There is no PR title/body section, since the PR text is unchanged. The commit message is shown verbatim instead.
-- The trigger is shown as "Requested by @maintainer: <quoted review comment, escaped, ≤ 500 chars, link>".
-- View diff and the `.patch` attachment use the incremental patch.
-- Buttons: `[✅ Approve & Push] [❌ Reject fix] [✏️ Request changes] [🧾 View diff] [🧪 Test logs]`.
-- Confirm text: `Confirm: LIVE — push 1 commit to PR #5678 (langfuse/langfuse) as Amsal1. Expires in 5 min.`
-- Reject fix → `AWAITING_APPROVAL→WATCHING` (H).
-
-Golden tests in `tests/telegram/test_cards.py` cover: comment, claim, `push_update`, each in LIVE and DRY RUN; a long comment (K > 1, Approve hidden until delivered); and hidden or bidi characters in a comment.
-
-### 14.5 Commands
-
-> **Amended in revision 5 (CR-003, CR-001, CR-002, CR-004).** The command set and its pickers are §14.14.1 (adds `/drain /undrain /down /up`, `/work`, `/size`, `/filters`, `/egress`, `/hermes tier`, `/skills`, `/new`, `/quiet`, `/notify`, `/settings` and the `personal` safety class). `/approve <cid>` is `AppContext.reissue()` with the approval's expiry kept (§14.18.4 deltas 5 and 7).
-
-Registry `ossbot.gatekeeper.telegram.commands.registry`:
+The command set, classes, pickers and confirmation patterns are §14.14.1–§14.14.2 (the revision-4 table is in Appendix A.3). `/approve [cid]` re-sends a card through `AppContext.reissue()` with the approval's expiry kept and never approves by itself (§14.18.4 deltas 5 and 7). The registry mechanism stays:
 
 ```python
-@command("pause", help="Pause the pipeline", safety="stop")      # safety: read | stop | go | config
+@command("pause", help="Pause the pipeline", safety="stop")      # safety: read | stop | go | config | personal | tune | request
 async def pause(ctx: CommandContext, args: list[str]) -> Reply: ...
 ```
 
-`go` and `config` commands always produce a confirm button. Commands come from built-ins and from Python entry points group `ossbot.telegram_commands` (future integrations: `/digest`, `/cost`); the BotFather menu is set at startup via `setMyCommands`.
-
-| Command | Safety | Behaviour |
-|---|---|---|
-| `/status` | read | control state, dry-run, config hash, audit head + last anchor, running stages, today's counters, versions (kiro-cli, Hermes), last errors |
-| `/queue` | read | contributions grouped by state with buttons to open cards |
-| `/approve <cid>` | read | Re-sends the current approval card as a **new** message; it never approves by itself. In one SQLite transaction (N4), the gatekeeper invalidates every `ui_tokens` row of the old card(s) for that approval and resets the approval to `pending` if it was `armed`. The new message's tokens are minted only after `sendMessage` returns the new `message_id` and the body parts are delivered. The old card is edited to "moved to a newer message". If the approval had expired, live checks are re-run and a fresh approval row is created. |
-| `/reject <cid> [reason]` | config | confirm, then reject |
-| `/pause` | stop | immediate |
-| `/resume` | go | confirm |
-| `/kill [reason]` | stop | immediate soft kill |
-| `/dryrun on` / `off` | stop / go | on immediate; off needs confirm; either invalidates open approvals and re-issues cards |
-| `/reload` | go | shows a diff of policy/targets/egress/identity vs the active snapshot; confirm applies |
-| `/repos [filter]` | read | targets with enabled/cooldown/AI-policy/CLA badges; per-repo Enable/Disable/Allow AI (config, confirm) |
-| `/model` | read/config | default + roles; `/model <role> <id>` or catalog buttons → confirm → writes models.yaml |
-| `/limits` (`/budget`) | read | limits and current usage; invocation counts/time per role in 24 h |
-| `/logs <cid> [stage]` | read | last stage log tail + file |
-| `/newchat` | read | new Hermes session |
-| `/help` | read | generated from the registry |
+`go` and `config` commands always produce a confirm button. Commands come from built-ins and from Python entry points group `ossbot.telegram_commands`; the menus are set per scope and control state with `setMyCommands` (§14.10.2). Every command and confirm handler is tagged `effect: local|io`; `io` effects run as spawned tasks (§14.18.5).
 
 ### 14.6 Summary
 The bot is Amsal's daily driver for two things: approving OSS contributions and using Hermes as a general multimodal assistant. Today the UX is a flat chat with one decorated card per candidate and escaped text replies. This CR makes it a structured workspace:
@@ -2166,7 +2089,9 @@ The deterministic approval path keeps its rules: the same token format, binding 
 6. atomic token binding at send;
 7. re-sends that keep the approval's expiry, carry each action's own part count and touch only eligible actions;
 8. crash recovery for card delivery;
-9. invalidation fan-out to every decision service. The default needs zero extra setup. Richer layers, the private GitHub review mirror (ADR-0019 option C) and phase-2 items, are opt-in.
+9. invalidation fan-out to every decision service.
+
+The default needs zero extra setup. Richer layers, the private GitHub review mirror (ADR-0019 option C) and phase-2 items, are opt-in.
 
 ### 14.7 What the research changed
 Model knowledge was stale. Everything below was checked against the live documentation on 2026-10-18 (sources in §14.25). "PTB" means python-telegram-bot 22.8, the pinned version and the latest release (PyPI, 2026-06-12), which fully supports Bot API 10.0. The current Bot API is 10.3 (2026-08-24). PTB's native 10.1 work (issue #5261) is paused until its v23 refactor, so 10.1–10.3 methods and fields go through `Bot.do_api_request`, which the outbox already uses for every call (`telegram/bot.py: TelegramSender`), with typed pydantic payload models in `telegram/ui/blocks.py` and `telegram/rawapi.py`. The library was re-evaluated now that new dependencies are allowed: PTB stays, aiogram 3.31 and pyTelegramBotAPI 4.37 were rejected (ADR-0020).
@@ -2258,7 +2183,7 @@ New in this CR. Each invariant names the layer that enforces it:
 | U11 | **Nothing is published to the web except approved GitHub actions and explicitly confirmed Telegraph articles.** An article can be created only by the gatekeeper, from an eligible `chat_answer` view (§14.12.8), after a publish tap and a confirm tap, and after the secret and personal-data scans pass. LLM components can't reach Telegraph at all (`telegra.ph`, `api.telegra.ph` and `edit.telegra.ph` are always denied for them) | `gatekeeper/telegraph.py` (the only module importing `telegraph_writer.py`, import-linter) + egress categories | The publish is public and irreversible, and its token stays with the deterministic component |
 | U12 | **Unsolicited Hermes messages can't choose where or how loudly they land.** Feature cards, Hermes notifications and reminders go only to 💬 Assistant or user chat topics, never to ✅ Reviews, 🚦 Control or 📈 OSS feed. Each carries 🤖 in its header line (§14.12.7). **Flat mode has no topics**, so "never next to approval cards" can't hold by placement. There the guarantee is by rendering: every Hermes message carries the gatekeeper `🤖 Assistant` header with its body in one quote (U6), so it can't look like a card. `docs/SETUP.md` recommends turning topics on in @BotFather. The target thread comes only from the gatekeeper's own `chat_turns` row for the calling session (§14.12.7). Hermes P1 is capped at 5 per day, then sent as P2. Answers to the user's own message are not unsolicited: they follow §14.10.4 rules 7–8 and U6 (in ✅ Reviews: header plus quote, only `[📝 Use as comment]`) | `gatekeeper/api/notify.py`, `api/features.py`, `telegram/notify.py`, `telegram/routing.py` | A prompt-injected Hermes must not be able to place lookalike content next to approval cards or wake the user at night |
 | U13 | **The size ceiling can't be changed from Telegram** (CR-004 Amendment B). `policy.diff.max_files / max_changed_lines / max_test_lines` have no picker, no token purpose, no typed argument and no `/reload` shortcut; they change only by editing `config/policy.yaml` plus the normal human-confirmed `/reload`. `/size`, `/filters` and `/repos … size` change only autonomous-discovery preferences (`xs`…`xl`; `xxl` is never selectable) and never touch an approved proposal, a user-directed item, a gate or the ceiling | `gatekeeper/discovery_prefs.py` (the only writer of preferences; rejects ceiling keys) + the strict config schema (CR-004) | The ceiling is a runaway-agent guard, not a preference; a prompt injection or a mis-tap must not move it |
-| U14 | **Redaction before any send** (§14.3). Every piece of untrusted or model-authored text passes one redactor before it reaches Telegram or a stored answer: `telegram/ui/redact.py`, which wraps `common.redact.Redactor` loaded with the policy secret patterns (`DEFAULT_SECRET_PATTERNS` + `policy.secrets.extra_patterns`), the gatekeeper's own secret values (`TELEGRAM_BOT_TOKEN`, `GITHUB_WRITE_TOKEN`, `HERMES_API_KEY`, `OSSBOT_TOKEN_PEPPER`, and when set `GITHUB_REVIEW_MIRROR_TOKEN` and `TELEGRAPH_ACCESS_TOKEN`) and the Kiro key hash check (each `policy.TOKENISH_RE` candidate whose sha256 is in `KIRO_KEY_SHA256` is replaced). It runs on: every untrusted text leaf in `classic.py` and `rich.py` (so every kit view, feature card and Hermes answer); every draft in `drafts.py`, which bypasses the outbox; `answer.md`; log tails and log documents; `chat_turns.answer_text` **before it is stored** (so Telegraph and `Use as comment` start from redacted text); follow-up items (an item with any hit is dropped, never shown as `[REDACTED]`). **Streaming:** a draft, a Stop partial and a truncated answer never show a secret's prefix: each is built with `draft_visible()` (§14.12.1 steps 3 and 5). Only a stream that completed normally is sent with `redact()` alone. The guarantee covers secret values and whitespace-free patterns (patterns that can match whitespace are refused at load, BA-16); the Kiro-key hash check is a final-text backstop, and the default `ksk_` pattern covers Kiro keys while streaming. **Verbatim publish bytes** (`<pre>` body, commit-message and comment parts, skill parts, `.patch`, `pr_body.md`, the HTML diff's code, **the PR title wherever it is shown** (the card's `PR title:` line, explorer section 9, `📋 Copy title`), and any text that will be published and is quoted back in a prompt (the current title and body in the S7 Title/Body ForceReply, the current comment text in FEAT-005's `edit_comment` prompt)) are never altered, because they must equal what is published or activated; they are only scanned. Packaging and every edit path already refuse them on a hit (`policy.check_text` with the gatekeeper's secret values, §14.18.1), so a render-time hit is a bug (§14.18.1) | `telegram/ui/redact.py` over the shared `gatekeeper/secret_scan.py` (§14.18.1), called by `classic.py`, `rich.py`, `drafts.py`, `chat/stream.py` (answer persistence, Stop and truncation paths) and the document builders; an AST test asserts each calls it. Publish bytes are gated earlier by `policy.check_text` in `packaging.py` and the edit paths, using the same scanner | Telegram is a cloud chat; one choke point for every new send path, including the draft lane that skips the outbox. It is a backstop against accidental echo (Hermes holds `HERMES_API_KEY` as its API-server key and its own Kiro key, and may repeat either), not a defence against deliberate encoding such as base64 |
+| U14 | **Redaction before any send** (§14.3). Every piece of untrusted or model-authored text passes one redactor before it reaches Telegram or a stored answer: `telegram/ui/redact.py`, which wraps `common.redact.Redactor` loaded with the policy secret patterns (`DEFAULT_SECRET_PATTERNS` + `policy.secrets.extra_patterns`), the gatekeeper's own secret values (`TELEGRAM_BOT_TOKEN`, `GITHUB_WRITE_TOKEN`, `HERMES_API_KEY`, `OSSBOT_TOKEN_PEPPER`, and when set `GITHUB_REVIEW_MIRROR_TOKEN` and `TELEGRAPH_ACCESS_TOKEN`) and the Kiro key hash check (each `policy.TOKENISH_RE` candidate whose sha256 is in `KIRO_KEY_SHA256` is replaced). It runs on: every untrusted text leaf in `classic.py` and `rich.py` (so every kit view, feature card and Hermes answer); every draft in `drafts.py`, which bypasses the outbox; `answer.md`; log tails and log documents; `chat_turns.answer_text` **before it is stored** (so Telegraph and `Use as comment` start from redacted text); follow-up items (an item with any hit is dropped, never shown as `[REDACTED]`). **Streaming:** a draft, a Stop partial and a truncated answer never show a secret's prefix: each is built with `draft_visible()` (§14.12.1 steps 3 and 5). Only a stream that completed normally is sent with `redact()` alone. The guarantee covers secret values and whitespace-free patterns (patterns that can match whitespace are refused at load, BA-16); the Kiro-key hash check is a final-text backstop, and the default `ksk_` pattern covers Kiro keys while streaming. **Verbatim publish bytes** (`<pre>` body, commit-message and comment parts, skill parts, `.patch`, `pr_body.md`, the HTML diff's code, **the PR title wherever it is shown** (the card's `PR title:` line, explorer section 9, `📋 Copy title`), and any text that will be published and is quoted back in a prompt (the current title and body in the S7 Title/Body ForceReply, the current comment text in the S7 `edit_comment` prompt, PLAN item 45)) are never altered, because they must equal what is published or activated; they are only scanned. Packaging and every edit path already refuse them on a hit (`policy.check_text` with the gatekeeper's secret values, §14.18.1), so a render-time hit is a bug (§14.18.1) | `telegram/ui/redact.py` over the shared `gatekeeper/secret_scan.py` (§14.18.1), called by `classic.py`, `rich.py`, `drafts.py`, `chat/stream.py` (answer persistence, Stop and truncation paths) and the document builders; an AST test asserts each calls it. Publish bytes are gated earlier by `policy.check_text` in `packaging.py` and the edit paths, using the same scanner | Telegram is a cloud chat; one choke point for every new send path, including the draft lane that skips the outbox. It is a backstop against accidental echo (Hermes holds `HERMES_API_KEY` as its API-server key and its own Kiro key, and may repeat either), not a defence against deliberate encoding such as base64 |
 
 ### 14.10 Information architecture
 
@@ -2329,12 +2254,12 @@ Models: chat sonnet-5.5 · coder opus-5 · vision sonnet-5.5
 
 1. `callback_query`: the token handler (existing).
 2. `stopped_message_generation`: the chat stream with that `draft_id`, cancelled (§14.12.1). Authorized by `authorized_chat_only()` (U10). An unknown `draft_id` is ignored at DEBUG.
-3. A reply whose `reply_to_message` is an **open** `pending_input` prompt (ForceReply correlation, 15 min; FEAT-005 table, widened in §14.20.2): that input kind (`changes`, `edit_title`, `edit_body`, `reject_other`, `edit_comment`, `comment`, `line_pick`, `review_send_text`, `body_file`, `feature_fix`, `proposal_adjust`, `proposal_snooze_days`). This rule runs **before** the command rule, so a comment that starts with `/` ("/api/v1 is wrong") is a comment, not an unknown command.
+3. A reply whose `reply_to_message` is an **open** `pending_input` prompt (ForceReply correlation, 15 min; table `pending_input`, §14.20.2, created by PLAN item 44 in `0005_telegram_ux.sql`): that input kind (`changes`, `edit_title`, `edit_body`, `reject_other`, `edit_comment`, `comment`, `line_pick`, `review_send_text`, `body_file`, `feature_fix`, `proposal_adjust`, `proposal_snooze_days`). This rule runs **before** the command rule, so a comment that starts with `/` ("/api/v1 is wrong") is a comment, not an unknown command.
 4. A message whose text starts with `/`: the command registry (existing). This applies in any topic.
 5. A reply to a gatekeeper view, resolved through the view's own `tg_views` row (never through the message text):
    - kind `file`, `explorer`, `interdiff`, `card`, `body_part` or `commit_msg`: the view's `action_id` (§14.18.2) is resolved to its current approval. What an open (`pending` or `armed`) approval means **depends on the action kind**:
      - `open_pr` or `push_update`: the reply is a **review comment** (§14.11.5). Replies to `body_part` and `commit_msg` messages are general comments, with the user's quote kept in `quote`.
-     - `comment` or `issue_claim` (only `card` and `body_part` views exist for them): the reply is **never** a review comment. These kinds have no rev and no Request changes, and `CHANGES_REQUESTED` is invalid from the states they live in. Instead the gatekeeper answers with a confirm panel, a reply to the user's message (`tg_views` kind `confirm_prompt`): `Replace the comment text with your reply? · c_01JABC` + `[✅ Replace] [↩️ Cancel]`. Its tokens are the kit purposes `comment_replace` (single-use, 15 min, arg `{cid, action_id, text}`, where `text` is the user's reply after `undefuse` and normalization, ≤ 4,000 characters) and `comment_replace_cancel`. **Replace** runs FEAT-005's `edit_comment` path exactly as `📝 Edit text` would: normalization, `policy.check_text`, the new body stored, the approval invalidated `text_edited`, a new card sent, and the old card S12 `text_edited`. It is refused with the §14.18.2 outcomes when the action is no longer eligible (§14.18.4.3). **Cancel** edits the panel to `Not changed.` A refused policy check answers with the exact reason and stores nothing.
+     - `comment` or `issue_claim` (only `card` and `body_part` views exist for them): the reply is **never** a review comment. These kinds have no rev and no Request changes, and `CHANGES_REQUESTED` is invalid from the states they live in. Instead the gatekeeper answers with a confirm panel, a reply to the user's message (`tg_views` kind `confirm_prompt`): `Replace the comment text with your reply? · c_01JABC` + `[✅ Replace] [↩️ Cancel]`. Its tokens are the kit purposes `comment_replace` (single-use, 15 min, arg `{cid, action_id, text}`, where `text` is the user's reply after `undefuse` and normalization, ≤ 4,000 characters) and `comment_replace_cancel`. **Replace** runs the S7 `edit_comment` path (PLAN item 45) exactly as `📝 Edit text` would: normalization, `policy.check_text`, the new body stored, the approval invalidated `text_edited`, a new card sent, and the old card S12 `text_edited`. It is refused with the §14.18.2 outcomes when the action is no longer eligible (§14.18.4.3). **Cancel** edits the panel to `Not changed.` A refused policy check answers with the exact reason and stores nothing.
      - Either kind, when no approval is open: when the action is already `approved`, `executing`, `done` or `dry_run_done`, nothing is stored and the reply is answered `Submitted: comment on the PR instead.` (`Dry run done: this rev was not published.` for `dry_run_done`). When no approval is open and nothing was submitted (expired, invalidated), the reply gets the stale answer `This card is no longer current; review the new card.` and nothing is stored;
    - kind `proposal`: a proposal adjustment (§14.11.15);
    - kind `skill_card` or `skill_part`: relayed to Hermes in the 💬 Assistant session, with `Re: skill <name> v<version>` as quoted context (like `💬 Ask Hermes why`, §14.15), and answered in 💬 Assistant. It is never stored in `review_comments`.
@@ -2368,7 +2293,7 @@ Every view in this section is rendered only from gatekeeper data:
 - model-authored fields (planner rationale, risk, reviewer report, implementer notes), always labelled 🤖 (U6).
 
 #### 14.11.1 S1: Preview card (`01-pr-preview-card.svg`)
-This replaces the §14.4 example layout; the fields are the same. Classic HTML, ≤ 3,900 escaped characters (cards today are about 1,500), sent to ✅ Reviews.
+This replaces the revision-4 example layout (Appendix A.1); the fields are the §14.4 content list. Classic HTML, ≤ 3,900 escaped characters (cards today are about 1,500), sent to ✅ Reviews.
 ```
 🧩 <b>Ready for review</b> · c_01JABC · r2 · 🧪 <b>DRY RUN</b>          (🔴 <b>LIVE</b>)
 👤 <b>requested by you</b> · /work 14 Oct                              (only for user-directed work)
@@ -2426,10 +2351,10 @@ push_update:           [✅ Approve & Push](success) [❌ Reject fix]
                        [🧭 Explore] [🧾 Files (2)]                          (the incremental patch, §14.4a)
                        [✏️ Request changes]
 comment, issue_claim:  [✅ Approve & Post](success) [❌ Reject]
-                       [📝 Edit text]                                       (opens the FEAT-005 edit_comment ForceReply directly)
+                       [📝 Edit text]                                       (opens the S7 edit_comment ForceReply directly)
 ```
-`comment` and `issue_claim` cards have no Explore, Files or Request changes: their whole content is the verbatim body part under the card. `push_update` has no title or body, so it has no `📝 Edit text`. On `comment`/`issue_claim`, `📝 Edit text` skips the S7 picker (which offers title/body choices those kinds don't have) and opens FEAT-005's `edit_comment` ForceReply.
-Changes from §14.4:
+`comment` and `issue_claim` cards have no Explore, Files or Request changes: their whole content is the verbatim body part under the card. `push_update` has no title or body, so it has no `📝 Edit text`. On `comment`/`issue_claim`, `📝 Edit text` skips the S7 picker (which offers title/body choices those kinds don't have) and opens the S7 `edit_comment` ForceReply (§14.11.8).
+Changes from the revision-4 keyboard (Appendix A.1):
 - `View diff` becomes `Files`.
 - `Test logs` moves into the explorer (section 7).
 - `Edit title`, `Edit body` and `Clear my edits` move behind `Edit text` (S7).
@@ -3289,7 +3214,7 @@ Binding: `{v:1, kind:"skill_activate", skill, version, files_sha256 (sorted path
 **Mode.** Skill activation is a **local** change (root copies files into Hermes's read-only skills dir); dry-run governs public GitHub writes only, so activation happens the same way in both modes. The card still carries the mode badge, marked as not applicable (S3), so a missing badge never has to be interpreted.
 
 **Machinery.** Skill decisions run through `SkillApprovals` (§14.18.4 delta 4), with its own `confirm_text()`. `ApprovalService.confirm_text()` for the four outbound kinds is untouched.
-- **Storage.** Decision rows live in the `skill_approvals` table that this CR's migration creates (§14.20.2), with ids `s_` + 10 Crockford characters (`new_id("s")`). Each row references FEAT-009's `skill_reviews` row by `skill_review_id`, whatever id format FEAT-009 ships. FEAT-009 keeps the content (staged files, hashes, activation result); CR-003 owns the decision lifecycle. So CR-003 depends on no FEAT-009 column beyond the row id.
+- **Storage.** Decision rows live in the `skill_approvals` table that this CR's migration creates (§14.20.2), with ids `s_` + 10 Crockford characters (`new_id("s")`). Each row references the `skill_reviews` row (written by the root hasher, PLAN item 36, migration `0004_hermes.sql`) by `skill_review_id`, whatever id format item 36 ships. `skill_reviews` keeps the content (staged files, hashes, activation result); `SkillApprovals` (PLAN item 24) owns the decision lifecycle. So the decision service depends on no `skill_reviews` column beyond the row id.
 - **Purposes.** Decisions (single-use): `skill_approve`, `skill_confirm`, `skill_cancel`, `skill_reject`. Views (multi-use, expiring and dying with the skill approval, like delta 3): `skill_diff`, `skill_ask`.
 - **Views and replies.** The card and its verbatim parts are recorded as `tg_views` kinds `skill_card` and `skill_part`. A reply to either goes to Hermes in the 💬 Assistant session with `Re: skill <name> v<version>` as quoted context, and is never a review comment (§14.10.4 rule 5).
 - **Refusals.** Approve and Confirm are refused while **paused or killed** (the existing toasts). The binding is recomputed at Approve, at Confirm and immediately before the root copy; a mismatch invalidates with `binding_changed`.
@@ -3457,7 +3382,7 @@ Button colour (`style`) always repeats a word ("Confirm LIVE"), never replaces i
 - `send.py`: turns a `View` into outbox rows (`message_thread_id` from `topics.py`, `disable_notification` from `notify.py`), then mints and binds tokens (§14.18.2).
 - `redact.py` (U14): the one redaction choke point.
   - `redact(text) -> (text, hits)` replaces every secret pattern, gatekeeper secret value and Kiro-key candidate with `[REDACTED]`. `classic.py` and `rich.py` call it on every untrusted text leaf **before** `make_visible`, `defuse_commands` and escaping; `drafts.py`, the answer persistence in `chat/stream.py` and the document builders (`answer.md`, log tails, log `.txt`) call it on their text.
-  - `scan(text) -> hits` counts without changing anything. It is used for **verbatim publish bytes**: card body parts, commit-message and comment parts, skill parts, `.patch`, `pr_body.md`, the HTML diff's code, **the PR title wherever it is shown** (the card's `PR title:` line, explorer section 9 and the `📋 Copy title` `copy_text`), and publish text quoted back in a prompt (the current title and body in the S7 Title/Body ForceReply, the current comment in FEAT-005's `edit_comment` prompt). Those bytes must equal what is published or activated, so they are never altered or redacted. Packaging and the edit paths already gate them (next bullet), so a hit is a bug: ERROR (surface and count only, never the match), the approval is invalidated with `render_failed`, and a fixed stub like the `ViewTooLarge` one (`kit.py` above; text `⚠️ Card withheld: it matched a secret pattern (bug) · <cid> r<rev> · see /logs <cid>`, no `approval_id`, no buttons) is sent in place of the card, document or prompt.
+  - `scan(text) -> hits` counts without changing anything. It is used for **verbatim publish bytes**: card body parts, commit-message and comment parts, skill parts, `.patch`, `pr_body.md`, the HTML diff's code, **the PR title wherever it is shown** (the card's `PR title:` line, explorer section 9 and the `📋 Copy title` `copy_text`), and publish text quoted back in a prompt (the current title and body in the S7 Title/Body ForceReply, the current comment in the S7 `edit_comment` prompt). Those bytes must equal what is published or activated, so they are never altered or redacted. Packaging and the edit paths already gate them (next bullet), so a hit is a bug: ERROR (surface and count only, never the match), the approval is invalidated with `render_failed`, and a fixed stub like the `ViewTooLarge` one (`kit.py` above; text `⚠️ Card withheld: it matched a secret pattern (bug) · <cid> r<rev> · see /logs <cid>`, no `approval_id`, no buttons) is sent in place of the card, document or prompt.
   - **One scanner for publish bytes and display.** `gatekeeper/secret_scan.py: SecretScanner` holds the policy patterns, the gatekeeper's own secret values (the U14 list) and the Kiro-key check, and is built once per config snapshot (`AppContext.secret_scanner`). `redact.py` wraps it for display, and `policy.check_text` gains a keyword `secret_values` that every production caller fills with `ctx.secret_scanner.values`: besides its existing checks it reports a gatekeeper secret value as `Violation("gatekeeper_secret", <kind>)` (the surface, never the value). Packaging passes the values for the title, body, commit message and comment text (all `policy.check_text` kinds) and also scans the patch with the scanner (`Violation("gatekeeper_secret", "patch")`). So a title, body, commit message, comment or patch containing `HERMES_API_KEY`, `OSSBOT_TOKEN_PEPPER` or `TELEGRAPH_ACCESS_TOKEN` gets the normal policy-violation path at packaging (coder feedback or redirect, with the code as the reason), and every edit path that runs `policy.check_text` (S7 title and body, body as file, `edit_comment`, comment replace) refuses it with its existing refusal text. A render-time `scan()` hit then really is a bug.
   - A display hit (any `redact` call with `hits > 0`) logs WARNING `redacted {surface, hits}` once per turn or view, never the match, and the text is sent redacted.
   - The redactor is built once at start from the config snapshot and `gatekeeper.env`, and rebuilt on a confirmed `/reload`.
@@ -3497,7 +3422,7 @@ An unbound token is never accepted, because the handler requires `tg_message_id 
   | **Re-send** (`show_card`, `queue_open`; proposal items resolve by `(cid, version)` and use `AppContext.reissue_proposal`) | `AppContext.reissue(cid, actor, keep_expiry=True)`, subject to the eligibility predicate and the confirmed-sibling refusal (§14.18.4.3) | "Already submitted · PR #N" | expired and still eligible: "Expired: tap 🔁 Retry on the card for a fresh approval."; expired and ineligible: "Nothing to re-send (state X)"; otherwise "Superseded…" |
   | **`stale_retry`** | n/a (the card is stale) | n/a | runs `AppContext.reissue(cid, actor, keep_expiry=True)` when the system is running and the action is eligible (§14.18.4.3); else "Nothing to re-send (state X)" |
   | **`stale_show_current`** (arg `{cid}`, `{cid, gate: 1}` or `{skill}`; no `action_id`) | resolved **by contribution** (or skill), not by action: the §14.11.12 query finds any `pending`/`armed` approval of the cid → `AppContext.reissue`; else the newest open proposal approval → `AppContext.reissue_proposal`; skills → `AppContext.reissue_skill(skill, …)` | n/a | "No open card for c_… (state X)" |
-  | **Comment replace** (`comment_replace`, `comment_replace_cancel`; §14.10.4 rule 5) | Replace runs FEAT-005's `edit_comment` path when the action is eligible; Cancel edits the panel | "Submitted: …" (as comment and send) | "Superseded…" |
+  | **Comment replace** (`comment_replace`, `comment_replace_cancel`; §14.10.4 rule 5) | Replace runs the S7 `edit_comment` path (PLAN item 45) when the action is eligible; Cancel edits the panel | "Submitted: …" (as comment and send) | "Superseded…" |
 
 - **Read-only explorers.** Tokens with `action_id: null` (the explorer from a rescope or ceiling-hit card, §14.11.17) resolve nothing. They navigate the `(cid, rev)` derived artifacts only and carry no comment or re-send buttons.
 - **Survival.** `_kill_tokens(approval_ids)` only touches rows with that `approval_id`. So a Cancel, a `reissue()` or an invalidation never kills explorer navigation, file views, comment prompts, draft-review buttons or Undo. Only the card's own tokens (`card_purposes(...)`, `confirm`, `cancel`) carry `approval_id`.
@@ -3548,7 +3473,7 @@ The review UI needs nine bounded changes in `approvals.py`, `outbox.py`, `CardPu
 | 6 | **`Outbox.mark_sent` binds tokens, writes `tg_views`, increments `tg_thread_seq` and counts card parts in its transaction**; part counting picks the table by id prefix (`a_` approvals, `s_` skill approvals) (§14.18.2). Plus the new `tg_outbox` columns (§14.20.2) | `outbox.py` | Closes the kit's crash window between `mark_sent` and `on_sent`; skill parts must count too | `test_outbox_bind_atomic.py`: crash injected after `mark_sent` → tokens bound and view present after restart; a skill part advances `skill_approvals.body_parts_delivered` |
 | 7 | **Re-sends keep the expiry, carry per-action part counts and touch only eligible actions** (§14.18.4.3): `create(…, expires_at=None)`; `reissue(…, part_count, keep_expiry)` with the eligibility predicate and the confirmed-sibling refusal; the `AppContext.reissue` wrapper that publishes; the `sweep_expired` reference becomes the newest approval's window start, and its move to `EXPIRED` cancels the contribution's `pending_approval` actions | `approvals.create`, `approvals.reissue`, `context.py`, `proposal_approvals.reissue`, `skill_approvals.reissue`, `state_machine.sweep_expired` | Navigation re-sends otherwise restart the 72 h TTL, reorder the queue and postpone the contribution-expiry sweep. One `body_parts_total=1` for every action let a re-sent `open_pr` card arm before its verbatim parts arrived (ADR-0004). Re-sends could revive cards that can't be submitted, or kill a sibling mid-submission | `test_reissue_keeps_expiry.py`, `test_reissue_part_counts.py`, `test_reissue_eligibility.py` (§14.18.4.3); AC 46, AC 57, AC 58 |
 | 8 | **`CardPublisher.recover()`** and single-transaction `_card_sent`/`_maybe_arm` (§14.18.4.4) | `telegram/bot.py`, `TelegramFrontend._connect`, `app.py: housekeeping_once` | Nothing re-runs `on_sent` for rows already `sent`, so a crash after a card's `mark_sent` left a card with no parts and no Approve | `test_card_recover.py`; AC 31 |
-| 9 | **Invalidation fan-out**: every existing invalidation and expiry call site calls all three decision services, and the tier switch invalidates skill approvals (§14.18.4.2) | `config_snapshot.py` (both reload branches), `control.py` (the four kill paths), `app.py: housekeeping_once`, the FEAT-009 tier switch | Today those call sites reach only `ApprovalService`, so a reload or kill would leave proposal and skill approvals valid | `test_decision_fanout.py`; AC 47 |
+| 9 | **Invalidation fan-out**: every existing invalidation and expiry call site calls all three decision services, and the tier switch invalidates skill approvals (§14.18.4.2) | `config_snapshot.py` (both reload branches), `control.py` (the four kill paths), `app.py: housekeeping_once`, the tier switch (PLAN item 36) | Today those call sites reach only `ApprovalService`, so a reload or kill would leave proposal and skill approvals valid | `test_decision_fanout.py`; AC 47 |
 
 ##### 14.18.4.1 Delta 3: card purposes per action kind
 
@@ -3557,7 +3482,7 @@ The review UI needs nine bounded changes in `approvals.py`, `outbox.py`, `CardPu
 | `open_pr` r1 (or no interdiff) | `approve`, `reject`, `reject_reason`, `changes` | `explore`, `files`, `edit_text_pick` | `[✅ Approve & Submit] [❌ Reject]` / `[🧭 Explore] [🧾 Files (n)]` / `[✏️ Request changes] [📝 Edit text]` |
 | `open_pr` rN with an interdiff | same | `explore`, `interdiff`, `edit_text_pick` | row 2 `[🧭 Explore] [🔀 Interdiff]` |
 | `push_update` | same | `explore`, `files` (the incremental patch, §14.4a) | `[✅ Approve & Push] [❌ Reject fix]` / `[🧭 Explore] [🧾 Files (n)]` / `[✏️ Request changes]` |
-| `comment`, `issue_claim` | `approve`, `reject`, `reject_reason` | `edit_text_pick` (opens FEAT-005's `edit_comment` ForceReply directly; no picker) | `[✅ Approve & Post] [❌ Reject]` / `[📝 Edit text]` |
+| `comment`, `issue_claim` | `approve`, `reject`, `reject_reason` | `edit_text_pick` (opens the S7 `edit_comment` ForceReply directly; no picker) | `[✅ Approve & Post] [❌ Reject]` / `[📝 Edit text]` |
 
 ```python
 DECISION_PURPOSES = ("approve", "reject", "reject_reason", "changes")
@@ -3615,7 +3540,7 @@ class DecisionServices:                               # AppContext.decisions
   | `control.py`: the kill path, the resume path that applies a root-written kill before reconcile, the resume-log path and the flag reconcile | `approvals.invalidate_armed_confirmed("killed", …)` | all three services |
   | `control.py` `set_dry_run` | `approvals.invalidate_all_open("dry_run_toggled")` | **unchanged, ApprovalService only**: proposal and skill bindings carry no mode |
   | `app.py: housekeeping_once` | `approvals.expire_due()` | `expire_due()` and `disarm_expired()` on all three, then `ctx.card_recover()`, which runs `CardPublisher.recover()` (delta 8, §14.18.4.4) |
-  | Tier switch (FEAT-009: the `/hermes tier` confirm handler and the `ossctl hermes tier` API route, right after the tier flag is written, in the same transaction as its audit row) | none | `skills.invalidate_all_open("tier_changed")` |
+  | Tier switch (PLAN item 36: the `/hermes tier` confirm handler and the `ossctl hermes tier` API route, right after the tier flag is written, in the same transaction as its audit row) | none | `skills.invalidate_all_open("tier_changed")` |
 
 - `REASON_LABELS` gains `tier_changed`, `new_proposal_version`, `new_skill_version` and `render_failed` (§14.11.12).
 
@@ -3770,7 +3695,7 @@ Python stack, locked: Python 3.12, **python-telegram-bot 22.8** (transport, long
 | `src/ossbot/gatekeeper/telegram/review/{explorer,files,comments,interdiff_view,status_card,queue,stale,edit_text}.py` | **New** review flow (§14.11) |
 | `src/ossbot/gatekeeper/telegram/{topics,routing,dashboard,notify,digest,drafts,pickers,rawapi}.py` | **New** (§14.10, §14.12.1, §14.13, §14.14). `rawapi.py`: typed wrappers (pydantic request/response models) for every Bot API 10.1–10.3 method and field the kit uses, over `do_api_request` (ADR-0020) |
 | `src/ossbot/gatekeeper/telegram/{proposal_cards,work_links,size_pickers}.py` | **New** (CR-004 presentation: §14.11.15–§14.11.19, §14.14.4) |
-| `src/ossbot/gatekeeper/{decisions,proposal_approvals,skill_approvals,discovery_prefs}.py` | **New**: the `DecisionService` protocol and `DecisionServices` (§14.18.4.2); `ProposalApprovals` and `SkillApprovals` (§14.18.4 delta 4) over the new `proposal_approvals` and `skill_approvals` tables; `DiscoveryPrefs` (§14.14.4). The proposal and work-request content model itself is CR-004's; the staged-skill content is FEAT-009's `skill_reviews` |
+| `src/ossbot/gatekeeper/{decisions,proposal_approvals,skill_approvals,discovery_prefs}.py` | **New**: the `DecisionService` protocol and `DecisionServices` (§14.18.4.2); `ProposalApprovals` and `SkillApprovals` (§14.18.4 delta 4) over the new `proposal_approvals` and `skill_approvals` tables; `DiscoveryPrefs` (§14.14.4). The proposal and work-request content model itself is CR-004's; the staged-skill content is `skill_reviews` (PLAN item 36) |
 | `src/ossbot/gatekeeper/approvals.py` | §14.18.4 deltas 2 (`disarm_expired`), 3 (`DECISION_PURPOSES`, `card_purposes()`, multi-use view tokens in `issue_card_tokens`) and 7 (`create(expires_at=)`; `reissue(…, part_count, keep_expiry)` with `reissue_eligible()` and the confirmed-sibling refusal); `Invalidated` widened to optional `action_id`/`cid` (§14.18.4.2); nothing else |
 | `src/ossbot/gatekeeper/context.py` (`AppContext`) | `reissue(cid, actor, *, keep_expiry)`, the only PR-side re-send entry point, which passes `cards.part_count` and publishes after the commit, and `reissue_proposal(cid, actor, *, keep_expiry)` and `reissue_skill(skill, actor, *, keep_expiry)`, the only callers of the proposal and skill services' `reissue`, which publish the same way (§14.18.4.3); `card_recover: Callable[[], None]` (no-op default, set by `TelegramFrontend.start`, §14.18.4.4); `reissue_cards` skips `Invalidated` rows with `action_id=None` |
 | `src/ossbot/gatekeeper/app.py` (`housekeeping_once`) | Calls `expire_due()` and `disarm_expired()` on every decision service (delta 9), queues the S1 card edits, then calls `ctx.card_recover()` (delta 8) |
@@ -3782,14 +3707,14 @@ Python stack, locked: Python 3.12, **python-telegram-bot 22.8** (transport, long
 | `src/ossbot/gatekeeper/chat/answer_view.py` | **New**: renders a Hermes answer or unsolicited Hermes message for its thread kind: full in Assistant and user topics; in flat mode and in Reviews, the gatekeeper `🤖 Assistant` header plus the body in one quote (rich: one `blockquote`/`expandable_blockquote` block holding every body block; classic: `<blockquote expandable>`), with flat mode keeping follow-up and feature buttons; never in Control or the feed (U6, §14.10.4 rules 7–9) |
 | `src/ossbot/gatekeeper/telegram/auth.py` | Adds `authorized_chat_only()` (U10 exception); `authorized()` unchanged |
 | `src/ossbot/gatekeeper/chat/imgmeta.py` | **New** metadata walker (§14.12.5) |
-| `src/ossbot/gatekeeper/telegram/cards.py` | Decorated S1 layout via the kit (FEAT-005 item 22); skill card; stale rendering |
+| `src/ossbot/gatekeeper/telegram/cards.py` | Decorated S1 layout via the kit (PLAN item 45); skill card (item 47); stale rendering (item 45) |
 | `src/ossbot/gatekeeper/telegram/keyboards.py` | `style`, `disabled`, URL/copy buttons in `to_json`; the regrouped card rows |
 | `src/ossbot/gatekeeper/telegram/escape.py` | `defuse_commands`; the `tg-time` helper |
 | `src/ossbot/gatekeeper/telegram/handlers.py` | Delegates classification to `routing.py`; new token purposes; `stopped_message_generation` `TypeHandler`; `_send_reply`/`_edit` rewritten to send through `telegram.ui.send` in the originating thread, except the U3 Approve/Confirm edits (§14.10.1); the update-handler budget (§14.18.5): `spawn(coro, kind, *, session_key, on_done)` with the done-callback cleanup, `cancel(kinds)`, the session map, the `command` kind for I/O-bound command and confirm effects (§14.14.1), the per-handler timer thresholds, `drain()` cancelling the chat-side kinds, the startup reset of `streaming` turns, and the 8 s bound on the Confirm preflight |
 | `src/ossbot/gatekeeper/telegram/bot.py` | `ALLOWED_UPDATES += ["stopped_message_generation"]`; topic bootstrap; command scopes and menu button; draft lane task; short-description updates on up/down; `CardPublisher`: dispatch through `ctx.decisions.for_id(aid)` for `a_`/`p_`/`s_` cards (§14.18.4.4), per-kind `card_rows`, single-transaction `_card_sent`/`_maybe_arm`, `recover()` (run in `_connect` before polling, and wired to `ctx.card_recover` in `TelegramFrontend.start`), `render_s1()` and `render_stale()` (§14.11.5), the `ViewTooLarge` stub (§14.18.1); `concurrent_updates` stays unset (§14.18.5) |
 | `src/ossbot/gatekeeper/telegram/commands/{builtin,registry}.py` | New commands (§14.14.1); safety class `personal`; picker integration; `menu()` per control state |
 | `src/ossbot/gatekeeper/outbox.py` | Columns `priority`, `thread_key`, `coalesce_key`, `result_message_id`, `bind_tokens_json`, `view_json`, `merged_into`; statuses `held`, `merged`; `mark_sent(row, result)` binds tokens, writes `tg_views`, increments `tg_thread_seq` and counts parts by id prefix in its transaction (§14.18.2, delta 6); quiet-hours hold and batching, never for rows with buttons or an `approval_id` (§14.13.3); "thread not found" recovery |
-| `src/ossbot/gatekeeper/chat/{backend,hermes_api,stream,md2blocks,followups,media,turns}.py` | FEAT-005 item 23 plus streaming, rendering, follow-ups and media (§14.12); `turns.py` holds `finalize_turn` and `reset_streaming` (§14.18.5, BA-15); `stream.py` redacts the answer before it is sent or stored in `chat_turns.answer_text`, and builds Stop partials and truncated answers with `draft_visible()`; `drafts.py` applies the redact-then-hold-back rule (U14, §14.12.1 steps 3–5) |
+| `src/ossbot/gatekeeper/chat/{backend,hermes_api,stream,md2blocks,followups,media,turns}.py` | Backend, relay gate and media download from PLAN item 37 (FEAT-007), plus streaming, rendering, follow-ups and media UX (§14.12, PLAN item 49); `turns.py` holds `finalize_turn` and `reset_streaming` (§14.18.5, BA-15); `stream.py` redacts the answer before it is sent or stored in `chat_turns.answer_text`, and builds Stop partials and truncated answers with `draft_visible()`; `drafts.py` applies the redact-then-hold-back rule (U14, §14.12.1 steps 3–5) |
 | `src/ossbot/gatekeeper/review_html.py` + `templates/review.html.j2` | **New** HTML diff (§14.11.4) |
 | `src/ossbot/gatekeeper/interdiff.py` | **New**: runs `INTERDIFF`/`RANGE_DIFF` at `/package` (§14.11.7) |
 | `src/ossbot/gatekeeper/packaging.py`, `derive.py` | Call `interdiff.py`; retention amendment (§14.11.7); packaging passes `ctx.secret_scanner.values` to `policy.check_text` (title, body, commit message, comment) and scans the patch with `ctx.secret_scanner`, recording `Violation("gatekeeper_secret", "patch")` (§14.18.1) |
@@ -3806,7 +3731,18 @@ Python stack, locked: Python 3.12, **python-telegram-bot 22.8** (transport, long
 | `pyproject.toml` | Import-linter contracts: features/chat cannot import `approvals`, `submit`, `github_writer`, `review_mirror_writer`, `state_machine`, `control`; only `telegram.ui.send` writes Telegram rows for chat/features |
 | `README.md`, `AGENTS.md`, `docs/SETUP.md` | Telegram tour (topics, dashboard, review flow), the §14.18.3 guide, the BotFather topic setting (SETUP **recommends enabling topics**: flat mode works, but there separation from cards is by rendering only, U12), mirror setup (optional) |
 
-#### 14.20.2 Data model (`migrations/00NN_telegram_ux.sql`, next free number)
+#### 14.20.2 Data model (split over migrations 0002–0006)
+
+The tables below are created by five migrations, numbered in PLAN order so no two items write the same number (each migration is registered in the `db.py` runner and covered by `tests/unit/gatekeeper/test_migrations.py` from an empty DB and from the previous number):
+
+| Migration | PLAN item | Contents |
+|---|---|---|
+| `0002_decisions.sql` | 24 (FEAT-005) | `proposal_approvals`, `skill_approvals`, `tg_views`, `tg_thread_seq`; `tg_outbox` columns `result_message_id`, `bind_tokens_json`, `view_json` (what `mark_sent` needs, delta 6) |
+| `0003_cr004.sql` | 29 (FEAT-006) | CR-004 proposal content and versions, `outcomes`, `discovery_prefs` |
+| `0004_hermes.sql` | 36, 37 (FEAT-007) | `skill_reviews` (root hasher), `chat_turns`, `chat_sessions(tg_user_id INTEGER PRIMARY KEY, n INTEGER NOT NULL, updated_at TEXT NOT NULL)` (the `n` of the flat-mode session key `tg-<uid>-<n>`, §14.12.6) |
+| `0005_telegram_ux.sql` | 44, 45 (FEAT-009) | `tg_topics`, `pending_input` (created directly with the full kind set and columns below; no table rebuild is needed because no earlier migration creates it), `review_comments`, `change_requests.comments_json`, `tg_outbox` columns `priority`, `thread_key`, `coalesce_key`, `merged_into` and index `tg_outbox_coalesce`, `ux_prefs` |
+| `0006_telegram_m2.sql` | 50, 51, 52 (FEAT-010) | `digest_runs`, `reminders`, `review_mirror`, `telegraph_pages` |
+
 ```sql
 CREATE TABLE tg_topics (name TEXT PRIMARY KEY, thread_id INTEGER NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE tg_views (
@@ -3831,9 +3767,9 @@ CREATE TABLE proposal_approvals (               -- §14.18.4.2; CR-004 owns the 
   invalidated_reason TEXT, decided_by_tg_user INTEGER,
   rejected_reason TEXT CHECK (rejected_reason IN ('skipped','snoozed','never_repo','never_kind')));   -- §14.11.15
 CREATE INDEX proposal_approvals_open ON proposal_approvals(cid, version, status);
-CREATE TABLE skill_approvals (                  -- §14.15, §14.18.4.2; FEAT-009's skill_reviews keeps the staged content
+CREATE TABLE skill_approvals (                  -- §14.15, §14.18.4.2; skill_reviews (0004_hermes.sql, PLAN item 36) keeps the staged content
   id TEXT PRIMARY KEY,                          -- 's_' + 10 Crockford chars (new_id("s"))
-  skill_review_id TEXT NOT NULL,                -- FEAT-009 skill_reviews.id (any format FEAT-009 ships)
+  skill_review_id TEXT NOT NULL,                -- skill_reviews.id (any format PLAN item 36 ships)
   skill TEXT NOT NULL, version INTEGER NOT NULL,
   binding_json TEXT NOT NULL, binding_hash TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending','armed','confirmed','consumed','invalidated','expired','rejected')),
@@ -3884,13 +3820,16 @@ CREATE TABLE discovery_prefs (          -- §14.14.4; CR-004 semantics; scope '*
   scope TEXT PRIMARY KEY, autonomous_max_class TEXT CHECK (autonomous_max_class IN ('xs','s','m','l','xl')),
   preferred_classes_json TEXT, filters_json TEXT, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL);
 
--- pending_input (FEAT-005 0002_phase2.sql) is widened with the SQLite table-rebuild procedure
--- (create pending_input_new, copy, drop, rename, recreate indexes) because a CHECK can't be altered:
---   kind IN ('changes','edit_title','edit_body','reject_other','edit_comment',
---            'comment','line_pick','review_send_text','body_file','feature_fix',
---            'proposal_adjust','proposal_snooze_days')
---   new columns: path TEXT, side TEXT CHECK (side IN ('old','new')), hunk INTEGER,
---                line_candidates_json TEXT, rev INTEGER, proposal_id TEXT
+CREATE TABLE pending_input (            -- ForceReply correlation (§14.10.4 rule 3), 0005_telegram_ux.sql
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('changes','edit_title','edit_body','reject_other','edit_comment',
+                                     'comment','line_pick','review_send_text','body_file','feature_fix',
+                                     'proposal_adjust','proposal_snooze_days')),
+  cid TEXT, approval_id TEXT, action_id TEXT, proposal_id TEXT, rev INTEGER,
+  path TEXT, side TEXT CHECK (side IN ('old','new')), hunk INTEGER, line_candidates_json TEXT,
+  prompt_message_id INTEGER NOT NULL, chat_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT);   -- 15 min TTL, single consumption
+CREATE INDEX pending_input_open ON pending_input(chat_id, prompt_message_id) WHERE consumed_at IS NULL;
 ```
 **Every view has a listed `tg_views.kind`.** `telegram/ui/send.py` defines `ViewKind = Literal[…]` with exactly the CHECK's values and validates `view_json.kind` with it at **enqueue**, so a bad kind fails before anything is sent (§14.18.2 step 3). Views without a dedicated kind map like this:
 
@@ -3906,7 +3845,7 @@ CREATE TABLE discovery_prefs (          -- §14.14.4; CR-004 semantics; scope '*
 
 Expiry: proposal approvals use `proposal.ttl_hours` (CR-004, 72 h by default); skill approvals use `limits.approval_ttl_hours`; both use `limits.confirm_ttl_seconds` for Confirm.
 
-`pending_input` is planned in FEAT-005 item 2 (`0002_phase2.sql`) with a narrower kind set and no path/hunk columns, and that feature is being built concurrently. This CR does not edit FEAT-005; its own migration (`00NN_telegram_ux.sql`, numbered after whatever FEAT-005 and FEAT-009 ship) performs the rebuild above, so it works whether or not FEAT-005 already widened the table. If FEAT-005 ships the wider definition first, the rebuild is a no-op copy (the migration test covers both starting points).
+`pending_input` is created once, by PLAN item 44 in `0005_telegram_ux.sql`, with the full kind set (revision 5; the CR-003 text planned a table rebuild because an earlier draft FEAT created a narrower table, and that draft was dropped in the consolidation). A prompt is matched only when `reply_to_message.message_id == prompt_message_id` in the owner chat, before expiry and before consumption; anything else falls through to the next routing rule (§14.10.4).
 
 #### 14.20.3 Configuration
 - **`config/telegram.yaml`** (tracked, strict schema, unknown keys rejected, loaded via the config snapshot, changed only by a human-confirmed `/reload`):
@@ -4142,7 +4081,9 @@ Why lenient decoding matters here: the gatekeeper is the only poller, and the sa
 **Live** (manual, recorded in VERIFICATION.md on Amsal's phone and desktop): rich explorer and file rendering; quote-reply on `<pre>` and on rich messages; `details` and `diff` highlighting; HTML document opening; topics; drafts with Stop; `tg-time` relative rendering; disabled buttons; the food-photo estimate (CR-002); the merged effect.
 
 #### 14.20.8 Milestones and mapping to PLAN.md
-- **M1** (extends FEAT-005 item 22):
+PLAN numbering (revision 5): FEAT-005 = Phase 1 rework, FEAT-006 = pipeline backend, FEAT-007 = Kiro/Hermes, FEAT-008 = lifecycle and backup, FEAT-009 = Telegram M1, FEAT-010 = Telegram M2–M4 and v1.x, FEAT-011 = docs and final verification. Item numbers are PLAN's global numbers.
+
+- **M1** (PLAN FEAT-005 items 24–25 for the token core, the handler budget and U14; FEAT-009 items 44–47 for the rest):
   - §14.18.4 token-core deltas 1–9 first, before any new view ships, together with the update-handler budget (§14.18.5: `spawn` with done-callback cleanup, `cancel`, the session map, the `command` kind, the handler timer, the preflight bound) and the U14 redactor (`telegram/ui/redact.py` over the shared `secret_scan.py`, with the `policy.check_text` `secret_values` change in packaging and the edit paths);
   - kit;
   - S1/S2/S3/S4/S5/S7/S8/S9/S12 classic;
@@ -4156,11 +4097,11 @@ Why lenient decoding matters here: the gatekeeper is the only poller, and the sa
   - `.patch` and HTML documents;
   - interdiff (S6) + retention amendment;
   - CR-004 presentation: proposal card and versions, size line, rescope and ceiling cards, `/work` and link cards, `/size`, `/filters`, per-repo size (ships with CR-004's pipeline work).
-- **M2** (extends FEAT-005 item 23, FEAT-007): chat streaming via drafts and Stop, md2blocks, sources and footer, follow-ups, media UX, `/new` `/title` `/memory`.
-- **M3:** rich views for explorer, file, interdiff, tests and assistant (behind `auto`); digest; status card S10/S11; reminders (§14.19 item 3).
-- **M4** (opt-in): review mirror (ADR-0019 C) + `ossctl review-mirror`.
-- **v1.x:** Telegraph articles (§14.12.8; off by default, with `ossctl telegraph setup|rotate`).
-- **Phase 2:** feature registry consumers (nutrition log first), §14.19 v1.x and phase-2 items, Mini App (only if needed).
+- **M2** (PLAN item 49, on the FEAT-007 item 37 backend): chat streaming via drafts and Stop, md2blocks, sources and footer, follow-ups, media UX, `/new` `/title` `/memory`.
+- **M3** (PLAN item 50): rich views for explorer, file, interdiff, tests and assistant (behind `auto`); digest with the §14.19 item 1 stats; status card S10/S11 with the item 2 activity; reminders (§14.19 item 3).
+- **M4** (PLAN item 51, opt-in): review mirror (ADR-0019 C) + `ossctl review-mirror`.
+- **v1.x built in this build (Phase 2 of PLAN):** Telegraph articles (§14.19 item 18, PLAN item 52; off by default, with `ossctl telegraph setup|rotate`) and PDF reading (§14.19 item 9: the `--network none` `extract_text` sandbox entrypoint, PLAN items 37 and 49). Voice (§14.19 item 10) ships as the Kiro audio path when §14.23 / §23 item 30 confirms audio input, otherwise the "Voice isn't supported yet" reply; local or provider transcription is deferred.
+- **Deferred after v1 (TRACEABILITY rows `CR3-IH-*` with status `deferred`):** §14.19 items 5–8 and 10 (transcription), 11's provider (the hook ships in PLAN item 37), 12–17, the Mini App (FR-22, user decision). They are later features built on the kit and registry (§14.18.3), each needing its own approval of new secrets or third-party data flows.
 
 Docs and AGENTS.md updates ship with M1. §14.20.1–§14.20.5 carry amendment notes that point here (done in design revision 5). ADR-0004 gains an amendment note: follow-up buttons (D9), rich rendering of answers (D8, U1), `allowed_updates += stopped_message_generation` with `authorized_chat_only()` (U10), the Approve-after-parts rule restated for re-sends (delta 7), and the token-use rule: "View and navigation tokens are multi-use until the approval ends (or 24/72 h for kit views), still message-bound, owner-only and opaque; every **decision** token (Approve, Confirm, Cancel, Reject, Start work, skill activation, Publish) stays single-use (CR-003 §12.4 delta 3)." §8.4 T5 ("single-use 128-bit tokens") gains the same sentence as an amendment. §14.3's "redaction before any send" gains a pointer to U14, the hold-back rule for drafts, Stop partials and truncated answers, and the PR title's status as publish bytes. §14.5 `/approve` semantics are amended to the code's `reissue()` with the expiry kept (§14.18.4 deltas 5 and 7). §14.4a's Confirm sentences are aligned with `confirm_text` (§14.11.9). §12.5 retention is amended. CR-004 §5's state list and tests gain the two human-only Undo edges (§14.11.15).
 
@@ -4270,7 +4211,7 @@ These are implementation-level details from design review rounds 3 and 4: exact 
 | BA-10 | Finding 16 | `api/features.py` increments `chat_turns.feature_cards` in the same transaction that stores the feature card. The §14.12.8 eligibility reads only `chat_turns` | `test_telegraph.py` (eligibility rows for a feature-card turn and a Reviews turn) |
 | BA-11 | Finding 3 | `class StaleShowCurrentArg(BaseModel, extra="forbid")` with the fields `cid: str \| None`, `gate: Literal[1] \| None`, `skill: str \| None`, and a validator that accepts exactly `{cid}`, `{cid, gate}` or `{skill}`. S12 renders the button only when `resolve.open_card_exists(arg)` is true | `test_stale_show_current.py` |
 | BA-12 | Finding 6 | `ProposalApprovals.reject(self, approval_id: str, *, reason: Literal["skipped", "snoozed", "never_repo", "never_kind"], actor: str, snooze_until: datetime \| None = None) -> None` (`snooze_until` is required iff `reason == "snoozed"`). The CR-004 Undo edges carry the guard name `undo_window` (≤ 600 s since `proposal_declined`, reason `skipped` or `snoozed`, actor human) | `test_proposal_decline.py`; a state-machine unit test per new edge |
-| BA-13 | Finding 4 | `class CommentReplaceArg(BaseModel, extra="forbid")` with the fields `cid: str`, `action_id: str` (`x_` id) and `text: str` (1–4,000 characters, stored after `undefuse` and normalization). Replace calls FEAT-005's `edit_comment` service function, never a copy of it | `test_comment_replace.py` |
+| BA-13 | Finding 4 | `class CommentReplaceArg(BaseModel, extra="forbid")` with the fields `cid: str`, `action_id: str` (`x_` id) and `text: str` (1–4,000 characters, stored after `undefuse` and normalization). Replace calls the S7 `edit_comment` service function (PLAN item 45), never a copy of it | `test_comment_replace.py` |
 | BA-14 | Finding 7 | `answer_view.render(answer, thread_kind, mode) -> View` has a `flat` thread kind. For `flat` and `reviews`, the first block is the gatekeeper header, and **all** remaining blocks are children of one quote block. Feature cards in flat mode pass through the same wrapper | `test_answer_view.py` (flat-mode cases) |
 | BA-15 | R4 finding 2 | `Handlers._sessions: dict[str, asyncio.Task[Any]]`; `Handlers.session_busy(self, session_key: str) -> bool`. `spawn` inserts into `_sessions` before returning and registers exactly one done callback, `_on_task_done(task, kind, session_key, on_done)`, which: discards the task from `self.tasks` and the kind index; deletes `_sessions[session_key]` only when it `is` this task; then calls `on_done(task)` inside `try/except Exception` (ERROR on failure). `chat/turns.py: finalize_turn(conn, turn_id: int) -> Callable[[asyncio.Task[Any]], None]` runs `UPDATE chat_turns SET status = :s, finished_at = COALESCE(finished_at, :now) WHERE turn_id = :id AND status = 'streaming'` with `:s = 'stopped' if task.cancelled() else 'failed' if task.exception() else 'done'`, in one `db.transaction`. `chat/turns.py: reset_streaming(conn) -> int` runs at start before polling. The media collector's `on_done` pops its `media_group_id` from the album buffer | `tests/telegram/test_handlers_nonblocking.py`: message + `/kill` in one batch (cancel before start) → `_sessions` empty, row `stopped`, next turn starts after `/resume`; the callback runs once per task and is a no-op on a `done` row; a newer turn's `_sessions` entry survives an older task's callback; album + `/kill` → buffer empty; `reset_streaming` after a simulated crash |
 | BA-16 | R4 finding 1 | `telegram/ui/redact.py`: `redact(text: str) -> tuple[str, int]` (redacted text, number of replacements); `scan(text: str \| bytes) -> int` (never alters its input); `draft_visible(text: str) -> str` (redact the whole text, then cut at `max(last whitespace index, len − HOLD_BACK)`); `HOLD_BACK = 256`; `build(snapshot, env) -> Redactor` loads `DEFAULT_SECRET_PATTERNS` + `policy.secrets.extra_patterns`, the values of `TELEGRAM_BOT_TOKEN`, `GITHUB_WRITE_TOKEN`, `HERMES_API_KEY`, `OSSBOT_TOKEN_PEPPER`, `GITHUB_REVIEW_MIRROR_TOKEN` and `TELEGRAPH_ACCESS_TOKEN` when set, and the Kiro-key check (`policy.TOKENISH_RE` candidates whose sha256 is in `policy.kiro_key_hashes(KIRO_KEY_SHA256)`, active when `policy.secrets.kiro_key_hash_check`). At load it refuses to start (or a `/reload` is refused) when a secret value contains whitespace or is ≥ `HOLD_BACK` characters, when a pattern's minimum match width is ≥ `HOLD_BACK`, or (R5 finding 3) when an `extra_patterns` entry can match a whitespace character: `secret_scan.can_match_whitespace(pattern) -> bool` walks `re._parser.parse(pattern)` (Python 3.12) and flags `ANY` (`.`), the categories `SPACE`, `NOT_WORD`, `NOT_DIGIT` (`\s`, `\W`, `\D`), `NOT_LITERAL`, negated classes, and any literal or class member that is in `WHITESPACE = " \t\n\r\f\v\u00a0\u2028\u2029"`, recursing into groups, alternations and repeats; the refusal message names the entry and says multi-line secrets are covered by gitleaks on publish bytes. Replacement text is `common.redact.REDACTED`. **`draft_visible` is the only builder** for drafts, Stop partials and truncated answers (R5 finding 1): `chat/stream.py` builds the Stop partial as `draft_visible(text) + "…"` and the truncated answer as `draft_visible(text) + "…(truncated)"`, and stores the same string in `chat_turns.answer_text`. The PR title (card line, explorer section 9, `copy_text`) and prompt-quoted publish text are passed to `scan`, never to `redact` (R5 finding 2). The display WARNING is `redacted {surface, hits}`; the verbatim ERROR is `redaction_verbatim_hit {surface, count}`; neither logs the match | `test_redaction_paths.py` (AC 66, including Stop after the 2nd of 3 deltas of `HERMES_API_KEY` and the 200 KB cut); `test_secret_scan.py` (a unit test per load refusal, the whitespace table); the AST test of U14 (each listed module calls `redact` or `draft_visible`; `chat/stream.py` calls `draft_visible` on the Stop and truncation paths; the verbatim builders and the title renderers call `scan` and never `redact`) |
@@ -4624,7 +4565,7 @@ defaults:
   labels: ["good first issue", "help wanted", "bug", "documentation", "kind/bug", "area/docs"]
   skip_labels: ["wontfix", "duplicate", "needs-triage", "stale", "question", "blocked", "discussion"]
   clone_depth: 200
-  max_changed_lines: 400
+  size_class: null                # optional autonomous-discovery preference xs|s|m|l|xl (null = inherit size.autonomous_max_class); never a hard limit
   validation: [static, unit, smoke]
   stack_validation: none          # none | compose | kind (Phase 2)
   cla_signed: false
@@ -4649,6 +4590,8 @@ denylist:
 ```
 
 `discovery: false` keeps a repo out of issue discovery while still allowing operator imports.
+
+Revision 5 (CR-004 Amendment B, §9.14, §12.6): there is no per-target line cap. The revision-4 `max_changed_lines: 400` (defaults and per-repo) is removed from the schema; the only hard size limit is the `policy.diff` ceiling (80 files / 3,000 non-test lines / 3,000 test lines), changed only in `config/policy.yaml`. A per-repo `size_class` (also settable with `/repos <repo> size <class|inherit>`, which writes `discovery_prefs`, §14.14.4) is an autonomous-discovery preference only: it never applies to user-directed work, an approved proposal or a gate, and the schema accepts only `xs`…`xl` (`xxl` is never selectable, U13). A Telegram or `ossctl` per-repo override in `discovery_prefs` wins over the tracked `size_class`.
 
 ### 17.2 Seed list (verified 2026-10-17 via GitHub search API: exists, not archived, pushed within ~60 days)
 
@@ -5254,7 +5197,7 @@ Each must be checked by web search and/or live probe before the dependent code i
 | ADR | Title |
 |---|---|
 | 0001 | Container runtime: Docker Engine inside the ossbot distro (not wslc), behind a root Docker API filter |
-| 0002 | Agent runtime: Hermes (narrowed role) + vendored kiro-acp with V3 ACP primary; OpenClaw and model routers rejected |
+| 0002 | Agent runtime: Hermes (no OSS-side authority; general multimodal assistant with capability tiers since revision 5) + vendored kiro-acp with V3 ACP primary, V2 fallback; OpenClaw and model routers rejected |
 | 0003 | Deterministic gatekeeper is the only GitHub write-token holder, policy core, and source of every reviewed artifact |
 | 0004 | Telegram: single bot owned by the gatekeeper; Hermes behind its local API; dual-bot fallback |
 | 0005 | Sandbox isolation: per-stage profiles, split coder, per-task internal networks, squid hostname allowlist |
@@ -5277,6 +5220,22 @@ Each must be checked by web search and/or live probe before the dependent code i
 Revision 5 amendments (consolidation, 2026-10-18) were added to ADR-0002 (Hermes general assistant, tiers), ADR-0003 (two human gates, ceiling), ADR-0004 (CR-003 amendments), ADR-0005 (`github_user_content`, egress modes, Telegraph), ADR-0008 (lifecycle vs kill, decision-service fan-out), ADR-0009 (`scout`/`vision` roles) and ADR-0018 (tiers). ADR-0019 and ADR-0020 are Accepted.
 
 ## 27. Responses to design review (`docs/design-review.md`)
+
+### 27.0b Consolidation review (`docs/review-consolidation.json`; verdict CHANGES_REQUESTED, 5 blocking MEDIUM, 1 MEDIUM, 5 NIT; addressed in place in revision 5)
+
+| Finding | Response | Sections |
+|---|---|---|
+| C-1 stale FEAT ids in §14 | Every FEAT reference in §14 and ADR-0019 now names the revision-5 PLAN item (24 token core, 36 tier switch and `skill_reviews`, 44 `pending_input`, 45 S7 `edit_comment`, 49 streaming). §14.20.8 opens with the FEAT map. The data model is split over migrations 0002–0006 with one owner each; `pending_input` is created once, with the full kind set, in `0005_telegram_ux.sql`, and `chat_sessions` lives in `0004_hermes.sql` | 14.10.4, 14.11.1, 14.15, 14.18, 14.20.1, 14.20.2, 14.20.8, 14.21.1, ADR-0019 |
+| C-2 threat model | T1/T2 states the `open`-mode `web_public` grant for `agent-llm`/`catalog` and the controls that bound it; T6 describes the per-tier allowlist, the skill staging dir, root hasher and skill gate; §8.5 describes typed-block rendering and gatekeeper-minted follow-ups. Row `DES-TM-1` | 8.4, 8.5 |
+| C-3 per-target line cap | §17.1 drops `max_changed_lines: 400`; a per-repo `size_class` preference (autonomous only) replaces it. Row `CR4-2o` | 17.1 |
+| C-4 §14.19 untraced | One row per item (`CR3-IH-1…18`). Phase 2 builds items 1–4, 9, the item 11 hook and 18, and voice via Kiro audio or the fallback reply; the rest are deferred (§6.1, §14.20.8, PLAN "Deferred") | 6.1, 14.20.8 |
+| C-5 PLAN/matrix ownership | Every PLAN item now lists full row ids, and every open row is named by an item of each FEAT in its phase (checked mechanically). `TGRW-9` moved to FEAT-010 item 49; `TGRW-11` to item 44; `CR3-U13` is shared by items 22, 29 and 46; `CR3-D10` and `CR3-V-13` are FEAT-010 | PLAN, TRACEABILITY |
+| C-6 §14.1–§14.5 beside §14.6+ | §14.1–§14.3 are current text with the amendments folded in. §14.4, §14.4a and §14.5 keep only what still applies; the revision-4 layouts, keyboards, flows and command table moved to Appendix A (historical). Section numbers stay for the Phase 1 docstrings, which PLAN item 44 updates (`TGRW-15`) | 14, 14.1–14.5, Appendix A |
+| C-7 rework rows without evidence | Each names the non-conforming code (file:line) or its `TGRW-*` row | TRACEABILITY |
+| C-8 `CR3-S4` | Now `missing` until `test_no_exposure.sh`/`test_no_tunnels.py` exist (item 26); S1–S4 have their own locations | TRACEABILITY |
+| C-9 tests cells | P1-15, P1-16 and P1-18 name the golden/render test, the doctor check and the VERIFICATION entry | TRACEABILITY |
+| C-10 carried draft text | Conflicting parts rewritten: the FEAT-009 draft items (`0002_phase2.sql`, revision-4 `/approve` semantics, the duplicated lifecycle helper), the FEAT-006 Telegram `/model` card, the FEAT-007 `locked` default and skill-card rendering, the FEAT-008 ADR number | FEAT-005…009 JSON |
+| C-11 minor text | §26 and ADR-0002 titles no longer say "narrowed role"; §14.6 delta 9 ends its list | 14.6, 26, ADR-0002 |
 
 ### 27.0a Round 4 (reviewed revision 3; verdict CHANGES_REQUESTED, 0 HIGH / 2 MEDIUM / 6 NIT; addressed in revision 4)
 
@@ -5415,8 +5374,117 @@ All 34 findings were addressed in revision 1; none were backlogged or ignored. R
 | Parent | `.wslconfig` template + install/backup/uninstall, values researched against the 2026-10-16 WSL docs (`autoMemoryReclaim`/`sparseVhd` are `[experimental]`; `localhostForwarding`, `autoProxy`, `gpuSupport`, `nestedVirtualization`, `telemetry`, `instanceIdleTimeout=-1` added); Hyper-V firewall evaluated and adopted as coarse port-level layer (WSL VMCreatorId verified locally); `wsl --shutdown` for hard kill; keepalive replaced by autostart. | 7.6-7.8, 13, 18.2, 22.8, ADR-0013 |
 | Parent 2 | Reproducibility and open-source readiness: README spec with mermaid diagram and generated command table; AGENTS.md spec with invariants and how-to recipes; SETUP.md as a fresh-install DR runbook; bootstrap creates the distro from zero (`wsl --install Ubuntu-24.04 --name ossbot --location … --no-launch`, `--import-in-place` for an orphaned VHD; flags verified locally) and never deletes one; state-outside-git inventory; `ossctl backup`/`restore` with age recipient encryption into gitignored `backups/`, restore lands killed + dry-run ON; personal values only in gitignored `config/profile.yaml` (+ example), personal floors made monotonic instead of hard-coded; `ossctl lint personal`; CI workflow (lint, hermetic tests, gitleaks binary) with read-only permissions and SHA-pinned actions. Workflow steps never push `origin`. | FR-15, FR-16, NFR-10, NFR-11, AC 21-24, 7.9, 18.2, 18.5, 18.7-18.9, 22.7a, ADR-0015, ADR-0016 |
 
+## Appendix A. Revision-4 Telegram baseline (historical, superseded)
+
+Kept so the revision-4 history stays readable next to the Phase 1 code. Nothing here is normative: §14.4, §14.4a and §14.5 keep what still applies, and §14.6–§14.25 replace the rest. Revision-4 text of §14.1–§14.3 is folded into those sections and is in git history (git show 77667ee:docs/DESIGN.md).
+
+### A.1 Revision-4 preview card layout, keyboard and flows (superseded by §14.11)
 
 
+Message 1 (card), example:
+
+```
+🧩 <b>Ready for review</b> · c_01JABC… · <b>DRY RUN</b> (or <b>LIVE</b>)
+<b>langfuse/langfuse</b> ⭐ 36.0k · pushed 2h ago · 14 external PRs merged/90d · median first review 9h
+Issue <a href="…">#1234</a> <b>Fix trace export when …</b> · labels: bug, good first issue
+Why: <rationale from planner, ≤ 300 chars>
+Maintainers: @a, @b · CODEOWNERS for touched paths: @org/team
+Checks: CONTRIBUTING ✅ · AI policy: disclosure required ✅ · CLA: not required · DCO: required → signed ✅ · Unclaimed ✅ · No competing PR ✅
+Risk: low · Confidence: 0.82 · Coder mode: split
+Change (derived by gatekeeper): 3 files, +42 −7
+  web/src/x.ts +30 −5 · web/src/y.ts +10 −2 · CHANGELOG.md +2
+Validation: ✅ lint (eslint) · ✅ unit 212 passed · ✅ smoke (build + --help) · ⏭ stack n/a · upstream CI after submit
+Self-review (claude-sonnet-5.5, round 1/2): PASS · 0 blocking · 2 nits fixed
+Commit abc1234 = 1 commit on upstream main@def5678 (base as of 10:02 UTC) · author/committer/sign-off: Amsal Khan <md.amsalkhan@gmail.com>
+Branch ossbot/1234-fix-trace-export-01jabc → Amsal1/langfuse
+PR title: <code>fix(web): handle empty spans in trace export</code>   [edited by you]
+Body: 2 140 chars, 1 part below · Commit message: 4 lines, below
+```
+
+Message 2..K+1: the PR body verbatim, escaped in `<pre>`, chunked, each part headed `PR body (i/K)`. If K > 3 or the body exceeds 10 000 chars, `pr_body.md` is also sent via `sendDocument`. Message K+2: the derived commit message verbatim in `<pre>`.
+
+Keyboard (on message 1), in two phases:
+
+- While body parts are still in the outbox: `[⏳ delivering…] [❌ Reject] [🧾 View diff]`. The `approve` token is created only when `body_parts_delivered == body_parts_total` (and the commit message message succeeded); the card is then edited to the full keyboard.
+- Full keyboard:
+
+```
+[✅ Approve & Submit] [❌ Reject]
+[✏️ Request changes] [🧾 View diff]
+[🧪 Test logs] [📝 Edit title] [📝 Edit body]
+[↩️ Clear my edits]   (only when an override exists)
+```
+
+Flows:
+
+- Approve → card edited to the mode-stating confirm (12.4) with `[✅ Confirm] [↩️ Cancel]`. Confirm → submit; progress edits; final link.
+- Reject → reasons `[Not valuable] [Wrong approach] [Repo unsuitable (cooldown)] [Other…]`; Other → ForceReply; text ≤ 500 chars. Repo unsuitable → 7-day cooldown.
+- Request changes → ForceReply "Describe the change (≤ 4000 chars)"; creates `change_requests`; contribution → CHANGES_REQUESTED → implement; old card edited "superseded by change request". Title/body overrides are kept and re-applied to the next package rev; the next card says "title/body edited by you".
+- Edit title/body → ForceReply with the current text quoted; validation (title 1-256 chars, single line; body ≤ 60000, disclosure enforced); stored in `pr_title_override`/`pr_body_override`; new card, old approvals invalidated.
+- Post-submit: "Submitted ✅ PR #N", then watcher updates: CI status, new reviews/comments (with "Draft reply" pending card if created), merged 🎉 / closed.
+
+ForceReply correlation: `pending_input(kind, cid, prompt_message_id, expires 15 min)`; the next message that replies to that prompt message is accepted; other text goes to Hermes.
+
+### A.2 Revision-4 comment, claim and push_update card examples (superseded by §14.11.1, §14.11.9, §14.18.4.1)
 
 
+Every public action shows the exact bytes it will publish before Approve exists. The same rules apply as for the PR card: escaped `<pre>`, chunking, `body_parts_delivered == body_parts_total` before the `approve` token is minted, two-tap mode-stating confirm, and message-ID-bound single-use tokens.
 
+Comment / claim card (message 1):
+
+```
+💬 <b>Comment ready</b> (or 🙋 <b>Issue claim ready</b>) · c_01JABC… · <b>LIVE</b> (or <b>DRY RUN</b>)
+Target: <a href="…">langfuse/langfuse#1234</a> <b>Fix trace export when …</b> (issue | our PR #5678)
+Why: <drafter rationale, ≤ 300 chars, escaped>  ·  In reply to: @maintainer, 2h ago (link)
+Checks: target open ✅ · our PR/linked issue ✅ · comments today 3/10 ✅ · secret scan ✅ · confidentiality ✅ · AI note ✅
+Body: 412 chars, 1 part below
+```
+
+- Messages 2..K+1 contain the body verbatim, escaped in `<pre>`, headed `Comment (i/K)`. Invisible and bidi characters are made visible as in 14.3.
+- Keyboard: `[✅ Approve & Post] [❌ Reject] [📝 Edit text]`. Edit text works like Edit body: normalized at storage, the AI note is re-appended if missing, and old approvals are invalidated.
+- Confirm text: `Confirm: LIVE — post comment on langfuse/langfuse#1234 as Amsal1. Expires in 5 min.` For a claim, `post claim comment`. For dry-run, `Confirm: DRY RUN — nothing will be posted.`
+- Reject of a claim → contribution `SKIPPED reason=claim_rejected` (from `VETTED`) or `FAILED claim_rejected` (from `PACKAGING`, 9.2). Reject of a comment → action `cancelled`; the contribution stays `WATCHING`.
+
+`push_update` card: the PR card layout (14.4) with these changes.
+
+- The header reads `🔁 <b>Fix ready for PR #5678</b>`, followed by "incremental commit on `Amsal1:<branch>`".
+- The change line is gatekeeper-derived from `old_head_sha..head`, e.g. "+12 −3 in 2 files". A cumulative line follows for context: "PR total vs base: 4 files +54 −10".
+- The commit line reads `Commit def4567 on top of abc1234 (current PR head, verified on fork)`.
+- There is no PR title/body section, since the PR text is unchanged. The commit message is shown verbatim instead.
+- The trigger is shown as "Requested by @maintainer: <quoted review comment, escaped, ≤ 500 chars, link>".
+- View diff and the `.patch` attachment use the incremental patch.
+- Buttons: `[✅ Approve & Push] [❌ Reject fix] [✏️ Request changes] [🧾 View diff] [🧪 Test logs]`.
+- Confirm text: `Confirm: LIVE — push 1 commit to PR #5678 (langfuse/langfuse) as Amsal1. Expires in 5 min.`
+- Reject fix → `AWAITING_APPROVAL→WATCHING` (H).
+
+Golden tests in `tests/telegram/test_cards.py` cover: comment, claim, `push_update`, each in LIVE and DRY RUN; a long comment (K > 1, Approve hidden until delivered); and hidden or bidi characters in a comment.
+
+### A.3 Revision-4 command table (superseded by §14.14.1)
+
+
+Registry `ossbot.gatekeeper.telegram.commands.registry`:
+
+```python
+@command("pause", help="Pause the pipeline", safety="stop")      # safety: read | stop | go | config
+async def pause(ctx: CommandContext, args: list[str]) -> Reply: ...
+```
+
+`go` and `config` commands always produce a confirm button. Commands come from built-ins and from Python entry points group `ossbot.telegram_commands` (future integrations: `/digest`, `/cost`); the BotFather menu is set at startup via `setMyCommands`.
+
+| Command | Safety | Behaviour |
+|---|---|---|
+| `/status` | read | control state, dry-run, config hash, audit head + last anchor, running stages, today's counters, versions (kiro-cli, Hermes), last errors |
+| `/queue` | read | contributions grouped by state with buttons to open cards |
+| `/approve <cid>` | read | Re-sends the current approval card as a **new** message; it never approves by itself. In one SQLite transaction (N4), the gatekeeper invalidates every `ui_tokens` row of the old card(s) for that approval and resets the approval to `pending` if it was `armed`. The new message's tokens are minted only after `sendMessage` returns the new `message_id` and the body parts are delivered. The old card is edited to "moved to a newer message". If the approval had expired, live checks are re-run and a fresh approval row is created. |
+| `/reject <cid> [reason]` | config | confirm, then reject |
+| `/pause` | stop | immediate |
+| `/resume` | go | confirm |
+| `/kill [reason]` | stop | immediate soft kill |
+| `/dryrun on` / `off` | stop / go | on immediate; off needs confirm; either invalidates open approvals and re-issues cards |
+| `/reload` | go | shows a diff of policy/targets/egress/identity vs the active snapshot; confirm applies |
+| `/repos [filter]` | read | targets with enabled/cooldown/AI-policy/CLA badges; per-repo Enable/Disable/Allow AI (config, confirm) |
+| `/model` | read/config | default + roles; `/model <role> <id>` or catalog buttons → confirm → writes models.yaml |
+| `/limits` (`/budget`) | read | limits and current usage; invocation counts/time per role in 24 h |
+| `/logs <cid> [stage]` | read | last stage log tail + file |
+| `/newchat` | read | new Hermes session |
+| `/help` | read | generated from the registry |
