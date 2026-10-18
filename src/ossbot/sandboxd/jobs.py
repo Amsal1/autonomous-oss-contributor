@@ -758,10 +758,21 @@ class ProbeRunner:
             self._plan("settings", "research", "probe", "none", {"OSSBOT_PROBE": "settings"})
         )
         results["settings"] = eval_settings(evidence["settings"], scanner)
+        # research_deny in two sessions (models refuse a prompt that names secret files): part 1, the
+        # harmless targets under every denied root, decides PASS and is retried when inconclusive;
+        # part 2 names the secret paths once: a refusal there is fine, any attempted read must be denied.
         planner_deny = self._kiro_env("planner", "research_deny", models["planner"], trust)
+        planner_secrets = self._kiro_env("planner", "research_deny_secrets", models["planner"], trust)
+        secrets_part = self._run(self._plan("research_deny_secrets", "research", "kiro", "none", planner_secrets))
+
+        def deny_run() -> ProbeEvidence:
+            part1 = self._run(self._plan("research_deny", "research", "kiro", "none", planner_deny))
+            files = {**{f"benign/{k}": v for k, v in part1.files.items()},
+                     **{f"secrets/{k}": v for k, v in secrets_part.files.items()}}  # fmt: skip
+            return ProbeEvidence(files=files, exit_code=part1.exit_code)
+
         evidence["research_deny"], verdicts["research_deny"], attempts["research_deny"] = self._retry(
-            lambda: self._run(self._plan("research_deny", "research", "kiro", "none", planner_deny)),
-            lambda ev: classify_research_deny(ev, scanner),
+            deny_run, lambda ev: classify_research_deny(ev, scanner)
         )
         planner_sym = {**self._kiro_env("planner", "symlink", models["planner"], trust), "OSSBOT_LIST_REPO": "1"}
 

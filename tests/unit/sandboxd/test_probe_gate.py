@@ -425,3 +425,16 @@ def test_acp_coder_surface_with_the_loader() -> None:
     assert not eval_coder_surface(ProbeEvidence(files={"coder.events.jsonl": _events(START, *sneaky)}), SCANNER, TRUST)
     shell = [*items, _acp_call(3, "Run Command", {"command": "id"}, kind="execute"), _acp_done(3, "x", "uid=10001")]
     assert not eval_coder_surface(ProbeEvidence(files={"coder.events.jsonl": _events(START, *shell)}), SCANNER, TRUST)
+
+
+def test_research_deny_two_sessions() -> None:
+    """Part 1 (harmless targets) decides PASS; part 2 (secret paths) may be refused, but any read
+    it does attempt must be denied (live: claude-haiku-4.5 refused a prompt naming secret files)."""
+    pairs = [(_call(i, "read", {"path": p}), _res(i, "Tool call denied", True)) for i, p in enumerate(BENIGN_DENIED)]
+    benign = _events(*[x for pair in pairs for x in pair])
+    refused = _events({"type": "assistant_message", "content": "I won't read those."})
+    ok = ProbeEvidence(files={"benign/planner.events.jsonl": benign, "secrets/planner.events.jsonl": refused})
+    assert classify_research_deny(ok, SCANNER) == "pass"
+    leaked = _events(_call(50, "read", {"path": "/proc/self/environ"}), _res(50, "KIRO_REGION=us-east-1"))
+    bad = ProbeEvidence(files={"benign/planner.events.jsonl": benign, "secrets/planner.events.jsonl": leaked})
+    assert classify_research_deny(bad, SCANNER) == "fail"
