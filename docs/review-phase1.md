@@ -1,79 +1,75 @@
-# Phase 1 review (round 4): egress and DNS surface
+# Phase 1 review (round 5): egress and DNS surface
 
-Round 4 reviews commit 109711f, the fix for round 3's P1-11/P1-12. It also covers the whole egress and DNS surface as recorded in the new threat table in `docs/VERIFICATION.md`. Both round-3 findings are closed in the template, the golden, the render tests and the live meter evidence, and the same pass also closed IPv6 `INPUT` and `0.0.0.0/8`. The 30-row table misses one channel that none of its layers can see: `AF_VSOCK` (Hyper-V sockets) from the VM to the Windows host.
+Round 5 reviews commit cb9c273, the fix for round 4's P1-13 (`AF_VSOCK` to the Windows host) and its four NITs. It also re-reads the full 36-row threat table in `docs/VERIFICATION.md` against squid's ACL semantics, every DNS path, IPv6, ICMP, raw IP, the Hyper-V layer and the non-IP host channels. The four NITs are closed, and no IP or DNS row (1-30) has a remaining hole. P1-13 itself is not closed. The fix filters `socket(2)` through seccomp, and io_uring creates sockets without making that syscall.
 
-Watch for: any confined service uid can open hvsocket connections to the Windows host (confirmed: as `hermes`, `AF_VSOCK` connects to CID 2 on ports 50000, 50002 and 50005 succeed). iptables owner rules, the WSL NAT and the Hyper-V VM firewall all filter IP traffic on the vNIC, and this traffic is not IP. Nothing in the units restricts the socket family. What sits behind those ports (WSL service channels, possibly the drvfs Plan 9 server or the DNS tunnel) is not traced. Either would be an uncontrolled path from a confined uid to a host process that has full network and disk access.
+Watch for (confirmed): in the exact unit context the surface test uses (the unit's user, its `RestrictAddressFamilies`, `NoNewPrivileges`, `SystemCallArchitectures=native`), `socket(AF_VSOCK)` gets errno 97. An `IORING_OP_SOCKET` submission for `AF_VSOCK` returns a working fd, though, and `connect((2, 50002))` on it reaches the drvfs Plan 9 server. This was checked for the gatekeeper and ossbox contexts. The WSL kernel is 6.18 with `kernel.io_uring_disabled = 0`, and no unit filters the io_uring syscalls. Threat-table row 31 and the ADR-0005/0007 addenda describe the path as closed for units. The surface probe only calls `socket()`, which is why it passes.
 
 **Verdict**: NEEDS_CHANGES
 
 ## High-level view
 
-With every name ACL `-n`, IP literals denied ahead of every allow, and `!denied_dst` as the last term of each allow line, squid resolves a name only after the port, the source pool and the category have matched. The meter's positive control (hermes's `web_public` lookup must be counted) is what makes its zero counts evidence of P1-11/P1-12 closure.
+No IP-level finding is left. The squid ACL order, `-n` on every name ACL, the per-uid owner chains (v4 and v6), the internal task networks, the `OSSBOT-IN` drops and the Hyper-V 80/443 rule leave no service uid or sandbox an IP or DNS path past the proxy. The proxy resolves only names its caller may reach. A TTL-0 rebinding does not get past `denied_dst`: squid's ipcache raises every positive TTL to at least `negative_dns_ttl`, so the connect uses the answer the ACL checked (likely, from squid's `ipcache` TTL clamp).
 
-Every DNS and IP row in the table has a control and a probe. The design assumes the network stack is the only way out of the VM, and on WSL2 it is not. `AF_VSOCK` reaches the host directly, it needs no capability, and the moby default seccomp profile blocks it only inside containers. The fix is cheap: `RestrictAddressFamilies=` on every non-root ossbot unit, a probe, and a threat-table row.
+The non-IP layer is the one gap. `RestrictAddressFamilies=` is a seccomp filter on `socket()`, and on kernels with `IORING_OP_SOCKET` (5.19+) io_uring creates sockets without that syscall. With io_uring enabled for everyone and not filtered in the units, every confined unit, including the Phase 2 runner and hermes units that will process untrusted content, can still open Hyper-V sockets to WSL init, the drvfs Plan 9 server and the crash-dump collector. The fix is to turn io_uring off system-wide and check that as drift, filter its syscalls in each unit, and add an io_uring variant of the vsock probe so the evidence covers the bypass. Containers are likely already covered, because Docker's default seccomp profile refuses the io_uring syscalls, but no probe shows it (row 32).
 
-The remaining items are hardening. `denied_dst` lacks a few special-purpose ranges. The host-listener probe exempts every port on the resolver address and does not allowlist loopback listeners, even though every service uid may reach `lo`. The threat table does not record the attacker-tenant channel through allowed SaaS endpoints. A skipped Hyper-V check is counted as a PASS.
+The rest is hardening. The listener allowlist sees only TCP/UDP sockets (confirmed), so abstract unix sockets in the host netns and UDP listeners on ephemeral ports get no check, even though every service uid can reach them. The squid config has no `manager` deny (confirmed), so the allow lines decide cache manager requests, and the broadest of them is the `web_public` callers' `all` rule.
 
 <details>
-<summary>Issues (5)</summary>
+<summary>Issues (3)</summary>
 
-1. **P1-13 HIGH: unfiltered `AF_VSOCK` path from confined uids to the Windows host**: add `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK` to every non-root ossbot unit (gatekeeper, sandboxd, and the Phase 2 runner/hermes templates; drop `AF_NETLINK` where it is not needed). Assert it in `tests/unit/test_systemd_units.py`, add a per-unit-context and per-pool vsock probe to `test_egress_surface.sh`, and add a threat-table row and an ADR-0005 addendum. Identify what listens on host ports 50000/50002/50005, and if one is the drvfs Plan 9 server, record what it means for ADR-0007.
-2. **NIT `denied_dst` special-purpose ranges**: add `198.18.0.0/15` (the fake-IP range of common Windows VPN/proxy clients), `192.0.0.0/24`, `224.0.0.0/4` and `240.0.0.0/4` so a `web_public` name cannot point squid at them.
-3. **NIT host-listener probe too permissive**: limit the resolver exemption to `<NS>:53` and turn the loopback check into an allowlist of the expected listeners. Every service uid reaches any `lo` port, so an unexpected loopback listener should fail the test, not pass it.
-4. **NIT attacker-tenant channel not in the threat table**: add a row for "allowed SaaS host, attacker's own account" (llm pool `kiro_core` with the sandbox Kiro key, runner `github_read`, fetch `storage.googleapis.com`/`ghcr.io`). Mark it as an accepted residual of CONNECT-only matching and name the mitigations (key scope, rotation, no secrets in fetch).
-5. **NIT Hyper-V SKIP counted as PASS**: `test_egress_surface.sh` reports the unapplied-layer case through `pass "SKIP …"`, so "313 PASS" does not show whether row 30 ran enforced. Count SKIPs separately in `lib.sh` (or record the row-30 outcome in VERIFICATION.md).
+1. **P1-14 HIGH: io_uring bypasses `RestrictAddressFamilies`, so `AF_VSOCK` to the Windows host stays open from every unit**: set `kernel.io_uring_disabled=2` through a sysctl.d file and fail closed on drift (`ossbot-firewall --check` / watchdog, doctor). Add `SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register` to every non-root unit and assert it in `tests/unit/test_systemd_units.py` next to the address-family line. Extend the unit-context and per-pool vsock probes in `test_egress_surface.sh` with an `IORING_OP_SOCKET` attempt, Correct threat-table row 31 and the ADR-0005/0007 addenda, and add the io_uring evidence to row 32.
+2. **NIT listener allowlist covers TCP/UDP only**: enumerate abstract unix sockets in the host netns (`ss -xl`, names starting `@`) against an allowlist, and limit the ephemeral-UDP skip to sockets owned by known clients (`ss -p`), since every service uid can reach both.
+3. **NIT no cache-manager deny in squid.conf**: add `acl manager url_regex -i ^cache_object:// /squid-internal-mgr/` with `http_access deny manager` among the fast denies, as the stock squid.conf does, so cache manager pages (ipcache, active requests of other callers) are never decided by the `web_public` `all` allow lines.
 
 </details>
 
 <details>
 <summary>Details</summary>
 
-### Hyper-V sockets bypass every egress layer (P1-13, HIGH, confirmed reachability)
+### io_uring sockets bypass the unit's address-family filter (P1-14, HIGH, confirmed)
 
-The threat table's rows assume that a confined process can only leave the VM over IP: owner rules in `OSSBOT-OUT` (IPv4 and IPv6), the `lo` ACCEPT with port 53 refused, the Hyper-V VM firewall on the vNIC. WSL2 also gives the guest Hyper-V sockets to the host (`AF_VSOCK`, host CID 2). This is how WSL's init, interop, drvfs and DNS tunnelling talk to the Windows side. netfilter never sees these sockets, the Hyper-V firewall filters only the virtual NIC, and an unprivileged process can create them. ADR-0007 already notes that the interop handler "failed on its vsock", so the transport is live in this distro. Reviewer spot-check, one command, as a confined service uid:
+systemd implements `RestrictAddressFamilies=` as a seccomp filter on the `socket()` syscall's family argument. `IORING_OP_SOCKET` (kernel 5.19+) creates the socket in the kernel from an io_uring submission. No `socket()` syscall is made, so seccomp never sees the family. LSM hooks still run, but no LSM rule restricts vsock here. The WSL kernel is `6.18.54.1-microsoft-standard-WSL2` and `/proc/sys/kernel/io_uring_disabled` is `0`. Neither the units nor DESIGN 7.5's hardening list filter `io_uring_setup`/`io_uring_enter`, and `git grep io_uring` finds nothing in the repo.
+
+Reviewer spot-check (one command). The probe is a ctypes io_uring client in a `systemd-run` transient unit with the same properties `test_egress_surface.sh` uses (`User=<unit user>`, `RestrictAddressFamilies=<the unit's value>`, `NoNewPrivileges=yes`, `SystemCallArchitectures=native`):
 
 ```
-wsl -d ossbot -u root -- runuser -u hermes -- python3 -I -c '... socket(AF_VSOCK).connect((2, p)) for p in 50000..50010'
-{50000: 'OPEN', 50001: 'timeout', 50002: 'OPEN', 50003: 'timeout', 50004: 'timeout',
- 50005: 'OPEN', 50006..50010: 'timeout'}
+== ossbot-gatekeeper user=gatekeeper RAF=[AF_INET AF_INET6 AF_UNIX]
+plain socket(AF_VSOCK): errno97
+io_uring IORING_OP_SOCKET(AF_VSOCK): created fd 7
+connect 2:50002: open
+== ossbot-sandboxd user=ossbox RAF=[AF_INET AF_INET6 AF_UNIX]
+plain socket(AF_VSOCK): errno97
+io_uring IORING_OP_SOCKET(AF_VSOCK): created fd 7
+connect 2:50002: open
 ```
 
-Three host listeners accept connections from `hermes`. The same holds for gatekeeper (GitHub PAT, Telegram token), sandboxd and the Phase 2 runner, because none of the units restricts address families (`git grep RestrictAddressFamilies` finds nothing). I did not trace which WSL services own these ports, and that sets the impact. Possible: a listener is WSL's drvfs Plan 9 server. Then a confined uid could attach Windows paths directly and get around ADR-0007's `automount=false` confinement. Possible: a listener carries the DNS tunnel. Then this is the P1-1/P1-6/P1-12 channel again, without port 53. In every case it is an unfiltered channel from an identity that reads untrusted content (hermes, the runner) to a host process outside every ossbot control. Even the cheapest reading of the impact gives an attack surface on a privileged Windows service.
+The fd is an ordinary vsock socket. `connect()` is not filtered, and 2:50002 is the drvfs Plan 9 server that ADR-0007's new addendum identifies. That server accepts an attach for any Windows path the user can reach. The probe stopped at connect: no Tversion, no attach. The impact is the one P1-13 described, for every confined unit. The gatekeeper holds the GitHub PATs and the Telegram token, and sandboxd drives Docker. In Phase 2 the runner and hermes join them, and those two read attacker-controlled content. Threat-table row 31, the ADR-0005 decision ("so no `AF_VSOCK`") and the ADR-0007 decision all describe the path as closed for units. `test_egress_surface.sh` tests only `socket()`, so it passes against the bypass.
 
-Sandbox containers are likely not affected. The filter forces `Runtime: runc` and `SecurityOpt == ["no-new-privileges"]`, so the moby default seccomp profile applies, and that profile refuses `socket(AF_VSOCK)`. No probe shows this, though. The proxy container falls in the same "likely" bucket.
+Turning io_uring off system-wide is the robust fix: `kernel.io_uring_disabled=2` (kernel 6.6+, refuses `io_uring_setup` for every process, root included). Nothing in the stack is likely to need io_uring: dockerd, containerd, runc, squid and the Python services use epoll. The Phase 1 bar after the change confirms this. The sysctl belongs with the other boot-time invariants. A sysctl.d file applies it, and the drift path (`ossbot-firewall --check`, watchdog `firewall_drift`, doctor) fails closed if it reads anything other than 2, like the masked-resolved check from P1-6. `SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register` on each non-root unit covers the unit even if the sysctl is lost, and `test_systemd_units.py` should assert it next to the address-family line so the Phase 2 units inherit it. The surface probe needs the io_uring path in the unit context, and also in each pool and in the proxy. Docker's default seccomp profile has refused the io_uring syscalls since moby 25 (likely, Docker 29.9.1 here), but nothing records that today. The control that makes the refusal evidence is the same as now: an unrestricted session, with io_uring enabled, reaches 2:50002 through `IORING_OP_SOCKET`.
 
-The fix is a systemd property on each non-root unit, `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` (plus `AF_NETLINK` where glibc's `AI_ADDRCONFIG` needs it). The renderers and the Phase 2 unit templates for runner and hermes should carry it as an invariant, and `test_systemd_units.py` should assert it. The live check has to run in the unit's context, for example the unit's `Seccomp:` and the `systemctl show -p RestrictAddressFamilies` value, plus a vsock connect from a `systemd-run` transient unit with the same properties. A connect under plain `runuser` would still succeed and prove nothing. Add a pool-side vsock probe to `POOL_SCRIPT` as well. Sessions outside units (`runuser`, `wsl -u ossnobody`) remain unrestricted. They need root or the owner's console, and the threat table should record them as such.
+The IP layer is not bypassed. A socket created through io_uring carries the submitter's credentials, so the `OSSBOT-OUT` owner match still applies (likely, not traced). With the sysctl at 2 this stops mattering.
 
-### `denied_dst` range gaps (NIT)
+### Listener allowlist coverage (NIT, confirmed gap in the probe)
 
-`always_denied.cidrs` covers RFC1918, CGNAT, link-local, loopback and `0.0.0.0/8`. It does not cover `198.18.0.0/15`. Fake-IP VPN/proxy clients on Windows (Clash, Surge-style TUN modes) hand out addresses in that range, and the WSL NAT forwards to them. With such a client running on the laptop, a `web_public` name resolving into the range would reach the Windows client through squid. `192.0.0.0/24`, `224.0.0.0/4` and `240.0.0.0/4` are cheap to add alongside it. IPv4-mapped AAAA answers are already handled, because squid stores IPv4 as v4-mapped, so `::ffff:127.0.0.1` matches `127.0.0.0/8`.
+Row 26's allowlist is built from `ss -ltnu`, so it covers TCP and UDP only. Abstract unix sockets (`@name`) in the host network namespace have no file permissions: any uid in the netns can connect to them, every service uid included, and the probe never enumerates them. The ephemeral-UDP skip also means a UDP listener on a port at or above `ip_local_port_range` passes whoever owns it. Neither case is a known hole today. Both are the same "new root listener reachable by service uids" class that NIT 2 turned into a test failure for TCP. A check of `ss -Hxl` names starting with `@` against an allowlist, plus `ss -p` owner checks for the skipped UDP sockets, closes the coverage gap.
 
-### Host-listener probe (NIT)
+### Cache manager is decided by the allow lines (NIT, likely)
 
-The awk filter in the "host surface" block drops every socket whose address equals `$NS`, on any port. It also accepts any `127.*`/`::1` listener. `OSSBOT-OUT` lets every service uid reach any port on `lo` (row 26), so the security-relevant question is which loopback listeners exist. The probe never asks it. Exempt only `<NS>:53`, and fail on any loopback listener that is not on an explicit list. That turns row 26's "future loopback service" residual into a test failure instead of a silent change.
-
-### Same-service, attacker-tenant channel (NIT, documentation)
-
-Row 7 records domain fronting as accepted. The more direct variant is not recorded: an allowed host that serves every tenant. A compromised llm pool can call `q.*.amazonaws.com`/`runtime.*.kiro.dev` with an attacker's own Kiro token, the runner can write to `api.github.com` with any token it gets, and the fetch pool can upload to an attacker's `storage.googleapis.com` bucket or `ghcr.io`. CONNECT-only matching cannot tell these apart from legitimate use, and that is a deliberate ADR-0005 trade-off. The table should still list it, with its mitigations: the sandbox Kiro key's scope and rotation, and no secrets in fetch/validate.
-
-### Hyper-V row evidence (NIT)
-
-When the Hyper-V layer is not applied, row 30's probe emits `pass "SKIP …"`, so the bar's "313 PASS, 0 FAIL" cannot distinguish an enforced row 30 from a skipped one. `scripts\ossctl.ps1 doctor` reports the layer applied, so it most likely ran enforced. The evidence log should say so explicitly, or `lib.sh` should count SKIPs separately.
+The config has no `manager` ACL (confirmed). Stock squid.conf puts `http_access deny manager` ahead of every allow for one reason: otherwise a cache manager request (`cache_object://` URLs or `/squid-internal-mgr/` paths) is allowed by whichever allow line matches its host. Here the `web_public` callers (hermes 3141, research pool) have `all !denied_dst`. Whether one of the URL forms gets past `Safe_ports` on this squid version is not traced. The internal-path form needs the first `http_port` (3128), which `Safe_ports` refuses. The exposure is read-only: public actions such as `ipcache`, `fqdncache` and `active_requests` would show which hosts other callers resolve and use. Protected actions need `cachemgr_passwd`, which is unset. One fast deny line removes the question.
 
 </details>
 
 <details>
 <summary>File map</summary>
 
-- `sandbox/proxy/squid.conf.j2`, `tests/unit/ctl/golden/squid.conf`: `-n` name ACLs, `ip_literal` deny, `!denied_dst` last on each allow line, `pinger_enable off`, `visible_hostname` (P1-11/P1-12, closed)
-- `src/ossbot/ctl/render.py`: `IP_LITERAL_PATTERNS`, literal-only CIDRs, ip6tables `OSSBOT-IN`
-- `config/egress.yaml`: `0.0.0.0/8` added to `always_denied.cidrs` (NIT 2 extends it)
-- `scripts/lib/firewall.sh`, `tests/unit/ctl/golden/iptables.rules`: ip6tables `INPUT` jump enforced by `--check`
-- `tests/system/test_egress_surface.sh`: proxy-DNS meter and per-row probes (NITs 3 and 5; P1-13 probe goes here)
-- `tests/unit/ctl/test_render.py`: squid render invariants
-- `systemd/ossbot-gatekeeper.service`, `systemd/ossbot-sandboxd.service`, `tests/unit/test_systemd_units.py`: no `RestrictAddressFamilies` (P1-13)
-- `docs/VERIFICATION.md`, `docs/adr/0005-sandbox-isolation-and-egress.md`, `docs/DESIGN.md`: threat table, addenda (P1-13 row and NIT 4 go here)
+- `systemd/ossbot-gatekeeper.service`, `systemd/ossbot-sandboxd.service`: `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6` (P1-13; bypassed through io_uring, P1-14)
+- `tests/unit/test_systemd_units.py`: address-family line asserted for every non-root unit (needs the io_uring filter assertion)
+- `tests/system/test_egress_surface.sh`: unit-context and per-pool vsock probes (`socket()` only), proxy seccomp check, `/run/WSL` checks, listener allowlist (TCP/UDP only)
+- `scripts/lib/wsl.sh`, `src/ossbot/ctl/doctor.py`: `/run/WSL` 0700 in `ossbot-nointerop`, `wsl.sh check`, and doctor `interop sockets`
+- `config/egress.yaml`, `tests/unit/ctl/golden/squid.conf`, `tests/unit/ctl/test_render.py`: four special-purpose ranges in `denied_dst`
+- `tests/system/lib.sh`: `skip` counted separately; `tests/system/test_audit_anchor.sh`: watchdog timer held around the tick-10 check
+- `docs/VERIFICATION.md`, `docs/adr/0005-…`, `docs/adr/0007-…`, `docs/DESIGN.md`, `docs/PLAN.md`: rows 31-36, the P1-13 addenda and the round-4 bar (row 31 and both addenda overstate the closure; row 32 lacks io_uring evidence)
 
-Full diff: `git -C d:\Work\autonomous-oss-contributor show 109711f`
+Full diff: `git -C d:\Work\autonomous-oss-contributor show cb9c273`
 
 </details>

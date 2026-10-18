@@ -2,37 +2,27 @@
   "verdict": "CHANGES_REQUESTED",
   "findings": [
     {
-      "id": "P1-13",
+      "id": "P1-14",
       "severity": "HIGH",
       "confidence": "confirmed",
-      "title": "Unfiltered AF_VSOCK path from confined uids to the Windows host",
-      "where": "systemd/ossbot-gatekeeper.service, systemd/ossbot-sandboxd.service, Phase 2 runner/hermes unit templates; docs/VERIFICATION.md egress threat table",
-      "detail": "As uid hermes, AF_VSOCK connect to host CID 2 succeeds on ports 50000, 50002 and 50005. Hyper-V sockets bypass the iptables owner rules, the WSL NAT and the Hyper-V VM firewall, and no unit restricts address families. What the listeners are (possibly drvfs Plan 9 or the DNS tunnel) is not traced.",
-      "action": "Add RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 (+AF_NETLINK only if needed) to every non-root ossbot unit and the Phase 2 runner/hermes templates; assert it in tests/unit/test_systemd_units.py; probe vsock from the unit context (systemd-run with the same properties, unit Seccomp) and from each sandbox pool; add a threat-table row and ADR-0005 addendum; identify the host listeners and record any ADR-0007 impact."
+      "title": "io_uring IORING_OP_SOCKET bypasses RestrictAddressFamilies, so AF_VSOCK to the Windows host stays open from every non-root unit (P1-13 not closed)",
+      "where": "systemd/ossbot-gatekeeper.service, systemd/ossbot-sandboxd.service, Phase 2 runner/hermes units; tests/unit/test_systemd_units.py; tests/system/test_egress_surface.sh; docs/VERIFICATION.md rows 31/32; ADR-0005 and ADR-0007 P1-13 addenda",
+      "detail": "In a systemd-run unit with the unit's user, RestrictAddressFamilies, NoNewPrivileges and SystemCallArchitectures=native (gatekeeper and ossbox), socket(AF_VSOCK) gets errno 97, but an IORING_OP_SOCKET submission returns a vsock fd and connect((2, 50002)) reaches the drvfs Plan 9 server. Kernel 6.18.54.1-microsoft-standard-WSL2, kernel.io_uring_disabled=0, no unit filters io_uring syscalls. The surface probe calls only socket(), so it passes against the bypass.",
+      "action": "Set kernel.io_uring_disabled=2 via sysctl.d and fail closed on drift (ossbot-firewall --check / watchdog firewall_drift, doctor). Add SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register to every non-root unit and assert it in test_systemd_units.py. Add an IORING_OP_SOCKET variant to the unit-context, per-pool and proxy vsock probes, with an unrestricted io_uring control. Correct row 31 and the ADR-0005/0007 addenda, and record io_uring evidence for row 32."
     },
     {
-      "id": "P1-N1",
+      "id": "P1-N5",
       "severity": "NIT",
-      "title": "denied_dst special-purpose ranges",
-      "action": "Add 198.18.0.0/15 (fake-IP range of Windows VPN/proxy clients), 192.0.0.0/24, 224.0.0.0/4 and 240.0.0.0/4 to always_denied.cidrs."
+      "confidence": "confirmed",
+      "title": "Listener allowlist covers TCP/UDP only",
+      "action": "In test_egress_surface.sh also check abstract unix sockets in the host netns (ss -Hxl names starting with @) against an allowlist, and restrict the ephemeral-UDP skip to sockets owned by known clients (ss -p)."
     },
     {
-      "id": "P1-N2",
+      "id": "P1-N6",
       "severity": "NIT",
-      "title": "Host-listener probe too permissive",
-      "action": "In test_egress_surface.sh exempt only <NS>:53, and turn the loopback check into an explicit allowlist, since every service uid can reach any lo port."
-    },
-    {
-      "id": "P1-N3",
-      "severity": "NIT",
-      "title": "Attacker-tenant channel through allowed SaaS hosts not in the threat table",
-      "action": "Add a row (llm pool kiro_core with an attacker token, runner github_read, fetch storage.googleapis.com/ghcr.io) as an accepted CONNECT-only residual with its mitigations."
-    },
-    {
-      "id": "P1-N4",
-      "severity": "NIT",
-      "title": "Hyper-V SKIP counted as PASS",
-      "action": "Count SKIPs separately in tests/system/lib.sh, or record explicitly in VERIFICATION.md that row 30 ran enforced."
+      "confidence": "likely",
+      "title": "No cache-manager deny in squid.conf",
+      "action": "Add acl manager url_regex -i ^cache_object:// /squid-internal-mgr/ and http_access deny manager among the fast denies in sandbox/proxy/squid.conf.j2 (and the golden), so the web_public 'all' allow lines never decide cache manager requests."
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.md"
