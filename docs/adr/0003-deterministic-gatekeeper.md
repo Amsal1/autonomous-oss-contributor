@@ -1,5 +1,5 @@
 # ADR-0003: A deterministic gatekeeper is the only GitHub write-token holder and policy core
-Status: Accepted (revised in design rev 1, rev 3 and rev 4) · Date: 2026-10-17 · Design: DESIGN.md §8, §9.2, §9.4, §12
+Status: Accepted (amended in design rev 5 on 2026-10-18; revised in design rev 1, rev 3 and rev 4) · Date: 2026-10-17 · Design: DESIGN.md §8, §9.2, §9.4, §12
 
 ## Context
 LLM sessions read hostile text (issues, comments, repo files, web pages). If any LLM-adjacent process can perform GitHub writes or decide approvals, prompt injection can publish under `Amsal1`.
@@ -38,3 +38,11 @@ More moving parts (runner ↔ gatekeeper API). Every public action is re-validat
 - `POST /v1/discovery-requests` creates a `DISCOVERED` contribution with `source='hermes_request'` (for operators too), subject to the same re-discovery rules. There is no separate requests table.
 - `POST /v1/actions` is refused (423) while paused or killed. The body is normalized and gets `<!-- ossbot:action=<id> -->` appended at storage time. A secret or Kiro-key hit is reported as anomaly `secret_in_text`: the action is blocked, and a second hit within 24 h pauses.
 - The targets denylist no longer carries the work account (no personal values in tracked files). `policy.check_repo` refuses any repo owned by an effective forbidden login (profile union floor) instead.
+
+## Revision 5 amendment (consolidation, 2026-10-18)
+
+Merged from CR-004 incl. Amendment B (DESIGN §9.2, §9.5a, §9.5b, §9.14, §12.6).
+
+- There are now **two deterministic human gates**: gate 1 approves a scouted proposal before any implementation compute is spent (`ProposalApprovals`, ids `p_…`, binding `{proposal_sha256, version, est_class}`), gate 2 is the unchanged public-action approval. Both use two taps on single-use, message-bound tokens; neither can be satisfied by LLM output. Skill activation (CR-002) is a third decision service (`SkillApprovals`, `s_…`); all three are invalidated together by kill and reload (DESIGN §14.18.4.2).
+- New states `SCOUTING`, `PROPOSED`, `PROPOSAL_APPROVED`, `PROPOSAL_REJECTED`, `PROPOSAL_SNOOZED`, `PROPOSAL_EXPIRED`, `RESCOPE_REQUIRED`; edges into or out of the gate states are gatekeeper or human only.
+- The diff ceiling in `policy.yaml` becomes a runaway-agent guard of 80 files / 3000 non-test lines / 3000 test lines, measured by the gatekeeper with test lines split out; it is config-only (no Telegram path, CR-003 U13) and applies to user-directed work too. Size classes are soft ranking preferences for autonomous discovery only; an overrun is flagged on the preview card, not blocked. The per-target `max_changed_lines` is replaced by per-repo size preferences.

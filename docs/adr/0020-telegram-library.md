@@ -1,6 +1,6 @@
 # ADR-0020: Telegram client library: keep python-telegram-bot 22.8 with a typed Bot API 10.1–10.3 adapter; no Pillow in the gatekeeper
 
-Status: Proposed (CR-003), revision 3 after design review round 5 · Date: 2026-10-18 · Facts verified on the web on 2026-10-18 (sources below) · Design: CR-003 §1, §6.1, §6.5, §12.5, §14.1, §14.4 · Related: ADR-0004, ADR-0019 · Supersedes: ADR-0019 Addendum A (moved here unchanged in substance; ADR-0019 keeps a back-reference)
+Status: Accepted (2026-10-18; CR-003 approved and merged into DESIGN.md §14; design loop ended after round 6, remaining findings carried as build criteria in docs/ux/cr003-carried-findings.md; "CR-003 §N.x" in this ADR = DESIGN §14.(N+6).x). Was: Proposed (CR-003), revision 3 after design review round 5 · Date: 2026-10-18 · Facts verified on the web on 2026-10-18 (sources below) · Design: CR-003 §1, §6.1, §6.5, §12.5, §14.1, §14.4 · Related: ADR-0004, ADR-0019 · Supersedes: ADR-0019 Addendum A (moved here unchanged in substance; ADR-0019 keeps a back-reference)
 
 ## Context
 The gatekeeper is the only Telegram poller (ADR-0004). One `getUpdates` long-polling stream carries Approve, Confirm, `/kill`, `/pause` and every assistant message, so the client library sits on the safety-critical path.

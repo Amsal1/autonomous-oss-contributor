@@ -1,5 +1,7 @@
 # CR-002: Research egress (github.io, gists) and configurable Hermes capability tiers
 
+**Merged into DESIGN.md §10.3, §11.3, §11.5, §15.1, §15.5, §15.6 and §16.1 (with FR-13, FR-18, FR-19, AC 25 and AC 33–36) on 2026-10-18, Amendment A included. Historical; do not edit.** The current spec is DESIGN.md; requirement rows are `CR2-*` in `docs/TRACEABILITY.md`.
+
 Status: Required for Phase 2 (user request, 2026-10-17). Where it conflicts with DESIGN.md, this CR wins and DESIGN.md/ADRs must be updated to match.
 
 ## Context

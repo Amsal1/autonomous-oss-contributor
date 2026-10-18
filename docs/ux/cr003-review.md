@@ -1,5 +1,7 @@
 # CR-003 / ADR-0019 / ADR-0020 design review, round 6
 
+> **Historical (2026-10-18).** The CR-003 design loop ended after this round; CR-003 is merged into DESIGN.md §14 (CR-003 §N.x = DESIGN §14.(N+6).x). The open findings of this round are build acceptance criteria (`docs/ux/cr003-carried-findings.md`, TRACEABILITY rows `CR3-F6-1`…`CR3-F6-6`).
+
 Reviewed: `docs/plan/CR-003-telegram-ux.md` (revision 6: §0–§6, §12.1–§12.5, §14.1, §14.5, §15, §15.1, §18, §24 read in full; the rest re-checked against the round-5 review where revision 6 left it unchanged), `docs/adr/0019-pr-review-surface.md` (revision 6), `docs/adr/0020-telegram-library.md` (revision 3), the text and constraint panels of all mockups `docs/ux/00..12-*.svg` (01, 03 and 07 read in full).
 Context read: the round-5 review, ADR-0004 and DESIGN §14 (as cited by the CR), CR-004 (ceiling, overrun, states), CR-002 (egress, as cited).
 Code spot-checked for revision 6's claims: `gatekeeper/policy.py` (`check_text` signature and checks, `TOKENISH_RE`, `kiro_key_hashes`, `Violation`), its two production callers (`packaging.py` for title, body and commit message; `api/actions.py` for `comment`), `telegram/escape.py` (`make_visible` → `⟦U+XXXX⟧`, 8 characters per invisible character; `code()`), `telegram/cards.py` (today the title is rendered in full in `<code>`), `common/config.py` (`TextPolicy.title_max: PosInt = 256`, no upper bound), `approvals.confirm_text`.

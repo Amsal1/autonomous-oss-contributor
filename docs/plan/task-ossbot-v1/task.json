@@ -1,11 +1,44 @@
 {
   "task_id": "task-ossbot-v1",
-  "task_description": "Implement ossbot v1 per the APPROVED docs/DESIGN.md (rev 4) and ADR-0001..0018, sequenced by docs/PLAN.md: an autonomous, isolated (dedicated WSL distro 'ossbot', confined to the repo folder), Telegram-gated OSS-contribution system. Phase 1 (FEAT-001..004): gatekeeper safety core (state machine, two-tap message-bound approvals, kill/pause, audit, policy, rate limits, dry-run default ON), gatekeeper git TCB and submission, sandbox layer (Docker filter, sandboxd, split coder, egress allowlist), provisioning from zero with WSL confinement, services and kill switch end to end. Phase 2 (FEAT-005..008): decorated Telegram review UX and chat relay, runner pipeline with global model switch, Kiro V3 ACP provider fork + Hermes v0.22.2, backup/restore, README/AGENTS/SETUP, gitleaks hooks, CI, final verification. No real secrets exist: everything is verified with fakes; live checks are listed by ossctl doctor.",
+  "task_description": "Implement ossbot v1 per docs/DESIGN.md revision 5 (the consolidated spec: revision 4 APPROVED in design review round 5, plus CR-001..CR-004, NOTE-live-secrets and the user's chat decisions merged on 2026-10-18) and ADR-0001..0020, sequenced by docs/PLAN.md, with every requirement tracked in docs/TRACEABILITY.md. Phase 1 (FEAT-001..004, done and APPROVED): gatekeeper safety core, git TCB and submission, sandbox layer and egress, provisioning, WSL confinement and kill switch. Phase 2 (FEAT-005..011): Phase 1 rework to revision 5 (ceiling, research egress and modes, token core deltas, handler budget, redaction, NITs, no exposure), the pipeline with scout, proposal gate and size budget, Kiro V3 ACP fork and Hermes with capability tiers and the multimodal assistant backend, lifecycle Windows hooks and backup/restore, the CR-003 Telegram workspace, docs, CI and final verification. Secrets exist; dry-run stays ON and no live GitHub write is made.",
   "status": "pending",
-  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005", "FEAT-006", "FEAT-007", "FEAT-008"],
+  "feature_order": [
+    "FEAT-001",
+    "FEAT-002",
+    "FEAT-003",
+    "FEAT-004",
+    "FEAT-005",
+    "FEAT-006",
+    "FEAT-007",
+    "FEAT-008",
+    "FEAT-009",
+    "FEAT-010",
+    "FEAT-011"
+  ],
   "phases": {
-    "phase1": {"title": "Phase 1: Safety core, sandbox isolation, provisioning foundation", "features": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004"], "gate_file": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.json"},
-    "phase2": {"title": "Phase 2: Telegram UX, pipeline, Kiro and Hermes, model switch, open-source docs, hardening", "features": ["FEAT-005", "FEAT-006", "FEAT-007", "FEAT-008"], "gate_file": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase2.json"}
+    "phase1": {
+      "title": "Phase 1: Safety core, sandbox isolation, provisioning foundation",
+      "features": [
+        "FEAT-001",
+        "FEAT-002",
+        "FEAT-003",
+        "FEAT-004"
+      ],
+      "gate_file": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.json"
+    },
+    "phase2": {
+      "title": "Phase 2: Phase 1 rework, pipeline with proposal gate, Kiro V3 and Hermes tiers, lifecycle, Telegram workspace, docs",
+      "features": [
+        "FEAT-005",
+        "FEAT-006",
+        "FEAT-007",
+        "FEAT-008",
+        "FEAT-009",
+        "FEAT-010",
+        "FEAT-011"
+      ],
+      "gate_file": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase2.json"
+    }
   },
   "blocked_reason": null
 }

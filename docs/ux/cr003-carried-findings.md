@@ -1,5 +1,7 @@
 # CR-003: findings carried into the build (orchestrator decision, 2026-10-18)
 
+> **Recorded in `docs/TRACEABILITY.md` on 2026-10-18** as rows `CR3-F6-1`…`CR3-F6-6` (round-6 findings), `CR3-BA-1`…`CR3-BA-22` (build criteria), `CR3-CF-1` / `DES-AC-42` (no exposure). This file stays as the source; section references to CR-003 map to DESIGN §14.(N+6).
+
 I ended the CR-003 design loop after round 6 instead of running another design pass. The design decisions are settled; the reviewer confirmed all HIGHs resolved, ADR-0020 in place and the Pillow decision made. The remaining items are rendering and implementation details, which the build handles better as tests than as more prose.
 
 Each item below is a **required build acceptance criterion**. The consolidation step must add every item to docs/TRACEABILITY.md as its own row, with a test:

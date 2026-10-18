@@ -1,6 +1,6 @@
 # ADR-0018: Hermes tool surface: allowlisted toolsets with runtime verification and kill on drift
 
-Status: Accepted (design rev 2, amended rev 3) · Date: 2026-10-17 · Design: DESIGN.md §8.4 T6, §15.1, §15.2 · Review: round 2 H2; round 3 M8, M9, N7
+Status: Accepted (amended in design rev 5 on 2026-10-18; design rev 2, amended rev 3) · Date: 2026-10-17 · Design: DESIGN.md §8.4 T6, §15.1, §15.2 · Review: round 2 H2; round 3 M8, M9, N7
 
 ## Context
 
@@ -37,3 +37,11 @@ Meanwhile the `hermes` uid must be able to read `hermes.env` (Kiro key, API key)
 ## Consequences
 
 Hermes cannot read files, run commands, write skills, or schedule jobs. Chat answers rely on its memory, the `ossbot` plugin, and Kiro's web tools. A Hermes upgrade that renames toolsets or changes `/v1/toolsets` triggers a kill rather than a silent widening.
+
+## Revision 5 amendment (consolidation, 2026-10-18)
+
+Merged from CR-002 incl. Amendment A (DESIGN §15.5, AC 25).
+
+- The allowlist becomes per tier: `locked` = `memory`, `todo_list`, `session_search`, `ossbot_*`; `research` adds Hermes-native web tools only if they are proven to route through proxy 3141; `self_improve` (default) adds `skill_manage`, `skill_view`, `skills_list`. `terminal`, `code_execution`, `file`, `browser`, `delegation`, `cronjob` and the Tool Search bridge are forbidden in every tier.
+- The gatekeeper's `/v1/toolsets` check uses the active tier's allowlist; drift is still a soft kill `hermes_tool_surface`. A tier switch re-renders the config as root, restarts Hermes, re-runs the Hermes-side Kiro probe and the surface check before the relay reopens, and invalidates pending skill approvals.
+- Skills cannot widen the surface: the rendered config, not a skill, defines toolsets, and a skill becomes active only after its two-tap approval card.

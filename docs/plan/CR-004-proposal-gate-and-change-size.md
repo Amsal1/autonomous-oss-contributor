@@ -1,5 +1,7 @@
 # CR-004: Proposal gate before implementation, plus a change-size budget
 
+**Merged into DESIGN.md §9.1, §9.2, §9.5a, §9.5b, §9.14 and §12.6 (with FR-3, FR-20, FR-21 and AC 37–41; presentation in §14.11.15–§14.11.19 and §14.14.4) on 2026-10-18, Amendment B included (it overrides the "Original §2" text kept below). Historical; do not edit.** The current spec is DESIGN.md; requirement rows are `CR4-*` in `docs/TRACEABILITY.md`.
+
 Status: Required for Phase 2 (user request, 2026-10-18). Where it conflicts with DESIGN.md §9 (pipeline), §12 (state machine) or config/policy.yaml, this CR wins, and DESIGN.md and its ADRs must be updated to match. The Telegram presentation of the proposal card belongs in CR-003.
 
 ## Problem

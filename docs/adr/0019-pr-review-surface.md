@@ -1,5 +1,5 @@
 # ADR-0019: PR review surface: native Telegram explorer by default, private GitHub review mirror as the opt-in rich layer
-Status: Proposed (CR-003), revision 6 after design review rounds 1–5 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, ADR-0020 (Telegram client library and Pillow, formerly Addendum A of this ADR), CR-004
+Status: Accepted (2026-10-18; CR-003 approved and merged into DESIGN.md §14; design loop ended after round 6, remaining findings carried as build criteria in docs/ux/cr003-carried-findings.md; "CR-003 §N.x" in this ADR = DESIGN §14.(N+6).x). Was: Proposed (CR-003), revision 6 after design review rounds 1–5 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, ADR-0020 (Telegram client library and Pillow, formerly Addendum A of this ADR), CR-004
 
 ## Context
 Amsal reviews almost every candidate on his phone. Today's review surface (DESIGN §14.4) is one card, the verbatim PR body and commit message in `<pre>` parts, a diff paged through `editMessageText`, and a `.patch` file. It is safe, but on a phone it is flat. It has no per-file navigation, no way to comment on a line, and no "what changed since my last review".

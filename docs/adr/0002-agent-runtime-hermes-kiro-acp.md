@@ -1,5 +1,5 @@
 # ADR-0002: Agent runtime is Hermes (narrowed role) with a vendored kiro-acp provider, V3 ACP primary
-Status: Accepted (revised in design rev 1, rev 2, rev 3 and rev 4) · Date: 2026-10-17 · Design: DESIGN.md §15
+Status: Accepted (amended in design rev 5 on 2026-10-18; revised in design rev 1, rev 2, rev 3 and rev 4) · Date: 2026-10-17 · Design: DESIGN.md §15
 
 ## Context
 The user wants a conversational agent on Telegram with memory and room for future integrations, using unlimited Kiro access through the official CLI only. MITM model routers (9router, OmniRoute) are rejected for ToS reasons. User decision (2026-10-17): Hermes uses Kiro **V3 ACP** as primary.
@@ -39,3 +39,12 @@ Live doc check (kiro.dev/docs/cli/v3/acp-migration, 2026-10-17): launch `kiro-cl
 
 ## Consequences
 We own a small fork. The plugin has one maintainer and no users; contract tests against `tests/fakes/fake_acp_v3.py` and a doctor round-trip guard upgrades. **Build-time probe (to append here at implementation):** real `kiro-cli acp --agent-engine=v3` initialize + session/new transcript (redacted), advertised extension methods, mode/model options, and which auth option worked.
+
+## Revision 5 amendment (consolidation, 2026-10-18)
+
+Merged from CR-002 incl. Amendment A (DESIGN §15.5, §15.6) and the user's chat decisions (DESIGN §25).
+
+- Hermes's role widens from "narrowed chat front-end" to the user's **general-purpose multimodal assistant**: every non-command Telegram update (text, photos, albums, documents, voice, locations, quoted replies) is relayed to it; answers stream with sources; features ship as skills or `ossbot` plugin tools with per-feature SQLite stores; a reverse-image-search provider is a documented hook only until the user picks one. The gatekeeper still owns the bot, the deterministic commands and every public GitHub write.
+- Capability tiers `locked` / `research` / `self_improve` (default `self_improve`) replace the single allowlist (ADR-0018 amendment). Self-written skills are staged inactive and activated only through a two-tap Telegram skill card; root copies the bound bytes into a read-only active dir. `terminal`, `code_execution`, `file`, `browser`, `delegation` and `cronjob` stay off in every tier; code runs only as gatekeeper-scheduled sandbox jobs.
+- Images go to the model as ACP image content blocks when V3 advertises `promptCapabilities.image`, on the new `vision` role (ADR-0009 amendment); attachments are downloaded by the gatekeeper with a size cap, a type allowlist and metadata stripping without Pillow (ADR-0020).
+- Unchanged and re-affirmed: the vendored fork of `tobenwarrior/hermes-kiro-provider` on Kiro **V3 ACP** is primary, V2 ACP is the fallback, and the fork's V3 adapter is queued as the first upstream contribution through `ossctl contribution import`; pipeline roles run `kiro-cli chat --v3 --no-interactive`.

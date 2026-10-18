@@ -1,5 +1,5 @@
 # ADR-0004: One Telegram bot, owned by the gatekeeper; Hermes reached via its local API
-Status: Accepted (revised in design rev 1) · Date: 2026-10-17 · Design: DESIGN.md §14
+Status: Accepted (amended in design rev 5 on 2026-10-18; revised in design rev 1) · Date: 2026-10-17 · Design: DESIGN.md §14
 
 ## Context
 The user wants one dedicated bot for everything. Approvals and kill must be deterministic. The Bot API delivers each update to one consumer per token (a second `getUpdates` poller gets a Conflict; webhooks need public HTTPS). Whoever polls the token sees every callback, including Approve taps.
@@ -16,3 +16,14 @@ The user wants one dedicated bot for everything. Approvals and kill must be dete
 
 ## Consequences
 Hermes-native Telegram features (inline model picker, clarify buttons, streaming edits) are unavailable in single mode. The relay is behind `ChatBackend`, so switching is configuration only. **Verify:** Hermes `/v1/responses` session semantics against `/v1/capabilities` at v0.22.2.
+
+## Revision 5 amendment (consolidation, 2026-10-18)
+
+Merged from CR-003 (DESIGN §14.6–§14.25; the amendments CR-003 §14.8 asked for).
+
+- Follow-up buttons are allowed as gatekeeper tokens whose single effect is to send the button's visible label (≤ 64 characters, byte for byte) to Hermes as the user's next message (D9). This amends "never with buttons".
+- Hermes answers are streamed through drafts and rendered by the gatekeeper from typed blocks; untrusted text is never markup (D8, U1). Placement and labelling follow U6 and U12.
+- `allowed_updates += stopped_message_generation`, authorized by `authorized_chat_only()` (U10); `authorized()` is unchanged.
+- The Approve-after-parts rule also holds for re-sent cards (delta 7).
+- Token use: view and navigation tokens are multi-use until the approval ends (or 24/72 h for kit views), still message-bound, owner-only and opaque; every decision token (Approve, Confirm, Cancel, Reject, Start work, skill activation, Publish) stays single-use (delta 3).
+- The library stays python-telegram-bot 22.8 with a typed Bot API 10.1–10.3 adapter over `do_api_request` (ADR-0020). Long polling only; no webhook, no inbound port, no Mini App in v1 (user decision 2026-10-18).

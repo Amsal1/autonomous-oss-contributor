@@ -1,5 +1,5 @@
 # ADR-0005: Sandbox isolation via per-stage profiles, a split coder, per-task internal networks, and a squid allowlist
-Status: Accepted (revised in design rev 1, rev 2 and rev 3) · Date: 2026-10-17 · Design: DESIGN.md §10, §11
+Status: Accepted (amended in design rev 5 on 2026-10-18; revised in design rev 1, rev 2 and rev 3) · Date: 2026-10-17 · Design: DESIGN.md §10, §11
 
 ## Context
 The coder must run hostile repo code (tests, install scripts) and kiro-cli needs a Kiro key. Hostile code at the same UID can read the key from `/proc/<pid>/environ`, and "Kiro hosts give an attacker no readable channel" is unverified (server-side web tools, remote MCP, cloud sessions). A hostile repo can also ship `.kiro/` workspace config (MCP servers, hooks). IP allowlists are brittle for CDN-fronted hosts.
@@ -123,3 +123,12 @@ The P1-13 decision above held only for `socket(2)`. systemd implements `Restrict
 - **Containers:** Docker's default seccomp profile refuses `io_uring_setup` (EPERM), shown per pool with the sysctl temporarily at 0. The proxy runs under the same default profile (no override, no interpreter to probe with), and the sysctl covers it as well.
 - **Other ways to hold a socket of a refused family**, reviewed in the same pass: fd passing (`SCM_RIGHTS`) or `pidfd_getfd` needs a process that already holds such a socket and is willing or ptrace-able. Only root and WSL's own processes hold vsock sockets, and `pidfd_getfd` needs ptrace access (Yama `ptrace_scope = 1`, and the unit has no capabilities). A new user or network namespace inherits the seccomp filters, and its network namespace has only `lo`.
 - **Tests:** `tests/system/test_egress_surface.sh` runs a ctypes io_uring client (one `IORING_OP_SOCKET(AF_VSOCK)`, then connect to 2:50002). With the sysctl at 2 it is refused in each unit context, in an unrestricted `hermes` session and for root. It then holds the watchdog timer, sets the sysctl to 0 for a few seconds and repeats: each unit context and each pool must still refuse, and the unrestricted `hermes` control must reach 2:50002 (`open`), so the refusals are evidence. A trap restores the value 2.
+
+## Revision 5 amendment (consolidation, 2026-10-18)
+
+Merged from CR-002 incl. Amendment A and CR-003 (DESIGN §10.3, §11.3, §11.5). CR-002 wins over the earlier text of this ADR.
+
+- `.github.io`, `gist.github.com` and `gist.githubusercontent.com` leave `always_denied` and form the category `github_user_content`, granted to the `research` profile and Hermes (3141) only. `uploads.github.com` and `checkpoint-api.hashicorp.com` stay always-denied, with the reason written next to each.
+- Egress modes `allowlist` / `research` / `open`, default **`open`**: `open` adds `web_public` to `agent-llm` and its pool-mate `catalog` so every agent can web-search unknowns. No mode relaxes the invariants: private, link-local, metadata and IP-literal denies; DNS, vsock and io_uring controls; the Hyper-V layer; `fetch`/`validate` on package and GitHub allowlists; gatekeeper and runner egress; mandatory key-exfil probes and output key scans. Mode changes are two-tap, audited and FYI'd; the active mode is a fail-closed control flag.
+- CR-003: a gatekeeper-only `telegraph` category exists only while `telegraph.enabled: true`; `telegra.ph`, `api.telegra.ph` and `edit.telegra.ph` are denied to every other caller in every mode.
+- Phase 1 review P1-15: `::/128` joins the always-denied CIDRs. P1-18: the residual of broad egress is held by Kiro-key holders (research pool, Hermes, and `agent-llm` in `open`), controlled by ADR-0017 (key out of tool reach) and the output key scans.

@@ -1,5 +1,7 @@
 # CR-001: Graceful lifecycle (up / down / drain) for laptop shutdown
 
+**Merged into DESIGN.md §13.5 (with FR-17, AC 31–32, NFR-3 and §23 item 31) on 2026-10-18. Historical; do not edit.** The current spec is DESIGN.md; requirement rows are `CR1-*` in `docs/TRACEABILITY.md`.
+
 Status: Required (user request, 2026-10-17). Applies on top of DESIGN.md; where it conflicts with an existing section, this CR wins and DESIGN.md must be updated to match.
 
 ## Problem

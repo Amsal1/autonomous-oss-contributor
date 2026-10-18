@@ -1,5 +1,7 @@
 # NOTE: live secrets are configured (2026-10-17)
 
+**Merged into DESIGN.md §22.7b on 2026-10-18. Historical; do not edit.** Requirement rows are `NOTE-*` in `docs/TRACEABILITY.md`.
+
 The user ran `scripts/setup-secrets.ps1`. Every secret is set (checked by key name only, values never read):
 
 - `gatekeeper.env`: GITHUB_WRITE_TOKEN (classic, `public_repo`), TELEGRAM_BOT_TOKEN, HERMES_API_KEY, OSSBOT_TOKEN_PEPPER, KIRO_KEY_SHA256.

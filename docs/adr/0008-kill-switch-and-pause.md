@@ -1,5 +1,5 @@
 # ADR-0008: Kill switch and pause semantics
-Status: Accepted (revised in design rev 1, rev 2 and rev 3) · Date: 2026-10-17 · Design: DESIGN.md §12.5, §13
+Status: Accepted (amended in design rev 5 on 2026-10-18; revised in design rev 1, rev 2 and rev 3) · Date: 2026-10-17 · Design: DESIGN.md §12.5, §13
 
 ## Context
 Need `/kill` on Telegram and `scripts/kill.ps1` that works even with the bot down or the distro stopped, persisted across reboots until resume, plus anomaly auto-pause. Review H5: the v1 control dir (2770, group-writable) let non-human components delete flags. Review M13: killing a stopped distro booted it with services racing the flag.
@@ -32,3 +32,10 @@ Soft kill keeps a minimal network-facing gatekeeper (Telegram + GitHub via one p
 ## Implementation addendum (Phase 1 integration, 2026-10-18)
 - Observed on this laptop: an unattended-upgrades run of the systemd package (255.4-1ubuntu8.18) re-ran `systemd-tmpfiles --create`. The `d /run/ossbot 1755` line re-chmods the directory, which narrows the ACL mask to `r-x`, and the `a+ u:gatekeeper:rwx,u:ossbox:rwx` line does not widen it again (live probe: fresh create 1775, second create 1755). The watchdog's 30 s permission check saw `/run/ossbot` at 1755 instead of 1775 and soft-killed, as designed (fail closed). With the narrowed mask the gatekeeper and sandboxd could no longer recreate their sockets after a restart.
 - Fix: `systemd/tmpfiles.d/ossbot.conf` sets the mask explicitly (`m::rwx`); re-runs now keep 1775. The provision `systemd` step re-applies tmpfiles whenever `/run/ossbot` is not 1775, and `tests/system/test_control_perms.sh` re-runs tmpfiles and asserts no drift.
+
+## Revision 5 amendment (consolidation, 2026-10-18)
+
+Merged from CR-001 and CR-003 (DESIGN §13.5, §14.18.4.2).
+
+- Lifecycle (`up` / `draining` / `down`, scopes `distro` and `workers`) is separate from kill and pause: it stops only new work, never invalidates approvals and never disables the autostart. Kill always overrides it, and `up` is refused while killed. Windows shutdown runs a graceful `down` through a per-user shutdown blocker and a User32 1074 event task (both required, both inside the repo).
+- A kill now invalidates the armed and confirmed approvals of every decision service (PR, proposal, skill), and typed `/kill` is handled within 2 s even while an assistant answer streams (update-handler budget, DESIGN §14.18.5).

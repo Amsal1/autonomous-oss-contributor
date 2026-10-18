@@ -1,5 +1,7 @@
 # Design review: docs/DESIGN.md (Draft v2, revision 4)
 
+> **Historical (2026-10-18).** This is the round-5 review that APPROVED revision 4. The current spec is DESIGN.md revision 5 (consolidation of CR-001…CR-004, NOTE-live-secrets and the chat decisions); its requirements and status are in `docs/TRACEABILITY.md`.
+
 Reviewer: design-review step (fresh context, round 5) · Date: 2026-10-17
 Scope:
 - DESIGN.md, with a close reading of every section revision 4 touched: §0 facts, 7.3, 7.5, 8.4 T2, 9.8, 9.11, 9.13, 10.8, 10.9, 12.2, 12.4, 12.5, 12.5a, 15.2, 15.4, 19, 22.1, 22.6, §23 items 13 and 19, and §27.0a.

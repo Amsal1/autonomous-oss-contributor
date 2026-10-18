@@ -1,0 +1,29 @@
+{
+  "id": "FEAT-010",
+  "type": "feat",
+  "description": "Telegram M2-M4 and v1.x per DESIGN §14: streaming assistant with drafts and Stop, answer_view (flat mode and Reviews wrap drafts too), follow-ups, media UX, feature cards and Hermes notifications (U12); rich views with classic fallback, live status card, reminders, digest with merge rate by size class; the opt-in private review mirror; Telegraph articles off by default. Depends on FEAT-009. Plan: docs/PLAN.md (Telegram M2–M4 and v1.x: streaming assistant, rich views, digest, status card, review mirror, Telegraph). Requirement rows: docs/TRACEABILITY.md.",
+  "status": "pending",
+  "steps": [
+    "Item 49: Streaming assistant (§14.12; rows CR3-D8, D9, D10, D21, CR3-U5 n/a, U6, U10, U11 pre-req, U12, CR3-AC-18, 19, 20, 22, 35, 48, 55, CR3-BA-14, BA-22, CR3-F6-2, TGRW-8, CR2-7h, CR2-7l, CR3-V-2, 3, 7, 13, 16). Drafts with Stop (`sendRichMessageDraft`/`sendMessageDraft`, `can_stop`), `stopped_message_generation` + `authorized_chat_only()`, `chat/{stream,drafts,md2blocks,followups,answer_view}.py` (flat mode and Reviews wrap drafts too), sources and footer, follow-ups, albums and reactions, `/new /title /memory`, feature cards and Hermes notifications (U12), assistant-unavailable states.",
+    "Item 50: Rich views and status (§14.11.11, §14.13.4; rows CR3-AC-9 rich, 42, 64, CR3-BA-9, CR3-M3, CR4-3c digest). Rich explorer/file/interdiff/tests/assistant behind `auto` with classic fallback, S10/S11 live status card and drafted replies, reminders, daily and weekly digest with merge rate by size class.",
+    "Item 51: Review mirror, opt-in (§14.11.14, ADR-0019 C; rows CR3-AC-24, CR3-U5, CR3-M4, CR3-V-9, 10). `review_mirror.py`, `review_mirror_writer.py`, `ossctl review-mirror enable|disable|status|purge`, setup-secrets optional key; off by default.",
+    "Item 52: Telegraph, off by default (§14.12.8; rows CR3-D17, CR3-U11, CR3-AC-27, 28, 65, 68, CR3-BA-10, BA-19, BA-20, CR3-F6-3, CR3-F6-4, CR3-V-11, CHAT-36 build). `telegraph.py`, `telegraph_writer.py`, gatekeeper-only `telegraph` egress category rendered only when enabled, `ossctl telegraph setup|rotate`, `/articles`.",
+    "Item 53: Close-out FEAT-010: redeploy, hermetic suites, live owner-only checks (a streamed sourced answer, Stop, a food photo through Telegram, an album), TRACEABILITY and VERIFICATION, commit."
+  ],
+  "acceptance_criteria": [
+    "DEV pytest -m \"unit or telegram\" passes for every §14.21 AC and BA assigned to FEAT-010 in docs/TRACEABILITY.md (streaming AC 18, follow-ups AC 19, albums AC 20, Hermes down AC 22, feature-card routing AC 35, flat-mode wrapping AC 48 incl. drafts, rich fallback AC 64, Telegraph AC 27, 28, 65, 68, mirror AC 24, digest AC 42)",
+    "stopped_message_generation is accepted only via authorized_chat_only() for an active draft and stops the turn within 2 s; no draft or final message ever shows a secret prefix",
+    "Review mirror and Telegraph are off by default and become active only after config + confirmed /reload + passing probe; Telegraph publishing needs two taps and is refused while paused or killed; the Telegraph hosts stay denied for every LLM caller",
+    "Live owner-only checks: a streamed sourced answer with Stop, an album, a food photo through Telegram; recorded in docs/VERIFICATION.md",
+    "ruff, mypy, lint-imports clean; TRACEABILITY rows updated; git status --porcelain empty after the commit"
+  ],
+  "verification": [
+    "$env:WSL_UTF8=1; DEV pytest -m \"unit or telegram or acp or e2e\"",
+    "DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports",
+    "powershell -NoProfile -File d:\\Work\\autonomous-oss-contributor\\scripts\\bootstrap.ps1 -Only provision   # twice; second run only 'unchanged'",
+    "ROOT bash tests/system/test_egress_surface.sh ; ROOT /opt/ossbot/app/.venv/bin/ossctl doctor",
+    "git -C d:\\Work\\autonomous-oss-contributor status --porcelain   # empty after the commit"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
