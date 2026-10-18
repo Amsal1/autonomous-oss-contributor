@@ -1,70 +1,77 @@
 {
   "verdict": "CHANGES_REQUESTED",
   "feat": "FEAT-006",
-  "round": 1,
+  "round": 2,
   "findings": [
     {
-      "id": "F006-R1-1",
+      "id": "F006-R2-1",
       "severity": "HIGH",
-      "title": "FEAT-006 is unfinished and the tree is dirty",
-      "detail": "git status shows uncommitted progress notes in FEAT-006.json. Item 30 is incomplete: ossctl discover, contribution import and targets verify are missing, ossctl up does not report the real resumed count, and item 30's TRACEABILITY rows are not updated. Item 31 has not started: no tests/e2e, upstream_fixture, kiro-cli stub, ossbot-runner.service with full hardening, services.sh/kill list/lib.sh entries or crash-safety runner case. Item 32 has not started: no redeploy, sandbox-llm image rebuild with the new agents, prompts and entrypoints, versions.lock digests, live checks (catalog, doctor --probes, kiro smoke, targets verify, global switch), VERIFICATION 'Phase 2 live checks', FEAT status or findings. Acceptance criteria 1 (e2e part), 2, 3, 5 (test_e2e_proposal) and 6 cannot be checked.",
-      "files": ["docs/plan/task-ossbot-v1/features/FEAT-006.json", "src/ossbot/ctl/cli.py", "tests/e2e/", "systemd/ossbot-runner.service", "scripts/lib/services.sh", "tests/system/lib.sh", "tests/system/test_crash_safety.sh", "config/versions.lock.yaml", "docs/TRACEABILITY.md", "docs/VERIFICATION.md"]
+      "title": "Back to gate 1 from RESCOPE_REQUIRED cannot complete and retries forever",
+      "detail": "stage_for sends RESCOPE_REQUIRED with pending feedback (Make it smaller / Split, allowed by ProposalService.request_revision) to scout.run. By then the task volume holds the build clone and sandboxd refuses to destroy it (not terminal, not PRE_START_STATES). The scout-mode fetch job clones into /work/repo; fetch.sh removes it only when .scout-clone exists, so git clone hits a non-empty directory and fails clone_failed. Scheduler.fail is a no-op because RESCOPE_REQUIRED is in NO_FAIL, and the next tick (10 s) re-dispatches: unbounded clone jobs, failed stage runs and audit rows, no owner message. After a re-approval the real fetch would hit the same non-empty volume. No runner or e2e test covers RESCOPE_REQUIRED (likely: code paths confirmed, not run). Fix: re-scout from the existing build tree (ro snapshot) or clone into a separate path; reset or reuse the volume for the post-re-approval fetch; alert and back off on repeated StageFailed in NO_FAIL states; add tests for Smaller/Split from RESCOPE_REQUIRED.",
+      "files": ["src/ossbot/runner/stages/scout.py", "src/ossbot/runner/stages/__init__.py", "src/ossbot/runner/scheduler.py", "sandbox/entrypoints/fetch.sh", "src/ossbot/sandboxd/jobs.py", "src/ossbot/runner/stages/fetch.py"]
     },
     {
-      "id": "F006-R1-2",
-      "severity": "HIGH",
-      "title": "A sandbox interruption or restart fails the item instead of re-queueing it",
-      "detail": "sandboxd records drain-timeout and crash-recovered jobs as state failed, error_class interrupted. runner/stages/common.py job() and runner/llm.py Kiro._once raise StageFailed for every non-succeeded job, so Scheduler.run_one calls fail() and the item becomes FAILED, with the stage run recorded as failed. A sandboxd SIGKILL or restart makes Sandbox.run raise SbxError 503 sandboxd_unreachable, which run_one also routes to fail(). This contradicts AC 32 and the CR-001 runner rule (interrupted job -> stage_run interrupted -> re-queue, max 3). No test covers it. Fix: map error_class interrupted and SbxError 503 to Interrupted (not fail()) and add unit tests.",
-      "files": ["src/ossbot/runner/stages/common.py", "src/ossbot/runner/llm.py", "src/ossbot/runner/scheduler.py", "src/ossbot/runner/sbx_client.py"]
-    },
-    {
-      "id": "F006-R1-3",
-      "severity": "HIGH",
-      "title": "M11 first start is incomplete and the probe-gate 423 turns into a hot loop",
-      "detail": "Scheduler.first_start only reads probes_status. Nothing calls Sandbox.probes_run with resolved models, although M11 and test_e2e_first_start require it. A failed catalog job only logs: there is no catalog_empty alert and no hourly retry, and dispatch continues, so items go FAILED with model_unavailable instead of waiting. While sandboxd answers 423 safety_probe_missing (always after the item-32 image rebuild, because agent_configs_sha256 is in the probe key), every Kiro-stage item re-runs each 10 s tick. Each run costs about 5 GitHub GETs, a stage_runs row recorded failed internal:SbxError and 2 audit events, with no backoff, and it is not counted toward REQUEUE_MAX. Three items exceed the 5000/h read-token limit. Fix: complete M11 (catalog -> probes_run -> stages), hold Kiro stages before any transition or stage run until the catalog and probes are ready, send catalog_empty with an hourly retry, and back off on 423.",
-      "files": ["src/ossbot/runner/scheduler.py", "src/ossbot/runner/pipeline.py", "src/ossbot/runner/stages/vet.py", "src/ossbot/runner/stages/scout.py"]
-    },
-    {
-      "id": "F006-R1-4",
+      "id": "F006-R2-2",
       "severity": "MEDIUM",
-      "title": "A drain interrupts running stages at the next heartbeat",
-      "detail": "Gate.check (require_running + require_up) runs at every StageRun.tick (every 2 s inside Sandbox.run), so draining or down cancels the running sandbox job within seconds. DESIGN 13.5 says the lifecycle only stops new work and running work finishes (sandboxd drain gives running jobs S s; AC 31 counts 'N finished'). test_heartbeat_interrupts_a_running_stage[draining] asserts the wrong behaviour. The build-plan wording conflicts with DESIGN, and DESIGN wins. Fix: at heartbeat check kill and pause only; check the lifecycle before a stage and before each new job; treat sandboxd's 423 draining or interrupted result as Interrupted.",
-      "files": ["src/ossbot/runner/pipeline.py", "tests/unit/runner/test_pipeline_gates.py"]
+      "title": "The scheduler only sees the newest 200 contributions of any state",
+      "detail": "Scheduler._dispatch iterates gk.contributions(limit=200); ContributionService.list orders by updated_at DESC over every state (route le=200). Discovery keeps adding mostly-SKIPPED candidates, so after enough cycles quiet WATCHING items (open PRs whose review comments need answers), snoozed and expired proposals fall out of the window and are never dispatched. Fix: list only states with a stage (state-set or active filter in the gatekeeper) or paginate; test with >200 terminal rows and one old WATCHING item.",
+      "files": ["src/ossbot/runner/scheduler.py", "src/ossbot/runner/gk_client.py", "src/ossbot/gatekeeper/contributions.py", "src/ossbot/gatekeeper/api/contributions.py"]
     },
     {
-      "id": "F006-R1-5",
+      "id": "F006-R2-3",
       "severity": "MEDIUM",
-      "title": "The scout snapshot is a fetch job in the task volume, before gate 1",
-      "detail": "scout.py runs a fetch-profile, fetch-entrypoint job (repo_mode rw, ossbot-task-<cid>, depth 1, prefetch false) before Start work. DESIGN 9.1 row 2a and 9.5a specify a fetch-free shallow snapshot by the runner's read path into a snapshot job, 9.1 says fetch and the task volume come only after Start work, and AC 37 says no fetch job runs before Start work. No repo code runs, but the fetch egress and a task volume are used pre-gate-1, and the decision is recorded only in the FEAT findings, not in DESIGN, an ADR addendum or TRACEABILITY. Fix: implement the read-path snapshot, or ask (hard rule 12) and record the decision change, with AC 37 and test_e2e_proposal worded to match.",
-      "files": ["src/ossbot/runner/stages/scout.py", "sandbox/entrypoints/fetch.sh", "src/ossbot/sandboxd/profiles.py", "src/ossbot/sandboxd/jobs.py", "docs/DESIGN.md", "docs/adr/0005-sandbox-isolation-and-egress.md"]
+      "title": "AC 2: the needs_key sandbox cases still never run",
+      "detail": "ROOTDEV pytest -m 'sandbox or e2e_docker' gave 11 passed, 2 skipped. tests/sandbox/test_profiles.py test_kiro_host_connect and test_workspace_canary_s_ws_1 are bodiless functions under an unconditional skip, although AC 2 requires them to run against the real key. The ADR-0005 item-30 addendum still says items 5b, 6 and 8 are pending a live probe while TRACEABILITY marks DES-V-8 done. Fix: implement both tests for when the key is present (or assert the recorded live 'workspace' probe result for the current tuple for S-ws-1) and update the ADR-0005 addendum (item 8 result; 5b/6 moved).",
+      "files": ["tests/sandbox/test_profiles.py", "docs/adr/0005-sandbox-isolation-and-egress.md"]
     },
     {
-      "id": "F006-R1-6",
+      "id": "F006-R2-4",
       "severity": "MEDIUM",
-      "title": "Hitting proposal.max_per_day re-runs the whole scout every tick",
-      "detail": "The daily cap is checked only when POST /proposal arrives (429). scout.run turns that into Deferred and the item stays SCOUTING, which Scheduler._eligible always dispatches. The next tick clones again and runs another full Kiro scout session, until the 24 h window rolls. This is reachable with the defaults (proposals_per_cycle 3 every 6 h against max_per_day 5). Fix: pre-check the cap before scouting, or hold the item until the window opens.",
-      "files": ["src/ossbot/runner/stages/scout.py", "src/ossbot/runner/scheduler.py", "src/ossbot/gatekeeper/proposals.py"]
+      "title": "TRACEABILITY rows closed with evidence that does not prove them; FEAT-006-only rows left open",
+      "detail": "DES-V-17 (public_repo sufficiency for fork/push/PR/comments, latency, secondary limits) and DES-V-18 (commit email verified on Amsal1, not linked to <work-login>) are done with the generic 'catalog 20 ids, probes 5/5, kiro smoke pong, targets verify 73/73' string, which touches neither; ADR-0006 still lists fork/push/PR as pending. DES-V-8 has the same string. DES-V-5/5a/21/24/33 cite runner code instead of the ADR-0005 addendum. DES-V-9, CR4-1h and CR4-2c name only FEAT-006 and are still missing; DES-V-5b and DES-V-6 say '-> FEAT-007' but their phase column is still P2 FEAT-006; DES-FR-14 still says the import CLI is missing. Fix each row with its real evidence or owner FEAT and recount Totals.",
+      "files": ["docs/TRACEABILITY.md", "docs/adr/0006-github-auth-and-identity.md"]
     },
     {
-      "id": "F006-R1-7",
+      "id": "F006-R2-5",
       "severity": "MEDIUM",
-      "title": "The tests-required backstop trusts the scout's claim that the repo has no suite",
-      "detail": "review.run sets has_suite = bool(proposal.tests). A scout answer of tests: [] with any no_suite_reason disables the deterministic missing-tests rejection (tests_exception no_suite), so the AC 41 and user rule depends on untrusted model output. Fix: detect a suite deterministically from the fetched tree (test_globs or known test configs, recorded in fetch.json), and refuse or flag proposals whose no_suite_reason contradicts it.",
-      "files": ["src/ossbot/runner/stages/review.py", "sandbox/entrypoints/fetch.sh", "src/ossbot/gatekeeper/proposals.py"]
+      "title": "Docs offer the test roles in the Telegram /model picker (user decision: never)",
+      "detail": "The user decided test and test_vision are changed only via config/models.yaml or ossctl model set test ... and never offered in /model. DESIGN §16 'Test roles' paragraph says 'Telegram /model', README 'Models' says 'including test ... or the Telegram /model picker', and TRACEABILITY MDL-3 lists 'Telegram /model picker shows test roles (FEAT-009)' as remaining work. No picker code exists yet. Fix the three texts and make MDL-3 (or a new row) require FEAT-009 to exclude and test the exclusion of test roles.",
+      "files": ["docs/DESIGN.md", "README.md", "docs/TRACEABILITY.md"]
     },
     {
-      "id": "F006-R1-8",
+      "id": "F006-R2-6",
       "severity": "MEDIUM",
-      "title": "Expired and snoozed proposals are re-scouted without checking that they still apply",
-      "detail": "AC 37 and 9.5b say an expired proposal is re-scouted only if it is still relevant, and the state machine has PROPOSAL_EXPIRED -> SKIPPED. scout.run moves PROPOSAL_EXPIRED and PROPOSAL_SNOOZED straight to SCOUTING without re-reading the issue (closed, assigned, linked open PR, rediscover rules), and no code takes the SKIPPED edge. Fix: run a cheap relevance check before re-scouting, skip with a reason when it fails, and add tests.",
-      "files": ["src/ossbot/runner/stages/scout.py", "src/ossbot/runner/scheduler.py"]
+      "title": "A model switch is audited but not announced on Telegram",
+      "detail": "ModelsAdmin.set_model appends a model_set audit event and returns the diff; PUT /v1/models/{role} returns it to ossctl; nothing is queued on the outbox. DESIGN §16 and the user require changes (incl. test roles) to be audited, catalog-validated and announced by a Telegram FYI. Fix: queue one owner FYI (role, old -> new, actor, forced) in the audit transaction and add a test in test_models_admin.py.",
+      "files": ["src/ossbot/gatekeeper/models_admin.py", "src/ossbot/gatekeeper/api/models.py", "tests/unit/gatekeeper/test_models_admin.py"]
     },
     {
-      "id": "F006-R1-9",
+      "id": "F006-R2-7",
+      "severity": "MEDIUM",
+      "title": "Full safety-probe run (~80 s) exceeds the owner's 60 s target, which is recorded nowhere",
+      "detail": "The FEAT handoff records ~80 s for six sequential Kiro sessions (doctor --probes 86 s in VERIFICATION) against the owner's 60 s target; inconclusive retries make it longer. No DESIGN section or TRACEABILITY row tracks the target. Fix: run independent probes concurrently or bound each session, or ask the owner (hard rule 12) to accept the measured figure and record it in DESIGN §10.9.",
+      "files": ["src/ossbot/sandboxd/jobs.py", "src/ossbot/sandboxd/probes.py", "docs/DESIGN.md"]
+    },
+    {
+      "id": "F006-R2-8",
       "severity": "NIT",
-      "title": "The claim wait never ends for an item without an issue",
-      "detail": "With proposal.claim_comment on, the PROPOSAL_APPROVED -> FETCHING guard requires an issue_claim. fetch._claim raises Deferred('claim_without_issue') every tick for repo or PR /work items, with no message to the owner. Exempt items with no issue in the guard, or notify the owner once.",
-      "files": ["src/ossbot/runner/stages/fetch.py", "src/ossbot/gatekeeper/state_machine.py"]
+      "title": "Runner case of test_crash_safety.sh passes vacuously",
+      "detail": "It SIGKILLs ossbot-runner and checks that no stage run is left running with a stale heartbeat, without first putting a stage in running, so an idle runner passes. Seed a running stage against the fake upstream before the kill and assert it is re-queued.",
+      "files": ["tests/system/test_crash_safety.sh"]
+    },
+    {
+      "id": "F006-R2-9",
+      "severity": "NIT",
+      "title": "targets verify transient unit lacks the runner hardening",
+      "detail": "ossctl targets verify runs verify_targets via systemd-run --uid=ossrunner with only EnvironmentFile and PrivateTmp. Add NoNewPrivileges, ProtectSystem=strict, ProtectHome, RestrictAddressFamilies, the io_uring SystemCallFilter/SystemCallErrorNumber, CapabilityBoundingSet= and a firewall --check first.",
+      "files": ["src/ossbot/ctl/cli.py"]
+    },
+    {
+      "id": "F006-R2-10",
+      "severity": "NIT",
+      "title": "VERIFICATION 'Phase 2 live checks' is stale and self-contradictory",
+      "detail": "The Root suites and System tests rows still say not run (round 2 ran them: sandbox/e2e_docker 11 passed 2 skipped; the five system suites all passed), and the 'Global switch: not exercised as a live switch' row contradicts 'Global switch, live'. Record the results and drop the contradiction.",
+      "files": ["docs/VERIFICATION.md"]
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-006.md"
