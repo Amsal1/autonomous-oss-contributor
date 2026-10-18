@@ -229,6 +229,9 @@ class Scheduler:
             self.discover(asked or None)
         elif self.last_discovery is None or self.now() - self.last_discovery >= interval:
             self.discover()
+        if self.sc.stopping():
+            out.skipped = "stopping"  # SIGTERM during discovery: start nothing new
+            return out
         self._dispatch(out)
         return out
 
@@ -238,7 +241,12 @@ class Scheduler:
             self.refused.clear()  # refusals are cached for one discovery cycle
         try:
             return discover.run(self.sc, repos=repos, refused=self.refused)
-        except (Interrupted, GkError) as exc:
+        except Interrupted as exc:  # stopped mid-cycle: the full cycle runs again once open
+            if repos is None:
+                self.last_discovery = None
+            log.info("discovery interrupted: %s", exc, extra={"event": "discover_interrupted"})
+            return []
+        except GkError as exc:
             log.warning("discovery skipped: %s", exc, extra={"event": "discover_skipped"})
             return []
 

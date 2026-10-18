@@ -133,6 +133,34 @@ def test_dispatch_sees_old_items_behind_many_terminal_ones(
     assert set(started) == {watching, snoozed} and set(ran) == {watching, snoozed}
 
 
+@pytest.mark.parametrize("how", ["sigterm", "pause"])
+def test_discovery_ends_at_the_next_target_when_stopped(
+    sc: StageContext, ctx: AppContext, monkeypatch: pytest.MonkeyPatch, how: str
+) -> None:
+    """A cycle reads for minutes; a SIGTERM (unit stop, TimeoutStopSec) or a kill/pause/drain ends
+    it between targets instead of after the whole cycle, and the full cycle runs again later."""
+    read: list[str] = []
+    real_repo = sc.gh.repo
+
+    def repo(name: str) -> Any:
+        read.append(name)
+        if how == "pause":
+            ctx.control.pause("test", "uid:1000/operator")
+        return real_repo(name)
+
+    monkeypatch.setattr(sc.gh, "repo", repo)
+    if how == "sigterm":
+        sc.stopping = lambda: bool(read)
+    scheduler = ready(sc, ctx)
+    scheduler.last_discovery = None
+    ran: list[str] = []
+    monkeypatch.setattr(scheduler, "run_one", ran.append)
+    out = scheduler.tick()
+    assert len(read) == 1, read  # the next target was never read
+    assert scheduler.last_discovery is None  # not counted as a finished cycle
+    assert ran == [] and out.skipped == ("stopping" if how == "sigterm" else None)
+
+
 def test_active_list_pages_past_the_page_size(sc: StageContext, ctx: AppContext) -> None:
     cids = {insert_contribution(ctx, State.PROPOSED) for _ in range(7)}
     for _ in range(3):

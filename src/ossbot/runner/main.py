@@ -90,6 +90,7 @@ def main() -> int:
     paths = Paths.default()
     sc, cache = build(paths)
     stop = threading.Event()
+    sc.stopping = stop.is_set  # a discovery cycle ends at the next target on SIGTERM (TimeoutStopSec)
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     while not stop.is_set() and not sc.gk.health():

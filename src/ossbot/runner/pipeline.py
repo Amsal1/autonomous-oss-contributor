@@ -93,6 +93,8 @@ class StageContext:
     run: StageRun | None = None  # set while a stage runs (its tick drives heartbeats)
     state_dir: Path | None = None  # runner-local notes per contribution (artifact dirs of earlier stages)
     notify: Callable[[str], None] | None = None
+    # the service is stopping (SIGTERM): discovery, which holds no state, ends at the next target
+    stopping: Callable[[], bool] = field(default=lambda: False)
 
     def load(self, cid: str) -> dict[str, Any]:
         path = (self.state_dir or self.inputs_root.parent / "state") / f"{cid}.json"

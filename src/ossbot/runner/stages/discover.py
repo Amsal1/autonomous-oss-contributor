@@ -4,7 +4,8 @@ Per enabled target with discovery on, no open PR of ours and no cooldown: open i
 label, drop PRs, assigned/locked issues, ``skip_labels``, stale or crowded issues; rank with
 ``scoring`` (size fit first, filters from ``discovery_prefs``); check the top ones for an open linked
 PR; create at most ``discovery.proposals_per_cycle`` contributions. The gatekeeper applies the
-re-discovery rules (409 refusals are cached for one cycle). Reads only; nothing is posted.
+re-discovery rules (409 refusals are cached for one cycle). Reads only; nothing is posted. A cycle
+reads for minutes, so a service stop (SIGTERM), kill, pause or drain ends it between targets.
 """
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ from ossbot.common.config import DiscoveryFilters, all_targets
 from ossbot.runner import scoring
 from ossbot.runner.github_read import GitHubReadError
 from ossbot.runner.gk_client import GkError
-from ossbot.runner.pipeline import StageContext
+from ossbot.runner.pipeline import Interrupted, StageContext
 
 log = logging.getLogger(__name__)
 STAGE = "discover"
@@ -43,6 +44,12 @@ def keep_issue(issue: dict[str, Any], skip_labels: set[str], now: datetime) -> b
     return (now - from_iso(str(issue["updated_at"]))).days <= 180
 
 
+def _check(sc: StageContext) -> None:
+    if sc.stopping():
+        raise Interrupted("runner stopping")
+    sc.gate.check(STAGE)
+
+
 def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | None = None,
         refused: set[str] | None = None) -> list[str]:  # fmt: skip
     """One discovery cycle; returns the created cids. ``repos`` limits it (``ossctl discover``)."""
@@ -60,6 +67,7 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
     for entry in all_targets(bundle.targets):
         if not entry.enabled or not entry.discovery or (repos and entry.repo not in repos):
             continue
+        _check(sc)  # a cycle reads for minutes: a stop, kill, pause or drain ends it between targets
         if entry.repo.lower() in active:
             continue  # one open PR per repo for autonomous work
         repo_prefs = sc.gk.prefs(entry.repo)
@@ -98,6 +106,7 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
     for item in ranked:
         if len(created) >= budget:
             break
+        _check(sc)
         key = f"{item.candidate.repo}#{item.candidate.number}"
         if key in refused:
             continue
