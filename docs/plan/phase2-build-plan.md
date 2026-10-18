@@ -340,3 +340,4 @@ Coder steps can run out of context and stop mid-task, leaving uncommitted work. 
 2. **Commit in small units.** Commit after each plan item or sub-item once its tests pass. Don't hold large uncommitted batches. Also update TRACEABILITY.md and VERIFICATION.md as you go, not only at the end.
 3. **Keep context lean.** Don't paste huge files or full test logs into context. Use grep/targeted reads and `tail` the logs.
 4. **Reviewers:** never approve while the tree is dirty, or while committed work lacks test evidence. Instead, return CHANGES_REQUESTED with a "finish the WIP" finding.
+5. **Pushes to origin are the owner's.** Amsal pushes `main` to the private remote himself, whenever he likes, so origin/main moving forward is expected and is not a finding. Workflow steps still never push, force-push or rewrite history. Treat it as a problem only if origin/main contains commits that are not in local main, or if history was rewritten.
