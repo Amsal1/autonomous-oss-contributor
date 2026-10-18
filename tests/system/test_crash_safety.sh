@@ -17,16 +17,40 @@ gk_health() { [[ $(gk GET /v1/health | cut -d' ' -f1) == 200 ]]; }
 done_before=$(q "SELECT COUNT(*) FROM outbound_actions WHERE status IN ('done','dry_run_done')")
 audit_before=$(q "SELECT COUNT(*) FROM audit_events")
 
+# Runner (FEAT-006): seed a stage run in 'running', opened through the worker API as ossrunner,
+# so the SIGKILL below lands mid-stage. It goes on the newest terminal contribution: the runner
+# never dispatches a terminal item, so nothing runs for it and no GitHub or Kiro call is made;
+# the restarted runner must mark it interrupted ("runner restarted"), which is what re-queues a
+# live item on the next tick (the re-dispatch itself: tests/e2e/test_e2e_resume.py).
+seed_cid=$(q "SELECT COALESCE((SELECT id FROM contributions WHERE state IN ('SKIPPED','FAILED','ABANDONED','DRY_RUN_DONE') AND id NOT IN (SELECT cid FROM stage_runs WHERE status = 'running') ORDER BY updated_at DESC LIMIT 1), '')")
+seed_run=""
+if [[ -n "$seed_cid" ]]; then
+  seeded=$(gk POST "/v1/contributions/$seed_cid/stage-runs" '{"stage":"vet","profile":"research"}' ossrunner)
+  if [[ ${seeded%% *} == 201 ]]; then
+    seed_run=$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1].split(" ",1)[1])["id"])' "$seeded")
+    pass "stage run seeded in 'running' before the kill ($seed_run)"
+  else
+    fail "could not seed a running stage run: ${seeded:0:200}"
+  fi
+else
+  skip "runner mid-stage case: no terminal contribution to seed a stage run on"
+fi
+
 systemctl kill --signal=SIGKILL ossbot-gatekeeper.service ossbot-sandboxd.service ossbot-dockerfilter.service \
   ossbot-runner.service
 sleep 2
 check "units restarted by systemd after SIGKILL" wait_for 90 units_active ossbot-gatekeeper ossbot-sandboxd ossbot-dockerfilter \
   ossbot-runner
-# Runner (FEAT-006): a stage run the killed runner left 'running' is marked interrupted at its next
-# start and re-queued (max 3); none may stay running with a stale heartbeat.
+# A stage run the killed runner left 'running' is marked interrupted at its next start and
+# re-queued (max 3); none may stay running with a stale heartbeat.
 stale_runs() { q "SELECT COUNT(*) FROM stage_runs WHERE status = 'running' AND heartbeat_at < strftime('%Y-%m-%dT%H:%M:%SZ', 'now', '-120 seconds')"; }
 no_stale_runs() { [[ $(stale_runs) -eq 0 ]]; }
 check "no stage run left running by the killed runner" wait_for 90 no_stale_runs
+if [[ -n "$seed_run" ]]; then
+  seed_state() { q "SELECT status || '/' || COALESCE(error_message, '') FROM stage_runs WHERE id = '$seed_run'"; }
+  seed_interrupted() { [[ $(seed_state) == "interrupted/runner restarted" ]]; }
+  check "the seeded mid-stage run is interrupted by the restarted runner (re-queue)" wait_for 90 seed_interrupted
+fi
 check "gatekeeper healthy again" wait_for 60 gk_health
 check "sandboxd healthy again" wait_for 60 sbx_health
 verify=$(gk GET /v1/audit/verify)

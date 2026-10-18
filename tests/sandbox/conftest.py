@@ -3,7 +3,8 @@
 Run as root on the provisioned distro (ROOTDEV pytest -m sandbox). Containers are created
 through sandboxd's own code (``JobService.execute`` with the fixed templates and
 ``DockerCliRuntime`` on ``/run/ossbot/docker-filter.sock``), so every request also passes the
-Docker filter. Key-dependent checks are marked ``needs_key`` and skipped with a reason.
+Docker filter. This JobService holds no key; the key-dependent checks go through the live
+sandboxd and ``ossctl`` (product code) instead (test_profiles.py ``live_probes``).
 """
 
 from __future__ import annotations

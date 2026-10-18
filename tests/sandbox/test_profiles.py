@@ -1,7 +1,9 @@
 """DESIGN §22.5 sandbox isolation smoke tests, one container per profile via sandboxd's templates.
 
-Every bullet that needs no Kiro key runs here; the Kiro host CONNECT checks and S-ws-1 (a real
-coder/planner run over the hostile fixture) are ``needs_key`` and skipped with the reason.
+Every bullet that needs no Kiro key runs on this suite's own JobService (no key). The two
+``needs_key`` cases run against the real key through product code: the Kiro host CONNECT through
+``ossctl kiro smoke`` and the live probe results, S-ws-1 through the live ``workspace`` probe
+(a real planner and coder run over the hostile fixture) for the current tuple.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any, Literal
 
@@ -23,7 +26,8 @@ CID = "c_SMOKETEST1"
 PEER_CID = "c_SMOKETEST2"
 SNAP_CID = "c_SMOKETEST3"
 FETCH_CID = "c_SMOKETEST4"
-needs_key = pytest.mark.skip(reason="needs_key: requires the sandbox KIRO_API_KEY (live probe, DESIGN §22.7)")
+LIVE_SANDBOXD = Path("/run/ossbot/sandboxd.sock")
+OSSCTL = Path("/opt/ossbot/app/.venv/bin/ossctl")
 _cache: dict[str, dict[str, Any]] = {}
 # /work holds nothing but the empty image directory /work/repo (the mountpoint research uses).
 EMPTY_WORK = (None, [], ["/work/repo"])
@@ -191,11 +195,42 @@ def test_fetch_clones(sandbox: Sandbox) -> None:
     assert "README" in f["repo_top"] and ".git" in f["repo_top"]
 
 
-@needs_key
+def live_probes() -> dict[str, Any]:
+    """``GET /v1/probes/status`` of the live sandboxd (root may read it, like ``ossctl doctor``),
+    checked to be for the images and agent configs this suite runs against."""
+    import httpx
+
+    from ossbot.common.images import DEFAULT_LOCK_COPY, load_image_pins
+    from ossbot.common.uds import uds_client
+    from ossbot.sandboxd.probes import compute_key
+
+    if not LIVE_SANDBOXD.exists():
+        pytest.fail(f"{LIVE_SANDBOXD} missing: provision first")
+    with uds_client(LIVE_SANDBOXD, timeout=httpx.Timeout(10.0)) as client:
+        resp = client.get("/v1/probes/status")
+    assert resp.status_code == 200, resp.text
+    doc: dict[str, Any] = resp.json()
+    key = compute_key(load_image_pins(DEFAULT_LOCK_COPY), doc["trust_mode"] or "ids")
+    assert key is not None and doc["probe_key"] == key.sha256, "live sandboxd runs other images: redeploy"
+    return doc
+
+
 def test_kiro_host_connect() -> None:
-    """research / agent-llm: Kiro host CONNECT ok (needs the key to be meaningful)."""
+    """research and agent-llm reach the Kiro host with the real key (needs_key, now live): ``ossctl
+    kiro smoke`` (one research-profile job on roles.test) answers pong, and the probes that need a
+    model answer passed for the current tuple: research_deny (a research session) and coder_surface
+    (the coder pair's agent-llm). Both go through the proxy; direct egress stays closed (assert_common)."""
+    proc = subprocess.run([str(OSSCTL), "kiro", "smoke"], capture_output=True, text=True, timeout=900, check=False)
+    assert proc.returncode == 0, (proc.stdout[-1500:], proc.stderr[-1500:])
+    probes = live_probes()["probes"]
+    assert probes["research_deny"] is True and probes["coder_surface"] is True, probes
 
 
-@needs_key
 def test_workspace_canary_s_ws_1() -> None:
-    """S-ws-1: the fixture's .kiro/settings/mcp.json and hooks never run during a coder or planner run."""
+    """S-ws-1 (needs_key, now live): the ``workspace`` safety probe runs a real planner and a real coder
+    session with the key over the hostile fixture (.kiro/settings/mcp.json, hooks, AGENTS.md) and
+    fails on the canary file, the canary host in the proxy log or a key leak (``eval_workspace``).
+    It passed for the current tuple, the images and agent configs this suite tests."""
+    doc = live_probes()
+    assert doc["probes"]["workspace"] is True, "workspace probe not passed: ossctl doctor --probes"
+    assert doc["all_passed"] is True, doc["probes"]

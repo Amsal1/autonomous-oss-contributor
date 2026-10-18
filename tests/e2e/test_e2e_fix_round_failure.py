@@ -20,6 +20,7 @@ def test_failed_fix_round_returns_to_watching(e2e: E2E) -> None:
     row = db.one(e2e.ctx.conn, "SELECT state_reason FROM contributions WHERE id = ?", (cid,))
     assert row is not None and str(row[0]).startswith("fix_round_failed:"), e2e.why(cid)
     assert e2e.has_task_volume(cid)  # kept for the next round (M9)
+    assert any(f"Fix for PR #{number} failed" in n and "still watching" in n for n in e2e.notes())  # the note
     assert len(e2e.pusher.pushes) == pushes and not db.one(
         e2e.ctx.conn, "SELECT 1 FROM outbound_actions WHERE cid = ? AND kind = 'push_update'", (cid,))  # fmt: skip
     e2e.answer("reviewer", REVIEW)
