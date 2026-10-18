@@ -1,6 +1,6 @@
 # ADR-0020: Telegram client library: keep python-telegram-bot 22.8 with a typed Bot API 10.1–10.3 adapter; no Pillow in the gatekeeper
 
-Status: Proposed (CR-003), revision 2 after design review round 4 · Date: 2026-10-18 · Facts verified on the web on 2026-10-18 (sources below) · Design: CR-003 §1, §6.1, §6.5, §12.5, §14.1, §14.4 · Related: ADR-0004, ADR-0019 · Supersedes: ADR-0019 Addendum A (moved here unchanged in substance; ADR-0019 keeps a back-reference)
+Status: Proposed (CR-003), revision 3 after design review round 5 · Date: 2026-10-18 · Facts verified on the web on 2026-10-18 (sources below) · Design: CR-003 §1, §6.1, §6.5, §12.5, §14.1, §14.4 · Related: ADR-0004, ADR-0019 · Supersedes: ADR-0019 Addendum A (moved here unchanged in substance; ADR-0019 keeps a back-reference)
 
 ## Context
 The gatekeeper is the only Telegram poller (ADR-0004). One `getUpdates` long-polling stream carries Approve, Confirm, `/kill`, `/pause` and every assistant message, so the client library sits on the safety-critical path.
@@ -96,6 +96,10 @@ In priority order:
 - **Decision unchanged.** The review found the evaluation complete (every criterion scored, Pillow decided). The library stays python-telegram-bot 22.8 with the typed `rawapi.py` adapter; aiogram, pyTelegramBotAPI and an own client stay rejected; Pillow stays out of the gatekeeper.
 - **Finding 2 (task cancelled before it starts):** recorded under "Update processing stays sequential" above. The fix is in CR-003 §12.5 (`spawn(…, on_done)` and the session map) and does not depend on the library.
 - **Finding 3 (`command` task kind):** CR-003 §12.5 only; no library impact.
+
+## Responses to design review round 5
+- **Decision unchanged.** The review confirmed the library decision (keep python-telegram-bot 22.8 with the typed `rawapi.py` adapter; aiogram, pyTelegramBotAPI and an own client rejected) and the Pillow decision (not in the gatekeeper; allowed only in `--network none` sandbox images).
+- **No library impact.** The round-5 fixes (the hold-back for Stop partials and truncated answers, the PR title as publish bytes, the shared secret scanner used by packaging, the whitespace-pattern load check, the comment-refresh re-render after `/reload`, the Telegraph announcement after `/kill`, the U12 time bound and the token-use amendment note) are gatekeeper logic in CR-003 §24. The Telegraph `asyncio.shield` and done-callback behaviour they rely on is plain asyncio, not PTB.
 
 ## Sources (accessed 2026-10-18)
 - PyPI JSON for python-telegram-bot, aiogram, pyTelegramBotAPI and Pillow (versions, upload dates, licence classifiers): https://pypi.org/project/python-telegram-bot/ , https://pypi.org/project/aiogram/ , https://pypi.org/project/pyTelegramBotAPI/ , https://pypi.org/project/Pillow/

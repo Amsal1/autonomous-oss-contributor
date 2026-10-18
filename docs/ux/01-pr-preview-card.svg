@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="900" viewBox="0 0 820 900" role="img" aria-labelledby="title desc">
   <title id="title">ossbot mockup S1: PR preview card</title>
-  <desc id="desc">Telegram phone screen in the Reviews topic showing the decorated approval card with mode badge, verified facts, model claims, the size estimate versus the measured diff with code and test lines split, expiry, a four-row inline keyboard and the first verbatim PR body part.</desc>
+  <desc id="desc">Telegram phone screen in the Reviews topic showing the decorated approval card with mode badge, verified facts, model claims, the size estimate versus the measured diff with code and test lines split, expiry, a four-row inline keyboard and the first verbatim PR body part. Notes add that the PR title is publish bytes: shown escaped, scanned for secrets but never redacted or defused, and copied unchanged by Copy title.</desc>
   <style>
     .t{font-family:-apple-system,"Segoe UI",Roboto,"Noto Color Emoji",sans-serif;font-size:12.5px;fill:#111}
     .b{font-weight:700}
@@ -116,15 +116,16 @@
   <text class="note" x="440" y="440">• 👤 requested by you appears under the header for</text>
   <text class="note" x="440" y="456">  /work items.</text>
   <text class="note b" x="440" y="484">Behaviour</text>
-  <text class="note" x="440" y="502">• While parts are delivering: one disabled</text>
-  <text class="note" x="440" y="518">  [⏳ delivering 1/2…] and no tokens; Approve is</text>
-  <text class="note" x="440" y="534">  minted after delivery (unchanged).</text>
-  <text class="note" x="440" y="552">• ✅ = verified by the gatekeeper; 🤖 = model claim.</text>
-  <text class="note" x="440" y="570">• "in 3 days" is &lt;tg-time format="r"&gt;.</text>
-  <text class="note" x="440" y="588">• Issue title is untrusted: escaped, made visible,</text>
-  <text class="note" x="440" y="604">  bot commands defused (U8).</text>
-  <text class="note" x="440" y="622">• Loud only within 2 cards/hour or class 0–1.</text>
-  <text class="note b" x="440" y="650">📝 Edit text → picker (reply to card)</text>
+  <text class="note" x="440" y="502">• Delivering: one disabled [⏳ delivering 1/2…], no</text>
+  <text class="note" x="440" y="518">  tokens; Approve minted after delivery (unchanged).</text>
+  <text class="note" x="440" y="536">• ✅ = verified by the gatekeeper; 🤖 = model claim.</text>
+  <text class="note" x="440" y="553">• "in 3 days" is &lt;tg-time format="r"&gt;.</text>
+  <text class="note" x="440" y="570">• Loud only within 2 cards/hour or class 0–1.</text>
+  <text class="note" x="440" y="588">• Issue title: escaped, made visible, defused (U8).</text>
+  <text class="note" x="440" y="604">• PR title = publish bytes: escaped in &lt;code&gt;, scanned,</text>
+  <text class="note" x="440" y="620">  never defused or redacted (U14); a hit withholds</text>
+  <text class="note" x="440" y="636">  the card. 📋 Copy title copies it unchanged.</text>
+  <text class="note b" x="440" y="654">📝 Edit text → picker (reply to card)</text>
   <rect x="440" y="660" width="172" height="30" rx="9" fill="#5f7d64"/>
   <text class="btn" x="526" y="679">✏️ Title</text>
   <rect x="616" y="660" width="172" height="30" rx="9" fill="#5f7d64"/>

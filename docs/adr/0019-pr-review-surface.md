@@ -1,5 +1,5 @@
 # ADR-0019: PR review surface: native Telegram explorer by default, private GitHub review mirror as the opt-in rich layer
-Status: Proposed (CR-003), revision 5 after design review rounds 1–4 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, ADR-0020 (Telegram client library and Pillow, formerly Addendum A of this ADR), CR-004
+Status: Proposed (CR-003), revision 6 after design review rounds 1–5 (`docs/ux/cr003-review.md`) · Date: 2026-10-18 · Design: CR-003 §5, DESIGN §14.3–§14.4a · Related: ADR-0004, ADR-0014, ADR-0020 (Telegram client library and Pillow, formerly Addendum A of this ADR), CR-004
 
 ## Context
 Amsal reviews almost every candidate on his phone. Today's review surface (DESIGN §14.4) is one card, the verbatim PR body and commit message in `<pre>` parts, a diff paged through `editMessageText`, and a `.patch` file. It is safe, but on a phone it is flat. It has no per-file navigation, no way to comment on a line, and no "what changed since my last review".
@@ -216,7 +216,7 @@ At most `telegram.loud_cards_per_hour` (default 2) new cards notify with sound; 
   - **Eligibility.** An action is eligible when it is `pending_approval` and its contribution is in a state where the action can still be submitted. A re-send is refused while any approval of the contribution is `confirmed` ("Submitting… try again in a moment"); a re-send never invalidates a confirmed approval.
   - **Stale cards.** S12 "Show current" resolves by contribution (purpose `stale_show_current`), so after r3 is packaged it re-sends r3, and after proposal v2 it re-sends v2.
   - **Proposal and skill cards** are re-sent through their own wrappers, `AppContext.reissue_proposal` and `AppContext.reissue_skill`, which publish every new card after the service's commit. The decision services themselves never publish (CR-003 §12.4.3).
-- **Redaction.** Every text a review view shows (issue text, logs, model claims, test tails) passes the one redactor before it is sent (CR-003 U14). The verbatim body, commit-message and comment parts, the `.patch` and the HTML diff's code are never altered, because they must equal what is published; they are only scanned, and a hit withholds the card (`render_failed`).
+- **Redaction.** Every text a review view shows (issue text, logs, model claims, test tails) passes the one redactor before it is sent (CR-003 U14). The verbatim body, commit-message and comment parts, the `.patch`, the HTML diff's code and **the PR title wherever it is shown** (the card's `PR title:` line, explorer section 9, `📋 Copy title`), plus publish text quoted back in an edit prompt, are never altered, because they must equal what is published and what the approval binds. The title is shown escaped in `<code>` and made visible, but never defused or redacted. These bytes are only scanned, and a hit withholds the card (`render_failed`, the `Card withheld` stub, no Approve). Packaging and the edit paths gate the same bytes first with the same scanner, including the gatekeeper's own secret values (`Violation("gatekeeper_secret", <surface>)`), so a render-time hit is a bug. What you see is what you approve.
 - **Replies to `comment` and `issue_claim` cards** are not review comments. They open a confirm panel, "Replace the comment text with your reply?", whose Replace runs FEAT-005's `edit_comment` path (a new card; the old one goes stale `text_edited`). Review comments exist only for `open_pr` and `push_update` (CR-003 §4.4 rule 5).
 - **Comments:**
   - A reply to a file message becomes a comment on that file.
@@ -288,3 +288,10 @@ The normative fixes are in CR-003 (§23 maps all 8 findings). This ADR changes w
 - **Finding 6 (who publishes proposal and skill re-sends):** Option A names `AppContext.reissue_proposal` and `AppContext.reissue_skill` as the publishing wrappers.
 - **Findings 2–5, 7 and 8:** they don't change this ADR's decision (A by default, C opt-in, B deferred). Their fixes are CR-003-only; finding 2's update-handler change is recorded in ADR-0020 because that ADR owns the sequential-processing decision.
 - **Library decision:** still in [ADR-0020](0020-telegram-library.md) (formerly Addendum A of this ADR), unchanged.
+
+## Responses to design review round 5
+The normative fixes are in CR-003 (§24 maps all 8 findings). This ADR changes where its text depends on them:
+- **Finding 2 (the PR title is publish bytes):** Option A "Redaction" lists the PR title on the card, in explorer section 9 and in `📋 Copy title`, and publish text quoted in edit prompts, as scanned and never redacted; a hit withholds the card.
+- **Finding 4 (gatekeeper secret values at packaging):** Option A "Redaction" says packaging and the edit paths gate the same bytes first with the same scanner, so a render-time hit is a bug.
+- **Findings 1, 3 and 5–8:** they don't change this ADR's decision (A by default, C opt-in, B deferred). Their fixes are CR-003-only. Finding 8's token-use sentence (view tokens multi-use, decision tokens single-use) is an ADR-0004 and DESIGN §8.4 amendment note listed in CR-003 §14.8; the "single-use" tokens in this ADR's Context are the decision tokens, which stay single-use.
+- **Library decision:** still in [ADR-0020](0020-telegram-library.md), unchanged.
