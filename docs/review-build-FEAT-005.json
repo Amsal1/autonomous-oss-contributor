@@ -1,0 +1,64 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "feat": "FEAT-005",
+  "round": 1,
+  "findings": [
+    {
+      "id": "F005-R1-1",
+      "severity": "HIGH",
+      "title": "Item 26 work in progress is uncommitted and unverified (dirty tree)",
+      "detail": "The coder ran out of context partway through item 26. Modified: scripts/hyperv-firewall.ps1, scripts/lib/common.ps1, scripts/ossctl.ps1, src/ossbot/ctl/doctor.py, tests/system/test_egress_surface.sh, tests/unit/test_systemd_units.py, FEAT-005.json. New: tests/system/test_no_exposure.sh, tests/unit/ctl/test_doctor_users.py, tests/unit/test_no_tunnels.py. The unit tests pass in the hermetic run, but nothing is deployed, the root and Windows checks have not been run, and nothing is recorded. Next coder iteration, first: finish item 26, run DEV pytest on test_systemd_units.py, test_no_tunnels.py and test_doctor_users.py, REDEPLOY, then ROOT bash tests/system/test_no_exposure.sh, ROOT bash tests/system/test_egress_surface.sh (with the P1-19 dead-man job), ROOT shellcheck on both scripts, and powershell scripts\\ossctl.ps1 doctor (WARN if not elevated, never UAC). Update VERIFICATION threat-table row 41, set DES-FR-22, DES-AC-42, CHAT-33, CR3-CF-1, CR3-S4, P1-16, P1-17, P1-19 and ADR-0013 to done with evidence, and commit the files by name. Do not discard the work in progress.",
+      "files": ["scripts/hyperv-firewall.ps1", "scripts/lib/common.ps1", "scripts/ossctl.ps1", "src/ossbot/ctl/doctor.py", "tests/system/test_egress_surface.sh", "tests/system/test_no_exposure.sh", "tests/unit/test_systemd_units.py", "tests/unit/test_no_tunnels.py", "tests/unit/ctl/test_doctor_users.py", "docs/VERIFICATION.md", "docs/TRACEABILITY.md"]
+    },
+    {
+      "id": "F005-R1-2",
+      "severity": "HIGH",
+      "title": "Item 27 close-out not done; the deployment is stale at item 23",
+      "detail": "diff -rq src /opt/ossbot/app/src shows chat/, decisions.py, proposal_approvals.py, skill_approvals.py, secret_scan.py, telegram/ui/ and migrations/0002_decisions.sql missing from the deployed copy. Items 23a, 24 and 25 have never run live, and migration 0002 is not applied to the live DB. Required: REDEPLOY twice (the second run prints only 'unchanged'). Then run the full Phase 1 verification block: DEV pytest -m \"unit or telegram or acp or e2e\", ROOTDEV pytest -m sandbox, every ROOT bash tests/system/test_*.sh, tests\\system\\test_kill.ps1, and ROOT ossctl doctor (including the new egress mode and hermes tier lines). Point the pre-consolidation FEAT comments at current items (TGRW-15: control_flags.py, cards.py, keyboards.py 'FEAT-005 adds the decorated rows', approvals.py). Record CHAT-37's FEAT-005 part, leave no rework row naming FEAT-005 (5 remain: ADR-0013, P1-16, P1-17, P1-19, TGRW-15) and no FEAT-005-only row open (9 remain), and update the Totals line. Record the run evidence for 23a and 25 (VERIFICATION has a pass count only for item 24). Set FEAT-005 status completed with findings, commit, and leave git status --porcelain empty.",
+      "files": ["docs/TRACEABILITY.md", "docs/VERIFICATION.md", "docs/plan/task-ossbot-v1/features/FEAT-005.json", "src/ossbot/common/control_flags.py", "src/ossbot/gatekeeper/telegram/cards.py", "src/ossbot/gatekeeper/telegram/keyboards.py", "src/ossbot/gatekeeper/approvals.py"]
+    },
+    {
+      "id": "F005-R1-3",
+      "severity": "NIT",
+      "title": "Housekeeping runs card recovery unguarded, ahead of the expiry sweep",
+      "detail": "housekeeping_once now runs ctx.card_recover() before state_machine.sweep_expired() and prune_retention(). CardPublisher.recover -> _card_sent renders cards and does not catch errors, so one row whose render raises makes every tick stop before the sweep, and AWAITING_APPROVAL contributions stop expiring. Wrap card_recover in its own try/except (log card_recover_failed), or run it last.",
+      "files": ["src/ossbot/gatekeeper/app.py", "src/ossbot/gatekeeper/telegram/bot.py"]
+    },
+    {
+      "id": "F005-R1-4",
+      "severity": "NIT",
+      "title": "Draft hold-back only holds for patterns with a bounded match width",
+      "detail": "BA-16 refuses patterns by minimum width. A whitespace-free extra_patterns entry with a small minimum and a maximum of 256 or more (e.g. x[a-z]{1,1000}y) passes the load refusals, and draft_visible shows its first len-256 characters before the match completes. The code follows the spec, so this is design-level: raise it at the Phase 2 gate, or also refuse a max width >= HOLD_BACK (a DESIGN change, ask first per hard rule 12).",
+      "files": ["src/ossbot/gatekeeper/secret_scan.py", "src/ossbot/gatekeeper/telegram/ui/redact.py"]
+    },
+    {
+      "id": "F005-R1-5",
+      "severity": "NIT",
+      "title": "squid_drift reports no drift indefinitely for a snapshot the schema rejects",
+      "detail": "When parse_bundle raises ConfigError for the snapshot the live conf names, squid_drift returns [] with no time or state bound. That fixes the recorded redeploy incident, but it is fail-open in an egress guard. Limit it to the case where that snapshot is not the current one (and/or a time window), or report a WARN in doctor.",
+      "files": ["src/ossbot/ctl/render.py"]
+    },
+    {
+      "id": "F005-R1-6",
+      "severity": "NIT",
+      "title": "squid_drift takes the Hermes login-window state from the conf under test",
+      "detail": "The expected render uses hermes_login='\\nacl cat_kiro_idc_login ' in text, so a conf left with the IdC login window open is never drift. Compare it against the real window state when FEAT-007 adds the window.",
+      "files": ["src/ossbot/ctl/render.py"]
+    },
+    {
+      "id": "F005-R1-7",
+      "severity": "NIT",
+      "title": "No test of /kill during a slow Confirm preflight",
+      "detail": "The item 25 test list asks for typed /kill while a slow preflight is held open. D14 allows a wait of up to 8 s there, but no test bounds it. Add a case that /kill sent during a preflight is handled within PREFLIGHT_TIMEOUT_S plus the handler budget.",
+      "files": ["tests/telegram/test_handlers_nonblocking.py"]
+    },
+    {
+      "id": "F005-R1-8",
+      "severity": "NIT",
+      "title": "origin/main was pushed during the build loop (actor not identified)",
+      "detail": "The reflog shows 'update by push' to b24f4e6 at 21:02:45 and to 2b29171 at 21:29:39, each about 12 s after the coder's commit. Earlier commits in the project were pushed with the same pattern. No hook or helper script in the repo pushes. History must not be rewritten. The next coder should state in its findings that it did not push, and the owner should check for an IDE or automation auto-sync.",
+      "files": [".git/logs/refs/remotes/origin/main"]
+    }
+  ],
+  "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-005.md"
+}
