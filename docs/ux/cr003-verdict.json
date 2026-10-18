@@ -1,0 +1,134 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": 1,
+      "severity": "HIGH",
+      "title": "reissue() gives every re-created approval body_parts_total=1, so a re-sent PR card can arm before its verbatim parts arrive",
+      "where": "CR §12.4 delta 5, §12.4.3, §5.2, §5.12, §5.13, §8.1 /approve; ADR-0019 Option A; code approvals.reissue, context.create_approval, cards.part_count, bot._maybe_arm",
+      "problem": "reissue() passes one integer (default 1) to create() for every action of the contribution, and the CR freezes that signature ('extended by delta 7 only'). Five entry points now use it, and it re-sends siblings of different kinds (claim + open_pr, push_update + comment). An open_pr card has >= 2 parts, so Approve is minted after the first part. Any retry or backoff on a later part puts the arm edit ahead of it, violating ADR-0004 'Approve appears only after every body part was delivered', CR §5.1, AC 5 and the recover() predicate. A count that is too high means Approve is never minted. reissue() also doesn't publish.",
+      "fix": "Delta 7 takes a per-action part count: reissue(cid, *, tg_chat_id, actor, part_count: Callable[[str], int], keep_expiry=False), with create(..., body_parts_total=part_count(action_id)). Add AppContext.reissue(cid, actor, *, keep_expiry), passing part_count=lambda aid: cards.part_count(conn, aid) and calling on_approval_created for each new id after commit. All five entry points use it. Apply the same rule to ProposalApprovals and SkillApprovals. Update §12.4.3, §16 and ADR-0019. Add test_reissue_part_counts.py: claim 1 part + open_pr 3 parts; a failing part 2 means no Approve until it is delivered."
+    },
+    {
+      "id": 2,
+      "severity": "HIGH",
+      "title": "Long Hermes turns and other slow I/O would block PTB's single update slot, delaying /kill and making Stop impossible",
+      "where": "CR §5.5 (one-update-at-a-time used as a safety argument), §6.1 streaming and Stop, §6.5 album window, §6.8 Telegraph retries, §5.19 title fetch, D14/AC 15, AC 18; code bot.build_application (no concurrent_updates), installed PTB 22.8 SimpleUpdateProcessor(max_concurrent_updates=1); FEAT-005 item 4",
+      "problem": "With blocking handlers and one concurrent update, a handler that awaits a Hermes SSE answer (minutes; 120 s idle timeout) holds the poller. /kill, /pause, Approve, Confirm and stopped_message_generation all wait. Stop can never stop the stream it targets, and album collection is impossible. The CR never says where a turn runs, and §5.5 makes inline handling look intended.",
+      "fix": "Add a normative 'update handler budget' rule to §6.1/§12. Handlers do only DB work plus at most one Telegram call. These run as tracked tasks via Handlers.spawn(coro, kind), like _run_submit: Hermes turns, media download and stripping, Telegraph publish and unpublish, GitHub reads for /work and link cards. Use one asyncio.Lock per session_key; a second message while streaming answers 'Still answering — tap Stop or wait'. /kill and drain() cancel chat tasks (chat_turns.status='stopped'). The comment-save and Confirm-panel refresh stays inline, so §5.5 still holds. New AC: with a fake Hermes stream open for 60 s, /kill is handled within 2 s and stopped_message_generation ends the stream within 2 s (tests/telegram/test_handlers_nonblocking.py)."
+    },
+    {
+      "id": 3,
+      "severity": "MEDIUM",
+      "title": "S12 'Show current' on a card superseded by a new rev or proposal version resolves to 'Superseded…'",
+      "where": "CR §5.12 table (new_package_rev, new_proposal_version, new_skill_version -> Show current), §5.16, §12.2 resolution table (Re-send class), ADR-0019 state diagram; code packaging.py cancels the old open_pr/push_update action at a new rev",
+      "problem": "The stale card's token carries the old {cid, rev, action_id}. After a new rev, that action is cancelled, so resolution finds no open approval and answers 'Superseded…' instead of re-sending r3. Proposals resolved by (cid, version) fail the same way. The button's purpose is unnamed.",
+      "fix": "Add the purpose stale_show_current, with arg {cid} (proposals {cid, gate:1}, skills {skill}), resolved by contribution: SELECT 1 FROM approvals a JOIN outbound_actions o ON o.id=a.action_id WHERE o.cid=:cid AND a.status IN ('pending','armed'). If found, call AppContext.reissue(cid, keep_expiry=True). Otherwise use the newest open proposal_approvals row and call ProposalApprovals.reissue. If neither, toast 'No open card for c_… (state X)'. Render the button only when such an approval exists. Update §12.2, §5.12 and §5.16. Extend AC 10: after r3 is packaged, Show current on the r2 card re-sends r3; on proposal v1 it re-sends v2."
+    },
+    {
+      "id": 4,
+      "severity": "MEDIUM",
+      "title": "A reply to a comment or issue_claim card becomes a rev-less review comment whose Send triggers CHANGES_REQUESTED",
+      "where": "CR §4.4 rule 5 (kinds card and body_part), rule 7 Use as comment ('exactly one approval pending'), §5.5 (keyed by (cid, rev); Send -> CHANGES_REQUESTED), §14.2 review_comments.rev NOT NULL; code comment/claim payloads have no rev; handlers._reject shows these kinds in WATCHING/VETTED/PACKAGING",
+      "problem": "Replying 'make it shorter' to a drafted maintainer-reply card stores a review comment with no rev. Send then requests a re-implementation, which is invalid from WATCHING or VETTED and not what the user meant. These cards deliberately have no Request changes.",
+      "fix": "Split rule 5 by action kind. open_pr/push_update: review comment as now. comment/issue_claim: a confirm panel 'Replace the comment text with your reply? [✅ Replace] [↩️ Cancel]'; Replace runs FEAT-005's edit_comment path (normalize, policy.check_text, new card, old one S12 text_edited). Offer use_as_comment only when the single pending approval is open_pr or push_update. Add ACs."
+    },
+    {
+      "id": 5,
+      "severity": "MEDIUM",
+      "title": "reissue(), Retry and typed /approve can create approvable cards for contributions that can't be submitted, and can kill a sibling mid-submission",
+      "where": "CR §5.12 Retry, §8.1 /approve, §12.2 Re-send/stale_retry, §12.4.3; code approvals.reissue (pending_approval|approved; invalidates confirmed), state_machine (IMPLEMENTING leaves the old action pending_approval; sweep -> EXPIRED leaves open_pr pending_approval), submit._step0 (AWAITING_APPROVAL -> APPROVED)",
+      "problem": "A typed /approve during S5 (r3 being built), or Retry after the 7-day EXPIRED sweep, mints a fresh approvable r2 card. Confirm then raises TransitionError in _step0, the user sees 'Submission crashed', and the approval stays confirmed. A Show card tap between a sibling's Confirm and its consume() invalidates the confirmed sibling.",
+      "fix": "Use one eligibility predicate in reissue, stale_retry and /approve. Eligible: action status 'pending_approval' (drop the never-written 'approved') and contribution state AWAITING_APPROVAL for open_pr/push_update, or the kind's creation states (WATCHING/VETTED/PACKAGING) for comment/claim. Skip ineligible actions; if none remain, toast 'Nothing to re-send (state X)'. If any approval of the cid is confirmed, refuse with 'Submitting… try again in a moment' and never invalidate a confirmed approval from a re-send. The EXPIRED transition cancels the contribution's pending_approval actions, so S12 drops Retry. Add test_reissue_eligibility.py."
+    },
+    {
+      "id": 6,
+      "severity": "MEDIUM",
+      "title": "Proposal Skip, Later and Never (and their Undo) have no defined effect on the decision row or the contribution state",
+      "where": "CR §5.15 (Skip/Later + Undo 10 min, Never confirm), §12.4.2 ('kit actions'), §14.2 proposal_approvals.status; CR-004 states PROPOSAL_REJECTED/PROPOSAL_SNOOZED with no edge back to PROPOSED",
+      "problem": "It is unspecified what status the open p_ approval takes, whether its Start-work tokens die, which CR-004 transition runs, and how Undo brings back a working Start work (same approval or a new one, and with which expiry). CR-004 has no PROPOSAL_REJECTED|SNOOZED -> PROPOSED edge, so Undo can't be built as written.",
+      "fix": "Skip, Later and Never (after its confirm) call ProposalApprovals.reject(approval_id, reason in {skipped, snoozed, never_repo, never_kind}): status rejected, _kill_tokens, contribution -> PROPOSAL_REJECTED/PROPOSAL_SNOOZED (actor human, audited). Undo is a single-use kit token, 10 min, for Skip and Later only. It needs CR-004 to add human-only edges PROPOSAL_REJECTED|PROPOSAL_SNOOZED -> PROPOSED within 10 min; it removes the snooze or never record, then calls ProposalApprovals.reissue(cid, keep_expiry=True) (new p_ approval, old expiry). If CR-004 won't add the edge, drop Undo and point to /work <url>. Add an AC."
+    },
+    {
+      "id": 7,
+      "severity": "MEDIUM",
+      "title": "In flat mode, the zero-setup default, Hermes output sits next to approval cards without the Reviews protection",
+      "where": "CR D1/§4.1 (topics need @BotFather; topics: auto), U6 bullet 2, U12 ('flat mode: the assistant section with its 🤖 header'), AC 35, AC 48",
+      "problem": "A fresh install runs in flat mode: cards, Hermes answers and feature cards share one chat. A prompt-injected rich answer such as '🧩 Ready for review … ✅ CI passed' appears directly under real cards with only a 🤖 line. Rule 7 prevents exactly that in ✅ Reviews. U12's 'never next to approval cards' can't hold in flat mode, and the CR doesn't say so.",
+      "fix": "In flat mode, render every Hermes answer and unsolicited Hermes message like rule 7: the gatekeeper header '🤖 <b>Assistant</b> · …' first, then the body inside a quote (rich: all body blocks nested in one blockquote/expandable_blockquote block; classic: <blockquote expandable>). Follow-up and feature buttons stay, since they are gatekeeper tokens. Restate U6/U12 for flat mode ('separation by rendering, not by topic'). Have SETUP.md recommend enabling topics. Add a flat-mode case to AC 48."
+    },
+    {
+      "id": 8,
+      "severity": "NIT",
+      "title": "Dedupe keys for disarm and S1 re-renders are unspecified, but dedupe_key is UNIQUE forever",
+      "where": "CR §5.9, §12.4 delta 2; code outbox.enqueue ON CONFLICT(dedupe_key) DO NOTHING",
+      "problem": "Reusing arm:<aid> or a fixed disarm:<aid> drops the second time-out's S1 edit and leaves a dead Confirm panel.",
+      "fix": "Key the disarm edit as disarm:<aid>:<armed_at>. State in §12.2 that dedupe keys are permanent, so repeatable edits need a per-occurrence component."
+    },
+    {
+      "id": 9,
+      "severity": "NIT",
+      "title": "§7.1 and §7.3 disagree on where quiet-hours P2 goes",
+      "where": "CR §7.1 table ('held for the digest') vs §7.3 and AC 17 (held until the window end, then batched)",
+      "problem": "Two readings of the same behaviour.",
+      "fix": "Change the §7.1 cell to 'held until quiet hours end, then batched (§7.3)'."
+    },
+    {
+      "id": 10,
+      "severity": "NIT",
+      "title": "CardPublisher dispatch for p_/s_ cards and housekeeping's access to it are unspecified",
+      "where": "CR §12.4.4, §14.1; code bot.CardPublisher (PR-specific), app.housekeeping_once(ctx) has no CardPublisher",
+      "problem": "_card_sent and _maybe_arm call ctx.approvals, cards.view_for_approval and keyboards.card_rows, and housekeeping can't reach recover().",
+      "fix": "CardPublisher resolves set_card_message, issue_card_tokens, the renderer and the keyboard via ctx.decisions.for_id(aid). Add AppContext.card_recover: Callable[[], None], set in TelegramFrontend.start like on_approval_created."
+    },
+    {
+      "id": 11,
+      "severity": "NIT",
+      "title": "'Invalidated is unchanged' conflicts with the services returning action_id=None (and skills having no cid)",
+      "where": "CR §12.4.2; code approvals.Invalidated(approval_id: str, action_id: str, cid: str) under strict mypy",
+      "problem": "Type mismatch.",
+      "fix": "Use action_id: str | None and cid: str | None, with reissue_cards skipping None, or a separate DecisionInvalidated type."
+    },
+    {
+      "id": 12,
+      "severity": "NIT",
+      "title": "The tg_views.kind CHECK doesn't list every kit view; a CHECK failure inside mark_sent would cause duplicate sends",
+      "where": "CR §14.2 tg_views CHECK, §12.2 step 3",
+      "problem": "/queue, /settings, /size, /filters, /memory, /articles, reminders and the Telegraph reply have no listed kind. A failed insert after a successful send leaves the row pending, so it is re-sent every tick.",
+      "fix": "Map every view to a listed kind (pickers and lists -> picker; others -> fyi) or add the kinds. Validate view_json.kind with a pydantic Literal mirroring the CHECK at enqueue. Add a test."
+    },
+    {
+      "id": 13,
+      "severity": "NIT",
+      "title": "The 'pre-filled' ForceReply for ✂️ Split is not possible",
+      "where": "CR §5.18",
+      "problem": "ForceReply can't pre-fill text. Its only hint is input_field_placeholder (1-64 characters), and the proposed text is 76.",
+      "fix": "Send the fixed split feedback directly, as Make it smaller does, then offer an optional ForceReply with the placeholder 'Anything to add? (optional)'."
+    },
+    {
+      "id": 14,
+      "severity": "NIT",
+      "title": "Forwarded third-party text becomes /work notes with the owner's authority, unseen",
+      "where": "CR §5.19 (Work on this = /work <url> <rest of the message text>), §4.4 rule 6",
+      "problem": "The link card never shows the notes, and for a forward they are someone else's text sent to scout as '👤 requested by you'.",
+      "fix": "When forward_origin is set, the notes are empty. Otherwise show 'Notes: \"<first 80 chars>\"' on the link card."
+    },
+    {
+      "id": 15,
+      "severity": "NIT",
+      "title": "Falling back to classic while editing an existing rich message is unspecified",
+      "where": "CR §5.2, §5.3, §14.5 (rich 400 -> classic)",
+      "problem": "Editing a rich message into a classic one may be impossible after a 400 on an in-place edit.",
+      "fix": "On a 400 for a rich edit, send the classic view as a new reply to the card, stub the old message and update tg_views. Add a [VERIFY] for whether editMessageText can switch between rich and classic."
+    },
+    {
+      "id": 16,
+      "severity": "NIT",
+      "title": "'Feature topic' in the Telegraph eligibility rule is undefined",
+      "where": "CR §6.8 eligibility",
+      "problem": "No 'feature topic' exists.",
+      "fix": "Replace it with 'the thread is not ✅ Reviews and the turn produced no feature card (no POST /v1/features/*/cards for its session_key during the turn)', or drop the clause."
+    }
+  ],
+  "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\ux\\cr003-review.md"
+}
