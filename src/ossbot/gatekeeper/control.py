@@ -38,13 +38,18 @@ from ossbot.common.control_flags import (
     write_flag,
 )
 from ossbot.common.paths import Paths
-from ossbot.common.schemas import ControlView
+from ossbot.common.schemas import TERMINAL_STATES, ControlView
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalService, Invalidated
 from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.decisions import DecisionServices
 
 log = logging.getLogger(__name__)
+REQUEUED_SQL = (
+    "SELECT COUNT(*) FROM contributions c JOIN stage_runs r ON r.cid = c.id"
+    " WHERE r.rowid = (SELECT MAX(r2.rowid) FROM stage_runs r2 WHERE r2.cid = c.id)"
+    " AND r.status IN ('interrupted', 'running')"
+)
 Notify = Callable[[str], None]
 RESUME_LOG_MAX_LINE = 4096
 
@@ -207,11 +212,22 @@ class ControlService:
         self.notify(f"⏹ Going down: {finished} finished, {interrupted} interrupted (re-queued on up)")
         return self.view()
 
-    def up(self, actor: str, resumed: int = 0) -> ControlView:
+    def requeued(self) -> int:
+        """Contributions the runner re-queues on up: a non-terminal item whose latest stage run was
+        interrupted (drain timeout, down, crash) or is still marked running (the runner died; it
+        marks those interrupted at its start). CR-001: the real "N resumed" of ``ossctl up``."""
+        terminal = sorted(s.value for s in TERMINAL_STATES)
+        marks = ",".join("?" * len(terminal))  # placeholders only; the values are bound
+        sql = f"{REQUEUED_SQL} AND c.state NOT IN ({marks})"
+        return int(self.conn.execute(sql, terminal).fetchone()[0])
+
+    def up(self, actor: str, resumed: int | None = None) -> ControlView:
         """Back to scheduling work. Refused while killed (kill overrides lifecycle; use resume)."""
         flags = self.flags()
         if flags.killed is not None or self._row()["state"] == "killed":
             raise ControlConflict("killed: up refused; resume first (/resume, ossctl resume, resume.ps1)")
+        if resumed is None:
+            resumed = self.requeued()
         with db.transaction(self.conn):
             was = lifecycle_name(self.lifecycle())
             self.paths.lifecycle_flag.unlink(missing_ok=True)

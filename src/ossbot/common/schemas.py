@@ -134,7 +134,7 @@ class DownRequest(ApiModel):
 
 
 class UpRequest(ApiModel):
-    resumed: Annotated[int, Field(ge=0)] = 0
+    resumed: Annotated[int, Field(ge=0)] | None = None  # None: the gatekeeper counts the re-queued stages
 
 
 class DryRunRequest(ApiModel):
@@ -242,6 +242,12 @@ WORK_URL_RE = (
     r"^(?:https://)?(?:www\.)?github\.com/(?P<owner>[A-Za-z0-9-]{1,39})/(?P<repo>[A-Za-z0-9._-]{1,100})"
     r"(?:/(?P<kind>issues|pull)/(?P<n>[1-9][0-9]{0,9}))?/?$"
 )
+
+
+class DiscoverRequest(ApiModel):
+    """``POST /v1/discover`` (operator, ``ossctl discover``): [] = every enabled target."""
+
+    repos: Annotated[list[Annotated[str, Field(min_length=3, max_length=140)]], Field(max_length=50)] = []
 
 
 class WorkRequest(ApiModel):

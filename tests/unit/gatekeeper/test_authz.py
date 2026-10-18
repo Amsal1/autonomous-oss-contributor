@@ -68,6 +68,8 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/contributions/{cid}/proposal"): frozenset({W}),
     ("GET", "/v1/contributions/{cid}/proposal"): frozenset({W, O}),
     ("POST", "/v1/work"): frozenset({O}),
+    ("POST", "/v1/discover"): frozenset({O}),
+    ("POST", "/v1/discover/claim"): frozenset({W}),
     ("GET", "/v1/discovery-prefs"): frozenset({O, W}),
     ("PUT", "/v1/discovery-prefs"): frozenset({O}),
     ("POST", "/v1/discovery-prefs/undo"): frozenset({O}),

@@ -1485,6 +1485,9 @@ POST /v1/contributions/{id}/proposal    worker         {proposal, revises?, feed
                                                         above_ceiling | above_autonomous_max | kind_filtered | never_repo, 429 daily cap)
 GET  /v1/contributions/{id}/proposal    worker, operator ?version=  -> the stored proposal (+ pending Adjust/Smaller feedback)
 POST /v1/work {url, notes}              operator       (CR-004 Amendment B: GitHub issue/PR/repo URL of an enabled target; source='user')
+POST /v1/discover {repos}               operator       (ossctl discover: enabled targets with discovery on, [] = all; held for
+                                                        the runner's next tick like models refresh, 9.4)
+POST /v1/discover/claim                 worker         -> {requested, repos} (consumes the pending discover request)
 GET  /v1/discovery-prefs?repo=          operator, worker -> effective size preference and filters (+ rows, + pacing
                                                         {max_per_day, used, remaining, next_slot_at}: the runner holds
                                                         autonomous scouting until next_slot_at instead of scouting into a 429)

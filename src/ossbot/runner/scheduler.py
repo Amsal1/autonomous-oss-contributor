@@ -172,7 +172,13 @@ class Scheduler:
             out.skipped = "not_ready"  # M11: no discovery, no stage before catalog + probes
             return out
         interval = timedelta(hours=bundle.policy.discovery.interval_hours)
-        if self.last_discovery is None or self.now() - self.last_discovery >= interval:
+        try:
+            asked = self.sc.gk.claim_discover()  # ossctl discover [repo...]
+        except GkError:
+            asked = None
+        if asked is not None:
+            self.discover(asked or None)
+        elif self.last_discovery is None or self.now() - self.last_discovery >= interval:
             self.discover()
         self._dispatch(out)
         return out

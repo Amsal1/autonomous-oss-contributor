@@ -17,6 +17,7 @@ from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import ProposalService
+from ossbot.runner import scheduler as scheduler_mod
 from ossbot.runner.llm import StageFailed
 from ossbot.runner.outputs import ReviewVerdict
 from ossbot.runner.pipeline import StageContext
@@ -261,3 +262,18 @@ def test_pacing_reports_the_next_slot(ctx: AppContext) -> None:
     svc = ProposalService(ctx)
     assert svc.pacing() == {"max_per_day": ctx.config.policy.proposal.max_per_day, "used": 0,
                             "remaining": ctx.config.policy.proposal.max_per_day, "next_slot_at": None}  # fmt: skip
+
+
+def test_ossctl_discover_request_runs_one_cycle(
+    sc: StageContext, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[list[str] | None] = []
+    monkeypatch.setattr(scheduler_mod.discover, "run", lambda sc, repos=None, refused=None: seen.append(repos) or [])
+    scheduler = ready(sc, ctx)
+    scheduler.first_start_done = True
+    scheduler.tick()
+    assert seen == []  # interval not due, nothing requested
+    ctx.contributions.request_discover(["langfuse/langfuse"], "uid:1000/operator")
+    scheduler.tick()
+    scheduler.tick()  # consumed once
+    assert seen == [["langfuse/langfuse"]]

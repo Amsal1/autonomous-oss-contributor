@@ -94,6 +94,42 @@ class ContributionService:
             issue_hash=issue_hash,
         )
 
+    def request_discover(self, repos: list[str], actor: str) -> dict[str, Any]:
+        """``ossctl discover [repo...]`` (§9.4 on demand): held for the runner's next tick.
+
+        Every repo must be an enabled target with discovery on; [] means all of them. Reads only
+        happen in the runner; nothing is posted.
+        """
+        names: list[str] = []
+        for repo in repos:
+            target = resolve_target(self.config().targets, repo.removeprefix("https://github.com/").strip("/"))
+            if target is None:
+                raise ContributionRefused(400, "not_a_target")
+            if not target.enabled or not target.discovery:
+                raise ContributionRefused(400, "discovery_disabled")
+            names.append(target.repo)
+        now = to_iso(self.clock.now())
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO runner_requests (kind, requested_at, actor, payload) VALUES ('discover', ?, ?, ?)"
+                " ON CONFLICT(kind) DO UPDATE SET requested_at = excluded.requested_at, actor = excluded.actor,"
+                " payload = excluded.payload",
+                (now, actor, json.dumps(sorted(set(names)))),
+            )
+            self.audit.append(actor, "discover_requested", {"repos": sorted(set(names))})
+        return {"requested_at": now, "repos": sorted(set(names))}
+
+    def claim_discover(self, actor: str) -> dict[str, Any]:
+        """Runner: consume a pending discover request (``requested`` false when there is none)."""
+        with db.transaction(self.conn):
+            row = db.one(self.conn, "SELECT payload FROM runner_requests WHERE kind = 'discover'")
+            if row is None:
+                return {"requested": False, "repos": []}
+            self.conn.execute("DELETE FROM runner_requests WHERE kind = 'discover'")
+            repos = json.loads(row["payload"] or "[]")
+            self.audit.append(actor, "discover_claimed", {"repos": repos})
+        return {"requested": True, "repos": repos}
+
     def create_user(self, url: str, notes: str, actor: str) -> dict[str, Any]:
         """``/work`` / ``ossctl work`` (CR-004 Amendment B): user-directed, ``source='user'``.
 

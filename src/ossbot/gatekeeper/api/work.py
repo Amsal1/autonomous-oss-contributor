@@ -11,11 +11,25 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
-from ossbot.common.schemas import WorkRequest
+from ossbot.common.schemas import DiscoverRequest, WorkRequest
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 
 router = APIRouter(prefix="/v1")
+
+
+@router.post("/discover", status_code=202)
+async def discover(
+    request: Request, body: DiscoverRequest, caller: Annotated[Caller, Depends(require(Role.OPERATOR))]
+) -> dict[str, Any]:
+    """``ossctl discover [repo...]``: one discovery cycle on the runner's next tick (§9.4)."""
+    return ctx(request).contributions.request_discover(body.repos, caller.actor)
+
+
+@router.post("/discover/claim")
+async def claim_discover(request: Request, caller: Annotated[Caller, Depends(require(Role.WORKER))]) -> dict[str, Any]:
+    """Runner: consume a pending discover request."""
+    return ctx(request).contributions.claim_discover(caller.actor)
 
 
 @router.post("/work", status_code=201)

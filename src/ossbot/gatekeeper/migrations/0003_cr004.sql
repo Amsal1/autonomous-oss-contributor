@@ -89,8 +89,9 @@ CREATE TABLE discovery_prefs_undo (
   id TEXT PRIMARY KEY, scope TEXT NOT NULL, previous_json TEXT, created_at TEXT NOT NULL,
   expires_at TEXT NOT NULL, used_at TEXT);
 
--- Requests the gatekeeper holds for the runner's next scheduler tick (ossctl models refresh):
--- one row per kind, consumed (deleted) by the worker.
+-- Requests the gatekeeper holds for the runner's next scheduler tick (ossctl models refresh,
+-- ossctl discover): one row per kind, consumed (deleted) by the worker. payload: discover's repo
+-- list as JSON (validated owner/name of enabled targets; [] = every enabled target).
 CREATE TABLE runner_requests (
-  kind TEXT PRIMARY KEY CHECK (kind IN ('catalog_refresh')),
-  requested_at TEXT NOT NULL, actor TEXT NOT NULL);
+  kind TEXT PRIMARY KEY CHECK (kind IN ('catalog_refresh', 'discover')),
+  requested_at TEXT NOT NULL, actor TEXT NOT NULL, payload TEXT);

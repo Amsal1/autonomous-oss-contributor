@@ -138,6 +138,11 @@ class Gatekeeper:
     def claim_refresh(self) -> bool:
         return bool(self._call("POST", "/v1/models/refresh/claim")["requested"])
 
+    def claim_discover(self) -> list[str] | None:
+        """A pending ``ossctl discover`` request: its repos ([] = all), or None when there is none."""
+        doc = self._call("POST", "/v1/discover/claim")
+        return [str(r) for r in doc["repos"]] if doc.get("requested") else None
+
     # --------------------------------------------------------------- package/actions
     def package_ts(self, cid: str, rev: int) -> str:
         return str(self._call("POST", f"/v1/contributions/{cid}/package-ts", {"rev": rev})["package_ts"])

@@ -49,6 +49,10 @@ app.add_typer(model_app, name="model")
 app.add_typer(models_app, name="models")
 size_app = typer.Typer(no_args_is_help=True, help="autonomous size preference (CR-004; never the ceiling)")
 app.add_typer(size_app, name="size")
+contribution_app = typer.Typer(no_args_is_help=True, help="contributions (operator import, §9.13)")
+app.add_typer(contribution_app, name="contribution")
+targets_app = typer.Typer(no_args_is_help=True, help="targets (config/targets.yaml)")
+app.add_typer(targets_app, name="targets")
 
 BIN = Path("/opt/ossbot/bin")
 SANDBOXD_SOCK = Path("/run/ossbot/sandboxd.sock")
@@ -289,7 +293,7 @@ def up(
         _show(report)
         _fail(f"gatekeeper not healthy within {wait_s} s (journalctl -u ossbot-gatekeeper); lifecycle unchanged")
     try:
-        code, data = api("POST", "/v1/control/up", {"resumed": 0})  # stage re-queue arrives with the runner
+        code, data = api("POST", "/v1/control/up", {})  # the gatekeeper counts the stages the runner re-queues
     except GatekeeperDown as exc:
         code, data = 503, str(exc)
     if code != 200:
@@ -473,6 +477,79 @@ def work(
     if code != 201:
         _fail(f"work request refused ({code}): {data}")
     _show(data)
+
+
+@app.command("discover")
+def discover(
+    repos: Annotated[list[str] | None, typer.Argument(help="owner/repo or GitHub URL (default: every target)")] = None,
+) -> None:
+    """One discovery cycle on the runner's next tick (§9.4; reads only, nothing is posted)."""
+    code, data = api("POST", "/v1/discover", {"repos": repos or []})
+    if code != 202:
+        _fail(f"discover request refused ({code}): {data}")
+    typer.echo(f"discovery requested for {', '.join(data['repos']) or 'every enabled target'}; the runner picks it"
+               " up on its next tick and sends proposal cards as they are scouted")  # fmt: skip
+
+
+@contribution_app.command("import")
+def contribution_import(
+    repo: Annotated[str, typer.Option(help="owner/repo of an enabled target")],
+    from_bundle: Annotated[Path, typer.Option("--from-bundle", help="git bundle with exactly one head")],
+    base: Annotated[str, typer.Option(help="base commit sha (the bundle's prerequisite)")],
+    title_file: Annotated[Path, typer.Option("--title-file", help="PR title (first line)")],
+    body_file: Annotated[Path, typer.Option("--body-file", help="PR body (markdown)")],
+    base_ref: Annotated[str, typer.Option("--base-ref", help="upstream branch")] = "main",
+    issue: Annotated[int | None, typer.Option(help="issue number it fixes")] = None,
+) -> None:
+    """Operator import (§9.13, M3): uploads the bundle bytes; validate -> review -> package -> card."""
+    import base64  # noqa: PLC0415
+    import hashlib  # noqa: PLC0415
+
+    try:
+        data = from_bundle.read_bytes()  # read with the caller's own permissions; the gatekeeper never opens a path
+        title = title_file.read_text(encoding="utf-8").strip().splitlines()[0] if title_file.stat().st_size else ""
+        body = body_file.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError, IndexError) as exc:
+        _fail(f"cannot read the import files: {exc}")
+    if len(data) > 50 * 1024 * 1024:
+        _fail("bundle larger than 50 MB")
+    req = {"repo": repo, "base_ref": base_ref, "base_sha": base, "bundle_b64": base64.b64encode(data).decode("ascii"),
+           "bundle_sha256": hashlib.sha256(data).hexdigest(), "title": title, "body": body,
+           "issue_number": issue}  # fmt: skip
+    code, doc = api("POST", "/v1/contributions/import", req, timeout=300.0)
+    if code != 201:
+        _fail(f"import refused ({code}): {doc}")
+    _show(doc)
+
+
+@targets_app.command("verify")
+def targets_verify() -> None:
+    """Read every enabled target with the fine-grained read token (root; runs as ossrunner via 3140)."""
+    _require_root("targets verify")
+    from ossbot.common.config import DiscoveryFilters, all_targets  # noqa: PLC0415
+
+    try:
+        _, files = read_current(Paths.default().snapshot_root)
+        bundle = parse_bundle(files)
+    except (OSError, ValueError, ConfigError) as exc:
+        _fail(f"no usable config snapshot ({exc}); ossctl config reload")
+    repos = [t.repo for t in all_targets(bundle.targets) if t.enabled]
+    argv = ["/usr/bin/systemd-run", "--quiet", "--collect", "--wait", "--pipe", "--uid=ossrunner", "--gid=ossrunner",
+            "-p", "EnvironmentFile=/etc/ossbot/secrets/runner.env", "-p", "PrivateTmp=yes",
+            "/opt/ossbot/app/.venv/bin/python", "-m", "ossbot.runner.verify_targets"]  # fmt: skip
+    req = json.dumps({"repos": repos, "stale_days": DiscoveryFilters().min_maintainer_activity_days})
+    proc = subprocess.run(argv, input=req, capture_output=True, text=True, timeout=900, check=False)
+    try:
+        doc = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _fail(f"targets verify failed (exit {proc.returncode}): {proc.stderr.strip()[-500:]}")
+    for row in doc["rows"]:
+        typer.echo(f"{row['status']:<5} {row['repo']:<55} {row.get('pushed_at') or '-'!s:<21} {row['detail']}")
+    counts = {s: sum(1 for r in doc["rows"] if r["status"] == s) for s in ("PASS", "WARN", "FAIL")}
+    typer.echo(
+        f"{len(doc['rows'])} enabled targets: {counts['PASS']} PASS, {counts['WARN']} WARN, {counts['FAIL']} FAIL"
+    )
+    raise typer.Exit(0 if doc["ok"] else 1)
 
 
 def _prefs_show(repo: str | None) -> None:

@@ -79,3 +79,15 @@ async def test_notes_bounded(ctx: AppContext) -> None:
     async with client(ctx, UID_OPERATOR) as c:
         resp = await c.post("/v1/work", json={"url": "https://github.com/langfuse/langfuse", "notes": "x" * 1001})
     assert resp.status_code == 400
+
+
+async def test_discover_request_is_held_for_the_runner(ctx: AppContext) -> None:
+    """``ossctl discover``: operator request, consumed once by the worker; only discovery targets."""
+    async with client(ctx, UID_OPERATOR) as c:
+        resp = await c.post("/v1/discover", json={"repos": ["https://github.com/langfuse/langfuse"]})
+        assert resp.status_code == 202 and resp.json()["repos"] == ["langfuse/langfuse"]
+        assert (await c.post("/v1/discover", json={"repos": ["nobody/nothing"]})).json()["error"] == "not_a_target"
+        assert (await c.post("/v1/discover", json={"repos": ["tobenwarrior/hermes-kiro-provider"]})).status_code == 400
+    async with client(ctx, UID_WORKER) as c:
+        assert (await c.post("/v1/discover/claim")).json() == {"requested": True, "repos": ["langfuse/langfuse"]}
+        assert (await c.post("/v1/discover/claim")).json() == {"requested": False, "repos": []}

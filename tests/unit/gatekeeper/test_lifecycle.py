@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 
 from ossbot.common.control_flags import read_lifecycle, require_up
+from ossbot.common.schemas import State
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.control import ControlConflict
-from tests.conftest import UID_OPERATOR, UID_WORKER, packaged_contribution, write_flag
+from tests.conftest import UID_OPERATOR, UID_WORKER, insert_contribution, packaged_contribution, write_flag
 from tests.unit.gatekeeper.api_helpers import client
 from tests.unit.gatekeeper.test_approvals import card, status, tap
 
@@ -37,6 +38,27 @@ def test_drain_down_up_cycle_keeps_approvals(ctx: AppContext) -> None:
     assert any("Back up: 0 resumed, 2 awaiting approval" in s for s in sent)
     events = [r["event"] for r in ctx.conn.execute("SELECT event FROM audit_events ORDER BY seq")]
     assert events.index("lifecycle_draining") < events.index("lifecycle_down") < events.index("lifecycle_up")
+
+
+def test_up_reports_the_real_resumed_count(ctx: AppContext) -> None:
+    """CR-001: "N resumed" = non-terminal items whose latest stage run was interrupted or left running."""
+    sent: list[str] = []
+    ctx.control.notify = sent.append
+
+    def item(state: State, *statuses: str) -> None:
+        cid = insert_contribution(ctx, state)
+        for n, st in enumerate(statuses, start=1):
+            ctx.conn.execute("INSERT INTO stage_runs (id, cid, stage, attempt, status, started_at) VALUES"
+                             " (?, ?, 'plan', ?, ?, '2026-10-18T00:00:00Z')", (f"r_{cid}_{n}", cid, n, st))  # fmt: skip
+
+    item(State.PLANNING, "interrupted")  # drained mid-stage
+    item(State.IMPLEMENTING, "succeeded", "running")  # the runner died
+    item(State.PLANNED, "interrupted", "succeeded")  # already resumed
+    item(State.FAILED, "interrupted")  # terminal
+    ctx.control.drain("uid:0/operator", "down", 60)
+    assert ctx.control.requeued() == 2
+    ctx.control.up("uid:0/operator")
+    assert any("Back up: 2 resumed" in s for s in sent)
 
 
 def test_kill_overrides_lifecycle_and_up_is_refused(ctx: AppContext) -> None:
