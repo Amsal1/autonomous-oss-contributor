@@ -32,6 +32,36 @@ Migration `0002_decisions.sql` (`proposal_approvals`, `skill_approvals`, `tg_vie
 - No exposure: `tests/system/test_no_exposure.sh` (host listeners from `ss -ltnupe` only loopback, the WSL resolver and root sockets of the WSL VM; no wildcard listener; no container with published ports, `PortBindings` or the host network; proxy netns only 3128/3140/3141/3150 plus Docker's embedded resolver on 127.0.0.11 and squid's unconnected UDP DNS-client sockets on ephemeral ports; no proxy port in the host netns; gatekeeper API is a Unix socket and its uid holds no TCP/UDP socket; no tunnel tool installed; deployed bot long-polls) and `tests/unit/test_no_tunnels.py` (no tunnel, webhook, Mini App or published port in files outside `docs/`).
 - Run (2026-10-18): `DEV pytest -m unit tests/unit/test_systemd_units.py tests/unit/test_no_tunnels.py tests/unit/ctl/test_doctor_users.py` 37 passed; lint gate clean; `ROOT shellcheck` on both scripts clean; `REDEPLOY` (app-deploy changed, four services restarted; this also took items 23a-25 and migration 0002 live), second `REDEPLOY` only `unchanged`; `ROOT bash tests/system/test_no_exposure.sh` all checks passed (the first run failed on the proxy netns' Docker DNS and squid DNS-client sockets, which the check now names); `ROOT bash tests/system/test_egress_surface.sh` all checks passed (225 PASS, 0 SKIP; dead-man armed and cancelled, sysctl back at 2, watchdog timer active).
 
+### Review round 1 fixes (docs/review-build-FEAT-005.md)
+- F005-R1-3: `housekeeping_once` runs `ctx.card_recover()` last, in its own try/except (`card_recover_failed`), so one card that fails to render cannot stop `sweep_expired`/`prune_retention` (`test_card_recover.py::test_a_failing_card_recover_does_not_stop_the_expiry_sweep`).
+- F005-R1-5: `squid_drift` tolerates a conf whose snapshot the installed schema rejects only while that snapshot is still `current` or the newer `current` is younger than `MODE_APPLY_GRACE_S` (60 s, proxy restart pending); after that it is `firewall_drift:squid_mode`. Doctor `squid.conf verifiable` WARNs while the conf cannot be verified (`test_render.py::test_squid_drift_bounds_the_rejected_snapshot_window`).
+- F005-R1-7: `test_handlers_nonblocking.py::test_kill_during_a_slow_preflight_waits_at_most_the_preflight_bound` (a typed /kill queued behind a Confirm with a hung preflight is handled within `PREFLIGHT_TIMEOUT_S` + 2 s; the approval ends `invalidated`, state `killed`).
+- F005-R1-4 (draft hold-back and unbounded max width) and F005-R1-6 (login-window state taken from the conf) are recorded in the FEAT-005 findings for the Phase 2 gate and FEAT-007; neither changes code here.
+
+### Item 27: close-out and Phase 1 re-verification against revision 5 (2026-10-18, about 21:50-22:20 +07)
+Live evidence for items 23a-25 (never run live before this round): the first `REDEPLOY` of this round deployed them (`app-deploy` changed, gatekeeper, dockerfilter, proxy and sandboxd restarted); the live DB is at `user_version 2` with `proposal_approvals`, `skill_approvals`, `tg_views`, `tg_thread_seq` (migration 0002, read-only query as root); `ossctl hermes tier` shows `self_improve` with memory, todo, session_search, ossbot, skills; `ossctl egress status` shows `open`; doctor `hermes tier` and `egress mode` PASS; the gatekeeper journal over the last 5 minutes has no ERROR and no `telegram_poll_failed` (the proxy restarts during the system tests caused retried poll failures, which recovered).
+
+| Phase 1 bar item | Result |
+|---|---|
+| `DEV ruff check` / `ruff format --check` / `mypy` / `lint-imports` | clean / 211 files formatted / 110 files no issues / 5 contracts kept |
+| `ROOT shellcheck` test_no_exposure.sh, test_egress_surface.sh | clean |
+| `DEV pytest -m "unit or telegram or acp or e2e"` | 1963 passed, 11 deselected (baseline 1557 at e0ecf11) |
+| `ROOTDEV pytest -m sandbox` | 9 passed, 2 skipped (`needs_key` live Kiro probes), exit 0 |
+| `ROOT bash tests/system/*.sh` (12 scripts) | all exit 0, 458 PASS, 0 FAIL, 0 SKIP: audit_anchor 11, config_write 11, control_perms 23, crash_safety 10, docker_filter 10, egress_per_uid 71, egress_surface 225, firewall_failclosed 11, lifecycle 25, no_exposure 20 (new), proxy_dns 5, secret_perms 36 |
+| `tests\system\test_kill.ps1` | all checks passed |
+| `wsl --terminate ossbot` + `scripts\test-isolation.ps1` | PASS 13/13 |
+| `REDEPLOY` twice; full `scripts\bootstrap.ps1` twice | second redeploy and both full runs: every step `unchanged` (kiro/hermes `skipped (phase 2)`, Hyper-V WARN not elevated) |
+| `ROOT docker version` / `docker compose version` | 29.9.1 / 5.6.0 |
+| `systemctl is-active` gatekeeper, dockerfilter, proxy, sandboxd, watchdog.timer | all active |
+| `ossbot-firewall --check` | exit 0 (mode `open`) |
+| `ossctl doctor` (root, full) | PASS 35, WARN 2, SKIP 3, exit 0 (new: `service uids: no user manager`, `squid.conf verifiable`, `egress mode: open`, `hermes tier: self_improve`) |
+| `scripts\ossctl.ps1 doctor` | exit 0; Windows part all PASS incl. `hyper-v firewall: ... exactly the ossbot TCP 80/443 rules`; distro part as above |
+| `ossctl audit verify` | ok (443 rows, 238 anchors) |
+| `gitleaks git --redact .` | 60 commits, no leaks |
+| Matrix check for FEAT-005 | no `rework` row; no open row whose phase names only FEAT-005; the 24 open rows all name a later FEAT and record their FEAT-005 part. Totals: deferred 26, done 164, missing 302, rework 16 (508 rows) |
+
+WARNs and SKIPs are unchanged from Phase 1: the runner-owned catalog (FEAT-006), safety probes not run yet, and the three Hermes checks (FEAT-007). Dry-run stayed ON (doctor `gatekeeper health: dry_run True`); no GitHub write; no Telegram message was sent by this step outside product code. This coder step did not push; `origin/main` is not touched by it (review F005-R1-8 is for the owner to check).
+
 ### Egress threat table, FEAT-005 changes
 Rows not listed are unchanged (table below, "Phase 1, after review round 5").
 
