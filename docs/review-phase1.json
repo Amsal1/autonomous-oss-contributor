@@ -1,28 +1,45 @@
 {
-  "verdict": "CHANGES_REQUESTED",
+  "verdict": "APPROVED",
   "findings": [
     {
-      "id": "P1-14",
-      "severity": "HIGH",
-      "confidence": "confirmed",
-      "title": "io_uring IORING_OP_SOCKET bypasses RestrictAddressFamilies, so AF_VSOCK to the Windows host stays open from every non-root unit (P1-13 not closed)",
-      "where": "systemd/ossbot-gatekeeper.service, systemd/ossbot-sandboxd.service, Phase 2 runner/hermes units; tests/unit/test_systemd_units.py; tests/system/test_egress_surface.sh; docs/VERIFICATION.md rows 31/32; ADR-0005 and ADR-0007 P1-13 addenda",
-      "detail": "In a systemd-run unit with the unit's user, RestrictAddressFamilies, NoNewPrivileges and SystemCallArchitectures=native (gatekeeper and ossbox), socket(AF_VSOCK) gets errno 97, but an IORING_OP_SOCKET submission returns a vsock fd and connect((2, 50002)) reaches the drvfs Plan 9 server. Kernel 6.18.54.1-microsoft-standard-WSL2, kernel.io_uring_disabled=0, no unit filters io_uring syscalls. The surface probe calls only socket(), so it passes against the bypass.",
-      "action": "Set kernel.io_uring_disabled=2 via sysctl.d and fail closed on drift (ossbot-firewall --check / watchdog firewall_drift, doctor). Add SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register to every non-root unit and assert it in test_systemd_units.py. Add an IORING_OP_SOCKET variant to the unit-context, per-pool and proxy vsock probes, with an unrestricted io_uring control. Correct row 31 and the ADR-0005/0007 addenda, and record io_uring evidence for row 32."
+      "id": "P1-15",
+      "severity": "NIT",
+      "title": "IPv6 unspecified address not in denied_dst",
+      "detail": "always_denied.cidrs has 0.0.0.0/8 (squid would connect to its own loopback) but not its IPv6 twin ::/128; a web_public caller's AAAA of :: makes squid try [::]:80/443 in the proxy netns. Nothing listens there today. Add ::/128 (optionally ::ffff:0:0/96 as documentation).",
+      "confidence": "confirmed omission; no reachable target (likely)",
+      "files": ["config/egress.yaml", "tests/unit/ctl/golden/squid.conf"]
     },
     {
-      "id": "P1-N5",
+      "id": "P1-16",
       "severity": "NIT",
+      "title": "Hyper-V drift check reads rule names only",
+      "detail": "hyperv-firewall.ps1 keeps any rule with the right name and the ossctl.ps1 doctor PASS checks only names and Block defaults; neither validates protocol/ports/action/enabled nor enumerates other Allow rules for the WSL VMCreatorId. Require exactly the two ossbot rules (Outbound, Allow, Enabled, TCP, 443/80) and re-create rules whose properties differ.",
       "confidence": "confirmed",
-      "title": "Listener allowlist covers TCP/UDP only",
-      "action": "In test_egress_surface.sh also check abstract unix sockets in the host netns (ss -Hxl names starting with @) against an allowlist, and restrict the ephemeral-UDP skip to sockets owned by known clients (ss -p)."
+      "files": ["scripts/hyperv-firewall.ps1", "scripts/ossctl.ps1"]
     },
     {
-      "id": "P1-N6",
+      "id": "P1-17",
       "severity": "NIT",
+      "title": "Unit seccomp confinement assumes no reachable user manager, unasserted",
+      "detail": "A unit that can reach its uid's systemd user manager can systemd-run --user an unfiltered process (AF_VSOCK to 2:50002 again). Closed today by ProtectHome=yes hiding /run/user and no linger for service uids, but neither is asserted. Assert ProtectHome in {yes, tmpfs} for every non-root unit in test_systemd_units.py, and Linger=no / no /run/user/<uid> for the five service uids in the surface test and doctor; record in threat-table row 41.",
       "confidence": "likely",
-      "title": "No cache-manager deny in squid.conf",
-      "action": "Add acl manager url_regex -i ^cache_object:// /squid-internal-mgr/ and http_access deny manager among the fast denies in sandbox/proxy/squid.conf.j2 (and the golden), so the web_public 'all' allow lines never decide cache manager requests."
+      "files": ["tests/unit/test_systemd_units.py", "tests/system/test_egress_surface.sh", "src/ossbot/ctl/doctor.py", "docs/VERIFICATION.md"]
+    },
+    {
+      "id": "P1-18",
+      "severity": "NIT",
+      "title": "Threat-table row 7 misstates who holds broad egress",
+      "detail": "Row 7 says only secretless callers hold shared-front-end categories, but the research pool and Hermes hold a Kiro key plus web_public (approved ADR-0005 design). Reword rows 7/36 so the accepted residual names the actual control (ADR-0017 key out of tool reach, output key scans); CR-002 'open' adds agent-llm to this set.",
+      "confidence": "confirmed",
+      "files": ["docs/VERIFICATION.md"]
+    },
+    {
+      "id": "P1-19",
+      "severity": "NIT",
+      "title": "io_uring control window in the surface test has no dead-man restore",
+      "detail": "The test stops ossbot-watchdog.timer and sets kernel.io_uring_disabled=0; the EXIT trap does not run on SIGKILL or wsl --terminate, leaving io_uring enabled and drift monitoring off until the timer is started or the next boot. Arm a root systemd-run --on-active=90 job that restores the sysctl and starts the timer before the write, and cancel it after the restore.",
+      "confidence": "confirmed",
+      "files": ["tests/system/test_egress_surface.sh"]
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-phase1.md"
