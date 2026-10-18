@@ -277,3 +277,31 @@ def test_ossctl_discover_request_runs_one_cycle(
     scheduler.tick()
     scheduler.tick()  # consumed once
     assert seen == [["langfuse/langfuse"]]
+
+
+def test_reviewer_collision_pauses_instead_of_reviewing_with_the_coders_model(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx
+) -> None:
+    """Owner rule: require_distinct_from holds after fallback; no catalog model distinct from the
+    coder's -> pause with an alert and re-queue, never a review by the coder's own model."""
+    ctx.conn.execute("DELETE FROM model_catalog WHERE model_id != 'claude-opus-5.5'")
+    cid = insert_contribution(ctx, State.VALIDATED, review_rounds=0)
+    sc.save(cid, diff="diff --git a/src/a.py b/src/a.py\n+x\n", fetch={"has_test_suite": True})
+    ready(sc, ctx).tick()
+    assert ctx.control.view().state == "paused"
+    assert not [j for j in sbx.jobs if j["entrypoint"] == "kiro"]
+    assert state(ctx, cid) == "REVIEWING" and runs(ctx, cid) == [("review", "interrupted")]
+
+
+def test_items_that_only_ran_kiro_jobs_get_their_networks_released(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx
+) -> None:
+    """Live finding: vetted-and-skipped items kept their per-task research networks (the /28 pool
+    leaks). Every cid that ran a sandbox job is noted; the sweep destroys it once terminal."""
+    sbx.kiro("vetter", fenced({**VETTING, "ai_policy": "unclear"}))
+    cid = insert_contribution(ctx, State.DISCOVERED)
+    scheduler = ready(sc, ctx)
+    scheduler.tick()
+    assert state(ctx, cid) == "SKIPPED"
+    scheduler.tick()
+    assert cid in sbx.destroyed and cid not in common.volume_cids(sc)

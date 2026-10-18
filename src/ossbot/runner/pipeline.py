@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -35,6 +36,8 @@ from ossbot.runner.sbx_client import Sandbox
 __all__ = ["HEARTBEAT_S", "SLEEP_GAP_S", "STAGE_TIMEOUT_S", "Clocks", "Deferred", "Gate", "Interrupted",
            "StageContext", "StageFailed", "StageRun"]  # fmt: skip
 log = logging.getLogger(__name__)
+SANDBOX_NOTE = "_volumes"  # runner note: cids whose sandbox resources (volume, networks) may exist
+_NOTES_LOCK = threading.Lock()
 HEARTBEAT_S = 15.0
 SLEEP_GAP_S = 300.0
 STAGE_TIMEOUT_S: dict[str, int] = {
@@ -108,6 +111,18 @@ class StageContext:
         tmp.replace(directory / f"{cid}.json")
         return doc
 
+    def note_sandbox(self, cid: str, present: bool = True) -> None:
+        """Remember cids that ran a sandbox job: their task volume and per-task networks are destroyed
+        by the scheduler's sweep once the item is terminal or has not passed Start work."""
+        with _NOTES_LOCK:
+            cids = set(self.load(SANDBOX_NOTE).get("cids", []))
+            if (cid in cids) != present:
+                self.save(SANDBOX_NOTE, cids=sorted(cids | {cid} if present else cids - {cid}))
+
+    def sandbox_cids(self) -> list[str]:
+        with _NOTES_LOCK:
+            return [str(c) for c in self.load(SANDBOX_NOTE).get("cids", [])]
+
     def say(self, text: str) -> None:
         if self.notify is not None:
             self.notify(text)
@@ -118,7 +133,7 @@ class StageContext:
             log.warning("notify failed: %s", exc.code, extra={"event": "notify_failed"})
 
     def kiro(self) -> Kiro:
-        return Kiro(self.gk, self.sbx, self.models, self.inputs_root, tick=self.tick)
+        return Kiro(self.gk, self.sbx, self.models, self.inputs_root, tick=self.tick, on_job=self.note_sandbox)
 
     def tick(self) -> None:
         if self.run is not None:

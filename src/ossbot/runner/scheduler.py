@@ -157,7 +157,8 @@ class Scheduler:
 
     # ------------------------------------------------------------------- tick
     def sweep_volumes(self) -> int:
-        """Destroy task volumes nothing needs any more: terminal items (§9.12) and items that have not
+        """Destroy task volumes and per-task networks nothing needs any more (every cid that ran a
+        sandbox job is noted): terminal items (§9.12) and items that have not
         passed Start work (only a scout clone left behind by a kill, crash or drain, §9.5a). Runs on
         every tick, also while stopped (cleanup only, nothing new starts). Returns the count."""
         noted = common.volume_cids(self.sc)

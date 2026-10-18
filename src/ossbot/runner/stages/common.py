@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -24,21 +23,16 @@ TEST_PATH_RE = re.compile(
 )
 
 
-VOLUMES = "_volumes"  # runner note: cids whose task volume may exist (a fetch job ran for them)
-_volumes_lock = threading.Lock()
 log = logging.getLogger(__name__)
 
 
 def note_volume(sc: StageContext, cid: str, present: bool) -> None:
-    with _volumes_lock:
-        cids = set(sc.load(VOLUMES).get("cids", []))
-        if (cid in cids) != present:
-            sc.save(VOLUMES, cids=sorted(cids | {cid} if present else cids - {cid}))
+    """A cid whose sandbox resources (task volume, per-task networks) may exist (StageContext note)."""
+    sc.note_sandbox(cid, present)
 
 
 def volume_cids(sc: StageContext) -> list[str]:
-    with _volumes_lock:
-        return [str(c) for c in sc.load(VOLUMES).get("cids", [])]
+    return sc.sandbox_cids()
 
 
 def destroy_volume(sc: StageContext, cid: str) -> bool:
@@ -78,8 +72,7 @@ def job(
         "run_id": new_run_id(stage), "cid": cid, "profile": profile, "entrypoint": entrypoint, "args": args,
         "repo_mode": repo_mode, "inputs": inputs or {}, "timeout_s": timeout_s or STAGE_TIMEOUT_S.get(stage, 1800),
     }  # fmt: skip
-    if entrypoint == "fetch":
-        note_volume(sc, cid, True)  # sandboxd creates ossbot-task-<cid>; the sweep destroys it later
+    note_volume(sc, cid, True)  # task volume and/or per-task networks: the sweep destroys them later
     done = sandbox_run(sc.sbx, spec, sc.tick)
     if done.get("state") != "succeeded":
         raise StageFailed(str(done.get("error_class") or f"{entrypoint}_failed"), str(spec["run_id"]))

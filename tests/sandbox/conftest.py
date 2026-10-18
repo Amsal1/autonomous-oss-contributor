@@ -120,6 +120,38 @@ def proxy_ip_on(network: str) -> str:
     return str(json.loads(out.stdout)[network]["IPAddress"])
 
 
+def reserve_live_subnets(store: Store, clock: SystemClock) -> int:
+    """The test JobService has its own subnet table; the live sandboxd's per-task networks (the
+    runner is active since FEAT-006) must not be handed out again ("Pool overlaps")."""
+    import ipaddress
+
+    from ossbot.common.clock import to_iso
+    from ossbot.sandboxd.profiles import POOLS
+    from ossbot.sandboxd.subnets import PREFIX
+
+    names = subprocess.run(["/usr/bin/docker", "network", "ls", "-q", "--filter", "name=ossbot-t-"],
+                           capture_output=True, text=True, check=True).stdout.split()  # fmt: skip
+    if not names:
+        return 0
+    out = subprocess.run(["/usr/bin/docker", "network", "inspect", "--format",
+                          "{{range .IPAM.Config}}{{.Subnet}} {{end}}", *names],
+                         capture_output=True, text=True, check=True).stdout.split()  # fmt: skip
+    rows = 0
+    with store.tx() as conn:
+        for n, subnet in enumerate(out):
+            net = ipaddress.IPv4Network(subnet, strict=False)
+            for profile, pool in POOLS.items():
+                base = ipaddress.IPv4Network(pool)
+                if net.subnet_of(base):
+                    idx = (int(net.network_address) - int(base.network_address)) // 2 ** (32 - PREFIX)
+                    row = (profile, idx, f"live-{n}", to_iso(clock.now()), pool)
+                    conn.execute("INSERT OR IGNORE INTO subnets (profile, idx, cid, allocated_at, pool)"
+                                 " VALUES (?, ?, ?, ?, ?)", row)  # fmt: skip
+                    rows += 1
+                    break
+    return rows
+
+
 def make_box(root: Path) -> Sandbox:
     """A JobService like sandboxd's (real filter socket), state under ``root`` (also used by the
     crash-safety child process, tests/sandbox/crash_child.py)."""
@@ -128,6 +160,7 @@ def make_box(root: Path) -> Sandbox:
     runtime = DockerCliRuntime()
     store = Store(root / "sandboxd.db")
     clock = SystemClock()
+    reserve_live_subnets(store, clock)
     gatekeeper = NoGatekeeper()
     svc = JobService(
         store=store, runtime=runtime, pins=lambda: load_image_pins(DEFAULT_LOCK_COPY),
