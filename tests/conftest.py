@@ -51,6 +51,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(pytest.mark.unit)
         elif "/tests/telegram/" in node or node.startswith("tests/telegram/"):
             item.add_marker(pytest.mark.telegram)
+        elif "/tests/acp/" in node or node.startswith("tests/acp/"):
+            item.add_marker(pytest.mark.acp)
 
 
 def make_repo(root: Path) -> Path:

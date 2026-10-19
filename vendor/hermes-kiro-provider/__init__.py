@@ -37,7 +37,15 @@ class KiroACPProfile(ProviderProfile):
     _MODEL_LIST_CACHE: tuple = ()  # (timestamp, models)
 
     def create_client(self, **client_kwargs: Any) -> Any:
-        """Build the ACP stdio shim rather than an HTTP client."""
+        """Build the ACP stdio shim rather than an HTTP client.
+
+        ``HERMES_KIRO_ACP_ENGINE=v3`` (default) uses the CLI V3 adapter in ``kiro_acp``;
+        ``v2`` keeps the original CLI v2 path below."""
+        from .kiro_acp.hermes_plugin import create_v3_client, engine
+
+        if engine() == "v3":
+            return create_v3_client(**client_kwargs)
+
         from .kiro_acp_client import KiroACPClient
 
         command = client_kwargs.get("command") or self.process_command
@@ -59,9 +67,14 @@ class KiroACPProfile(ProviderProfile):
         if self._MODEL_LIST_CACHE and now - self._MODEL_LIST_CACHE[0] < 3600:
             return list(self._MODEL_LIST_CACHE[1]) or None
         try:
-            from .kiro_acp_models import list_kiro_models
+            from .kiro_acp.hermes_plugin import engine, fetch_v3_models
 
-            models = list_kiro_models(timeout_seconds=min(max(timeout, 20.0), 60.0))
+            if engine() == "v3":
+                models = fetch_v3_models(timeout=min(max(timeout, 20.0), 60.0))
+            else:
+                from .kiro_acp_models import list_kiro_models
+
+                models = list_kiro_models(timeout_seconds=min(max(timeout, 20.0), 60.0))
         except Exception:
             models = None
         if models:

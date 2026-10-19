@@ -100,6 +100,15 @@ def _chain(cfg: ModelsConfig, role: str) -> tuple[str, Effort, Source]:
     return entry.model, effort or cfg.default.effort, source
 
 
+def requested(cfg: ModelsConfig, role: str) -> tuple[str, Effort]:
+    """The model id and effort the role's indirections lead to, before the catalog and any fallback
+    (for clients that check against the catalog a Kiro session advertises, e.g. the Hermes probe)."""
+    if role not in ROLE_NAMES:
+        raise ModelUnavailable(f"unknown role {role}")
+    model, effort, _source = _chain(cfg, role)
+    return model, effort
+
+
 def role_fallbacks(cfg: ModelsConfig, role: str) -> list[str]:
     """``roles.<r>.fallback`` along the role-name chain: "none" -> [], a list -> it, unset -> the
     global ``fallbacks`` (e.g. ``test_vision: {model: test}`` inherits test's "none")."""
