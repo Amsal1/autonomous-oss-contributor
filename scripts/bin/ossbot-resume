@@ -10,7 +10,8 @@
 #                                              the log line (paused_only: true) first, then only 'paused'
 #                                              is removed; a kill flag and the marker always stay
 # Then: remove killed, paused, resume-request and the Windows marker together, and start in order
-# gatekeeper, proxy, dockerfilter, sandboxd, runner, hermes (units that do not exist are skipped).
+# gatekeeper, proxy, dockerfilter, sandboxd, runner, hermes, the Hermes probe socket (units that do not
+# exist are skipped).
 # Dry-run is never changed. Exit 0 done, 1 refused, 3 partial (a unit did not start).
 set -uo pipefail
 
@@ -93,8 +94,10 @@ start_unit() {
   if systemctl is-active --quiet "$u"; then return 0; fi
   if timeout 120 systemctl start "$u"; then log "started $u"; else failed+=("$u"); fi
 }
+# The Hermes probe socket has ConditionPathExists=!killed too: after a reboot while killed it was
+# skipped and nothing else starts it (found by test_kill.ps1, FEAT-008).
 for u in ossbot-gatekeeper.service ossbot-proxy.service ossbot-dockerfilter.service \
-         ossbot-sandboxd.service ossbot-runner.service ossbot-hermes.service; do
+         ossbot-sandboxd.service ossbot-runner.service ossbot-hermes.service ossbot-hermes-probe.socket; do
   start_unit "$u"
 done
 if ((${#failed[@]})); then

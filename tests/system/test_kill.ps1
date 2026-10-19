@@ -11,7 +11,7 @@
              up, the filter refuses a create; after a restart: level full, gatekeeper + proxy skipped
              by ExecCondition; resume.ps1 starts gatekeeper, then proxy, then sandboxd.
     4 stopped kill.ps1 with the distro stopped writes only the marker; the next boot is killed (full).
-    5 hung   kill.ps1 with the in-distro kill hanging (test hook) returns in ~35 s via wsl --terminate.
+    5 hung   kill.ps1 with the in-distro kill hanging (test hook) returns in ~40 s via wsl --terminate.
     6 hard   kill.ps1 -Hard leaves WSL stopped and the autostart task disabled; resume.ps1 restores.
   Telegram itself is not configured in phase 1; /kill and ossctl kill call the same gatekeeper
   ControlService.kill (soft), which the unit tests drive through the Telegram handlers.
@@ -28,7 +28,8 @@ $scripts = Join-Path $repo 'scripts'
 $ossctl = '/opt/ossbot/app/.venv/bin/ossctl'
 $script:Fail = 0
 $Units = @('ossbot-boot-gate', 'ossbot-firewall', 'ossbot-firewall-docker', 'ossbot-dockerfilter',
-    'ossbot-gatekeeper', 'ossbot-proxy', 'ossbot-sandboxd', 'ossbot-watchdog.timer')
+    'ossbot-gatekeeper', 'ossbot-proxy', 'ossbot-sandboxd', 'ossbot-runner', 'ossbot-hermes',
+    'ossbot-hermes-probe.socket', 'ossbot-watchdog.timer')
 
 function Ok([string]$Name, [bool]$Cond, [string]$Detail = '') {
     if ($Cond) { Write-Host "PASS $Name $Detail" -ForegroundColor Green }
@@ -112,8 +113,9 @@ if ($Selected -contains 1) {
         Ok 'case2 gatekeeper + proxy active after reboot' ($t -ge 0)
         Ok 'case2 level soft after reboot' ((Level) -eq 'soft')
         Ok 'case2 sandboxd inactive' ((Active 'ossbot-sandboxd') -ne 'active')
-        $st = Root @($ossctl, 'status')
-        Ok 'case2 /status answers: killed' ((($st.Out -join ' ') -match '"state": "killed"'))
+        # 'active' comes a moment before the API socket answers after a boot: poll the answer
+        $t = Wait-Until { ((Root @($ossctl, 'status')).Out -join ' ') -match '"state": "killed"' } 30
+        Ok 'case2 /status answers: killed' ($t -ge 0) ("({0:N1} s)" -f $t)
     }
     Resume-All 'case1'
 }
@@ -170,7 +172,9 @@ if ($Selected -contains 5) {
     $sw = [Diagnostics.Stopwatch]::StartNew()
     & powershell -NoProfile -File (Join-Path $scripts 'kill.ps1') -Reason 'test_kill_hung' -TestHangSeconds 120 | Out-Host
     $secs = $sw.Elapsed.TotalSeconds
-    Ok 'case5 kill.ps1 returned within ~35 s' ($secs -le 40) ("({0:N1} s, exit $LASTEXITCODE)" -f $secs)
+    # 30 s timeout (N8) + wsl --terminate, which takes about 10 s with runner and Hermes running (measured
+    # 10.1 s on 2026-10-19, FEAT-008; it was about 7 s before FEAT-006/007)
+    Ok 'case5 kill.ps1 returned within ~40 s' ($secs -le 45) ("({0:N1} s, exit $LASTEXITCODE)" -f $secs)
     Ok 'case5 distro terminated' (-not (Test-OssDistroRunning))
     Start-OssDistro | Out-Null
     $t = Wait-Until { (Level) -eq 'full' } 30

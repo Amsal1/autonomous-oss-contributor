@@ -68,7 +68,15 @@ enforce() {
     if [[ -n $ids ]]; then
       # shellcheck disable=SC2086  # ids are docker short ids
       docker kill $ids >/dev/null 2>&1 || true
-      if [[ -n $(docker ps -q --filter label=ossbot.sandbox=1 2>/dev/null) ]]; then failed+=("kill containers"); fi
+      # `docker kill` returns once the signal is sent; a killed container is still listed for a moment
+      # (seen live: gone within 0.5 s). Partial only if one is still there after 10 s.
+      local left i
+      for ((i = 0; i < 20; i++)); do
+        left=$(docker ps -q --filter label=ossbot.sandbox=1 2>/dev/null)
+        [[ -z $left ]] && break
+        sleep 0.5
+      done
+      if [[ -n $left ]]; then failed+=("kill containers"); fi
       log "killed $(wc -w <<<"$ids") sandbox container(s)"
     fi
     nets=$(docker network ls --format '{{.Name}}' 2>/dev/null | grep -E '^ossbot-t-' || true)
