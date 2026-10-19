@@ -1,0 +1,5 @@
+name: kiro-acp-provider
+kind: model-provider
+version: 0.1.0
+description: Kiro CLI (AWS) agent as a Hermes model provider via ACP stdio
+author: tobenwarrior
