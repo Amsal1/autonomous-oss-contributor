@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from ossbot.common.github_mcp_tools import kiro_tool_ids
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
@@ -182,4 +183,5 @@ def test_scout_session_is_read_only_research(sc: StageContext, ctx: AppContext, 
     assert (session["profile"], session["repo_mode"]) == ("research", "snapshot")
     assert profiles.ROLE_REPO_MODE["scout"] == "snapshot"
     tools = set(profiles.TRUST_TOOLS["scout"].split(","))
-    assert tools <= {"read", "web_search", "web_fetch"}  # no shell, no write
+    # no shell, no write: the built-in read/web tools plus the read-only GitHub MCP tools (GHMCP-2)
+    assert tools <= {"read", "web_search", "web_fetch", *kiro_tool_ids()}
