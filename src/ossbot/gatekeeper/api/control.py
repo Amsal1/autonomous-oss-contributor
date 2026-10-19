@@ -52,10 +52,12 @@ async def kill(
 
 @router.get("/control/lifecycle")
 async def get_lifecycle(request: Request, caller: Annotated[Caller, Depends(require(OP))]) -> dict[str, Any]:
-    """CR-001: lifecycle, running work, pending approvals, Telegram poll health (status.ps1)."""
+    """CR-001: lifecycle, running work, pending approvals, Telegram poll health, egress mode and
+    Hermes tier (status.ps1, PLAN item 39)."""
     c = ctx(request)
-    return {"control": c.control.view().model_dump(), **c.control.lifecycle_status(),
-            "telegram": c.poll_stats.as_dict()}  # fmt: skip
+    status = c.control.lifecycle_status(egress_default=c.config.egress.mode_default,
+                                        tier_default=c.config.policy.hermes.capability_tier_default)  # fmt: skip
+    return {"control": c.control.view().model_dump(), **status, "telegram": c.poll_stats.as_dict()}
 
 
 @router.post("/control/drain")

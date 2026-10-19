@@ -80,9 +80,22 @@ def test_unparseable_lifecycle_flag_is_down(ctx: AppContext) -> None:
 def test_lifecycle_status_counts(ctx: AppContext) -> None:
     _, action = packaged_contribution(ctx)
     card(ctx, action)
-    st = ctx.control.lifecycle_status()
+    st = ctx.control.lifecycle_status(egress_default="open", tier_default="self_improve")
     assert st["lifecycle"] == "up" and st["awaiting_approval"] == 1
     assert st["executing_actions"] == 0 and st["running_stages"] == 0
+    assert st["egress_mode"] == "open" and st["hermes_tier"] == "self_improve"  # no flag: the defaults
+
+
+def test_lifecycle_status_shows_the_flags_fail_closed(ctx: AppContext) -> None:
+    """PLAN item 39: status.ps1 shows the egress mode and Hermes tier in effect, read like every reader."""
+    write_flag(ctx.paths.control_dir / "egress-mode", {"mode": "research", "actor": "x", "ts": "t"})
+    write_flag(ctx.paths.control_dir / "hermes-tier", {"tier": "locked", "actor": "x", "ts": "t"})
+    st = ctx.control.lifecycle_status(egress_default="open", tier_default="self_improve")
+    assert (st["egress_mode"], st["hermes_tier"]) == ("research", "locked")
+    (ctx.paths.control_dir / "egress-mode").write_text("{garbage")
+    (ctx.paths.control_dir / "hermes-tier").write_text('{"tier": "root"}')
+    st = ctx.control.lifecycle_status(egress_default="open", tier_default="self_improve")
+    assert (st["egress_mode"], st["hermes_tier"]) == ("allowlist", "locked")
 
 
 async def test_lifecycle_api_operator_only(ctx: AppContext) -> None:
@@ -94,6 +107,10 @@ async def test_lifecycle_api_operator_only(ctx: AppContext) -> None:
         lc = (await c.get("/v1/control/lifecycle")).json()
         assert lc["lifecycle"] == "draining" and lc["scope"] == "workers" and lc["control"]["state"] == "running"
         assert set(lc["telegram"]) >= {"last_ok_at", "reconnects", "consecutive_failures"}
+        # every CR-001 field status.ps1 prints (PLAN item 39)
+        assert set(lc) >= {"lifecycle", "scope", "lifecycle_since", "running_stages", "executing_actions",
+                           "awaiting_approval", "outbox_pending", "egress_mode", "hermes_tier"}  # fmt: skip
+        assert set(lc["control"]) >= {"state", "dry_run", "kill_level", "reason", "lifecycle"}
         assert (await c.post("/v1/control/down", json={"finished": 1, "interrupted": 0})).json()["lifecycle"] == "down"
         write_flag(ctx.paths.killed_flag, {"level": "soft", "reason": "x", "actor": "root"})
         refused = await c.post("/v1/control/up", json={})

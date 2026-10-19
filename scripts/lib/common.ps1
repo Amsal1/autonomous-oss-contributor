@@ -238,6 +238,87 @@ function Restart-OssWsl {
     return Start-OssDistro -Distro $Distro
 }
 
+# ------------------------------------------------------------------ lifecycle (CR-001 5/6, DESIGN 13.5)
+# down.ps1 and up.ps1 serialise on a per-user named mutex, so the shutdown blocker (6a) and the
+# shutdown-hook task (6b) firing during the same shutdown never run two downs at once. 'Local\' is the
+# session namespace: the blocker, the hook task (InteractiveToken) and a console run in the same session.
+$script:OssLifecycleMutex = 'Local\ossbot-lifecycle'
+$script:OssBlockerMutex = 'Local\ossbot-shutdown-blocker'
+
+function Write-OssLifecycleLog {
+    # One line in .ossbot-local\lifecycle.log (UTC ISO timestamp first).
+    param([Parameter(Mandatory)][string]$Text)
+    $file = Join-Path (New-OssLocalDir) 'lifecycle.log'
+    $line = '{0} {1}' -f (Get-Date).ToUniversalTime().ToString('o'), $Text
+    for ($i = 0; $i -lt 5; $i++) {
+        # two scripts may append at the same moment; a sharing violation is retried
+        try { [IO.File]::AppendAllText($file, $line + "`r`n", (New-Object System.Text.UTF8Encoding $false)); return }
+        catch [System.IO.IOException] { Start-Sleep -Milliseconds 100 }
+    }
+}
+
+function Enter-OssLifecycleLock {
+    # Wait up to TimeoutSec for the lifecycle mutex. Returns the held mutex, or $null on timeout. A
+    # mutex abandoned by a killed holder counts as acquired (its run is over).
+    param([int]$TimeoutSec = 0)
+    $m = New-Object System.Threading.Mutex($false, $script:OssLifecycleMutex)
+    $got = $false
+    try { $got = $m.WaitOne([Math]::Max(0, $TimeoutSec) * 1000) }
+    catch [System.Threading.AbandonedMutexException] { $got = $true }
+    if ($got) { return $m }
+    $m.Dispose()
+    return $null
+}
+
+function Exit-OssLifecycleLock {
+    param([object]$Mutex)
+    if ($null -eq $Mutex) { return }
+    try { $Mutex.ReleaseMutex() } catch { }
+    $Mutex.Dispose()
+}
+
+function Test-OssBlockerRunning {
+    # The shutdown blocker (6a) holds Local\ossbot-shutdown-blocker for as long as it runs.
+    $m = $null
+    try {
+        if ([System.Threading.Mutex]::TryOpenExisting($script:OssBlockerMutex, [ref]$m)) { $m.Dispose(); return $true }
+        return $false
+    } catch [System.UnauthorizedAccessException] { return $true }
+}
+
+function Get-OssBlockerState {
+    # The blocker's own state file (.ossbot-local\shutdown-blocker.state, JSON), or $null.
+    $file = Join-Path $script:OssLocal 'shutdown-blocker.state'
+    if (-not (Test-Path -LiteralPath $file)) { return $null }
+    try { return ([IO.File]::ReadAllText($file) | ConvertFrom-Json) } catch { return $null }
+}
+
+$script:OssAutostartTask = 'ossbot-autostart'
+$script:OssHookTask = 'ossbot-shutdown-hook'
+
+function Get-OssHostTaskStates {
+    # status.ps1: the autostart task (with the blocker action, 6a), the blocker process and the
+    # shutdown-hook task (6b), one line each.
+    $a = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
+    $auto = 'missing (scripts\bootstrap.ps1 -Only autostart)'
+    if ($a) {
+        $hasBlocker = @($a.Actions | Where-Object { [string]$_.Arguments -match 'ossbot-shutdown-blocker\.ps1' }).Count -gt 0
+        $auto = "$($a.State)" + $(if ($hasBlocker) { ', also starts the shutdown blocker at logon' } else { ', no blocker action' })
+    }
+    $h = Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue
+    $hook = if ($h) { "$($h.State) (System User32 1074 -> down.ps1 -Timeout 20 -Kind hook)" } else { 'missing (scripts\bootstrap.ps1 -Only shutdownhooks)' }
+    $blk = 'not running (starts at logon; now: scripts\bootstrap.ps1 -Only shutdownhooks)'
+    if (Test-OssBlockerRunning) {
+        $blk = 'running'
+        $st = Get-OssBlockerState
+        if ($null -ne $st) {
+            $bp = $st.PSObject.Properties['pid']; $ph = $st.PSObject.Properties['phase']
+            if ($bp -and $ph) { $blk += " (pid $($bp.Value), $($ph.Value))" }
+        }
+    }
+    return [pscustomobject]@{ Autostart = $auto; Blocker = $blk; Hook = $hook }
+}
+
 function Get-OssSha256Hex {
     param([Parameter(Mandatory)][byte[]]$Bytes)
     $sha = [Security.Cryptography.SHA256]::Create()

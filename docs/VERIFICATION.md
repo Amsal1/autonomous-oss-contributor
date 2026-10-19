@@ -4,6 +4,14 @@ Results of the phase verification bars (docs/PLAN.md) and of the live checks of 
 
 ## Phase 2 live checks
 
+### FEAT-008 live checks (lifecycle remainder, crash safety, backup and restore; 2026-10-19 from about 20:30 +07)
+
+Product code only (the Windows scripts, `ossctl` as root, the gatekeeper API). Dry-run stayed ON, no GitHub write, Telegram only to the owner through the outbox ("Going down" / "Back up" summaries), no secret value read or printed by hand. Windows was not restarted or shut down (the real restart test is FEAT-011 item 57); every shutdown below is simulated.
+
+| Check | Command / trigger | Outcome |
+|---|---|---|
+| Item 39: Windows lifecycle scripts | redeploy; `powershell -NoProfile -File tests\system\test_lifecycle_scripts.ps1` | all checks passed: `status.ps1` printed every CR-001 field with a value (control running, lifecycle up, dry-run ON, egress open, tier self_improve, 0 stages/jobs/submissions, approvals, outbox, Telegram last poll and reconnects, last shutdown graceful, task states, kill marker, last lifecycle line), and every field again with the distro stopped (in-distro ones marked stopped, the distro not started); two `down.ps1 -Timeout 10` started 0.4 s apart serialised on `Local\ossbot-lifecycle` (16.2 s together; log order A start, A end, B start, B end; B logged the wait and "distro not running"; both exit 0); `up.ps1` exit 0 in 26.9 s, then lifecycle up and last shutdown graceful; `up.ps1 -LockTimeout 3` while the test held the lock exit 1, logged |
+
 ### FEAT-007 live checks (round 4: review round 3 fixes, 2026-10-19 about 19:40-19:55 +07)
 
 Same rules as below. No Telegram message, no Kiro chat turn and no GitHub write in this round.

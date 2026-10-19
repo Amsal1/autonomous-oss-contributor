@@ -238,8 +238,12 @@ class ControlService:
         self.notify(f"▶️ Back up: {resumed} resumed, {awaiting} awaiting approval")
         return self.view()
 
-    def lifecycle_status(self) -> dict[str, Any]:
-        """One-screen state for ``ossctl status`` / ``status.ps1`` (CR-001 item 5)."""
+    def lifecycle_status(self, *, egress_default: EgressMode, tier_default: HermesTier) -> dict[str, Any]:
+        """One-screen state for ``ossctl status`` / ``status.ps1`` (CR-001 item 5, PLAN item 39): the
+        lifecycle, running work, approvals, outbox, and the egress mode and Hermes tier in effect
+        (flag, else the snapshot default; fail closed like every reader). The control view (kill,
+        dry-run) and the Telegram poll stats are added by the endpoint, the last shutdown type and the
+        Windows task states by ``ossctl status`` and ``status.ps1``."""
         info = self.lifecycle()
 
         def count(sql: str) -> int:
@@ -253,6 +257,8 @@ class ControlService:
             "executing_actions": count("SELECT COUNT(*) FROM outbound_actions WHERE status = 'executing'"),
             "awaiting_approval": count("SELECT COUNT(*) FROM approvals WHERE status IN ('pending','armed')"),
             "outbox_pending": count("SELECT COUNT(*) FROM tg_outbox WHERE status = 'pending'"),
+            "egress_mode": self.egress_mode(egress_default),
+            "hermes_tier": self.hermes_tier(tier_default),
         }
 
     # ------------------------------------------------------------------ go (human only)

@@ -26,8 +26,12 @@ from ossbot.common.config import ConfigError, LifecyclePolicy, parse_bundle
 from ossbot.common.control_flags import (
     EGRESS_MODES,
     HERMES_TIERS,
+    EgressMode,
+    HermesTier,
     lifecycle_name,
+    read_egress_mode,
     read_flags,
+    read_hermes_tier,
     read_lifecycle,
     write_flag,
 )
@@ -135,6 +139,26 @@ def _local_lifecycle() -> dict[str, Any]:
     return out
 
 
+def _local_modes() -> dict[str, Any]:
+    """Egress mode and Hermes tier from the control dir without the gatekeeper (PLAN item 39): the
+    flag, else the snapshot default; an unreadable snapshot falls back to the narrowest values."""
+    paths = Paths.default()
+    if not os.access(paths.control_dir, os.R_OK | os.X_OK):
+        return {}
+    egress_default: EgressMode = "allowlist"
+    tier_default: HermesTier = "locked"
+    try:
+        _, files = read_current(paths.snapshot_root)
+        bundle = parse_bundle(files)
+        egress_default, tier_default = bundle.egress.mode_default, bundle.policy.hermes.capability_tier_default
+    except (OSError, ValueError, ConfigError):
+        pass
+    return {
+        "egress_mode": read_egress_mode(paths.control_dir, egress_default),
+        "hermes_tier": read_hermes_tier(paths.control_dir, tier_default),
+    }
+
+
 def _sandboxd(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 10.0) -> Any:
     with uds_client(SANDBOXD_SOCK, timeout=httpx.Timeout(timeout, connect=3.0)) as client:
         resp = client.request(method, path, json=body)
@@ -152,7 +176,7 @@ def status() -> None:
             code, data = api("GET", "/v1/control")
     except GatekeeperDown as exc:
         typer.echo(f"gatekeeper unreachable ({exc})")
-        _show(_local_lifecycle())
+        _show({**_local_lifecycle(), **_local_modes()})
         raise typer.Exit(1) from None
     if code != 200:
         _fail(f"gatekeeper answered {code}: {data}")
