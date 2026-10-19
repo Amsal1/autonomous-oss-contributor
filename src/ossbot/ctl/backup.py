@@ -18,7 +18,10 @@ What goes in (``include_list``): the §18.8 table plus the Hermes state layout f
 
 Every SQLite file is copied with the online backup API (``sqlite3.Connection.backup``); ``-wal``,
 ``-shm`` and ``-journal`` siblings are never copied. Each file is copied into a root-only staging dir
-first and hashed there, so the manifest describes exactly the bytes in the archive. The archive is a
+first and hashed there, so the manifest describes exactly the bytes in the archive. Nothing is read
+through a symlink: an item root with a symlink in its path, a Hermes home that is not a real directory
+of the hermes user (or is replaced during the copy) and a file whose opened path differs abort the
+backup (``path_problem``, ``Layout.hermes_home_problem``, ``_open_exact``). The archive is a
 tar of ``MANIFEST.json`` + ``files/<absolute path>``, always encrypted with ``age`` to the X25519 (or
 post-quantum hybrid) recipients in ``profile.backup.age_recipients``; there is no unencrypted mode.
 """
@@ -57,6 +60,7 @@ SQLITE_SIBLINGS = ("-wal", "-shm", "-journal")
 RECIPIENT_RE = re.compile(r"^age1(?:pq1)?[02-9ac-hj-np-z]{58,}$")
 LINK_TARGET_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")  # a sibling name only (config-snapshot/current)
 HERMES_HOME = Path("/home/hermes/.hermes")
+HERMES_USER = "hermes"
 # DESIGN §18.8: "/home/hermes/.hermes/ minus hermes-agent/ code and caches". Kept: every top-level entry
 # but these (code, installs, tools and plugins are re-provisioned; .env is the root-owned provisioned
 # key file; caches, logs, locks and the gateway's runtime files are rebuilt). The FEAT-007 state list
@@ -82,12 +86,26 @@ class BackupError(RuntimeError):
     """The backup cannot be made (no recipients, audit chain broken, age failed...)."""
 
 
+def path_problem(path: Path) -> str | None:
+    """Why root must not read or write through ``path`` (None: it may). Backup and restore run as root on
+    paths whose directories other uids own (``~hermes/.hermes`` above all, writable by the hermes uid):
+    the path itself must not be a symlink and no existing component above it may be one, i.e.
+    ``realpath`` gives back the same path. A missing path is fine (nothing to copy, or created fresh)."""
+    if os.path.islink(path):
+        return f"{path} is a symlink"
+    real = os.path.realpath(path)
+    if real != str(path):
+        return f"{path} resolves to {real[:160]} (a symlink above it)"
+    return None
+
+
 @dataclass(frozen=True)
 class Layout:
     """Where the state lives (``Layout.default()``); tests relocate it under a tmp dir."""
 
     paths: Paths
     hermes_home: Path = HERMES_HOME
+    hermes_user: str = HERMES_USER  # the owner the Hermes home must have
 
     @classmethod
     def default(cls) -> Layout:
@@ -109,8 +127,42 @@ class Layout:
     def runs_dir(self) -> Path:
         return self.paths.logs_dir / "runs"
 
+    def hermes_home_problem(self) -> str | None:
+        """Why the Hermes home must not be used (None: it is a real directory of ``hermes_user``, or
+        absent). The hermes uid may replace ``.hermes`` with a symlink at any time (ReadWritePaths
+        /home/hermes): followed by root, a backup would copy files from elsewhere and a restore would
+        write Hermes-chosen files there (F008-R1-1)."""
+        home = self.hermes_home
+        problem = path_problem(home)
+        if problem is not None:
+            return problem
+        try:
+            st = os.lstat(home)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISDIR(st.st_mode):
+            return f"{home} is not a directory"
+        try:
+            uid = pwd.getpwnam(self.hermes_user).pw_uid
+        except KeyError:
+            return f"{home}: no user {self.hermes_user!r} to own it"
+        if st.st_uid != uid:
+            return f"{home} is owned by uid {st.st_uid}, not {self.hermes_user}"
+        return None
+
+    def hermes_identity(self) -> tuple[int, int] | None:
+        """(st_dev, st_ino) of the Hermes home, None when absent; compared before and after a copy."""
+        try:
+            st = os.lstat(self.hermes_home)
+        except FileNotFoundError:
+            return None
+        return st.st_dev, st.st_ino
+
     def hermes_names(self) -> list[str]:
-        """The kept top-level entries that exist now (sorted)."""
+        """The kept top-level entries that exist now (sorted); refuses an unsafe Hermes home."""
+        problem = self.hermes_home_problem()
+        if problem is not None:
+            raise BackupError(f"Hermes home refused: {problem}")
         try:
             return sorted(n for n in os.listdir(self.hermes_home) if hermes_kept(n))
         except FileNotFoundError:
@@ -209,9 +261,29 @@ def _meta(path: Path, st: os.stat_result, item: str) -> dict[str, Any]:
             "uid": st.st_uid, "gid": st.st_gid}  # fmt: skip
 
 
-def _is_sqlite(path: Path) -> bool:
+def _refuse_moved(path: Path) -> None:
+    problem = path_problem(path)
+    if problem is not None:
+        raise BackupError(f"refused: {problem} (changed during the backup?)")
+
+
+def _open_exact(path: Path) -> int:
+    """Open ``path`` read-only, refusing it unless the opened file is that very path: O_NOFOLLOW guards
+    the last component, the fd's /proc link every directory above it (a directory swapped for a
+    symlink between the walk and the open)."""
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, "rb") as fh:
+    try:
+        real = os.readlink(f"/proc/self/fd/{fd}")
+    except OSError:
+        real = os.path.realpath(path)
+    if real != str(path):
+        os.close(fd)
+        raise BackupError(f"refused: {path} opened {real[:160]} (a symlink above it)")
+    return fd
+
+
+def _is_sqlite(path: Path) -> bool:
+    with os.fdopen(_open_exact(path), "rb") as fh:
         return fh.read(len(SQLITE_MAGIC)) == SQLITE_MAGIC
 
 
@@ -225,9 +297,9 @@ def _copy_file(src: Path, dst: Path) -> None:
         finally:
             target.close()
             source.close()
+        _refuse_moved(src)  # sqlite opens by path: the path must still be real after the copy
         return
-    fd = os.open(src, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    with os.fdopen(fd, "rb") as fin, dst.open("wb") as fout:
+    with os.fdopen(_open_exact(src), "rb") as fin, dst.open("wb") as fout:
         shutil.copyfileobj(fin, fout, 1 << 20)
 
 
@@ -246,6 +318,9 @@ class Collector:
         return self.root / str(target).lstrip("/")
 
     def add(self, item: Item) -> None:
+        problem = path_problem(item.path)
+        if problem is not None:  # an item root (or a directory above it) swapped for a symlink
+            raise BackupError(f"{item.name} refused: {problem}")
         try:
             st = os.lstat(item.path)
         except FileNotFoundError:
@@ -272,6 +347,7 @@ class Collector:
     def _dir(self, root: Path, item: str) -> None:
         for current, dirnames, filenames in os.walk(root, followlinks=False):
             here = Path(current)
+            _refuse_moved(here)  # os.walk descends by path: a subdirectory swapped for a symlink meanwhile
             self.dirs.append(_meta(here, os.lstat(here), item))
             for name in sorted(dirnames):
                 sub = here / name
@@ -363,9 +439,16 @@ def collect(layout: Layout, options: Options, staging: Path) -> Collector:
     for item in core:
         collector.add(item)
     cids = active_cids(collector.staged(layout.paths.db_path))
-    for item in include_list(layout, cids, options):
+    hermes_before = layout.hermes_identity()
+    for item in include_list(layout, cids, options):  # include_list refuses an unsafe Hermes home
         if item.name not in {"audit_anchors", "gatekeeper_db"}:
             collector.add(item)
+    # Hermes keeps running during a backup: its home must still be the directory that was checked
+    problem = layout.hermes_home_problem()
+    if problem is None and layout.hermes_identity() != hermes_before:
+        problem = f"{layout.hermes_home} was replaced"
+    if problem is not None:
+        raise BackupError(f"Hermes home changed during the backup: {problem}")
     return collector
 
 

@@ -3,6 +3,7 @@ encrypted, SQLite online copies, the audit check on the copy, retention."""
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import os
 import sqlite3
@@ -145,6 +146,48 @@ def test_only_sibling_symlinks_are_kept(layout: bk.Layout, tmp_path: Path) -> No
     m = manifest_of(make(layout, tmp_path).archive)
     assert not any(link["path"].endswith("evil") for link in m["links"])
     assert any("evil" in s for s in m["skipped"])
+
+
+def _swap_for_symlink(path: Path, target: Path) -> None:
+    """What the uid owning ``path`` can do at any time: move it away and put a symlink in its place."""
+    path.rename(path.with_name(path.name + ".real"))
+    os.symlink(target, path)
+
+
+def test_a_symlinked_hermes_home_is_refused_not_followed(layout: bk.Layout, tmp_path: Path) -> None:
+    """F008-R1-1: ``.hermes`` -> the secrets dir must not put secrets into an includes_secrets=false archive."""
+    _swap_for_symlink(layout.hermes_home, layout.paths.secrets_dir)
+    with pytest.raises(bk.BackupError, match=r"Hermes home refused: .* is a symlink"):
+        make(layout, tmp_path)
+    assert not list((tmp_path / "backups").glob("*.tar.age"))
+    assert not list(tmp_path.glob("ossbot-backup-*"))  # the staging dir is gone too
+
+
+def test_a_hermes_home_of_another_owner_is_refused(layout: bk.Layout, tmp_path: Path) -> None:
+    other = "root" if os.getuid() != 0 else "nobody"
+    with pytest.raises(bk.BackupError, match=f"not {other}"):
+        make(dataclasses.replace(layout, hermes_user=other), tmp_path)
+
+
+def test_an_item_root_below_a_symlinked_directory_is_refused(layout: bk.Layout, tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _swap_for_symlink(layout.imports_dir, elsewhere)  # imports/<cid> now resolves outside the gatekeeper dir
+    with pytest.raises(bk.BackupError, match=rf"imports:{CID_ACTIVE} refused: .* resolves to"):
+        make(layout, tmp_path)
+
+
+def test_a_file_opened_through_a_swapped_directory_is_refused(tmp_path: Path) -> None:
+    """The walk lists a directory, then the owner swaps it for a symlink before the file is opened."""
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "f").write_text("x")
+    os.symlink(real, tmp_path / "swapped")
+    with pytest.raises(bk.BackupError, match="a symlink above it"):
+        bk._copy_file(tmp_path / "swapped" / "f", tmp_path / "out" / "f")
+    sqlite_wal(real / "s.db", 1).close()
+    with pytest.raises(bk.BackupError, match="a symlink above it"):
+        bk._copy_file(tmp_path / "swapped" / "s.db", tmp_path / "out" / "s.db")
 
 
 def test_a_missing_gatekeeper_db_or_anchors_is_an_error(layout: bk.Layout, tmp_path: Path) -> None:

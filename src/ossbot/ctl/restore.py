@@ -8,7 +8,10 @@ in order:
 2. ``unpack``: refuses an unknown ``format``, a member the manifest does not list (or a listed one that
    is missing), anything but regular files, a target outside the include list, and any file whose size
    or sha256 differs from the manifest.
-3. ``install``: moves every current item aside to ``/srv/ossbot/restore-previous-<ts>/`` (never deletes;
+3. ``check_targets`` (also the first step of ``install``): refuses, with nothing moved, an item root
+   that is a symlink or has one above it and a Hermes home that is not a real directory of the hermes
+   user (the hermes uid owns ``/home/hermes``; root must never write through a path it chose).
+   ``install``: moves every current item aside to ``/srv/ossbot/restore-previous-<ts>/`` (never deletes;
    SQLite ``-wal``/``-shm``/``-journal`` siblings go with their database; the append-only flag of the
    anchors is lifted for the move), then writes the archive's files, directories and sibling symlinks
    with the owners and modes the manifest recorded.
@@ -39,7 +42,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn
 
-from ossbot.ctl.backup import AGE, FORMAT, LINK_TARGET_RE, SQLITE_SIBLINGS, Layout, hermes_kept
+from ossbot.ctl.backup import AGE, FORMAT, LINK_TARGET_RE, SQLITE_SIBLINGS, Layout, hermes_kept, path_problem
 
 MAX_IDENTITY = 64 * 1024
 MAX_MANIFEST = 64 * 1024 * 1024
@@ -220,14 +223,38 @@ def _move_aside(path: Path, aside: Path, moved: list[str]) -> None:
         moved.append(str(candidate))
 
 
-def install(manifest: dict[str, Any], staging: Path, layout: Layout, aside: Path, *, attr: Chattr = chattr
-            ) -> list[str]:  # fmt: skip
-    """Move the current items aside, then write the archive's state. Returns the moved paths."""
+def _roots(manifest: dict[str, Any], layout: Layout) -> list[Path]:
     roots: list[Path] = []
     for entry in [*manifest["items"], *manifest["dirs"], *manifest["links"]]:
         root = item_root(layout, str(entry["item"]))
         if root not in roots:
             roots.append(root)
+    return roots
+
+
+def check_targets(manifest: dict[str, Any], layout: Layout) -> None:
+    """Refuse before anything moves when root would write through a symlink (F008-R1-1): no item root
+    may be a symlink or have one above it, and the Hermes home must be a real directory of the hermes
+    user. Called after the units are stopped (no hermes process can swap it any more) and again by
+    ``install``."""
+    for root in _roots(manifest, layout):
+        problem = path_problem(root)
+        if problem is not None:
+            raise RestoreError(f"unsafe restore target: {problem}")
+    entries = [*manifest["items"], *manifest["dirs"], *manifest["links"]]
+    if any(str(e["item"]).startswith("hermes:") for e in entries):
+        problem = layout.hermes_home_problem()
+        if problem is not None:
+            raise RestoreError(f"unsafe restore target: {problem}")
+        if not os.path.lexists(layout.hermes_home):
+            raise RestoreError(f"{layout.hermes_home} is missing: provision Hermes first (bootstrap), then restore")
+
+
+def install(manifest: dict[str, Any], staging: Path, layout: Layout, aside: Path, *, attr: Chattr = chattr
+            ) -> list[str]:  # fmt: skip
+    """Move the current items aside, then write the archive's state. Returns the moved paths."""
+    check_targets(manifest, layout)
+    roots = _roots(manifest, layout)
     moved: list[str] = []
     for root in roots:
         if root == layout.paths.audit_anchors_log and root.exists():

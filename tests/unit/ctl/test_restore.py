@@ -4,20 +4,25 @@ the three decision services invalidated; anything that does not match its manife
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
+import os
+import shutil
 import sqlite3
 import tarfile
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from typer.testing import CliRunner
 
 from ossbot.common.schemas import State
 from ossbot.ctl import backup as bk
+from ossbot.ctl import cli
 from ossbot.ctl import restore as rs
 from ossbot.gatekeeper.context import AppContext
-from tests.conftest import insert_contribution
+from tests.conftest import insert_contribution, write_flag
 from tests.unit.ctl.backup_helpers import (
     CID_ACTIVE,
     CID_DONE,
@@ -163,6 +168,85 @@ def test_a_tampered_or_odd_archive_is_refused_before_anything_is_installed(
         restore(layout, bad, tmp_path)
     assert memory.read_text() == "current\n"  # nothing installed, nothing moved aside
     assert not rs.aside_dir(layout, NOW).exists()
+
+
+def test_restore_never_writes_through_a_symlinked_hermes_home(layout: bk.Layout, tmp_path: Path) -> None:
+    """F008-R1-1: the hermes uid swaps ``.hermes`` for a symlink to a root directory before the restore;
+    nothing may be written into, or moved out of, the symlink's target."""
+    archive = backup(layout, tmp_path)
+    victim = tmp_path / "root-owned-dir"  # stands in for /etc
+    victim.mkdir()
+    (victim / "SOUL.md").write_text("root's file\n")
+    layout.hermes_home.rename(tmp_path / "hermes-moved")
+    os.symlink(victim, layout.hermes_home)
+    with pytest.raises(rs.RestoreError, match=r"unsafe restore target: .*hermes.* (is a symlink|resolves to)"):
+        restore(layout, archive, tmp_path)
+    assert sorted(p.name for p in victim.iterdir()) == ["SOUL.md"]
+    assert (victim / "SOUL.md").read_text() == "root's file\n"
+    assert not rs.aside_dir(layout, NOW).exists()  # nothing moved aside
+
+
+@pytest.mark.parametrize("case", ["other_owner", "missing_home", "symlinked_parent"])
+def test_restore_refuses_unsafe_targets_before_anything_moves(layout: bk.Layout, tmp_path: Path, case: str) -> None:
+    archive = backup(layout, tmp_path)
+    if case == "other_owner":
+        layout = dataclasses.replace(layout, hermes_user="root" if os.getuid() != 0 else "nobody")
+        match = "is owned by uid"
+    elif case == "missing_home":
+        shutil.rmtree(layout.hermes_home)
+        match = "provision Hermes first"
+    else:  # the artifacts dir (another service uid's) swapped for a symlink: bundles:<cid> resolves elsewhere
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        layout.paths.artifacts_dir.rename(tmp_path / "artifacts-moved")
+        os.symlink(elsewhere, layout.paths.artifacts_dir)
+        match = "resolves to"
+    with pytest.raises(rs.RestoreError, match=match):
+        restore(layout, archive, tmp_path)
+    assert not rs.aside_dir(layout, NOW).exists()
+    assert (layout.paths.db_path).is_file()  # the current DB was not moved
+
+
+@pytest.mark.parametrize("case", ["kill_failed", "stop_failed"])
+def test_restore_fails_closed_when_the_kill_or_a_stop_failed(
+    ctx: AppContext, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, case: str
+) -> None:
+    """F008-R1-3: no kill flag, or a unit still running, means nothing is decrypted or moved; the
+    gatekeeper and proxy are started again (killed mode when the flag exists)."""
+    helper_calls: list[tuple[str, ...]] = []
+    systemctl_calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def helper(name: str, *args: str, quiet: bool = False) -> int:
+        helper_calls.append((name, *args))
+        if case == "kill_failed":
+            return 1  # ossbot-kill failed before it wrote the flag
+        write_flag(ctx.paths.killed_flag, {"level": "soft", "reason": "restore", "actor": "ossctl-restore"})
+        return 0
+
+    def systemctl(action: str, units: tuple[str, ...]) -> list[str]:
+        systemctl_calls.append((action, units))
+        return ["ossbot-gatekeeper.service"] if action == "stop" and case == "stop_failed" else []
+
+    def no_decrypt(*args: object, **kwargs: object) -> None:
+        raise AssertionError("decrypt must not run after a failed kill or stop")
+
+    monkeypatch.setattr(cli.Paths, "default", classmethod(lambda cls: ctx.paths))
+    monkeypatch.setattr(cli, "_require_root", lambda what: None)
+    monkeypatch.setattr(cli, "_root_helper", helper)
+    monkeypatch.setattr(cli, "_systemctl", systemctl)
+    monkeypatch.setattr(rs, "decrypt", no_decrypt)
+    archive = tmp_path / "ossbot-20261019-120000.tar.age"
+    archive.write_bytes(b"never decrypted here")
+
+    result = CliRunner().invoke(cli.app, ["restore", str(archive), "--yes"], input=IDENTITY)
+
+    assert result.exit_code == 1, result.output
+    why = "no kill flag was written" if case == "kill_failed" else "did not stop: ossbot-gatekeeper.service"
+    assert why in result.output
+    assert helper_calls[0][:3] == ("ossbot-kill", "--soft", "--reason")
+    assert systemctl_calls == [("stop", cli.RESTORE_STOP), ("start", cli.RESTORE_START)]
+    assert not list(ctx.paths.srv.glob("restore-previous-*"))
+    assert ctx.paths.db_path.is_file()
 
 
 def test_a_wrong_or_missing_identity_is_refused(layout: bk.Layout, tmp_path: Path) -> None:

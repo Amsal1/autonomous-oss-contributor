@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import pwd
 import sqlite3
 import sys
 import tarfile
@@ -42,7 +44,9 @@ def sqlite_wal(path: Path, rows: int) -> sqlite3.Connection:
 
 def populate(paths: Paths, tmp: Path) -> Layout:
     """Hermes home, skill gate state, anchors, bundles of one active and one terminal item, secrets."""
-    layout = Layout(paths, hermes_home=tmp / "home" / "hermes" / ".hermes")
+    # the test user stands in for the hermes user (the Hermes home must be a directory of that user)
+    layout = Layout(paths, hermes_home=tmp / "home" / "hermes" / ".hermes",
+                    hermes_user=pwd.getpwuid(os.getuid()).pw_name)  # fmt: skip
     h = layout.hermes_home
     for rel, text in {
         "SOUL.md": "soul", "config.yaml": "model: x\n", "memories/MEMORY.md": "the owner likes tea\n",

@@ -1178,13 +1178,23 @@ def restore(
     report["kill_exit"] = _root_helper("ossbot-kill", "--soft", "--reason", "restore", "--actor", "ossctl-restore",
                                        quiet=True)  # fmt: skip
     report["stop_failed"] = _systemctl("stop", RESTORE_STOP)
+    # fail closed (F008-R1-3): a unit still running would keep the moved-aside DB open, and a DB marked
+    # killed without the flag the workers and the Docker filter read makes reconcile alert forever
+    killed = read_flags(paths.control_dir).killed is not None
+    if not killed or report["stop_failed"]:
+        report["start_failed"] = _systemctl("start", RESTORE_START)
+        _show(report)
+        why = f"did not stop: {', '.join(report['stop_failed'])}" if killed else "no kill flag was written"
+        _fail(f"refused before anything was moved ({why}); check ossctl status and journalctl, then retry")
     staging = Path(tempfile.mkdtemp(prefix="ossbot-restore-", dir=bk.STAGING_PARENT))
     try:
-        # 2. decrypt to a root-only temp dir on ext4, verify the manifest
+        # 2. decrypt to a root-only temp dir on ext4, verify the manifest and the targets (the units are
+        #    stopped: no service uid can swap a directory for a symlink any more)
         tar_path = staging / "archive.tar"
         try:
             rs.decrypt(path, key, tar_path)
             manifest = rs.unpack(tar_path, staging, layout)
+            rs.check_targets(manifest, layout)
         except rs.RestoreError as exc:
             report["start_failed"] = _systemctl("start", RESTORE_START)  # killed mode: /resume works again
             _show(report)
