@@ -79,6 +79,8 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/chat/selftest"): frozenset({O}),  # §15.6, PLAN item 37
     ("POST", "/v1/chat/jobs/claim"): frozenset({W}),  # the runner's extract_text jobs for PDF turns
     ("POST", "/v1/chat/jobs/{job_id}/result"): frozenset({W}),
+    ("POST", "/v1/chat/sandbox-jobs"): frozenset({R}),  # Hermes code jobs (F007-R1-2 owner decision)
+    ("GET", "/v1/chat/sandbox-jobs/{job_id}"): frozenset({R}),
     ("GET", "/v1/audit/verify"): frozenset({O}),
 }
 UIDS = {O: UID_OPERATOR, W: UID_WORKER, S: UID_SANDBOX, R: UID_REQUESTER}

@@ -2,7 +2,9 @@
 
 The gatekeeper derives the caller's role from the socket peer uid (``hermes`` = requester), so these
 tools can read status, file a discovery request for an issue URL, send the owner a note, pause or
-kill; they cannot approve, submit, resume or change settings. ``ossbot_feature_*`` work on the
+kill, and (tier ``self_improve``) run a short program in a ``--network none`` sandbox job
+(``ossbot_request_sandbox_job``); they cannot approve, submit, resume or change settings.
+``ossbot_feature_*`` work on the
 per-feature SQLite stores (``features.py``) without the gatekeeper. Stdlib only; never imports ossbot.
 Every result is a JSON string; gatekeeper errors are returned as ``{"success": false, ...}``.
 """
@@ -15,6 +17,7 @@ import os
 import re
 import socket
 import sqlite3
+import time
 import urllib.parse
 from typing import Any
 
@@ -154,6 +157,43 @@ def ossbot_feature_query(params: dict[str, Any]) -> str:
     return json.dumps({"success": True, "data": store.query(prefix.strip(), limit)}, ensure_ascii=False)
 
 
+JOB_ID_RE = re.compile(r"^k_[0-9a-f]{16}$")
+ATTACHMENT_RE = re.compile(r"^a_[0-9a-f]{16}$")
+JOB_WAIT_S = 240.0
+JOB_POLL_S = 2.0
+
+
+@_safe
+def ossbot_request_sandbox_job(params: dict[str, Any]) -> str:
+    """Run a short program in a ``--network none`` sandbox and wait for its result (DESIGN §15.6)."""
+    kind = params.get("kind", "code")
+    if kind != "code":
+        raise ValueError('kind must be "code"')
+    language = params.get("language")
+    if language not in ("python", "bash"):
+        raise ValueError('language must be "python" or "bash"')
+    code = _text(params, "code", 64 * 1024)
+    files = params.get("files") or []
+    if not isinstance(files, list) or len(files) > 5 or not all(isinstance(f, str) and ATTACHMENT_RE.match(f)
+                                                                for f in files):  # fmt: skip
+        raise ValueError("files must be at most 5 attachment ids (a_...)")
+    timeout_s = params.get("timeout_s", 120)
+    if not isinstance(timeout_s, int) or not 1 <= timeout_s <= 120:
+        raise ValueError("timeout_s must be 1..120")
+    body = {"kind": "code", "language": language, "code": code, "files": files, "timeout_s": timeout_s}
+    status, data = call("POST", "/v1/chat/sandbox-jobs", body)
+    if status != 202 or not isinstance(data, dict) or not JOB_ID_RE.match(str(data.get("job_id"))):
+        return _result(status, data)
+    job_id = str(data["job_id"])
+    deadline = time.monotonic() + JOB_WAIT_S
+    while time.monotonic() < deadline:
+        status, data = call("GET", f"/v1/chat/sandbox-jobs/{job_id}")
+        if status != 200 or not isinstance(data, dict) or data.get("status") not in ("queued", "running"):
+            return _result(status, data)
+        time.sleep(JOB_POLL_S)
+    return json.dumps({"success": False, "error": "still running", "job_id": job_id})
+
+
 def _schema(
     name: str, description: str, props: dict[str, Any] | None = None, required: tuple[str, ...] = ()
 ) -> dict[str, Any]:
@@ -223,5 +263,22 @@ TOOLS: list[tuple[dict[str, Any], Any]] = [
             ("feature",),
         ),
         ossbot_feature_query,
+    ),
+    (
+        _schema(
+            "ossbot_request_sandbox_job",
+            "Run a short python or bash program in an offline sandbox (no network, 120 s, Pillow/numpy/pandas)"
+            " and get its stdout, stderr and result files. The owner's attachments (ids a_...) are in"
+            " $OSSBOT_INPUT_DIR (/io/input, read-only); write result files to $OSSBOT_OUTPUT_DIR (max 5, 10 MB).",
+            {
+                "kind": {"type": "string", "enum": ["code"]},
+                "language": {"type": "string", "enum": ["python", "bash"]},
+                "code": _STR,
+                "files": {"type": "array", "items": _STR},
+                "timeout_s": {"type": "integer"},
+            },
+            ("language", "code"),
+        ),
+        ossbot_request_sandbox_job,
     ),
 ]

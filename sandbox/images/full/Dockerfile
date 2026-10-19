@@ -1,5 +1,6 @@
 # ossbot/sandbox-full (DESIGN §10.1): code-running image for fetch, validate, package, unbundle,
-# agent-exec, snapshot, stage-in, probe and extract_text (PDF text, §14.12.5). No kiro-cli and no secrets, ever.
+# agent-exec, snapshot, stage-in, probe, extract_text (PDF text, §14.12.5) and run_code (the assistant's code
+# jobs, §15.6). No kiro-cli and no secrets, ever.
 # Build (root, FEAT-004 'images' step, context = repo root):
 #   docker build -f sandbox/images/full/Dockerfile -t ossbot/sandbox-full:<date> .
 # Pins come from config/versions.lock.yaml (tests/unit/sandbox/test_gitcmd_image_env.py checks them).
@@ -55,6 +56,15 @@ RUN curl -fsSL -o /tmp/mise.tar.gz \
  && corepack enable --install-directory /opt/mise/shims \
  && chmod -R a+rX /opt/mise /opt/uv-python
 
+# Python for the assistant's code jobs (profile `code`, --network none; ADR-0020: Pillow only in
+# network-none sandboxes): a root-owned venv from hash-pinned wheels (code-requirements.txt).
+COPY --chown=0:0 --chmod=0444 sandbox/images/full/code-requirements.txt /tmp/code-requirements.txt
+RUN uv venv --python /usr/bin/python3 /opt/ossbot/code-py \
+ && uv pip install --python /opt/ossbot/code-py/bin/python --require-hashes --no-deps --only-binary :all: \
+      -r /tmp/code-requirements.txt \
+ && /opt/ossbot/code-py/bin/python -c "import PIL, numpy, pandas" \
+ && rm /tmp/code-requirements.txt \
+ && chmod -R a+rX,go-w /opt/ossbot/code-py
 # Non-root user and the fixed directories with the M2 owners/modes (copy-up onto fresh volumes).
 RUN groupadd -g 10001 agent \
  && useradd -u 10001 -g 10001 -d /home/agent -s /bin/bash -M agent \
@@ -66,7 +76,7 @@ COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/execd.py /opt/ossbot/bin/
 COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/fetch.sh sandbox/entrypoints/exec.sh \
      sandbox/entrypoints/validate.sh sandbox/entrypoints/package.sh sandbox/entrypoints/unbundle.sh \
      sandbox/entrypoints/snapshot.sh sandbox/entrypoints/probe.sh sandbox/entrypoints/extract_text.sh \
-     /opt/ossbot/entrypoints/
+     sandbox/entrypoints/run_code.sh /opt/ossbot/entrypoints/
 
 # Safety-probe fixture as a tar so its symlinks survive (DESIGN §10.1, §10.9).
 COPY --chown=0:0 sandbox/fixtures/ /tmp/fixtures/

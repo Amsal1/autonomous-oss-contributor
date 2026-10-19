@@ -22,6 +22,7 @@ from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.authz import Role, interactive_ancestry
 from ossbot.gatekeeper.chat import hermes_api
 from ossbot.gatekeeper.chat.backend import ChatRuntime, ChatService, HermesApiBackend, RelayGate
+from ossbot.gatekeeper.chat.code_jobs import CodeJobs
 from ossbot.gatekeeper.chat.hermes_api import HermesClient
 from ossbot.gatekeeper.chat.hermes_surface import SurfaceResult, check_toolsets
 from ossbot.gatekeeper.chat.media import MediaStore
@@ -337,4 +338,15 @@ def chat_runtime(ctx: AppContext, tier: Callable[[], HermesTier]) -> ChatRuntime
                      on_surface_kill=surface_kill)  # fmt: skip
     service = ChatService(HermesApiBackend(HermesClient(key), gate), TurnStore(ctx.conn, ctx.clock))
     media_store = MediaStore(ctx.paths.gatekeeper_dir / "chat")
-    return ChatRuntime(service, gate, media_store, PdfJobs(ctx.paths.artifacts_dir), probe_path)
+
+    def stopped() -> str | None:
+        flags = ctx.control.flags()
+        if flags.killed is not None:
+            return "killed"
+        if flags.paused is not None:
+            return "paused"
+        return None if lifecycle() is None else "workers_down"
+
+    code = CodeJobs(ctx.paths.artifacts_dir, media_store, redact=lambda t: ui_redact.redact(t, surface="code_job")[0],
+                    stopped=stopped)  # fmt: skip
+    return ChatRuntime(service, gate, media_store, PdfJobs(ctx.paths.artifacts_dir), probe_path, code, tier)

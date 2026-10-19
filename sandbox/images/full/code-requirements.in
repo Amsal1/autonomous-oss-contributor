@@ -1,0 +1,7 @@
+# Python libraries for the assistant's code jobs (profile `code`, --network none; DESIGN §15.6, ADR-0020:
+# Pillow only in network-none sandboxes). Compiled with hashes into code-requirements.txt:
+#   uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-unknown-linux-gnu \
+#     sandbox/images/full/code-requirements.in -o sandbox/images/full/code-requirements.txt
+pillow
+numpy
+pandas

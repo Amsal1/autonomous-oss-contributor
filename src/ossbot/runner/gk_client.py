@@ -157,11 +157,10 @@ class Gatekeeper:
         return bool(self._call("POST", "/v1/models/refresh/claim")["requested"])
 
     # --------------------------------------------------------------- chat PDF jobs (§14.12.5)
-    def claim_chat_job(self) -> tuple[str, bytes] | None:
+    def claim_chat_job(self) -> dict[str, Any] | None:
+        """The next assistant job: ``kind`` ``pdf`` (``pdf_b64``) or ``code`` (``code_b64``, ``files``)."""
         job = self._call("POST", "/v1/chat/jobs/claim")["job"]
-        if not job:
-            return None
-        return str(job["job_id"]), base64.b64decode(job["pdf_b64"], validate=True)
+        return dict(job) if isinstance(job, dict) and job else None
 
     def chat_job_result(self, job_id: str, *, run_id: str | None, ok: bool, error: str | None = None) -> None:
         self._call("POST", f"/v1/chat/jobs/{job_id}/result", {"run_id": run_id, "ok": ok, "error": error})

@@ -33,8 +33,8 @@ IMAGE_RE = re.compile(r"^ossbot/(sandbox-full|sandbox-llm|sandbox-android)@sha25
 ENTRYPOINT_CMD_RE = re.compile(r"^/opt/ossbot/entrypoints/([a-z_]{1,32})\.sh$")
 
 PROFILES: frozenset[str] = frozenset(
-    {"fetch", "research", "agent-llm", "agent-exec", "validate", "package", "catalog", "extract", "snapshot",
-     "stage-in", "probe", "stack"}
+    {"fetch", "research", "agent-llm", "agent-exec", "validate", "package", "catalog", "extract", "code",
+     "snapshot", "stage-in", "probe", "stack"}
 )  # fmt: skip
 # R4-N5: entrypoint name bound to ossbot.profile; probe.sh is accepted in every profile except
 # stage-in and stack (22.5 smoke tests run it once per profile).
@@ -47,14 +47,16 @@ CMD_BY_PROFILE: Mapping[str, frozenset[str]] = {
     "package": frozenset({"package", "unbundle"}),
     "catalog": frozenset({"list_models"}),
     "extract": frozenset({"extract_text"}),
+    "code": frozenset({"run_code"}),
     "snapshot": frozenset({"snapshot"}),
     "probe": frozenset({"probe"}),
 }
 KEY_PAIRS: frozenset[tuple[str, str]] = frozenset(
     {("research", "kiro"), ("agent-llm", "kiro"), ("catalog", "list_models")}
 )
-TMP_EXEC_PROFILES: frozenset[str] = frozenset({"fetch", "validate", "agent-exec", "package"})
-NETWORK_NONE_PROFILES: frozenset[str] = frozenset({"agent-exec", "package", "extract", "snapshot", "stage-in"})
+# code: the validate rules (exec /tmp) with the network forced to none (owner decision F007-R1-2)
+TMP_EXEC_PROFILES: frozenset[str] = frozenset({"fetch", "validate", "agent-exec", "package", "code"})
+NETWORK_NONE_PROFILES: frozenset[str] = frozenset({"agent-exec", "package", "extract", "code", "snapshot", "stage-in"})
 LLM_IMAGE_PROFILES: frozenset[str] = frozenset({"research", "agent-llm", "catalog"})
 CATALOG_NETWORK = "ossbot-t-sys-catalog-catalog"
 STAGE_IN_CMD = ["/bin/true"]
@@ -337,7 +339,7 @@ def _check_mounts(mounts: Any, profile: str) -> None:
             raise Denied("mount_input_rw")
         if kind == "ro" and not read_only and profile != "snapshot":
             raise Denied("mount_ro_rw")
-        if profile in {"agent-llm", "catalog", "extract"} and kind in {"task", "ro"}:
+        if profile in {"agent-llm", "catalog", "extract", "code"} and kind in {"task", "ro"}:
             raise Denied(f"mount_{kind}_on_{profile}")
         if profile == "research" and kind == "task":
             raise Denied("mount_task_on_research")

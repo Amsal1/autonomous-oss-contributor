@@ -87,6 +87,7 @@ STAGE_ENTRYPOINTS: tuple[str, ...] = (
 )  # fmt: skip
 SANDBOX_JOB_ENTRYPOINTS: tuple[str, ...] = (
     "fetch", "kiro", "exec", "validate", "package", "unbundle", "snapshot", "list_models", "probe", "extract_text",
+    "run_code",
 )  # fmt: skip
 DOCKER_FILTER_OPERATIONS: tuple[str, ...] = ("containers/create", "containers/start")
 SUBMISSION_CHECKPOINTS: dict[OutboundKind, tuple[str, ...]] = {

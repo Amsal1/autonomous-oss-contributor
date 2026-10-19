@@ -99,7 +99,7 @@ def test_tmp_exec_only_for_code_running_profiles(name: str) -> None:
     spec = variants()[name]
     tmpfs = dict(t.split(":", 1) for t in _pairs(build_argv(spec), "--tmpfs"))
     exec_on_tmp = "exec" in tmpfs["/tmp"].split(",")
-    assert exec_on_tmp is (spec.profile in {"fetch", "validate", "agent-exec", "package"})
+    assert exec_on_tmp is (spec.profile in {"fetch", "validate", "agent-exec", "package", "code"})
     if "/home/agent" in tmpfs:
         assert "noexec" in tmpfs["/home/agent"].split(",")
 

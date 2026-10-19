@@ -15,8 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort
 from ossbot.common.schemas import BASE_REF_RE, SHA1_RE
 
-JobProfile = Literal["fetch", "research", "coder", "validate", "package", "catalog", "extract", "stack"]
-JobEntrypoint = Literal["fetch", "kiro", "validate", "package", "unbundle", "list_models", "extract_text", "probe"]
+JobProfile = Literal["fetch", "research", "coder", "validate", "package", "catalog", "extract", "code", "stack"]
+JobEntrypoint = Literal[
+    "fetch", "kiro", "validate", "package", "unbundle", "list_models", "extract_text", "run_code", "probe"
+]
 RepoMode = Literal["none", "snapshot", "rw"]
 ResearchRole = Literal["vetter", "scout", "planner", "reviewer", "summarizer"]  # scout: decision B8 (CR-004)
 KiroRole = Literal["vetter", "scout", "planner", "reviewer", "summarizer", "coder"]
@@ -26,8 +28,12 @@ CID_RE = r"^(c_[0-9A-Z]{10}|sys-catalog|sys-chat)$"
 INPUT_NAME_RE = r"^[a-z0-9_.-]{1,64}$"
 PROMPT_FILE_RE = r"^[a-z0-9_-]{1,64}\.md$"
 CATALOG_CID = "sys-catalog"
-CHAT_CID = "sys-chat"  # the assistant's PDF text jobs (extract_text, §14.12.5)
+CHAT_CID = "sys-chat"  # the assistant's PDF text (extract_text, §14.12.5) and code jobs (run_code, §15.6)
+CHAT_PROFILES = frozenset({"extract", "code"})
 EXTRACT_INPUT = "doc.pdf"
+CODE_SOURCES = {"python": "main.py", "bash": "main.sh"}
+CODE_MAX_INPUTS = 6  # the source plus at most 5 attachments
+CODE_MAX_TIMEOUT_S = 120
 MAX_CPUS = 8.0
 MAX_MEMORY_MB = 6144
 MIN_MEMORY_MB = 64
@@ -56,6 +62,9 @@ TEMPLATES: dict[str, ContainerTemplate] = {
     "catalog": ContainerTemplate("catalog", "sandbox-llm", "catalog", False, True, True, False),
     # pdftotext on an owner's PDF: no network, no key, no repo, noexec /tmp (§14.12.5)
     "extract": ContainerTemplate("extract", "sandbox-full", "none", False, False, False, False),
+    # the assistant's code jobs (§15.6, owner decision F007-R1-2): Hermes' python/bash on the owner's
+    # attachments; no network, no key, no repo, exec /tmp as the scratch dir
+    "code": ContainerTemplate("code", "sandbox-full", "none", True, False, False, False),
     # internal helpers (never submitted through POST /v1/jobs)
     "stage-in": ContainerTemplate("stage-in", "sandbox-full", "none", False, False, False, False),
     "snapshot": ContainerTemplate("snapshot", "sandbox-full", "none", False, False, False, False),
@@ -87,6 +96,7 @@ PROFILE_REPO_MODE: dict[str, RepoMode] = {
     "coder": "rw",
     "catalog": "none",
     "extract": "none",
+    "code": "none",
 }
 PROFILE_ENTRYPOINTS: dict[str, frozenset[str]] = {
     "fetch": frozenset({"fetch"}),
@@ -96,10 +106,11 @@ PROFILE_ENTRYPOINTS: dict[str, frozenset[str]] = {
     "package": frozenset({"package", "unbundle"}),
     "catalog": frozenset({"list_models"}),
     "extract": frozenset({"extract_text"}),
+    "code": frozenset({"run_code"}),
 }
 PROFILE_MAX_TIMEOUT: dict[str, int] = {
     "fetch": 3600, "research": 3600, "coder": 7200, "validate": 7200, "package": 900, "catalog": 300,
-    "extract": 300,
+    "extract": 300, "code": CODE_MAX_TIMEOUT_S + 60,
 }  # fmt: skip
 # Fixed per role, never caller-supplied (§15.3). [VERIFY §23 item 5: exact V3 internal tool ids]
 TRUST_TOOLS: dict[str, str] = {
@@ -178,6 +189,11 @@ class ExtractTextArgs(Strict):
     pass
 
 
+class RunCodeArgs(Strict):
+    language: Literal["python", "bash"]
+    timeout_s: Annotated[int, Field(ge=1, le=CODE_MAX_TIMEOUT_S)] = CODE_MAX_TIMEOUT_S
+
+
 ARGS_MODELS: dict[str, type[Strict]] = {
     "fetch": FetchArgs,
     "kiro": KiroArgs,
@@ -186,6 +202,7 @@ ARGS_MODELS: dict[str, type[Strict]] = {
     "unbundle": UnbundleArgs,
     "list_models": ListModelsArgs,
     "extract_text": ExtractTextArgs,
+    "run_code": RunCodeArgs,
 }
 
 
@@ -254,10 +271,17 @@ def validate_job(spec: JobSpec) -> ValidatedJob:
         raise SpecError("catalog jobs use the pseudo-cid sys-catalog, and only they do")
     if spec.profile == "catalog" and spec.inputs:
         raise SpecError("catalog jobs take no inputs")
-    if (spec.profile == "extract") != (spec.cid == CHAT_CID):
-        raise SpecError("extract jobs use the pseudo-cid sys-chat, and only they do")
+    if (spec.profile in CHAT_PROFILES) != (spec.cid == CHAT_CID):
+        raise SpecError("extract and code jobs use the pseudo-cid sys-chat, and only they do")
     if spec.profile == "extract" and set(spec.inputs) != {EXTRACT_INPUT}:
         raise SpecError(f"extract jobs take exactly the input {EXTRACT_INPUT}")
+    if isinstance(args, RunCodeArgs):
+        source = CODE_SOURCES[args.language]
+        others = set(spec.inputs) - {source}
+        if source not in spec.inputs or len(spec.inputs) > CODE_MAX_INPUTS or set(CODE_SOURCES.values()) & others:
+            raise SpecError(f"code jobs take {source} and at most {CODE_MAX_INPUTS - 1} attachments")
+        if spec.timeout_s < args.timeout_s + 10:
+            raise SpecError("code jobs need timeout_s at least the code timeout + 10 s")
     if spec.timeout_s > PROFILE_MAX_TIMEOUT[spec.profile]:
         raise SpecError(f"timeout_s exceeds the {spec.profile} maximum")
     return ValidatedJob(spec=spec, args=args)

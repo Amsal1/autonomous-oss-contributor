@@ -166,18 +166,18 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
      "EFFORT=high",
      "MODEL=claude-test",
-     "OSSBOT_TRUST_MODE=ids",
      "PROMPT_FILE=plan.md",
      "REQUIRE_MCP=1",
-     "HTTPS_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "OSSBOT_TRUST_MODE=ids",
      "ROLE=coder",
-     "TRUST_TOOLS=@ossbot-exec/run",
-     "HOME=/home/agent",
-     "HTTP_PROXY=http://proxy:3128",
-     "KIRO_API_KEY=ksk_test_key_value_0123456789"
+     "TRUST_TOOLS=@ossbot-exec/run"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -328,11 +328,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HOME=/home/agent",
-     "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
      "NO_PROXY=",
-     "KIRO_API_KEY=ksk_test_key_value_0123456789"
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -456,6 +456,151 @@
     "User": "10001:10001",
     "Volumes": {},
     "WorkingDir": "/home/agent/cwd"
+   },
+   "followed_by": [
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
+    "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/start"
+   ],
+   "query": {
+    "name": [
+     "ossbot-r1-plan"
+    ]
+   }
+  },
+  "code": {
+   "body": {
+    "AttachStderr": false,
+    "AttachStdin": false,
+    "AttachStdout": false,
+    "Cmd": [
+     "/opt/ossbot/entrypoints/run_code.sh"
+    ],
+    "Domainname": "",
+    "Entrypoint": null,
+    "Env": [
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_ARG_LANGUAGE=python",
+     "OSSBOT_ARG_TIMEOUT_S=120",
+     "HTTPS_PROXY=http://proxy:3128"
+    ],
+    "HostConfig": {
+     "AutoRemove": false,
+     "Binds": null,
+     "BlkioDeviceReadBps": [],
+     "BlkioDeviceReadIOps": [],
+     "BlkioDeviceWriteBps": [],
+     "BlkioDeviceWriteIOps": [],
+     "BlkioWeight": 0,
+     "BlkioWeightDevice": [],
+     "CapAdd": null,
+     "CapDrop": [
+      "ALL"
+     ],
+     "Cgroup": "",
+     "CgroupParent": "",
+     "CgroupnsMode": "",
+     "ConsoleSize": [
+      0,
+      0
+     ],
+     "ContainerIDFile": "",
+     "CpuCount": 0,
+     "CpuPercent": 0,
+     "CpuPeriod": 0,
+     "CpuQuota": 0,
+     "CpuRealtimePeriod": 0,
+     "CpuRealtimeRuntime": 0,
+     "CpuShares": 0,
+     "CpusetCpus": "",
+     "CpusetMems": "",
+     "DeviceCgroupRules": null,
+     "DeviceRequests": null,
+     "Devices": [],
+     "Dns": null,
+     "DnsOptions": [],
+     "DnsSearch": [],
+     "ExtraHosts": null,
+     "GroupAdd": null,
+     "IOMaximumBandwidth": 0,
+     "IOMaximumIOps": 0,
+     "Init": true,
+     "IpcMode": "",
+     "Isolation": "",
+     "Links": null,
+     "LogConfig": {
+      "Config": {},
+      "Type": ""
+     },
+     "MaskedPaths": null,
+     "Memory": 1073741824,
+     "MemoryReservation": 0,
+     "MemorySwap": 1073741824,
+     "MemorySwappiness": -1,
+     "Mounts": [
+      {
+       "ReadOnly": true,
+       "Source": "ossbot-in-r1-plan",
+       "Target": "/io/input",
+       "Type": "volume"
+      },
+      {
+       "Source": "ossbot-out-r1-plan",
+       "Target": "/io/output",
+       "Type": "volume"
+      }
+     ],
+     "NanoCpus": 1000000000,
+     "NetworkMode": "none",
+     "OomKillDisable": false,
+     "OomScoreAdj": 0,
+     "PidMode": "",
+     "PidsLimit": 4096,
+     "PortBindings": {},
+     "Privileged": false,
+     "PublishAllPorts": false,
+     "ReadonlyPaths": null,
+     "ReadonlyRootfs": true,
+     "RestartPolicy": {
+      "MaximumRetryCount": 0,
+      "Name": "no"
+     },
+     "SecurityOpt": [
+      "no-new-privileges"
+     ],
+     "ShmSize": 0,
+     "Tmpfs": {
+      "/tmp": "rw,exec,nosuid,nodev,size=2g"
+     },
+     "UTSMode": "",
+     "Ulimits": [
+      {
+       "Hard": 65536,
+       "Name": "nofile",
+       "Soft": 65536
+      }
+     ],
+     "UsernsMode": "",
+     "VolumeDriver": "",
+     "VolumesFrom": null
+    },
+    "Hostname": "sbx",
+    "Image": "ossbot/sandbox-full@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "Labels": {
+     "ossbot.cid": "sys-chat",
+     "ossbot.profile": "code",
+     "ossbot.run": "r1-plan",
+     "ossbot.sandbox": "1"
+    },
+    "NetworkingConfig": {
+     "EndpointsConfig": {}
+    },
+    "OpenStdin": false,
+    "StdinOnce": false,
+    "Tty": false,
+    "User": "10001:10001",
+    "Volumes": {},
+    "WorkingDir": "/"
    },
    "followed_by": [
     "POST containers/ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff/wait",
@@ -914,11 +1059,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
+     "OSSBOT_ARG_ROUND_BASE=1111111111111111111111111111111111111111",
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "OSSBOT_ARG_ROUND_BASE=1111111111111111111111111111111111111111"
+     "NO_PROXY="
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1064,11 +1209,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
+     "OSSBOT_PROBE=smoke",
      "HOME=/home/agent",
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "OSSBOT_PROBE=smoke"
+     "NO_PROXY="
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1219,11 +1364,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "OSSBOT_PROBE=smoke",
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY="
+     "NO_PROXY=",
+     "OSSBOT_PROBE=smoke"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1519,17 +1664,17 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HOME=/home/agent",
-     "NO_PROXY=",
-     "OSSBOT_TRUST_MODE=ids",
-     "PROMPT_FILE=plan.md",
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "KIRO_API_KEY=ksk_test_key_value_0123456789",
      "EFFORT=high",
      "MODEL=claude-test",
-     "ROLE=vetter",
-     "TRUST_TOOLS=read,web_search,web_fetch"
+     "OSSBOT_TRUST_MODE=ids",
+     "TRUST_TOOLS=read,web_search,web_fetch",
+     "HOME=/home/agent",
+     "NO_PROXY=",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "PROMPT_FILE=plan.md",
+     "ROLE=vetter"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1675,17 +1820,17 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "TRUST_TOOLS=read,web_search,web_fetch",
      "HTTPS_PROXY=http://proxy:3128",
-     "EFFORT=high",
-     "MODEL=claude-test",
-     "HOME=/home/agent",
-     "HTTP_PROXY=http://proxy:3128",
      "NO_PROXY=",
      "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "EFFORT=high",
+     "ROLE=planner",
+     "HTTP_PROXY=http://proxy:3128",
+     "MODEL=claude-test",
      "OSSBOT_TRUST_MODE=ids",
      "PROMPT_FILE=plan.md",
-     "ROLE=planner"
+     "TRUST_TOOLS=read,web_search,web_fetch",
+     "HOME=/home/agent"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1837,10 +1982,10 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "NO_PROXY=",
-     "OSSBOT_PROBE=snapshot_check",
      "HTTPS_PROXY=http://proxy:3128",
-     "HTTP_PROXY=http://proxy:3128"
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=",
+     "OSSBOT_PROBE=snapshot_check"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -2253,11 +2398,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "OSSBOT_ARG_MODE=fix_round",
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY="
+     "NO_PROXY=",
+     "OSSBOT_ARG_MODE=fix_round"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -2403,11 +2548,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
+     "NO_PROXY=",
+     "OSSBOT_ARG_PLAN_FILE=validate.json",
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
-     "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "OSSBOT_ARG_PLAN_FILE=validate.json"
+     "HTTP_PROXY=http://proxy:3128"
     ],
     "HostConfig": {
      "AutoRemove": false,

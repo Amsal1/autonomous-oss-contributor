@@ -23,6 +23,7 @@ import base64
 import hashlib
 import os
 import re
+import secrets
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -43,6 +44,7 @@ TEXT_MIMES = {"text/plain", "text/markdown", "text/csv", "application/json", "te
               "text/yaml", "text/html", "application/xml", "text/xml"}  # fmt: skip
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".json", ".py", ".yaml", ".yml", ".log", ".toml", ".ini", ".xml", ".html"}
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
+ATTACHMENT_ID_RE = re.compile(r"^a_[0-9a-f]{16}$")
 
 
 class AttachmentRefused(ValueError):
@@ -164,6 +166,29 @@ class MediaStore:
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
         return path
+
+    def put(self, session_key: str, name: str, data: bytes) -> str:
+        """Keep a prepared (metadata-stripped) attachment; returns its id ``a_<16 hex>``, which Hermes
+        passes to ``ossbot_request_sandbox_job`` (DESIGN §15.6, owner decision F007-R1-2)."""
+        attachment_id = f"a_{secrets.token_hex(8)}"
+        path = self._dir(session_key) / f"{attachment_id}-{safe_name(name, 'file')}"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+        return attachment_id
+
+    def get(self, attachment_id: str) -> tuple[str, bytes] | None:
+        """``(name, bytes)`` of a kept attachment, or None (unknown, pruned or malformed id)."""
+        if not ATTACHMENT_ID_RE.match(attachment_id) or not self.root.is_dir():
+            return None
+        for session in self.root.iterdir():
+            if session.is_symlink() or not session.is_dir():
+                continue
+            for f in session.glob(f"{attachment_id}-*"):
+                fd = os.open(f, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                with os.fdopen(fd, "rb") as fh:
+                    return f.name[len(attachment_id) + 1 :], fh.read()
+        return None
 
     def prune(self, retention_hours: int, now: float | None = None) -> int:
         cutoff = (time.time() if now is None else now) - retention_hours * 3600

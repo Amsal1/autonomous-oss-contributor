@@ -93,7 +93,8 @@ step_images() {
 
   local full llm proxy
   _build sandbox-full sandbox/images/full/Dockerfile "$full_args" \
-    src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py sandbox/entrypoints sandbox/fixtures
+    src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py sandbox/entrypoints sandbox/fixtures \
+    sandbox/images/full/code-requirements.txt
   full=$OSSBOT_IMAGE_ID
   _build sandbox-llm sandbox/images/llm/Dockerfile "$llm_args" \
     src/ossbot/sandbox_tools/exec_mcp.py sandbox/entrypoints sandbox/kiro .kiro/agents prompts sandbox/probes

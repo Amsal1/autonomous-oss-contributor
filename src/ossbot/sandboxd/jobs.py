@@ -59,6 +59,7 @@ from ossbot.sandboxd.profiles import (
     JobSpec,
     KiroArgs,
     PackageArgs,
+    RunCodeArgs,
     SpecError,
     UnbundleArgs,
     ValidateArgs,
@@ -176,6 +177,8 @@ def _env_for(job: ValidatedJob, trust_mode: TrustMode) -> dict[str, str]:
             "OSSBOT_ARG_MODE": a.mode, "OSSBOT_ARG_BUNDLE_REF": a.bundle_ref,
             "OSSBOT_ARG_CHECKOUT_SHA": a.checkout_sha, "OSSBOT_ARG_REV": str(a.rev),
         }  # fmt: skip
+    if isinstance(a, RunCodeArgs):
+        return {"OSSBOT_ARG_LANGUAGE": a.language, "OSSBOT_ARG_TIMEOUT_S": str(a.timeout_s)}
     return {}
 
 

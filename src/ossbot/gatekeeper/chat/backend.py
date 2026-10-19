@@ -29,6 +29,7 @@ from ossbot.common.config import AttachmentKind, AttachmentsPolicy
 from ossbot.common.control_flags import FlagState, HermesTier
 from ossbot.ctl import hermes_probe
 from ossbot.gatekeeper.chat import hermes_api, media
+from ossbot.gatekeeper.chat.code_jobs import CodeJobs
 from ossbot.gatekeeper.chat.hermes_api import Event, HermesClient, HermesError, HermesUnavailable
 from ossbot.gatekeeper.chat.hermes_surface import SurfaceResult
 from ossbot.gatekeeper.chat.media import MediaStore, Prepared
@@ -217,6 +218,8 @@ class ChatRuntime:
     media: MediaStore
     pdf: PdfJobs | None
     probe_path: Path
+    code: CodeJobs | None = None
+    tier: Callable[[], HermesTier] = field(default=lambda: "locked")
 
     async def prepare(self, kind: AttachmentKind, data: bytes, name: str, policy: AttachmentsPolicy, *,
                       as_file: bool = False) -> Prepared:  # fmt: skip
