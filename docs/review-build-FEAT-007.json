@@ -1,0 +1,93 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "feat": "FEAT-007",
+  "round": 1,
+  "findings": [
+    {
+      "id": "F007-R1-1",
+      "severity": "HIGH",
+      "title": "Items 37 and 38 unfinished; uncommitted WIP fails the hermetic bar and lint gate",
+      "detail": "31 uncommitted paths (20 modified, 11 untracked; item 37 assistant backend). On the tree: pytest 2626 passed, 1 failed (test_every_entrypoint_exists_and_matches_the_shared_constant: extract_text.sh not in SANDBOX_JOB_ENTRYPOINTS); ruff 8 errors, ruff format 2 files, mypy 11 errors (common/config.py, chat/hermes_api.py, chat/backend.py, runner/chat_jobs.py, api/chat.py). Missing plan tests: test_backend, test_relay_gate, test_media, test_turns, unit and root test_extract_text, fake_hermes extension. dockerfilter/rules.py and sandbox-full Dockerfile changes need the record_corpus re-record and an images rebuild with the new digest. Item 38 (selftest, live model switch, sourced answer, github.io/gist, food photo, FINAL_REPORT.md) not started. Working rule 4: no approval while the tree is dirty. Fix: finish item 37 with its tests, lint-clean, commit; redeploy twice; run item 38 and close out.",
+      "files": [
+        "src/ossbot/gatekeeper/chat/backend.py",
+        "src/ossbot/gatekeeper/chat/hermes_api.py",
+        "src/ossbot/gatekeeper/chat/turns.py",
+        "src/ossbot/gatekeeper/chat/media.py",
+        "src/ossbot/gatekeeper/chat/imgmeta.py",
+        "src/ossbot/gatekeeper/chat/pdf_jobs.py",
+        "src/ossbot/gatekeeper/api/chat.py",
+        "src/ossbot/runner/chat_jobs.py",
+        "src/ossbot/common/config.py",
+        "src/ossbot/sandboxd/profiles.py",
+        "src/ossbot/dockerfilter/rules.py",
+        "sandbox/entrypoints/extract_text.sh",
+        "sandbox/images/full/Dockerfile",
+        "tests/unit/sandbox/test_gitcmd_image_env.py",
+        "tests/unit/gatekeeper/chat/"
+      ]
+    },
+    {
+      "id": "F007-R1-2",
+      "severity": "MEDIUM",
+      "title": "request_sandbox_job missing from the Hermes ossbot plugin",
+      "detail": "Plan item 35 and DESIGN 15.5/15.6 route all Hermes code execution through an ossbot plugin request for a research or agent-llm sandbox job scheduled by the gatekeeper. tools.py (HEAD and WIP) has status, queue, contribution, logs, request_discovery, notify, pause, kill and feature_* only; no tool, route or test exists. With terminal/code_execution off in every tier Hermes has no code-running path. Fix: add the tool and its gatekeeper route with role/tier checks, plus tests.",
+      "files": [
+        "hermes/plugins/ossbot/tools.py",
+        "src/ossbot/gatekeeper/api/"
+      ]
+    },
+    {
+      "id": "F007-R1-3",
+      "severity": "MEDIUM",
+      "title": "Vendored fork not declared as a non-editable uv path dependency, deviation unrecorded",
+      "detail": "Item 34 requires a non-editable uv path dependency (uv lock, sync DEV/ROOTDEV). pyproject.toml changed only ruff/mypy config and uv.lock is untouched; tests add vendor/ to sys.path and the probe loads v3_core.py by path. Loading by path may be the better design (single import origin for the root probe), but nothing records it. Fix: add the dependency, or record the decision in the ADR-0002 addendum and the FEAT findings.",
+      "files": [
+        "pyproject.toml",
+        "uv.lock",
+        "docs/adr/0002-agent-runtime-hermes-kiro-acp.md"
+      ]
+    },
+    {
+      "id": "F007-R1-4",
+      "severity": "MEDIUM",
+      "title": "TRACEABILITY and VERIFICATION not updated for items 33-36",
+      "detail": "No FEAT-007 commit touches docs/TRACEABILITY.md or docs/VERIFICATION.md. Rows named by items 33-36 (DES-V-5c/10/11/12/13/28/29/30, CR2-3c, DES-FR-11, DES-AC-20, ADR-0002, CHAT-5/6, DES-FR-1b, DES-FR-19, DES-AC-25, ADR-0018, CR2-3a/b/d/e/f/g, CR2-6a, CHAT-25) still lack FEAT-007 evidence; the live handshake, probe pass, two redeploys, hygiene and tier system tests are only in the ADR addendum; VERIFICATION Phase 2 live checks still says the Hermes checks belong to FEAT-007; rows citing ~hermes/.hermes/config.yaml do not reflect the managed-scope decision. Fix: set closed rows done with evidence, record the FEAT-007 part of shared rows, and log the live checks.",
+      "files": [
+        "docs/TRACEABILITY.md",
+        "docs/VERIFICATION.md"
+      ]
+    },
+    {
+      "id": "F007-R1-5",
+      "severity": "MEDIUM",
+      "title": "Owner name and email hard-coded in a tracked script",
+      "detail": "scripts/dev/kiro-provider-bundle.sh (da6935a) sets the owner's name and email for the upstream commit and Signed-off-by. Hard rule 8 allows personal values in tracked files only under docs/ and in the gitignored config/profile.yaml. Fix: read them from git var GIT_AUTHOR_IDENT or the profile and refuse when unset.",
+      "files": [
+        "scripts/dev/kiro-provider-bundle.sh"
+      ]
+    },
+    {
+      "id": "F007-R1-6",
+      "severity": "MEDIUM",
+      "title": "GHMCP-1..4 (read-only GitHub MCP server) not started",
+      "detail": "TRACEABILITY assigns GHMCP-1 to GHMCP-4 to P2 FEAT-007, all missing / not started (pinned v2.0.2 binary in sandbox-llm and the Hermes path, --read-only read toolsets, token routing and key-scan entry, fail closed on any write tool, Hermes plugin tool and doctor get_me check). Fix: implement per the phase2-build-plan addition in this loop, or move the rows to another FEAT with a recorded decision.",
+      "files": [
+        "docs/TRACEABILITY.md",
+        "config/versions.lock.yaml",
+        "sandbox/images/llm/Dockerfile",
+        "hermes/plugins/ossbot/"
+      ]
+    },
+    {
+      "id": "F007-R1-7",
+      "severity": "NIT",
+      "title": "Upstream contribution bundle carries ossbot-specific defaults",
+      "detail": "The bundle copies kiro_acp/v3_core.py as is, with DEFAULT_KIRO_CLI under /home/hermes, DEFAULT_PROXY http://10.212.0.2:3141, EXPECTED_MODE ossbot-chat and references to ossbot DESIGN. Upstream users would inherit ossbot's network and mode. Fix: generic or env-driven defaults, with ossbot's values set in ossbot-hermes.service and the probe.",
+      "files": [
+        "vendor/hermes-kiro-provider/kiro_acp/v3_core.py",
+        "scripts/dev/kiro-provider-bundle.sh"
+      ]
+    }
+  ],
+  "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-007.md"
+}
