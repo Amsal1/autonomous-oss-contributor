@@ -29,6 +29,7 @@ dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
     "pytest-timeout==2.4.0",
+    "pytest-xdist==3.8.0",
     "respx==0.23.1",
     "hypothesis==6.170.1",
     "ruff==0.17.1",
@@ -180,3 +181,11 @@ name = "The chat relay never imports the submit path"
 type = "forbidden"
 source_modules = ["ossbot.gatekeeper.chat"]
 forbidden_modules = ["ossbot.gatekeeper.submit", "ossbot.gatekeeper.github_writer"]
+
+[[tool.importlinter.contracts]]
+# review FEAT-007 round 2 (F007-R2-4): the root ACP probe client and the other root/operator tools stay
+# out of the gatekeeper; it reads the probe file through ossbot.common.probe_result.
+name = "The gatekeeper never imports ossctl or the root probe"
+type = "forbidden"
+source_modules = ["ossbot.gatekeeper"]
+forbidden_modules = ["ossbot.ctl"]
