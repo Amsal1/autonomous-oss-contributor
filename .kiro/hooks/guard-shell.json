@@ -1,0 +1,16 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Block approval-stalling shell commands",
+      "trigger": "PreToolUse",
+      "description": "Blocks inline here-strings, python -c, base64/encoded payloads and $(...) subexpressions, which force a manual approval and stall autonomous runs. Tells the agent to run a workspace script by path instead.",
+      "matcher": "execute_pwsh|control_pwsh_process|execute_bash|shell",
+      "action": {
+        "type": "command",
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev/guard-shell.ps1",
+        "timeout": 10
+      }
+    }
+  ]
+}
