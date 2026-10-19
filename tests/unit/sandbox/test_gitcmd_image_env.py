@@ -34,19 +34,28 @@ def _arg(text: str, name: str) -> str:
 
 
 def test_sandbox_full_env_equals_gitcmd() -> None:
-    full = _dockerfile("full")
+    full = _dockerfile("full-base")
     assert _env(full, "OSSBOT_FORMAT_PATCH") == gitcmd.FORMAT_PATCH
     assert _env(full, "OSSBOT_NUMSTAT") == gitcmd.NUMSTAT
 
 
-@pytest.mark.parametrize("image", ["full", "llm", "proxy"])
+@pytest.mark.parametrize("image", ["full-base", "llm", "proxy"])
 def test_base_image_pinned_by_lock_digest(image: str) -> None:
     froms = re.findall(r"^FROM (\S+)", _dockerfile(image), re.MULTILINE)
     assert froms == [f"ubuntu:24.04@{LOCK['base_images']['ubuntu_24_04']}"]
 
 
+def test_sandbox_full_is_a_thin_top_over_its_base() -> None:
+    """Scripts live only in the top, toolchains only in the base (a script change never rebuilds them)."""
+    top, base = _dockerfile("full"), _dockerfile("full-base")
+    assert re.findall(r"^FROM (\S+)", top, re.MULTILINE) == ["${BASE}"]
+    assert "apt-get" not in top and "mise" not in top and "uv pip" not in top
+    assert "sandbox/entrypoints" not in base and "src/ossbot" not in base
+    assert "chmod -R" not in base  # one journaled metadata write per toolchain inode (VERIFICATION 2026-10-19)
+
+
 def test_tool_pins_equal_lock() -> None:
-    full, llm, proxy = _dockerfile("full"), _dockerfile("llm"), _dockerfile("proxy")
+    full, llm, proxy = _dockerfile("full-base"), _dockerfile("llm"), _dockerfile("proxy")
     assert _arg(full, "UV_VERSION") == LOCK["uv"]["version"]
     assert _arg(full, "UV_SHA256") == LOCK["uv"]["sha256"]
     assert _arg(full, "MISE_VERSION") == LOCK["mise"]["version"]
@@ -78,7 +87,7 @@ def test_tools_and_entrypoints_baked_where_needed() -> None:
     assert "src/ossbot/sandbox_tools/numstat2json.py /opt/ossbot/bin/numstat2json" in full
     assert "src/ossbot/sandbox_tools/execd.py /opt/ossbot/bin/ossbot-execd" in full
     assert "build-probe-tar.sh /tmp/fixtures/probe-repo /opt/ossbot/fixtures/probe-repo.tar" in full
-    for entry in ("fetch", "exec", "validate", "package", "unbundle", "snapshot", "probe"):
+    for entry in ("fetch", "exec", "validate", "package", "unbundle", "snapshot", "probe", "extract_text", "run_code"):
         assert f"sandbox/entrypoints/{entry}.sh" in full, entry
     assert "src/ossbot/sandbox_tools/exec_mcp.py /opt/ossbot/bin/ossbot-exec-mcp" in llm
     for entry in ("kiro", "list_models", "probe"):

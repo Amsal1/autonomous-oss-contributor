@@ -20,22 +20,36 @@ _inputs_hash() {
   } | sha256sum | cut -d' ' -f1
 }
 
-# _build NAME DOCKERFILE "BUILDARGS..." INPUT_PATH...  -> sets OSSBOT_IMAGE_ID (sha256:<hex>)
+# _build NAME DOCKERFILE "BUILDARGS..." INPUT_PATH...  -> sets OSSBOT_IMAGE_ID (sha256:<hex>), OSSBOT_IMAGE_TAG
 _build() {
   local name=$1 dockerfile=$2 args=$3; shift 3
   local hash tag
   hash=$(_inputs_hash "$args" "$dockerfile" "$@")
   tag="ossbot/$name:in-${hash:0:12}"
   if ! docker image inspect "$tag" >/dev/null 2>&1; then
-    log "building $tag (this can take a while)"
+    log "building $tag (full log /srv/ossbot/logs/build-$name.log)"
     local -a argv=()
     [[ -n $args ]] && read -r -a argv <<<"$args"
+    local blog="/srv/ossbot/logs/build-$name.log" started=$SECONDS rc line
+    # Every build step, its cache hit and its duration go to the provision output as they happen.
     (cd "$OSSBOT_REPO" && DOCKER_BUILDKIT=1 docker build --progress=plain --pull=false \
-      -f "$dockerfile" -t "$tag" --label "ossbot.inputs=$hash" --label "ossbot.image=$name" "${argv[@]}" .) \
-      >"/srv/ossbot/logs/build-$name.log" 2>&1 || { tail -n 40 "/srv/ossbot/logs/build-$name.log" >&2; die "docker build $name failed (log /srv/ossbot/logs/build-$name.log)"; }
-    mark_changed "built $tag"
+      -f "$dockerfile" -t "$tag" --label "ossbot.inputs=$hash" --label "ossbot.image=$name" "${argv[@]}" .
+      echo "$?" >"$blog.rc") 2>&1 |
+      tee "$blog" | {
+        grep --line-buffered -E '^#[0-9]+ (\[[^]]*\] |DONE |CACHED|ERROR)' |
+          while IFS= read -r line; do log "  $name ${line:0:150}"; done
+        true
+      }
+    rc=$(cat "$blog.rc" 2>/dev/null || echo 1)
+    rm -f "$blog.rc"
+    if [[ $rc -ne 0 ]]; then
+      tail -n 40 "$blog" >&2
+      die "docker build $name failed (log $blog)"
+    fi
+    mark_changed "built $tag in $((SECONDS - started)) s"
   fi
   OSSBOT_IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$tag")
+  OSSBOT_IMAGE_TAG=$tag
   # Older input tags of this image are superseded (an image still used by a container stays).
   local old
   for old in $(docker images --format '{{.Repository}}:{{.Tag}}' "ossbot/$name" | grep -vx "$tag" || true); do
@@ -91,10 +105,13 @@ step_images() {
   llm_args=$(kiro_llm_build_args | paste -sd' ' -)
   proxy_args="--build-arg SQUID_VERSION=$(lock_get squid.apt_version)"
 
-  local full llm proxy
-  _build sandbox-full sandbox/images/full/Dockerfile "$full_args" \
-    src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py sandbox/entrypoints sandbox/fixtures \
-    sandbox/images/full/code-requirements.txt
+  local full llm proxy base
+  # The toolchains (rarely changed) and the thin top with our scripts (FEAT-007: a script change
+  # rebuilds only the top; the base tag also survives a build-cache prune).
+  _build sandbox-full-base sandbox/images/full-base/Dockerfile "$full_args" sandbox/images/full/code-requirements.txt
+  base=$OSSBOT_IMAGE_TAG
+  _build sandbox-full sandbox/images/full/Dockerfile "--build-arg BASE=$base" \
+    src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py sandbox/entrypoints sandbox/fixtures
   full=$OSSBOT_IMAGE_ID
   _build sandbox-llm sandbox/images/llm/Dockerfile "$llm_args" \
     src/ossbot/sandbox_tools/exec_mcp.py sandbox/entrypoints sandbox/kiro .kiro/agents prompts sandbox/probes
