@@ -1,21 +1,14 @@
 {
-  "verdict": "CHANGES_REQUESTED",
+  "verdict": "APPROVED",
   "feat": "FEAT-006",
-  "round": 4,
+  "round": 5,
   "findings": [
     {
-      "id": "F006-R4-1",
-      "severity": "MEDIUM",
-      "title": "A GitHub outage holds the scheduler tick for a whole discovery cycle (about 48 min, no dispatch)",
-      "detail": "Scheduler.tick runs discovery synchronously and calls _dispatch only after it returns. discover.run catches GitHubReadError per target and moves on to the next target, and since 58f5742 GitHubRead._get sleeps 2+8+30 s before raising github_unavailable. With about 72 discovery-enabled targets, an API outage (5xx) or a proxy that stays down holds the tick for about 48 min per cycle. In that time no new stage is dispatched: Start work (fetch), Continue (package), vet/scout and watch all wait. Running stages in pool threads are unaffected. ossctl targets verify (verify_targets.verify) loops over the same reader and takes as long. The precondition was seen live: the round-2 runner journal at 2026-10-19 06:03:04 has discover_read_failed ConnectError for every target within tens of milliseconds. Fix: end the discovery cycle on github_unavailable (re-raise as a Deferred; Scheduler.discover keeps pending_discover or clears last_discovery and sets discover_after, e.g. 15 min), keeping github_http_<status> per target. Alternatively, add a short fail-fast breaker in GitHubRead after one exhausted retry, which also bounds targets verify. Test: three targets on a refusing transport, total sleeps <= 40 s, and a PROPOSAL_APPROVED item dispatched in the same tick.",
-      "files": ["src/ossbot/runner/stages/discover.py", "src/ossbot/runner/scheduler.py", "src/ossbot/runner/github_read.py", "src/ossbot/runner/verify_targets.py", "tests/unit/runner/test_github_read.py"]
-    },
-    {
-      "id": "F006-R4-2",
+      "id": "F006-R5-1",
       "severity": "NIT",
-      "title": "origin/main was advanced by a push during round 3",
-      "detail": "git reflog show origin/main has 'update by push' to 1981308 at 2026-10-19 08:47:10 +07, after the round-3 fix commits (07:09) and before d4e0a14 (08:49). There are at least 25 such updates since 2026-10-18 15:46. The round-3 review's 'nothing was pushed' compared main with origin/main only. The remote is the owner's own repo, history was not rewritten, and this is not a product GitHub write, but hard rule 7 forbids steps from pushing. Confirm that the pushes come from the owner or the parent session and not from a build step.",
-      "files": []
+      "title": "Cut-short discovery cycles reset the per-cycle budget",
+      "detail": "Scheduler.discover(None) clears self.refused and starts created = [] against discovery.proposals_per_cycle on every full cycle. A cycle ended by discover.GitHubUnavailable (72bb704) or GitHubRateLimited (round 3) sets last_discovery back to None, so it re-runs 15 min later (or after the reset) as a new full cycle with a fresh budget. If the cut came in the open-PR search loop after sc.gk.create succeeded for some candidates, those come back as 409 but candidates ranked below them can still be created up to the full budget, so an outage that keeps coming and going can create more DISCOVERED items per interval_hours than DESIGN 9.5b's per-cycle pacing intends. proposal.max_per_day (scout_hold_until) still caps the owner-facing cards. Fix: carry created/refused of a cut cycle into its re-run, or document that the budget is per attempt; test that a cycle that created one item then hit github_unavailable creates at most budget - 1 on the re-run.",
+      "files": ["src/ossbot/runner/scheduler.py", "src/ossbot/runner/stages/discover.py", "tests/unit/runner/test_github_read.py"]
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-006.md"
