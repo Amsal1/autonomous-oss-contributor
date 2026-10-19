@@ -43,6 +43,7 @@ IMAGE_FILE_MAX = 5 * 1024 * 1024  # the vision input cap for image documents (ph
 TEXT_MIMES = {"text/plain", "text/markdown", "text/csv", "application/json", "text/x-python", "application/x-yaml",
               "text/yaml", "text/html", "application/xml", "text/xml"}  # fmt: skip
 TEXT_SUFFIXES = {".txt", ".md", ".csv", ".json", ".py", ".yaml", ".yml", ".log", ".toml", ".ini", ".xml", ".html"}
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif", ".gif"}  # when no MIME type came along
 SAFE_NAME = re.compile(r"[^A-Za-z0-9._-]+")
 ATTACHMENT_ID_RE = re.compile(r"^a_[0-9a-f]{16}$")
 
@@ -70,7 +71,7 @@ def classify(mime: str | None, name: str | None, *, is_photo: bool = False, is_v
     suffix = Path(name or "").suffix.lower()
     if is_voice or mime.startswith("audio/"):
         return "audio"
-    if is_photo or mime.startswith("image/"):
+    if is_photo or mime.startswith("image/") or (not mime and suffix in IMAGE_SUFFIXES):
         return "image"
     if mime == "application/pdf" or suffix == ".pdf":
         return "pdf"

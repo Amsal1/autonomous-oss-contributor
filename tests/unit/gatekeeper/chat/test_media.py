@@ -27,6 +27,8 @@ MB = 1024 * 1024
     ("mime", "name", "kw", "kind"),
     [
         ("image/jpeg", "a.jpg", {}, "image"),
+        (None, "meal.JPG", {}, "image"),  # a selftest fixture: no MIME type, the suffix decides
+        (None, "scan.heic", {}, "image"),
         (None, None, {"is_photo": True}, "image"),
         ("audio/ogg", "v.oga", {}, "audio"),
         (None, None, {"is_voice": True}, "audio"),
