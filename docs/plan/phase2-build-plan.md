@@ -384,3 +384,8 @@ Add `github/github-mcp-server` as a read-only GitHub tool for **scout**, **self-
    - **Prefer** the existing helpers: `scripts/*.ps1`, `ossctl`, `.ossbot-local/*.sh`.
    - **Reviewers:** follow the same rule when re-running checks.
 7. **Forbidden shell shapes** (enforced by `.kiro/hooks/guard-shell.json` → `scripts/dev/guard-shell.ps1`): here-strings (`@'`, `@"`), `@py…`, `python -c`/`py -c`, base64 or `-EncodedCommand` payloads, `Invoke-Expression`/`iex`, and `$(...)`. Write code with the file tool into `.ossbot-local/` or `scripts/dev/`, then run it by path. If you see "Blocked by guard-shell", rewrite the command that way; never work around the guard.
+8. **Test runs must never hang silently.**
+   - Every pytest run uses a per-test timeout, `--timeout=120` from pytest-timeout. Add it as a dev dependency and set a default in pyproject `[tool.pytest.ini_options]`, with `timeout_method = "thread"` so a hang dumps every thread's stack.
+   - Run long suites in the background and write output to a log file under `.ossbot-local/logs/`, then tail that log. Never pipe a whole suite through `Select-Object -Last N`, because that hides all progress until the run exits.
+   - Use `-x --durations=15` while iterating.
+   - Lint (ruff check plus ruff format) runs and is fixed BEFORE tests; if lint fails, fix it first.
