@@ -9,11 +9,11 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from ossbot.common import probe_result
 from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
-from ossbot.ctl import hermes_probe
 from ossbot.gatekeeper import db, policy, proposals, secret_scan
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
@@ -332,7 +332,7 @@ def chat_runtime(ctx: AppContext, tier: Callable[[], HermesTier]) -> ChatRuntime
         ctx.anomaly.report(Signal.HERMES_TOOL_SURFACE, detail[:300])
 
     def probe_doc() -> Mapping[str, Any] | None:
-        return hermes_probe.read_result(probe_path)
+        return probe_result.read_result(probe_path)
 
     gate = RelayGate(flags=ctx.control.flags, lifecycle=lifecycle, probe_doc=probe_doc, surface=surface, tier=tier,
                      on_surface_kill=surface_kill)  # fmt: skip

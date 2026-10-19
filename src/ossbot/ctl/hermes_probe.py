@@ -35,13 +35,15 @@ import re
 import stat
 import subprocess
 import sys
-import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Literal
+
+# the reader half lives in ossbot.common (stdlib only), so the gatekeeper never imports this module
+from ossbot.common.probe_result import MAX_AGE_S, RESULT_PATH, read_result, relay_open  # noqa: F401 (re-export)
 
 VENDOR_ROOT = Path("/opt/ossbot/app/vendor/hermes-kiro-provider")
 HERMES_HOME = Path("/home/hermes")
@@ -55,10 +57,8 @@ AGENT_FILE = HERMES_HOME / ".kiro/agents/ossbot-chat.json"
 PERMISSIONS_FILE = HERMES_HOME / ".kiro/settings/permissions.yaml"
 SETTINGS_FILE = HERMES_HOME / ".kiro/settings/cli.json"
 HERMES_ENV = Path("/etc/ossbot/secrets/hermes.env")
-RESULT_PATH = Path("/var/lib/ossbot/probes/hermes-kiro.json")
 UPGRADE_LOCK = Path("/run/ossbot/hermes-upgrade.lock")
 MODELS_FILE = Path("/mnt/d/Work/autonomous-oss-contributor/config/models.yaml")
-MAX_AGE_S = 2 * 3600
 SESSION_TIMEOUT_S = 90.0
 SKIP_NAMES = frozenset({"__pycache__"})
 FORBIDDEN_KINDS = frozenset({"read", "edit", "delete", "move", "execute"})
@@ -300,32 +300,6 @@ def evaluate(
 # ------------------------------------------------------------------------------ result
 def now_iso() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def read_result(path: Path = RESULT_PATH) -> dict[str, Any] | None:
-    try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
-    except OSError:
-        return None
-    with os.fdopen(fd, "rb") as fh:
-        data = fh.read(65536)
-    try:
-        doc = json.loads(data)
-    except ValueError:
-        return None
-    return doc if isinstance(doc, dict) else None
-
-
-def relay_open(doc: Mapping[str, Any] | None, *, now: float | None = None, max_age_s: int = MAX_AGE_S) -> bool:
-    """The relay gate on the probe file: ``passed: true`` and ``checked_at`` younger than 2 h."""
-    if not doc or doc.get("passed") is not True or not isinstance(doc.get("checked_at"), str):
-        return False
-    try:
-        checked = datetime.strptime(doc["checked_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC).timestamp()
-    except ValueError:
-        return False
-    age = (time.time() if now is None else now) - checked
-    return -300 <= age < max_age_s
 
 
 def write_result(doc: Mapping[str, Any], path: Path = RESULT_PATH, *, group: str = "gatekeeper") -> None:

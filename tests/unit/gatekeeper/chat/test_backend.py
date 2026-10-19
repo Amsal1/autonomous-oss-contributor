@@ -153,6 +153,43 @@ async def test_ask_uses_the_deltas_when_completed_has_no_text(ctx: AppContext) -
     assert out.answer == "only deltas"
 
 
+async def test_ask_keeps_at_most_max_answer_of_the_deltas(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hermes_api, "MAX_ANSWER", 10)
+    deltas = [sse("response.output_text.delta", {"type": "response.output_text.delta", "delta": "abcd"})] * 5
+    out = await service(ctx, FakeHermesApi(events=deltas)).ask([], "tg-1-1")  # no response.completed
+    assert out.answer == "abcdabcdab" and out.streamed_deltas == 5
+
+
+async def _chunks(*parts: bytes) -> Any:
+    for part in parts:
+        yield part
+
+
+async def _lines(*parts: bytes, limit: int = 1024) -> list[str]:
+    return [line async for line in hermes_api.bounded_lines(_chunks(*parts), limit)]
+
+
+async def test_bounded_lines_split_every_line_ending_across_chunks() -> None:
+    assert await _lines(b"a\nb\r\nc\rd", b"") == ["a", "b", "c", "d"]
+    assert await _lines(b"event: x\r", b"\ndata: y\n\n") == ["event: x", "data: y", ""]
+    assert await _lines(b"da", b"ta: \xc3", b"\xa9\n") == ["data: \u00e9"]
+
+
+async def test_bounded_lines_refuse_an_unterminated_line_before_buffering_it_all() -> None:
+    sent = 0
+
+    async def endless() -> Any:
+        nonlocal sent
+        while True:
+            sent += 1
+            yield b"x" * 1000
+
+    with pytest.raises(HermesError, match="size limit"):
+        async for _ in hermes_api.bounded_lines(endless(), 4096):
+            pass
+    assert sent == 5  # stopped at the first chunk past the limit
+
+
 async def test_failed_event_marks_the_turn_failed(ctx: AppContext) -> None:
     events = [sse("response.failed", {"type": "response.failed", "response": {"error": {"message": "model down"}}})]
     out = await service(ctx, FakeHermesApi(events=events)).ask([], "tg-1-1")

@@ -18,14 +18,14 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from ossbot.common import probe_result
 from ossbot.common.models import requested
-from ossbot.ctl import hermes_probe
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 from ossbot.gatekeeper.chat import media
 from ossbot.gatekeeper.chat.backend import RelayClosed
-from ossbot.gatekeeper.chat.code_jobs import CODE_MAX, FILES_IN_MAX, TIMEOUT_MAX_S, CodeRefused
+from ossbot.gatekeeper.chat.code_jobs import CODE_MAX, FILES_IN_MAX, TIMEOUT_MAX_S, CodeRefused, attachment_note
 from ossbot.gatekeeper.chat.code_jobs import JOB_ID_RE as CODE_JOB_ID_RE
 from ossbot.gatekeeper.chat.pdf_jobs import JOB_ID_RE
 
@@ -79,8 +79,7 @@ async def selftest(
                 return JSONResponse(status_code=400, content={"error": "attachment_refused", "reason": exc.reason,
                                                               "reply": exc.reply})  # fmt: skip
             attachment_id = c.chat.media.put("selftest", body.fixture, prepared.data)
-            note = (f"The attached file {body.fixture} has attachment id {attachment_id}; ossbot_request_sandbox_job"
-                    " can read it from /io/input.")  # fmt: skip
+            note = attachment_note(attachment_id, body.fixture)
             parts += [*prepared.parts, {"type": "input_text", "text": note}]
             attachment = {"kind": prepared.kind, "bytes": len(prepared.data), "metadata_removed": prepared.removed,
                           "id": attachment_id}  # fmt: skip
@@ -108,7 +107,7 @@ async def selftest(
             text = outcome.answer if len(outcome.answer) <= NOTIFY_MAX else outcome.answer[:NOTIFY_MAX] + "…"
             c.notify(f"🤖 Assistant · selftest\n\n{text}")
             delivered = True
-        probe = hermes_probe.read_result(c.chat.probe_path) or {}
+        probe = probe_result.read_result(c.chat.probe_path) or {}
         key_doc = probe.get("key")
         key: dict[str, Any] = key_doc if isinstance(key_doc, dict) else {}
         result = {

@@ -75,10 +75,23 @@ class CodeJob:
     result: dict[str, Any] = field(default_factory=dict)
 
 
-def input_name(index: int, name: str) -> str:
-    """A stage-in input name (``^[a-z0-9_.-]{1,64}$``) for an attachment."""
+def input_name(attachment_id: str, name: str) -> str:
+    """A stage-in input name (``^[a-z0-9_.-]{1,64}$``) for an attachment: ``<id>-<safe name>``, so the
+    path is known before the code is written, whatever the order of ``files``."""
     base = safe_name(name, "file").lower().replace("..", ".")
-    return f"{index}-{base}"[:64]
+    return f"{attachment_id}-{base}"[:64]
+
+
+def input_path(attachment_id: str, name: str) -> str:
+    """Where ``run_code`` finds an attachment passed in ``files`` (the note Hermes gets with it)."""
+    return f"/io/input/{input_name(attachment_id, name)}"
+
+
+def attachment_note(attachment_id: str, name: str) -> str:
+    """The text part that goes with a kept attachment, so Hermes can hand it to a code job."""
+    return (f"The attached file {safe_name(name, 'file')} has attachment id {attachment_id}. To process it with"
+            f" ossbot_request_sandbox_job, pass {attachment_id} in files; the program then reads it at"
+            f" {input_path(attachment_id, name)}.")  # fmt: skip
 
 
 class CodeJobs:
@@ -130,11 +143,11 @@ class CodeJobs:
         if sum(1 for j in self._jobs.values() if j.status == "queued") >= MAX_QUEUED:
             raise CodeRefused(429, "queue_full")
         files: list[tuple[str, bytes]] = []
-        for i, attachment_id in enumerate(attachment_ids, 1):
+        for attachment_id in attachment_ids:
             got = self.media.get(attachment_id)
             if got is None:
                 raise CodeRefused(404, f"attachment_not_found: {attachment_id[:20]}")
-            files.append((input_name(i, got[0]), got[1]))
+            files.append((input_name(attachment_id, got[0]), got[1]))
         if sum(len(d) for _, d in files) > INPUTS_MAX:
             raise CodeRefused(413, "inputs_too_large")
         job = CodeJob(f"k_{secrets.token_hex(8)}", language, code, files, timeout_s, self._now())

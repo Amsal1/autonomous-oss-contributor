@@ -4,7 +4,7 @@ Every turn passes ``RelayGate.check`` first. The relay is open only when:
 
 1. ossbot is neither killed nor paused, and the workers are not draining or down;
 2. the root Hermes-side Kiro probe passed less than 2 h ago (``/var/lib/ossbot/probes/hermes-kiro.json``,
-   ``hermes_probe.relay_open``);
+   ``ossbot.common.probe_result.relay_open``);
 3. Hermes' tool surface (``GET /v1/toolsets``) is within the tier's allowlist. Drift or an unverifiable
    answer soft-kills ``hermes_tool_surface``; refused or timed out only closes the relay. An ``ok`` is
    reused for ``SURFACE_TTL_S``.
@@ -25,9 +25,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from ossbot.common import probe_result
 from ossbot.common.config import AttachmentKind, AttachmentsPolicy
 from ossbot.common.control_flags import FlagState, HermesTier
-from ossbot.ctl import hermes_probe
 from ossbot.gatekeeper.chat import hermes_api, media
 from ossbot.gatekeeper.chat.code_jobs import CodeJobs
 from ossbot.gatekeeper.chat.hermes_api import Event, HermesClient, HermesError, HermesUnavailable
@@ -92,7 +92,7 @@ class RelayGate:
             return GateResult(False, "paused")
         if self._lifecycle() is not None:
             return GateResult(False, "workers_down")
-        if not hermes_probe.relay_open(self._probe_doc(), now=self._now()):
+        if not probe_result.relay_open(self._probe_doc(), now=self._now()):
             return GateResult(False, "probe_pending")
         return None
 
@@ -183,13 +183,19 @@ class ChatService:
         turn_id = self.turns.start(session_key, user_message_id, origin=origin, had_attachments=had_attachments)
         started = self._mono()
         deltas: list[str] = []
+        kept = 0  # characters kept from the deltas; the answer is bounded by hermes_api.MAX_ANSWER
+        streamed = 0
         tools: list[str] = []
         final: str | None = None
         response_id = ""
         try:
             async for event in self.backend.stream(parts, session_key, request_role=request_role):
                 if event.kind == "delta":
-                    deltas.append(event.text)
+                    streamed += 1
+                    if kept < hermes_api.MAX_ANSWER:
+                        piece = event.text[: hermes_api.MAX_ANSWER - kept]
+                        deltas.append(piece)
+                        kept += len(piece)
                 elif event.kind == "tool" and event.tool:
                     tools.append(event.tool)
                 elif event.kind == "completed":
@@ -206,7 +212,7 @@ class ChatService:
         answer = final if final else "".join(deltas)
         stored = self.turns.done(turn_id, answer, model=model_label, tools=tools, run_id=response_id or None)
         return TurnOutcome(turn_id, "done", stored, tools, self._mono() - started, response_id,
-                           streamed_deltas=len(deltas))  # fmt: skip
+                           streamed_deltas=streamed)  # fmt: skip
 
 
 @dataclass

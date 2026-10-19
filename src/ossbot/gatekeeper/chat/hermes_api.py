@@ -89,6 +89,29 @@ def final_text(response: dict[str, Any]) -> str:
     return "".join(out)[:MAX_ANSWER]
 
 
+async def bounded_lines(chunks: AsyncIterator[bytes], limit: int) -> AsyncIterator[str]:
+    """SSE lines (``\\n``, ``\\r\\n`` or ``\\r`` endings) from a byte stream; a line still unterminated after
+    ``limit`` bytes raises, so a peer can never make the gatekeeper buffer more than that."""
+    buf = b""
+    async for chunk in chunks:
+        buf += chunk
+        while True:
+            cut = min((i for i in (buf.find(b"\n"), buf.find(b"\r")) if i >= 0), default=-1)
+            if cut < 0:
+                break
+            skip = 1
+            if buf[cut] == 0x0D:  # \r
+                if cut + 1 == len(buf):
+                    break  # may be the first half of \r\n: wait for the next chunk
+                skip = 2 if buf[cut + 1] == 0x0A else 1
+            line, buf = buf[:cut], buf[cut + skip :]
+            yield line.decode("utf-8", "replace")
+        if len(buf) > limit:
+            raise HermesError("SSE line over the size limit")
+    if buf:
+        yield buf.rstrip(b"\r").decode("utf-8", "replace")
+
+
 class HermesClient:
     def __init__(self, api_key: str, base_url: str = DEFAULT_URL, *, transport: httpx.AsyncBaseTransport | None = None,
                  timeout: float = 900.0) -> None:  # fmt: skip
@@ -129,7 +152,7 @@ class HermesClient:
     async def _events(resp: httpx.Response) -> AsyncIterator[Event]:
         name, size = "", 0
         data: list[str] = []
-        async for line in resp.aiter_lines():
+        async for line in bounded_lines(resp.aiter_bytes(), MAX_EVENT):
             if line.startswith(":"):
                 continue  # keepalive comment
             if not line:

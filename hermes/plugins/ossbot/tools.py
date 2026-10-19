@@ -268,8 +268,10 @@ TOOLS: list[tuple[dict[str, Any], Any]] = [
         _schema(
             "ossbot_request_sandbox_job",
             "Run a short python or bash program in an offline sandbox (no network, 120 s, Pillow/numpy/pandas)"
-            " and get its stdout, stderr and result files. The owner's attachments (ids a_...) are in"
-            " $OSSBOT_INPUT_DIR (/io/input, read-only); write result files to $OSSBOT_OUTPUT_DIR (max 5, 10 MB).",
+            " and get its stdout, stderr and result files. Pass the owner's attachment ids (a_...) in files;"
+            " each one is then at /io/input/<id>-<file name> (read-only; the note with the attachment gives the"
+            " exact path, os.listdir('/io/input') shows them all). Write result files to $OSSBOT_OUTPUT_DIR"
+            " (max 5, 10 MB). Call it once per program and wait for its result.",
             {
                 "kind": {"type": "string", "enum": ["code"]},
                 "language": {"type": "string", "enum": ["python", "bash"]},

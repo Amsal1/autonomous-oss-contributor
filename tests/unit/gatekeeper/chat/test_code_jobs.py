@@ -12,7 +12,7 @@ import pytest
 
 from ossbot.common.control_flags import HermesTier
 from ossbot.gatekeeper.chat import code_jobs
-from ossbot.gatekeeper.chat.code_jobs import CodeJobs, CodeRefused
+from ossbot.gatekeeper.chat.code_jobs import CodeJobs, CodeRefused, input_path
 from ossbot.gatekeeper.chat.media import MediaStore
 from ossbot.gatekeeper.context import AppContext
 from tests.conftest import UID_OPERATOR, UID_REQUESTER, UID_WORKER, write_flag
@@ -55,7 +55,9 @@ def test_submit_claim_finish(rig: Rig) -> None:
     claimed = rig.jobs.claim()
     assert claimed is not None and claimed["kind"] == "code" and claimed["source"] == "main.py"
     assert base64.b64decode(claimed["code_b64"]) == b"print(1)" and claimed["timeout_s"] == 30
-    assert claimed["files"] == [{"name": "1-photo_1.jpg", "b64": base64.b64encode(b"\xff\xd8jpeg").decode()}]
+    name = f"{att}-photo_1.jpg"  # the id first: the path is known before the code is written
+    assert claimed["files"] == [{"name": name, "b64": base64.b64encode(b"\xff\xd8jpeg").decode()}]
+    assert input_path(att, "Photo 1.JPG") == f"/io/input/{name}"
     rig.run_dir("code-r1", OK, {"stdout.txt": b"1\n", "stderr.txt": b"", "out-plot.png": b"\x89PNG..."})
     assert rig.jobs.finish(job.id, run_id="code-r1", ok=True, error=None)
     view = rig.jobs.view(job)
