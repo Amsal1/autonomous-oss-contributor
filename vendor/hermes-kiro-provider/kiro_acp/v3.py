@@ -43,10 +43,20 @@ log = logging.getLogger("kiro_acp.v3")
 DEFAULT_TIMEOUT_S = 900.0
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=\s]+)$", re.DOTALL)
-_PREAMBLE = (
-    "You are the language model behind the Hermes assistant, reached over ACP.",
-    "If an action needs one of the Hermes tools listed below, output the call as a <tool_call>{...}</tool_call> "
-    "block with JSON exactly in OpenAI function-call shape, and nothing else for that step.",
+_PREAMBLE = ("You are the language model behind the Hermes assistant, reached over ACP.",)
+# only when Hermes offered tools in this completion (an auxiliary call such as a title offers none)
+_TOOL_PREAMBLE = (
+    "The Hermes tools listed below are not in your own tool list, but they are real and available now: Hermes "
+    "runs them on the host when your answer contains a call block, and the result comes back in the next message.",
+    'To use one, output only <tool_call>{"id": "<new unique id>", "type": "function", "function": {"name": '
+    '"<tool name>", "arguments": {<the arguments as a JSON object>}}}</tool_call> blocks for that step and stop'
+    ' there; never write a tool result yourself. Escape quotes and newlines inside JSON strings (\\" and \\n).',
+)
+# Hermes' own contract asks for arguments as a JSON *string*; double-encoded program text is where models
+# break the JSON, so the provider asks for an object (both parsers accept one).
+_HERMES_STRING_ARGS = "arguments must be a JSON string."
+_OBJECT_ARGS = "arguments is a JSON object."
+_PREAMBLE_TAIL = (
     "You may use your own web_search and web_fetch tools for current information; cite the URLs you used.",
     "If no tool is needed, answer normally.",
 )
@@ -275,7 +285,10 @@ def latest_images(messages: Sequence[Any]) -> list[tuple[str, str]]:
 
 
 def format_prompt(messages: Sequence[Any], tools: Any, tool_choice: Any, bridge: Any) -> str:
-    sections = [*_PREAMBLE, *(bridge.render_tool_bridge_sections(tools, tool_choice) if bridge is not None else [])]
+    offered = tool_names(tools) if bridge is not None else []
+    bridged = bridge.render_tool_bridge_sections(tools, tool_choice) if bridge is not None else []
+    sections = [*_PREAMBLE, *(_TOOL_PREAMBLE if offered else ()), *_PREAMBLE_TAIL,
+                *(str(s).replace(_HERMES_STRING_ARGS, _OBJECT_ARGS) for s in bridged)]  # fmt: skip
     transcript: list[str] = []
     for message in messages:
         if not isinstance(message, dict):
@@ -288,6 +301,8 @@ def format_prompt(messages: Sequence[Any], tools: Any, tool_choice: Any, bridge:
             transcript.append(f"{_ROLE_LABELS.get(role, 'Context')}:\n{text}")
     if transcript:
         sections.append("Conversation transcript:\n\n" + "\n\n".join(transcript))
+    if offered:  # recency: the tool list is far above a long transcript
+        sections.append("Hermes tools you can call now with a <tool_call> block: " + ", ".join(offered) + ".")
     sections.append("Continue the conversation from the latest user request.")
     return "\n\n".join(s.strip() for s in sections if s and str(s).strip())
 
@@ -296,6 +311,113 @@ def _hermes_bridge() -> Any:
     from agent import acp_openai_bridge  # Hermes in-tree helpers (text rendering only)
 
     return acp_openai_bridge
+
+
+def tool_names(tools: Any) -> list[str]:
+    """Names of the OpenAI-shape tool definitions Hermes offered (malformed entries are skipped)."""
+    names: list[str] = []
+    for tool in tools if isinstance(tools, list) else []:
+        fn = tool.get("function") if isinstance(tool, dict) else None
+        name = fn.get("name") if isinstance(fn, dict) else None
+        if isinstance(name, str) and name.strip():
+            names.append(name.strip())
+    return names
+
+
+_TOOL_CALL_OPEN = re.compile(r"<tool_call>\s*", re.IGNORECASE)
+
+
+def _tool_call(bridge: Any, call_id: str, name: str, arguments: str) -> Any:
+    build = getattr(bridge, "build_openai_tool_call", None)
+    if callable(build):
+        return build(call_id=call_id, name=name, arguments=arguments)
+    return SimpleNamespace(id=call_id, type="function", function=SimpleNamespace(name=name, arguments=arguments))
+
+
+def _lenient_call(obj: Any, offered: set[str]) -> tuple[str, str, str | None] | str:
+    """``(name, arguments json, id)`` from the shapes models write besides the OpenAI one:
+    ``{"name", "arguments"|"parameters"|"input"}`` or ``{"function": {...}}`` with object arguments,
+    else the reason it was refused (``shape``, ``unoffered``, ``args``). Only a tool Hermes offered in
+    this completion is accepted."""
+    if not isinstance(obj, dict):
+        return "shape"
+    inner = obj.get("function")
+    fn: dict[str, Any] = inner if isinstance(inner, dict) else obj
+    name = fn.get("name")
+    if not isinstance(name, str) or not name.strip():
+        return "shape"
+    if name.strip() not in offered:
+        return "unoffered"
+    args: Any = {}
+    for key in ("arguments", "parameters", "input", "args"):
+        if key in fn:
+            args = fn[key]
+            break
+    if isinstance(args, str):
+        try:
+            args = json.loads(args, strict=False) if args.strip() else {}
+        except ValueError:
+            return "args"
+    if not isinstance(args, dict):
+        return "args"
+    call_id = obj.get("id")
+    return name.strip(), json.dumps(args, ensure_ascii=False), call_id if isinstance(call_id, str) and call_id else None
+
+
+@dataclass
+class ToolExtraction:
+    calls: list[Any]
+    cleaned: str
+    blocks: int  # ``<tool_call>`` openings in the answer
+    rejected: dict[str, int] = field(default_factory=dict)  # lenient-pass refusals by reason (metadata only)
+
+
+def extract_tool_calls(bridge: Any, text: str, offered: Sequence[str]) -> ToolExtraction:
+    """Hermes' parser first; when it found nothing although the answer holds ``<tool_call>`` blocks, a
+    lenient pass for the other common shapes (offered tools only). When calls were found in blocks, the
+    message text is what came before the first block: models sometimes go on to invent the tool results."""
+    text = text or ""
+    first = _TOOL_CALL_OPEN.search(text)
+    blocks = len(_TOOL_CALL_OPEN.findall(text))
+    if bridge is None:
+        return ToolExtraction([], text, blocks)
+    calls, cleaned = bridge.extract_tool_calls_from_text(text)
+    calls = list(calls)
+    rejected: dict[str, int] = {}
+    if calls and not offered:  # e.g. a title request: no tool was offered, so no call can be honoured
+        rejected["unoffered"] = len(calls)
+        return ToolExtraction([], cleaned, blocks, rejected)
+    if not calls and first is not None and offered:
+        names = set(offered)
+        decoder = json.JSONDecoder(strict=False)  # models put raw newlines of a program inside JSON strings
+        for m in _TOOL_CALL_OPEN.finditer(text):
+            try:
+                obj, _end = decoder.raw_decode(text, m.end())
+            except json.JSONDecodeError as exc:  # the decoder's own message only, never the text
+                reason = f"json({exc.msg})"
+                rejected[reason] = rejected.get(reason, 0) + 1
+                continue
+            parsed = _lenient_call(obj, names)
+            if isinstance(parsed, str):
+                rejected[parsed] = rejected.get(parsed, 0) + 1
+                continue
+            name, arguments, call_id = parsed
+            calls.append(_tool_call(bridge, call_id or f"acp_call_{len(calls) + 1}", name, arguments))
+    if calls and first is not None:
+        cleaned = text[: first.start()].strip()
+    return ToolExtraction(calls, cleaned, blocks, rejected)
+
+
+class _Completion(SimpleNamespace):
+    """A finished completion that is also awaitable: Hermes' auxiliary async path (vision, titles)
+    awaits ``create()`` on ACP shims that opt out of its async wrapper (``HERMES_SKIP_ASYNC_WRAP``)."""
+
+    def __await__(self) -> Any:
+        return _resolved(self).__await__()
+
+
+async def _resolved(value: Any) -> Any:
+    return value
 
 
 # ----------------------------------------------------------------------------------- client
@@ -484,13 +606,17 @@ class KiroV3Client:
         # allowlisted request role picks another role of the same file.
         bridge = self._bridge if self._bridge is not None else _hermes_bridge()
         msgs = list(messages or [])
+        offered = tool_names(tools)
         text = format_prompt(msgs, tools, tool_choice, bridge)
         images = latest_images(msgs)
         result = self._turn(text, images, _timeout_s(timeout), self.request_role(model, bool(images)))
-        if bridge is not None:
-            tool_calls, cleaned = bridge.extract_tool_calls_from_text(result.text)
-        else:
-            tool_calls, cleaned = [], result.text
+        found = extract_tool_calls(bridge, result.text, offered)
+        tool_calls, cleaned = found.calls, found.cleaned
+        # metadata only: how many Hermes tools went into the prompt and how many calls came back out
+        rejected = ",".join(f"{k}:{v}" for k, v in sorted(found.rejected.items())) or "-"
+        log.info("kiro_acp tools: offered=%d bridged=%s blocks=%d parsed=%d rejected=%s names=%s",
+                 len(offered), bridge is not None and bool(offered), found.blocks, len(tool_calls), rejected,
+                 ",".join(sorted(offered))[:400])  # fmt: skip
         message = SimpleNamespace(
             content=cleaned,
             tool_calls=tool_calls,
@@ -498,7 +624,7 @@ class KiroV3Client:
             reasoning_content=result.reasoning or None,
             reasoning_details=None,
         )
-        completion = SimpleNamespace(
+        completion = _Completion(
             choices=[SimpleNamespace(message=message, finish_reason="tool_calls" if tool_calls else "stop")],
             usage=SimpleNamespace(
                 prompt_tokens=0,
