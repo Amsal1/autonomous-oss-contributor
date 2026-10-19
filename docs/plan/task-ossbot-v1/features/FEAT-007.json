@@ -31,5 +31,5 @@
     "git -C d:\\Work\\autonomous-oss-contributor status --porcelain   # empty after the commit"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "base_commit: d2827d887952b48bdafd6808e6842a93591139bb"
 }

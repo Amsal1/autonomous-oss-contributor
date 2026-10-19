@@ -38,8 +38,9 @@ kiro_cli:
 hermes:
   tag: "v0.22.2"
   tag_object: "7b77e29eedd85a8497ce2821448dac7964dc46f6"
-  peeled_commit: "pending (FEAT-007)"
-  source: "GitHub releases API latest = v0.22.2 (2026-10-15); git/ref/tags/v0.22.2 -> annotated tag object above"
+  peeled_commit: "d923a5eb487a17c0a68801bba9ef0f56c81040a8"
+  repo: "https://github.com/NousResearch/hermes-agent.git"
+  source: "GitHub releases API latest = v0.22.2 (2026-10-15); git/ref/tags/v0.22.2 -> annotated tag object above; peeled with git rev-parse v0.22.2^{commit} on a --depth 1 clone, 2026-10-18 (FEAT-007 item 33)"
 
 base_images:
   # Index digest of ubuntu:24.04 (multi-arch); every sandbox and proxy Dockerfile pins FROM to it.

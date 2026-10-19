@@ -19,17 +19,17 @@ def test_skills_only_in_self_improve() -> None:
     assert "skills" not in hs.allowed_toolsets("research") and "skills" not in hs.allowed_toolsets("locked")
 
 
-def test_research_equals_locked_until_web_routing_is_confirmed() -> None:
-    assert hs.HERMES_WEB_VIA_PROXY is False  # PLAN item 33 flips it after the [VERIFY]
+def test_research_equals_locked_while_web_routing_is_unconfirmed(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(hs, "HERMES_WEB_VIA_PROXY", False)
     assert hs.allowed_toolsets("locked") == ("memory", "todo", "session_search", "ossbot")
     assert hs.allowed_toolsets("research") == hs.allowed_toolsets("locked")
-    assert hs.TIER_TOOLSETS["self_improve"] == (*hs.LOCKED, "skills")
+    assert hs.allowed_toolsets("self_improve") == (*hs.LOCKED, "skills")
 
 
-def test_research_adds_web_once_confirmed(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(hs, "HERMES_WEB_VIA_PROXY", True)
+def test_research_adds_web_now_that_routing_is_confirmed() -> None:
+    assert hs.HERMES_WEB_VIA_PROXY is True  # PLAN item 33 (ADR-0002 addendum FEAT-007)
     assert hs.allowed_toolsets("research") == (*hs.LOCKED, "web")
-    assert hs.allowed_toolsets("self_improve") == (*hs.LOCKED, "web", "skills")
+    assert hs.TIER_TOOLSETS["self_improve"] == (*hs.LOCKED, "web", "skills")
     assert "web" not in hs.allowed_toolsets("locked")
 
 

@@ -11,10 +11,11 @@ from __future__ import annotations
 from ossbot.common.control_flags import HermesTier
 
 LOCKED: tuple[str, ...] = ("memory", "todo", "session_search", "ossbot")  # the §15.1 allowlist
-# §15.5 [VERIFY]: Hermes-native ``web`` tools join ``research`` only once PLAN item 33 confirms that the
-# pinned Hermes routes them through HTTPS_PROXY (port 3141). Until then research == locked and the Kiro
-# session's web_search/web_fetch stay the web path.
-HERMES_WEB_VIA_PROXY = False
+# §15.5 [VERIFY], checked in PLAN item 33 (ADR-0002 addendum FEAT-007): Hermes v0.22.2 web tools use
+# HTTP clients that honour HTTPS_PROXY, and the hermes uid can reach nothing but 10.212.0.2:3141 and lo
+# (OSSBOT-OUT), so every Hermes-native web call goes through squid port 3141 or fails. ``web`` therefore
+# joins ``research`` (and ``self_improve``). The live squid-log check is PLAN item 38.
+HERMES_WEB_VIA_PROXY = True
 ALWAYS_DISABLED: tuple[str, ...] = ("terminal", "code_execution", "file", "browser", "delegation", "cronjob")
 
 
