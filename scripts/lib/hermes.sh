@@ -14,8 +14,10 @@ HERMES_PROXY_URL=http://10.212.0.2:3141
 HERMES_MANAGED=/etc/hermes
 # Extras installed from the tag's uv.lock (no lazy installs at run time: the unit sets
 # HERMES_DISABLE_LAZY_INSTALLS=1). messaging = aiohttp for the API server; exa, firecrawl and
-# parallel-web = the SDKs of the keyless web-tool vendors (research tier). No browser or computer use.
-HERMES_EXTRAS=(messaging exa firecrawl parallel-web)
+# parallel-web = the SDKs of the keyless web-tool vendors (research tier); mcp = the MCP client SDK
+# for the read-only GitHub MCP server (GHMCP-4; without it Hermes skips MCP silently). No browser or
+# computer use.
+HERMES_EXTRAS=(messaging exa firecrawl parallel-web mcp)
 OSSBOT_HERMES_QUIESCED=0
 
 # as_hermes CMD...: run as uid hermes from cwd / (root's cwd may be unreadable to hermes).

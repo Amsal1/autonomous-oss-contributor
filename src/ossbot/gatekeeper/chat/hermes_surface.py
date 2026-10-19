@@ -64,7 +64,12 @@ TOOLSET_TOOLS: dict[str, frozenset[str]] = {
 }
 PLUGIN_TOOLSET = "ossbot"
 PLUGIN_PREFIX = "ossbot_"
-GITHUB_PREFIX = "mcp_github_"  # [VERIFY] live in FEAT-007 round 3 (VERIFICATION)
+# Hermes v0.22.2 names MCP tools mcp__<server>__<tool> and adds four read-only resource/prompt helpers
+# per server (registered live, FEAT-007 round 3). Its /v1/toolsets lists no MCP toolset at v0.22.2, so
+# for Hermes the guards are the wrapper's startup check and tools.include; this check covers a future
+# version that reports it.
+GITHUB_PREFIX = "mcp__github__"
+MCP_HELPER_TOOLS = frozenset({"list_resources", "read_resource", "list_prompts", "get_prompt"})
 BRIDGE_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # §15.1: every built-in toolset outside the allowlist, listed in agent.disabled_toolsets; a tier
 # removes from it only what it adds (web for research, skills for self_improve).
@@ -77,8 +82,9 @@ BUILTIN_DISABLED: tuple[str, ...] = (
 
 
 def github_read_tool(tool: str) -> bool:
-    """A tool of the GitHub MCP toolset as Hermes names it (``mcp_github_<tool>``) within the read list."""
-    return tool.startswith(GITHUB_PREFIX) and tool[len(GITHUB_PREFIX) :] in github_mcp_tools.READ_TOOLS
+    """A tool of the GitHub MCP toolset as Hermes names it (``mcp__github__<tool>``) within the read list."""
+    name = tool[len(GITHUB_PREFIX) :] if tool.startswith(GITHUB_PREFIX) else ""
+    return name in github_mcp_tools.READ_TOOLS or name in MCP_HELPER_TOOLS
 
 
 def disabled_toolsets(tier: HermesTier) -> tuple[str, ...]:

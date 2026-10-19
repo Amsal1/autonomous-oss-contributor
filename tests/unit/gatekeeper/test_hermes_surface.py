@@ -35,16 +35,18 @@ def test_research_adds_web_now_that_routing_is_confirmed() -> None:
 
 def test_github_mcp_read_tools_pass_above_locked_and_writes_are_drift() -> None:
     """GHMCP-3/4: only the pinned read-only tools in ``mcp-github``; a write tool is drift (soft kill)."""
-    gh = {"name": "mcp-github", "enabled": True, "tools": ["mcp_github_get_me", "mcp_github_search_code"]}
+    # the names Hermes v0.22.2 registered live (mcp__<server>__<tool>, plus its resource/prompt helpers)
+    tools = ["mcp__github__get_me", "mcp__github__search_code", "mcp__github__read_resource", "mcp__github__get_prompt"]
+    gh = {"name": "mcp-github", "enabled": True, "tools": tools}
     base = [_entry("memory", ["memory"])]
     assert hs.evaluate_toolsets(_wrap([*base, gh]), "research").outcome == "ok"
     assert hs.evaluate_toolsets(_wrap([*base, gh]), "self_improve").outcome == "ok"
     assert hs.evaluate_toolsets(_wrap([*base, gh]), "locked").outcome == "drift"
-    for bad in ("mcp_github_create_pull_request", "mcp_github_push_files", "get_me", "mcp_other_get_me"):
-        res = hs.evaluate_toolsets(_wrap([*base, {**gh, "tools": [*gh["tools"], bad]}]), "research")  # type: ignore[list-item]
+    for bad in ("mcp__github__create_pull_request", "mcp__github__push_files", "get_me", "mcp__other__get_me"):
+        res = hs.evaluate_toolsets(_wrap([*base, {**gh, "tools": [*tools, bad]}]), "research")
         assert res.outcome == "drift" and bad in res.unexpected, bad
     # a GitHub-shaped tool name outside the mcp-github toolset is drift too
-    res = hs.evaluate_toolsets(_wrap([*base, _entry("memory", ["mcp_github_get_me"])]), "research")
+    res = hs.evaluate_toolsets(_wrap([*base, _entry("memory", ["mcp__github__get_me"])]), "research")
     assert res.outcome == "drift"
 
 
