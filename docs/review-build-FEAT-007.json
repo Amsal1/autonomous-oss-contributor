@@ -1,76 +1,28 @@
 {
   "verdict": "CHANGES_REQUESTED",
   "feat": "FEAT-007",
-  "round": 2,
+  "round": 3,
   "findings": [
     {
-      "id": "F007-R2-1",
-      "severity": "HIGH",
-      "title": "Food-photo vision turn fails live; item 38 acceptance criterion unmet",
-      "detail": "ossctl chat selftest --fixture fried-chicken-leg.jpg on test_vision: the provider log shows images=1 (ACP image block sent, promptCapabilities.image advertised) but the answer said it could not analyze the image and gave no estimate (VERIFICATION FEAT-007 table; FEAT findings 'STILL OPEN'). CR3-IH-4 and the FEAT acceptance criterion 'a food photo returns an estimate' are not met, and there is no key/account cause under User action needed. The cause is unproven: block shape/MIME, the test_vision model (inherits test = claude-haiku-4.5) not taking images through Kiro, or Kiro dropping images for the ossbot-chat agent. Fix: isolate with a headless kiro-cli chat --v3 image prompt on roles.vision and a check of the block against the ACP ImageContent schema; fix and pass the live check (or record a key/account cause). Until then set DES-V-30 back to partial, because 'which catalog models accept images (the vision role)' is unanswered.",
-      "files": [
-        "vendor/hermes-kiro-provider/kiro_acp/v3.py",
-        "config/models.yaml",
-        "docs/VERIFICATION.md",
-        "docs/TRACEABILITY.md"
-      ]
-    },
-    {
-      "id": "F007-R2-2",
-      "severity": "HIGH",
-      "title": "No Hermes plugin tool call reaches the gatekeeper live; Kiro text tool bridge broken",
-      "detail": "VERIFICATION: no function_call reached the gatekeeper in any live turn and the model said ossbot_request_sandbox_job was unavailable. On the live system ~hermes/.hermes/ossbot-features/ does not exist (ossbot_feature_save never ran), while doctor shows the tool surface ok with the ossbot toolset enabled, so the tools are registered but lost between Hermes and Kiro (tools empty at _create_chat_completion, render_tool_bridge_sections output, the preamble steering to web tools, or <tool_call> blocks not parsed by extract_tool_calls_from_text). Every plugin tool (status, queue, notify, pause, kill, request_discovery, feature stores, code jobs) is unreachable in production; the F007-R1-2 fix is proven only hermetically. CR2-3f and CR2-7i read done on hermetic evidence. Fix: add a metadata-only provider log (tool definitions received, bridge sections rendered, tool_call blocks parsed), fix the bridge, pass one live plugin call and the live image code job, and keep CR2-3f/CR2-7i partial until then.",
-      "files": [
-        "vendor/hermes-kiro-provider/kiro_acp/v3.py",
-        "hermes/plugins/ossbot/tools.py",
-        "docs/TRACEABILITY.md",
-        "docs/VERIFICATION.md"
-      ]
-    },
-    {
-      "id": "F007-R2-3",
+      "id": "F007-R3-1",
       "severity": "MEDIUM",
-      "title": "GHMCP-1..4 (read-only GitHub MCP server) still not started",
-      "detail": "Carried from F007-R1-6. TRACEABILITY GHMCP-1..4 are still missing / not started. The owner decision of 2026-10-19 ('keep it simple') is recorded in the FEAT findings: pinned github-mcp-server v2.0.2 binary, 'stdio --read-only --toolsets repos,issues,pull_requests,actions', GITHUB_PERSONAL_ACCESS_TOKEN from GITHUB_READ_TOKEN, scout/reviewer Kiro agents and Hermes, one startup check that fails closed on any non-read tool, doctor get_me == Amsal1, read-token sha256 in the output key scan. Verify at 2.32.0 that agent MCP env ${VAR} expansion needs cli.json kiroAgent.mcpApprovedEnvVars. Fix: implement as decided with the fake-listing allowlist and 'write tool listed -> fail closed' tests.",
+      "title": "Shared matrix rows left missing with no owning FEAT (DES-AC-13, CR3-AC-59, CR3-AC-67, CR3-BA-15)",
+      "detail": "The matrix check for FEAT-007 lists four rows whose phase column names only completed FEATs (FEAT-005/006/007) but whose status is still missing. DES-AC-13 leaves /model ('remain (FEAT-007/009)'); CR3-AC-59 leaves stopped_message_generation ending the stream within 2 s (build-plan item 49, FEAT-010); CR3-AC-67 leaves the next turn after /resume and the U12 409 for a crashed streaming row; CR3-BA-15 records both parts done but stays missing. None of these ids is in a FEAT-009/010 item's Rows list, so only the final gate's $f='.' check would surface them, after FEAT-009/010 closed without testing those criteria (the FEAT-005 close-out rule: no row whose phase names only a closed FEAT). Fix: set each row done where nothing remains (CR3-BA-15 looks complete); otherwise add the owning FEAT to the phase column and the row id to that item's Rows (item 49 for the Stop/U12 parts, the FEAT-009 /model item for DES-AC-13).",
       "files": [
-        "config/versions.lock.yaml",
-        "sandbox/images/llm/Dockerfile",
+        "docs/TRACEABILITY.md",
+        "docs/plan/phase2-build-plan.md"
+      ]
+    },
+    {
+      "id": "F007-R3-2",
+      "severity": "NIT",
+      "title": "Scout/reviewer GitHub MCP path never exercised live",
+      "detail": "In the sandbox-llm container the wrapper reads the token from $HOME/.ossbot/github-read-token and the server needs HTTPS_PROXY; the agents' mcpServers.github sets no env, so both depend on kiro-cli forwarding its environment to MCP children, which nothing has shown (the Hermes path sets them explicitly and passed live). A miss fails closed into a scout without GitHub tools, while GHMCP-2 reads done on hermetic evidence. Fix: add literal env values (HOME=/home/agent, the 3128 proxy URL; no ${VAR} expansion needed) to mcpServers.github in ossbot-scout/ossbot-reviewer, and run one research-profile scout or reviewer job in the Phase 2 gate.",
+      "files": [
         ".kiro/agents/ossbot-scout.json",
         ".kiro/agents/ossbot-reviewer.json",
-        "hermes/plugins/ossbot/",
-        "src/ossbot/ctl/doctor.py",
+        "sandbox/entrypoints/kiro.sh",
         "docs/TRACEABILITY.md"
-      ]
-    },
-    {
-      "id": "F007-R2-4",
-      "severity": "NIT",
-      "title": "Gatekeeper imports the root probe module ossbot.ctl.hermes_probe",
-      "detail": "gatekeeper/context.py, chat/backend.py and api/chat.py import the root ACP probe client to use read_result/relay_open. No import-linter contract bounds what the gatekeeper uses from it. Fix: move read_result/relay_open (and the result path) into ossbot.common, or add a contract.",
-      "files": [
-        "src/ossbot/gatekeeper/context.py",
-        "src/ossbot/gatekeeper/chat/backend.py",
-        "src/ossbot/gatekeeper/api/chat.py"
-      ]
-    },
-    {
-      "id": "F007-R2-5",
-      "severity": "NIT",
-      "title": "Streamed deltas and SSE lines not bounded in memory",
-      "detail": "ChatService.ask appends every response.output_text.delta and joins them when no response.completed arrives; only the stored text is capped (200 KiB), not memory, although the ADR addendum promises a 512 KiB per-answer bound. HermesClient._events checks MAX_EVENT only after aiter_lines buffered a whole line. Fix: stop accumulating at MAX_ANSWER and bound the line read.",
-      "files": [
-        "src/ossbot/gatekeeper/chat/backend.py",
-        "src/ossbot/gatekeeper/chat/hermes_api.py"
-      ]
-    },
-    {
-      "id": "F007-R2-6",
-      "severity": "NIT",
-      "title": "pytest-xdist not added (build-plan rule 9)",
-      "detail": "Rule 9 (f3ca1f8) runs the hermetic suite once per round with -n auto via pytest-xdist as a pinned dev dependency; pyproject.toml has pytest-timeout but no xdist, and the bar took 8 min 11 s serially. Fix: add pytest-xdist==<pinned>, uv lock, sync DEV/ROOTDEV.",
-      "files": [
-        "pyproject.toml",
-        "uv.lock"
       ]
     }
   ],
