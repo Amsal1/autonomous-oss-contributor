@@ -1,0 +1,78 @@
+{
+  "verdict": "CHANGES_REQUESTED",
+  "feat": "FEAT-009",
+  "round": 1,
+  "findings": [
+    {
+      "id": "F009-R1-1",
+      "severity": "HIGH",
+      "title": "Items 46, 47 and 48 are not delivered; the tree holds uncommitted item 46 work",
+      "detail": "Only items 44 (69f5e4e) and 45 (1bc77a7) are committed. git status shows 9 modified and 5 untracked files (proposal_actions.py, proposal_cards.py, rescope_cards.py, size_pickers.py, work_links.py), which are item 46 in progress with none of its tests. Item 47 (full 14.14.1 command set with pickers, notify.py priorities, quiet hours, coalescing/batching, 14.16 offline and killed states, short descriptions, stale-message rules) and item 48 (redeploy, live owner-only checks, matrix, VERIFICATION, FEAT completed) are missing. FEAT-009.json is still pending. Finish the WIP with its tests, commit it, then build items 47 and 48 per phase2-build-plan.md.",
+      "files": ["src/ossbot/gatekeeper/context.py", "src/ossbot/gatekeeper/main.py", "src/ossbot/gatekeeper/packaging.py", "src/ossbot/gatekeeper/proposal_approvals.py", "src/ossbot/gatekeeper/proposals.py", "src/ossbot/gatekeeper/telegram/commands/__init__.py", "src/ossbot/gatekeeper/telegram/commands/registry.py", "src/ossbot/gatekeeper/telegram/handlers.py", "src/ossbot/gatekeeper/telegram/keyboards.py", "src/ossbot/gatekeeper/telegram/proposal_actions.py", "src/ossbot/gatekeeper/telegram/proposal_cards.py", "src/ossbot/gatekeeper/telegram/rescope_cards.py", "src/ossbot/gatekeeper/telegram/size_pickers.py", "src/ossbot/gatekeeper/telegram/work_links.py", "docs/plan/task-ossbot-v1/features/FEAT-009.json"]
+    },
+    {
+      "id": "F009-R1-2",
+      "severity": "HIGH",
+      "title": "No TRACEABILITY or VERIFICATION update for items 44 and 45",
+      "detail": "git diff ef4657a..HEAD -- docs/TRACEABILITY.md docs/VERIFICATION.md is empty. The FEAT-009 matrix check shows 118 missing, 10 rework and 4 done (all done before this FEAT). Rows already implemented and tested are still open, e.g. DES-V-20, CR3-M1, TGRW-10, TGRW-12, TGRW-15, CR3-D4, CR3-AC-4, CR3-AC-9, CR3-AC-12, CR3-AC-14. Set the closed rows to done with evidence, record the FEAT-009 part on shared rows, update Totals and add the FEAT-009 VERIFICATION entries.",
+      "files": ["docs/TRACEABILITY.md", "docs/VERIFICATION.md"]
+    },
+    {
+      "id": "F009-R1-3",
+      "severity": "MEDIUM",
+      "title": "The interdiff view can't show past the first file or page, and its comments land on the full diff",
+      "detail": "In INTERDIFF mode, interdiff_view.view reuses explorer.file_view(subject_with_interdiff_files, 0, page). Its Prev/Next file (file_pick), file picker, pager (nav view=file) and Comment (nav view=hunk_picker) buttons all call open_file, which reloads change.patch, the full change. So file 2 of an interdiff, page 2 of a long interdiff file and the interdiff hunks can't be reached. on_view_reply runs the quote locator only for kind=='file', so quote replies on the interdiff are stored file-level against the first interdiff file. 14.11.7 requires the same comment features as a file view. test_interdiff.py uses a single-file interdiff only. Fix: carry an interdiff source flag in the nav args, locate quotes for kind interdiff in INTERDIFF mode, and add a 2-file, 2-page interdiff test.",
+      "files": ["src/ossbot/gatekeeper/telegram/review/interdiff_view.py", "src/ossbot/gatekeeper/telegram/review/explorer.py", "src/ossbot/gatekeeper/telegram/review/actions.py", "tests/telegram/test_interdiff.py"]
+    },
+    {
+      "id": "F009-R1-4",
+      "severity": "MEDIUM",
+      "title": "AC 1 budget property test doesn't cover the real view builders or rich mode",
+      "detail": "test_kit_limits.py::test_every_builder_fits_its_budget fuzzes only a synthetic card_like view and the quoted chat answer. The production builders that take untrusted text get no fuzzing: cards.render per kind, explorer_view (9 sections), file_view, interdiff_view, comments.draft_view, queue.view, dashboard, edit picker/prompts, S12. Rich rendering isn't in the property test, and AC 53 ('maximal untrusted input never reaches ViewTooLarge') isn't covered for real builders. Register every production builder with maximal untrusted fixtures, in classic and rich modes.",
+      "files": ["tests/telegram/test_kit_limits.py"]
+    },
+    {
+      "id": "F009-R1-5",
+      "severity": "MEDIUM",
+      "title": "AC 5 goldens per kind and mode, and card-level purpose checks, are missing",
+      "detail": "tests/telegram/golden holds only dashboard.html and s1_title_256.html. AC 5 requires golden S1 cards in LIVE and DRY RUN for open_pr r1 and rN with interdiff, push_update, comment, issue_claim and skill_activate. It also requires the minted purposes and single_use flags of each published card to equal the 14.18.4.1 table, and comment/issue_claim cards to lack Explore, Files and Request changes. Only the purpose function (test_card_purposes.py) and the open_pr labels are tested. Add the goldens and a per-kind test over the ui_tokens rows of a published card.",
+      "files": ["tests/telegram/test_s1_cards.py", "tests/telegram/golden/"]
+    },
+    {
+      "id": "F009-R1-6",
+      "severity": "MEDIUM",
+      "title": "The AC 11 loudness cap has no test",
+      "detail": "CardPublisher._loud enforces telegram.loud_cards_per_hour (count of card: rows with priority 1 in the last hour), loud classes 0-1, and silent re-sends and autonomous proposals. No test touches it apart from the config range check. Add a test: 4 open_pr cards in an hour, 2 ring and 2 are silent; claims and user-directed cards ring past the cap; Show card is silent; a card an hour later rings.",
+      "files": ["src/ossbot/gatekeeper/telegram/publisher.py"]
+    },
+    {
+      "id": "F009-R1-7",
+      "severity": "NIT",
+      "title": "Copy title is sliced instead of length-checked",
+      "detail": "ui/send.py emits copy_text[:COPY_TEXT_MAX]. The FEAT asks for a copy-title length check, and 14.11.2 says the stored title is copied unchanged. Omit the button over the limit instead of cutting, and assert in test_title_never_cut.py that the 256-character title's copy button carries it in full.",
+      "files": ["src/ossbot/gatekeeper/telegram/ui/send.py", "tests/telegram/test_title_never_cut.py"]
+    },
+    {
+      "id": "F009-R1-8",
+      "severity": "NIT",
+      "title": "/queue details differ from 14.11.13",
+      "detail": "The sort labels are 'Oldest'/'Priority', not 'Oldest first'/'By priority'. A maintainer-triggered push_update isn't class 0. Approvals past expires_at are listed until the sweep, but expired items shouldn't be listed.",
+      "files": ["src/ossbot/gatekeeper/telegram/review/queue.py"]
+    },
+    {
+      "id": "F009-R1-9",
+      "severity": "NIT",
+      "title": "Mockup 01 has overlapping text",
+      "detail": "The new note line at y=648 overlaps the bold 'Edit text -> picker' label at y=654. Move the Edit text block down by about 16 px.",
+      "files": ["docs/ux/01-pr-preview-card.svg"]
+    },
+    {
+      "id": "F009-R1-10",
+      "severity": "NIT",
+      "title": "ALLOWED_UPDATES doesn't request stopped_message_generation",
+      "detail": "bot.py still has ALLOWED_UPDATES = ['message', 'callback_query'], although routing rule 2 (on_raw, authorized_chat_only) was added and 14.2 lists stopped_message_generation. Add it with a polling test, or record it for FEAT-010 item 49.",
+      "files": ["src/ossbot/gatekeeper/telegram/bot.py"]
+    }
+  ],
+  "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-009.md"
+}
