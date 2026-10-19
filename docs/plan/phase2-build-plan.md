@@ -389,3 +389,11 @@ Add `github/github-mcp-server` as a read-only GitHub tool for **scout**, **self-
    - Run long suites in the background and write output to a log file under `.ossbot-local/logs/`, then tail that log. Never pipe a whole suite through `Select-Object -Last N`, because that hides all progress until the run exits.
    - Use `-x --durations=15` while iterating.
    - Lint (ruff check plus ruff format) runs and is fixed BEFORE tests; if lint fails, fix it first.
+9. **Test cadence** (user rule; replaces any "run everything after each change" habit). In each coder round:
+   1. **Code first:** implement every finding and plan item for the round. While iterating, run only the tests for the files touched (`pytest tests/unit/<area> -x -k <name>`), at seconds each.
+   2. **Hermetic suite once per round**, at the end, run in parallel: `-n auto` via pytest-xdist (add it as a dev dependency), with the rule-8 timeout and logged to a file.
+   3. **Redeploy at most once per round**, at the end, and only if deploy-affecting files changed (src/, sandbox/, scripts/provision*, config units). Otherwise skip it.
+   4. **Live, system and e2e suites:** run only the ones covering what this round changed, once. Never re-run suites unrelated to the change.
+   5. Fix what fails, re-run only the failing tests, then record evidence once in VERIFICATION.md (commit SHA, command, result) and hand off.
+   - **Reviewers:** do not re-run suites the coder already ran at the same HEAD SHA with recorded evidence. Read the evidence, spot-check at most a few targeted tests for the findings, and inspect the diff.
+   - **Full runs:** the complete suites (all system, e2e_docker, egress surface, doctor --probes, crash safety) run only in the phase2-gate and finalize steps.
