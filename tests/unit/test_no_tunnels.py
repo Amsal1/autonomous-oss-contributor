@@ -7,6 +7,8 @@ only; ``tests/system/test_no_exposure.sh`` checks the live listeners.
 
 from __future__ import annotations
 
+import functools
+import os
 import re
 from pathlib import Path
 
@@ -29,16 +31,33 @@ FORBIDDEN = {
 }
 
 
-def _files() -> list[Path]:
+SKIP_SUFFIXES = {".png", ".svg", ".lock", ".db", ".pyc", ".bundle", ".tar", ".gz", ".vhdx"}
+
+
+@functools.cache
+def _files() -> tuple[Path, ...]:
+    """One pruned walk per session: skipped directories (.wsl holds the distro disk, .git, caches) are
+    never entered, which keeps the scan of the /mnt/d drvfs mount to a few seconds."""
     out = []
-    for path in ROOT.rglob("*"):
-        rel = path.relative_to(ROOT)
-        if not path.is_file() or set(rel.parts) & SKIP_DIRS or path.resolve() in GUARDS:
+    for dirpath, dirnames, filenames in os.walk(ROOT):
+        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.endswith(".egg-info")]
+        for name in filenames:
+            path = Path(dirpath) / name
+            if path.suffix in SKIP_SUFFIXES or path.resolve() in GUARDS:
+                continue
+            out.append(path)
+    return tuple(out)
+
+
+@functools.cache
+def _texts() -> tuple[tuple[Path, str], ...]:
+    out = []
+    for path in _files():
+        try:
+            out.append((path, path.read_text(encoding="utf-8")))
+        except (UnicodeDecodeError, OSError):
             continue
-        if path.suffix in {".png", ".svg", ".lock", ".db", ".pyc", ".bundle", ".tar", ".gz"}:
-            continue
-        out.append(path)
-    return out
+    return tuple(out)
 
 
 def test_scan_covers_code_scripts_units_and_images() -> None:
@@ -52,11 +71,7 @@ def test_scan_covers_code_scripts_units_and_images() -> None:
 def test_no_tunnel_or_webhook(what: str) -> None:
     pattern = FORBIDDEN[what]
     hits = []
-    for path in _files():
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
+    for path, text in _texts():
         for n, line in enumerate(text.splitlines(), 1):
             if pattern.search(line):
                 # the dockerfilter rejects published ports: its deny corpus/rules may name them
