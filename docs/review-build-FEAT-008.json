@@ -1,49 +1,18 @@
 {
-  "verdict": "CHANGES_REQUESTED",
+  "verdict": "APPROVED",
   "feat": "FEAT-008",
-  "round": 1,
+  "round": 2,
   "findings": [
     {
-      "id": "F008-R1-1",
-      "severity": "HIGH",
-      "title": "Root backup/restore follow a symlinked ~hermes/.hermes",
-      "detail": "Layout.hermes_names() lists os.listdir(hermes_home) and item_root('hermes:<name>') = hermes_home/name; the move-aside, mkdir(parents=True) and O_NOFOLLOW open protect only the last component. ossbot-hermes.service has ReadWritePaths=/home/hermes, so the hermes uid can replace .hermes with a symlink. Confirmed by a hermetic probe: restore wrote the archive's Hermes files (evil.service, SOUL.md, config.yaml, memories/, skills/, state.db; owner hermes) into the symlink target and would move same-named files there aside; a backup with .hermes -> the secrets dir recorded hermes:gatekeeper.env in an archive marked includes_secrets false. Code execution as hermes thus becomes root writes (e.g. /etc/<name>) at the owner's next restore. Fix: refuse in backup and restore when the Hermes home (or any item root, also artifacts/<cid>, imports/<cid>, chat) is a symlink, resolves elsewhere, or is not a directory of the expected owner; re-check after Hermes is stopped; add unit tests for both directions.",
-      "files": ["src/ossbot/ctl/backup.py", "src/ossbot/ctl/restore.py", "tests/unit/ctl/test_backup.py", "tests/unit/ctl/test_restore.py"]
-    },
-    {
-      "id": "F008-R1-2",
-      "severity": "MEDIUM",
-      "title": "Backup's paused-only resume restarts the workers stopped by a workers /down",
-      "detail": "_backup_pause pauses whenever ossbot is neither paused nor killed, including during a workers-scope down. ossbot-resume --paused-only removes 'paused', exits early only while killed, and otherwise runs start_unit for gatekeeper, proxy, dockerfilter, sandboxd, runner, Hermes and the probe socket, which starts every enabled inactive unit. The weekly timer can therefore silently bring runner, Hermes and sandboxd back while the lifecycle flag still says down, contrary to DESIGN 13.5. Fix: in --paused-only mode start nothing (a pause stops no unit), or skip the worker units while a lifecycle flag exists; add a test (backup during a workers down).",
-      "files": ["scripts/bin/ossbot-resume", "tests/system/test_backup_roundtrip.sh", "tests/system/test_lifecycle.sh"]
-    },
-    {
-      "id": "F008-R1-3",
-      "severity": "MEDIUM",
-      "title": "Restore keeps going after its kill or unit stop failed",
-      "detail": "ossctl restore records kill_exit and stop_failed, then decrypts, moves the state aside and installs regardless. A gatekeeper that did not stop keeps serving the moved-aside DB while finalize_db writes killed/dry_run=1 into the new one; a kill that wrote no flag leaves the DB killed without the flag the workers and the Docker filter read (reconcile alert loop). Fail closed: refuse (nothing moved, the units restarted in killed mode) unless the killed flag exists and stop_failed is empty; add a unit test with a failing helper/systemctl.",
-      "files": ["src/ossbot/ctl/cli.py", "tests/unit/ctl/test_restore.py"]
-    },
-    {
-      "id": "F008-R1-4",
+      "id": "F008-R2-1",
       "severity": "NIT",
-      "title": "Hermes crash-safety case can SKIP while the suite passes",
-      "detail": "test_crash_safety.sh skips the Hermes mid-relay case when no chat turn starts (relay closed), yet the AC requires the case to pass. Fail when the relay should be open (tier and probe OK), or fail the run when this case was skipped.",
-      "files": ["tests/system/test_crash_safety.sh"]
-    },
-    {
-      "id": "F008-R1-5",
-      "severity": "NIT",
-      "title": "Lifecycle helper checks the request, then reads it by path",
-      "detail": "The -L/-f check and the stat/head reads in ossbot-lifecycle are separate path lookups in a gatekeeper-writable directory (only a compromised gatekeeper could race them). Rename the request into a root-only dir first (rename does not follow symlinks), then check and read the moved inode; this also makes 'always consumed' atomic.",
-      "files": ["scripts/bin/ossbot-lifecycle"]
-    },
-    {
-      "id": "F008-R1-6",
-      "severity": "NIT",
-      "title": "Format file count in VERIFICATION",
-      "detail": "The FEAT-008 close-out row says ruff format checked 350 files; DEV ruff format --check src tests reports 342 at HEAD. Correct the number.",
-      "files": ["docs/VERIFICATION.md"]
+      "title": "SQLite copies in the backup still open by path",
+      "detail": "Likely. _copy_file checks the SQLite magic through _open_exact, then sqlite3.connect(f'file:{src}?mode=ro') reopens by path and _refuse_moved(src) checks only afterwards. A hermes uid that swaps .hermes for a symlink and back during the online copy (inotify on its own home sees root's open; the swap-back keeps hermes_identity unchanged) can make root copy another root-readable SQLite DB, e.g. the gatekeeper DB, filed under a hermes: name with the hermes owner; a later restore of that archive installs it readable by hermes. Non-SQLite files have a smaller gap: _meta takes owner/mode from an lstat by path after the copy. Fix: verify that the main-DB fd sqlite opened (the new /proc/self/fd entry) has the dev/ino of the _open_exact fd (or compare dev/ino of the opened file before and after), take _meta from fstat of the verified fd, and optionally force hermes: entries to the hermes owner on restore; add a unit test for a swap during the copy.",
+      "files": [
+        "src/ossbot/ctl/backup.py",
+        "src/ossbot/ctl/restore.py",
+        "tests/unit/ctl/test_backup.py"
+      ]
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-008.md"
