@@ -1,0 +1,10 @@
+# The skill staging scan runs every minute (it reads only; new reviews become cards on the
+# gatekeeper's next housekeeping tick).
+[Unit]
+Description=ossbot skill staging scan timer
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=10s
+[Install]
+WantedBy=timers.target

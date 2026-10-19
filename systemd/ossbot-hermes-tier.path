@@ -1,0 +1,8 @@
+# Applies a Hermes capability-tier change (DESIGN §15.5): the gatekeeper writes the flag, root renders.
+[Unit]
+Description=ossbot Hermes capability tier watch
+[Path]
+PathChanged=/var/lib/ossbot/control/hermes-tier
+Unit=ossbot-hermes-tier.service
+[Install]
+WantedBy=paths.target

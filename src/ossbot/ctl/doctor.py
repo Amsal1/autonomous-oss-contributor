@@ -566,6 +566,15 @@ def check_hermes_install() -> list[Result]:
                       "cli.json, permissions.yaml, ossbot-chat agent, .env, skills/hooks root-owned",
                       "provision steps kiro-cli-hermes,hermes"))  # fmt: skip
     try:
+        from ossbot.ctl import skills_root  # noqa: PLC0415
+
+        problems = skills_root.drift()
+        out.append(Result(FAIL if problems else PASS, "hermes skills (active vs approved)",
+                          "; ".join(problems)[:300] or "every active skill matches its approval",
+                          "investigate: only root activates approved skills (§15.5)"))  # fmt: skip
+    except (OSError, ValueError) as exc:
+        out.append(Result(FAIL, "hermes skills (active vs approved)", str(exc)[:200], "provision step hermes"))
+    try:
         from ossbot.ctl.hermes_render import MANAGED_CONFIG, render, tier_from_flag  # noqa: PLC0415
 
         tier = tier_from_flag()

@@ -1,0 +1,8 @@
+# Skill activation and rejection requests the gatekeeper writes after a two-tap decision (DESIGN §15.5).
+[Unit]
+Description=ossbot skill decision requests
+[Path]
+PathExistsGlob=/var/lib/ossbot/control/skill-request-*.json
+Unit=ossbot-skills-apply.service
+[Install]
+WantedBy=paths.target

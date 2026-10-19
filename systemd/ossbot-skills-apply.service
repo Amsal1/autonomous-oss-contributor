@@ -1,0 +1,12 @@
+# Root: copy exactly the approved bytes of a staged skill into the read-only active dir, or drop a
+# rejected one, then re-scan (DESIGN §15.5; ossbot.ctl.skills_root apply). Each request file is
+# consumed whatever the outcome, so the path unit does not loop on a bad one.
+[Unit]
+Description=ossbot apply skill decisions
+ConditionPathExists=!/var/lib/ossbot/control/killed
+[Service]
+Type=oneshot
+WorkingDirectory=/
+ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.skills_root apply
+TimeoutStartSec=300
+TimeoutStopSec=150

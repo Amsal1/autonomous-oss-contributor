@@ -52,6 +52,8 @@ step_users() {
   # setgid: flags written by the gatekeeper inherit group osscontrol (runner/sandboxd read them).
   ensure_dir /var/lib/ossbot/control gatekeeper osscontrol 2750
   ensure_dir /var/lib/ossbot/probes root gatekeeper 0750
+  # skill gate (§15.5): root hasher output the gatekeeper reads; staged/ inside is root-only
+  ensure_dir /var/lib/ossbot/skills root gatekeeper 0750
   ensure_dir /var/lib/ossbot/staging root root 0700
   ensure_dir /opt/ossbot root root 0755
   ensure_dir /opt/ossbot/bin root root 0755

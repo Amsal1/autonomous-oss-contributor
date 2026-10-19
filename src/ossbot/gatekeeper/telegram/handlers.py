@@ -60,6 +60,8 @@ HANDLER_SLOW_S = 1.0
 STOP_COMMANDS = frozenset({"kill", "pause"})
 # Gate 1 decision purposes (p_ ids); the kit purposes (skip, adjust, ...) arrive with FEAT-009.
 PROPOSAL_PURPOSES = frozenset({"proposal_start", "proposal_confirm", "proposal_cancel"})
+# Skill activation (§14.15, §15.5; s_ ids): two taps; the kit card and the diff/ask views are PLAN item 47.
+SKILL_PURPOSES = frozenset({"skill_approve", "skill_confirm", "skill_cancel", "skill_reject"})
 
 
 def markup(rows: keyboards.Rows) -> InlineKeyboardMarkup:
@@ -248,6 +250,8 @@ class Handlers:
                 await self._retry(query, token, row, user_id, chat_id, message_id)
             elif purpose in PROPOSAL_PURPOSES:
                 await self._proposal(query, token, purpose, row, user_id, chat_id, message_id)
+            elif purpose in SKILL_PURPOSES:
+                await self._skill(query, token, purpose, row, user_id, chat_id, message_id)
             elif purpose in CONFIRMS:
                 with db.transaction(self.ctx.conn):
                     self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
@@ -295,6 +299,34 @@ class Handlers:
             svc.cancel(token, **tap)
             tokens = svc.rotate_card_tokens(pid)
             await self._edit(query, svc.card_view(pid).card, svc.card_rows(pid, tokens))
+        await query.answer()
+
+    async def _skill(
+        self, query: Any, token: str, purpose: str, row: Any, user_id: int, chat_id: int, message_id: int
+    ) -> None:
+        """✅ Activate -> Confirm -> root copies exactly the bound bytes; ❌ Reject drops the staged skill.
+        The binding (digest, file hashes, declared tools, tier) is recomputed at each tap and in ``consume``."""
+        svc = self.ctx.decisions.skills
+        sid = str(row["approval_id"])
+        tap = {"tg_user_id": user_id, "chat_id": chat_id, "message_id": message_id}
+        if purpose == "skill_approve":
+            arm = svc.approve(token, **tap)
+            text = f"{svc.card_view(sid).card}\n\n{b(arm.confirm_text)}"
+            await self._edit(query, text, keyboards.confirm_rows(arm.confirm_token, arm.cancel_token))
+        elif purpose == "skill_confirm":
+            svc.confirm(token, **tap)
+            self.ctx.skill_reviews.request_activation(sid, f"tg:{user_id}")
+            await self._edit(
+                query, f"{svc.card_view(sid).card}\n\n✅ {b('Activating')}: root installs the approved files."
+            )
+        elif purpose == "skill_reject":
+            svc.reject(token, **tap)
+            self.ctx.skill_reviews.request_rejection(sid, f"tg:{user_id}")
+            await self._edit(query, f"{svc.card_view(sid).card}\n\n❌ {b('Rejected')}: the staged skill is dropped.")
+        else:
+            svc.cancel(token, **tap)
+            tokens = svc.rotate_card_tokens(sid)
+            await self._edit(query, svc.card_view(sid).card, svc.card_rows(sid, tokens))
         await query.answer()
 
     async def _finish_confirm(self, query: Any, effect: Awaitable[Reply]) -> None:

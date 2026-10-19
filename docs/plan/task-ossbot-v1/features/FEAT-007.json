@@ -31,5 +31,5 @@
     "git -C d:\\Work\\autonomous-oss-contributor status --porcelain   # empty after the commit"
   ],
   "blocked_reason": null,
-  "findings": "base_commit: d2827d887952b48bdafd6808e6842a93591139bb"
+  "findings": "base_commit: d2827d887952b48bdafd6808e6842a93591139bb\nProgress (coder iteration 1): item 33 6bdb9a4 (ADR-0002 addendum, peeled commit, HERMES_WEB_VIA_PROXY=True); item 34 b595c28 (unmodified import), 80ff1d8 (kiro_acp V3 adapter + tests/acp), da6935a (upstream bundle prep: scripts/dev/kiro-provider-bundle.sh); item 35 6395c17 (Hermes install, units, probe, surface check, doctor, ossctl hermes/kiro). Live: handshake + probe pass with auth (a), two redeploys unchanged, hygiene + egress-surface green. Next: item 36 tiers + skill gate (staging = ~/.hermes/pending/skills via skills.write_approval), item 37 assistant backend, item 38 live checks, GHMCP rows."
 }

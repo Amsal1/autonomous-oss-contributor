@@ -11,7 +11,8 @@ from ossbot.gatekeeper import db
 DECISION_TABLES = {"proposal_approvals", "skill_approvals", "tg_views", "tg_thread_seq"}
 OUTBOX_COLUMNS = {"result_message_id", "bind_tokens_json", "view_json"}
 CR004_TABLES = {"runner_requests"}
-LATEST = 3
+HERMES_TABLES = {"skill_reviews", "chat_turns", "chat_sessions"}  # 0004_hermes.sql (FEAT-007)
+LATEST = 4
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -25,7 +26,7 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def test_from_empty(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "a.db")
     assert db.migrate(conn) == LATEST
-    assert _tables(conn) >= DECISION_TABLES | CR004_TABLES
+    assert _tables(conn) >= DECISION_TABLES | CR004_TABLES | HERMES_TABLES
     assert _columns(conn, "tg_outbox") >= OUTBOX_COLUMNS
     assert db.migrate(conn) == LATEST  # idempotent
 

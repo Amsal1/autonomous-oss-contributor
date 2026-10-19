@@ -1,0 +1,10 @@
+# Root hasher (DESIGN §15.5): stage every skill write Hermes queued in ~/.hermes/pending/skills as a
+# review with file hashes, declared tools and the tier (/var/lib/ossbot/skills/pending.json).
+[Unit]
+Description=ossbot skill staging scan
+[Service]
+Type=oneshot
+WorkingDirectory=/
+ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.skills_root scan
+TimeoutStartSec=300
+TimeoutStopSec=150

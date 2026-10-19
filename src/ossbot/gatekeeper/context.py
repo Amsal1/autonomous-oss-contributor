@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
+from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
 from ossbot.gatekeeper import db, policy, proposals, secret_scan
 from ossbot.gatekeeper.anchors import AnchorClient
@@ -30,6 +31,7 @@ from ossbot.gatekeeper.pollstats import PollStats
 from ossbot.gatekeeper.proposal_approvals import ProposalApprovals
 from ossbot.gatekeeper.secret_scan import SecretScanner
 from ossbot.gatekeeper.skill_approvals import SkillApprovals
+from ossbot.gatekeeper.skill_reviews import DbSkillSource, SkillReviews, render_skill_card
 from ossbot.gatekeeper.stage_runs import StageRuns
 from ossbot.gatekeeper.state_machine import StateMachine
 from ossbot.gatekeeper.telegram import cards
@@ -64,6 +66,7 @@ class AppContext:
     decisions: DecisionServices = field(default=None)  # type: ignore[assignment]  # set by build_context
     discovery_prefs: DiscoveryPrefs = field(default=None)  # type: ignore[assignment]  # set by build_context
     stage_runs: StageRuns = field(default=None)  # type: ignore[assignment]  # set by build_context
+    skill_reviews: SkillReviews = field(default=None)  # type: ignore[assignment]  # set by build_context
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
     card_recover: Callable[[], None] = field(default=lambda: None)
 
@@ -229,6 +232,9 @@ def build_context(
     def owner_chat() -> int:
         return profile().telegram.user_id
 
+    def hermes_tier() -> HermesTier:
+        return read_hermes_tier(paths.control_dir, holder["snap"].current.bundle.policy.hermes.capability_tier_default)
+
     decisions = DecisionServices(
         approvals=approvals,
         proposals=ProposalApprovals(
@@ -238,7 +244,7 @@ def build_context(
         ),
         skills=SkillApprovals(
             conn, clock, audit, approvals, lambda: limits().approval_ttl_hours, confirm_ttl, skill_refusal,
-            chat_id=owner_chat,
+            chat_id=owner_chat, renderer=lambda row: render_skill_card(conn, row), source=DbSkillSource(hermes_tier),
         ),
     )  # fmt: skip
     control = ControlService(conn, paths, clock, audit, approvals, notify, decisions=decisions)
@@ -277,6 +283,8 @@ def build_context(
         stage_runs=StageRuns(conn, clock, audit, control),
     )
     ctx_ref["ctx"] = ctx
+    ctx.skill_reviews = SkillReviews(conn, paths, clock, audit, decisions.skills, hermes_tier, owner_chat,
+                                     on_card=lambda approval_id: ctx.on_approval_created(approval_id))  # noqa: PLW0108 - late-bound: the front-end replaces it  # fmt: skip
     # BA-16: a snapshot whose secret scanner can't be built refuses the start or the /reload.
     snapshots.validators.append(lambda bundle: secret_scan.build(bundle, ctx.env))
 

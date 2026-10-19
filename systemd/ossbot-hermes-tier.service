@@ -1,0 +1,10 @@
+# Root: re-render /etc/hermes/config.yaml for the tier, restart Hermes (not while killed or paused),
+# re-run the Hermes-side probe and the surface check (DESIGN §15.5; scripts/bin/ossbot-hermes-tier).
+[Unit]
+Description=ossbot apply the Hermes capability tier
+After=ossbot-hermes.service
+[Service]
+Type=oneshot
+ExecStart=/opt/ossbot/bin/ossbot-hermes-tier
+TimeoutStartSec=900
+TimeoutStopSec=150

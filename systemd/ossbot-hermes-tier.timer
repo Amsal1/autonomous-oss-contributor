@@ -1,0 +1,11 @@
+# Backstop for ossbot-hermes-tier.path (DESIGN §15.5): a flag written while the apply was finishing
+# is not seen by the path unit; this reconciles within two minutes. Cheap when nothing changed (the
+# probe only refreshes its timestamp for an unchanged key with a pass).
+[Unit]
+Description=ossbot Hermes capability tier reconcile timer
+[Timer]
+OnBootSec=3min
+OnUnitInactiveSec=2min
+AccuracySec=15s
+[Install]
+WantedBy=timers.target

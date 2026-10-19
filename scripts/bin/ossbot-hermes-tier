@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# ossbot-hermes-tier (root; DESIGN §15.5): apply the Hermes capability tier the gatekeeper wrote to
+# /var/lib/ossbot/control/hermes-tier. Started by ossbot-hermes-tier.path -> ossbot-hermes-tier.service.
+# Re-renders /etc/hermes/config.yaml (links refused), restarts Hermes when not killed or paused, then
+# re-runs the Hermes-side Kiro probe and the /v1/toolsets surface check (python -I, root-owned code).
+set -euo pipefail
+cd /
+exec /opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.hermes_tier apply "$@"

@@ -140,6 +140,12 @@ async def housekeeping_once(ctx: AppContext) -> None:
     ctx.state_machine.sweep_expired()
     ProposalService(ctx).sweep_expired()  # CR-004: PROPOSED past proposal.ttl_hours -> PROPOSAL_EXPIRED
     prune_retention(ctx)
+    # §15.5: skills Hermes staged (root hasher's pending.json) -> skill_reviews + skill cards; root decisions back
+    if ctx.skill_reviews is not None:
+        try:
+            ctx.skill_reviews.sync()
+        except Exception:
+            log.exception("skill review import failed", extra={"event": "skill_sync_failed"})
     # delta 8: CardPublisher.recover (no-op until the Telegram front-end starts). Last and guarded, so
     # one card that fails to render cannot stop the expiry sweep on every tick.
     try:
