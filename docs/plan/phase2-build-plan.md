@@ -190,35 +190,35 @@ Depends on FEAT-005 (egress, tier control plane, decision services, redactor) an
 
 Depends on FEAT-006 and FEAT-007 (runner and Hermes units, Hermes state layout).
 
-- [ ] 39. Windows lifecycle script audit.
+- [x] 39. Windows lifecycle script audit.
       Rows: DES-FR-17 (Windows part), CR1-5a.
       What: `scripts/status.ps1` shows every CR-001 field (lifecycle, kill, dry-run, stages, approvals, outbox, last poll + reconnects, last shutdown type, task states, egress mode, Hermes tier); `down.ps1`/`up.ps1` serialize on the named mutex `Local\ossbot-lifecycle` and log to `.ossbot-local\lifecycle.log`.
       Files: `scripts/{status.ps1,down.ps1,up.ps1,lib/common.ps1}`, `src/ossbot/gatekeeper/control.py` (`lifecycle_status` fields).
       Tests: update `tests/unit/gatekeeper/test_lifecycle.py`; new `tests/system/test_lifecycle_scripts.ps1` (two concurrent `down.ps1` serialize; status shows every field).
       Verify: `DEV pytest -m unit` green; `REDEPLOY`; `powershell -NoProfile -File tests\system\test_lifecycle_scripts.ps1` green; live `down.ps1 -Timeout 10` → `status.ps1` → `up.ps1` recorded in VERIFICATION.
 
-- [ ] 40. 6a shutdown blocker.
+- [x] 40. 6a shutdown blocker.
       Rows: DES-AC-32, DES-V-31, CR1-6a.
       What: research and record `docs/adr/0021-windows-shutdown-hooks.md` (`WM_QUERYENDSESSION`, `ShutdownBlockReasonCreate/Destroy`, hidden window requirements, Fast Startup). `scripts/windows/ossbot-shutdown-blocker.ps1` (PowerShell 5.1, C# compiled at runtime from repo source, single instance, log in `.ossbot-local\`), started by the `ossbot-autostart` task, runs `down.ps1 -Kind blocker` before releasing. (Built: `down.ps1 -Timeout 90 -Caller blocker`, shutdown type `graceful` as DESIGN §13.5 names it; the caller is in `lifecycle.log`.)
       Files: `scripts/windows/ossbot-shutdown-blocker.ps1`, `scripts/windows/ShutdownBlocker.cs`, `scripts/bootstrap.ps1` (autostart action), `docs/adr/0021-windows-shutdown-hooks.md`.
       Tests: new non-destructive `tests/system/test_shutdown_blocker.ps1` (simulated `WM_QUERYENDSESSION` to its own window → `down` invoked, reason registered and destroyed). The real restart test is item 57.
       Verify: `powershell -NoProfile -File tests\system\test_shutdown_blocker.ps1` green.
 
-- [ ] 41. 6b event task, bootstrap `shutdownhooks` phase, `-Uninstall`, `-Shortcuts`.
+- [x] 41. 6b event task, bootstrap `shutdownhooks` phase, `-Uninstall`, `-Shortcuts`.
       Rows: DES-NFR-3, CR1-5d, CR1-6b, CR1-6d.
       What: Scheduled Task `ossbot-shutdown-hook` (System log, User32 event 1074 only, non-elevated, `down.ps1 -Timeout 20 -Kind hook`, PT2M limit), SpiralPool BSD-3 credit (and notice if code is adapted); `bootstrap.ps1` phase `shutdownhooks`, `-Uninstall` (removes only ossbot-* tasks, shortcuts and the documented host files), optional `-Shortcuts`; `ossctl.ps1 doctor` checks both tasks.
       Files: `scripts/{bootstrap.ps1,uninstall-host.ps1,ossctl.ps1}`, `scripts/windows/ossbot-shutdown-hook.xml` (or generated), `docs/adr/0021-windows-shutdown-hooks.md`.
       Tests: update `tests/system/test_bootstrap_zero.ps1`; new `tests/system/test_shutdown_hook_task.ps1` (`Start-ScheduledTask` runs `down` with kind `hook`; last-shutdown shows it).
       Verify: `powershell -NoProfile -File scripts\bootstrap.ps1` twice (second run only `unchanged`); `powershell -NoProfile -File tests\system\test_shutdown_hook_task.ps1` green; `scripts\ossctl.ps1 doctor` PASS for the tasks.
 
-- [ ] 42. Telegram lifecycle root helper and full-stack crash safety.
+- [x] 42. Telegram lifecycle root helper and full-stack crash safety.
       Rows: DES-AC-31, DES-AC-32, CR1-5c (root part), CR1-6c2.
       What: `scripts/bin/ossbot-lifecycle` + `systemd/ossbot-lifecycle.{path,service}` consume a gatekeeper-written request (`down` scope workers, `up`; regular file ≤ 4 KiB, ≤ 5 min old, always consumed, `up` refused while killed); `POST /v1/control/lifecycle-request` (operator now; human via Telegram in item 47). `test_crash_safety.sh` covers gatekeeper, sandboxd, dockerfilter, runner and Hermes; `test_lifecycle.sh` gains the workers-down case.
       Files: `scripts/bin/ossbot-lifecycle`, `systemd/ossbot-lifecycle.{path,service}`, `scripts/lib/services.sh`, `src/ossbot/gatekeeper/{control.py,api/control.py}`, `tests/system/{test_crash_safety.sh,test_lifecycle.sh,lib.sh}`.
       Tests: update `tests/unit/gatekeeper/test_lifecycle.py` (request file rules); the two system tests above.
       Verify: `DEV pytest -m unit` green; `REDEPLOY`; `ROOT bash tests/system/test_crash_safety.sh` and `ROOT bash tests/system/test_lifecycle.sh` green.
 
-- [ ] 43. Backup and restore, close-out FEAT-008.
+- [x] 43. Backup and restore, close-out FEAT-008.
       Rows: DES-FR-15 (tooling part), DES-NFR-10 (tooling part), DES-AC-22, DES-V-26, ADR-0016, CHAT-18.
       What: `ctl/backup.py`, `ctl/restore.py`, `scripts/{backup,restore}.ps1`, `systemd/ossbot-backup.{service,timer}` (installed disabled), age pinned in `config/versions.lock.yaml`; include list = §18.8 + Hermes state, active skills, feature stores, `config/telegram.yaml`; chat attachments excluded by default; restore leaves killed + dry-run ON and invalidates all three decision services; output under gitignored `backups/`. Then matrix, VERIFICATION, FEAT-008 `completed`, commit.
       Files: `src/ossbot/ctl/{backup.py,restore.py,cli.py}`, `scripts/{backup.ps1,restore.ps1,lib/services.sh}`, `systemd/ossbot-backup.{service,timer}`, `config/versions.lock.yaml`, `.gitignore`.
