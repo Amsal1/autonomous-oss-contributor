@@ -56,6 +56,19 @@ step_apt_base() {
     rm -rf "$tmp"
     mark_changed "gitleaks ${have:-absent} -> $want"
   fi
+
+  # age for the encrypted backups (DESIGN §18.8), same pattern: pinned release, sha256-verified.
+  want=$(lock_get age.version)
+  have=$( (/usr/local/bin/age --version 2>/dev/null || true) | tr -d 'v[:space:]')
+  if [[ $have != "$want" || ! -x /usr/local/bin/age-keygen ]]; then
+    tmp=$(mktemp -d)
+    download_verified "$(lock_get age.url)" "$(lock_get age.sha256)" "$tmp/age.tar.gz"
+    tar -xzf "$tmp/age.tar.gz" -C "$tmp" age/age age/age-keygen
+    install -o root -g root -m 0755 "$tmp/age/age" /usr/local/bin/age
+    install -o root -g root -m 0755 "$tmp/age/age-keygen" /usr/local/bin/age-keygen
+    rm -rf "$tmp"
+    mark_changed "age ${have:-absent} -> $want"
+  fi
 }
 
 step_uv() {

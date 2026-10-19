@@ -1,0 +1,16 @@
+# Weekly encrypted backup (DESIGN §18.8, ADR-0016): `ossctl backup now` as root. Run by
+# ossbot-backup.timer, which is installed disabled; `ossctl backup schedule on` enables it. Secrets
+# only with policy.yaml backup.include_secrets: true. The archive goes to <repo>/backups (gitignored),
+# encrypted to profile.backup.age_recipients; no recipient = the run fails and nothing is written.
+[Unit]
+Description=ossbot weekly encrypted backup
+After=ossbot-boot-gate.service ossbot-gatekeeper.service
+
+[Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
+Type=oneshot
+ExecStart=/opt/ossbot/app/.venv/bin/ossctl backup now
+TimeoutStartSec=3600
+Nice=10
+IOSchedulingClass=idle

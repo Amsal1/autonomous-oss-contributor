@@ -1,0 +1,12 @@
+# Weekly backup timer (DESIGN §18.8). Installed by provisioning but NOT enabled (not in
+# OSSBOT_ENABLE_UNITS): `ossctl backup schedule on|off`.
+[Unit]
+Description=ossbot weekly encrypted backup timer
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

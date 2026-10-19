@@ -17,7 +17,7 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import httpx
 import typer
@@ -95,7 +95,7 @@ def api(method: str, path: str, body: dict[str, Any] | None = None, timeout: flo
     return resp.status_code, data
 
 
-def _fail(message: str, code: int = 1) -> None:
+def _fail(message: str, code: int = 1) -> NoReturn:
     typer.echo(message, err=True)
     raise typer.Exit(code)
 
@@ -109,12 +109,13 @@ def _confirm(word: str) -> None:
         _fail("not confirmed", 1)
 
 
-def _root_helper(name: str, *args: str) -> int:
-    """Run /opt/ossbot/bin/<name> as root (directly, or via the NOPASSWD sudo rule for ossadmin)."""
+def _root_helper(name: str, *args: str, quiet: bool = False) -> int:
+    """Run /opt/ossbot/bin/<name> as root (directly, or via the NOPASSWD sudo rule for ossadmin).
+    ``quiet``: its output goes to stderr, so a command printing JSON keeps stdout clean."""
     argv = [str(BIN / name), *args]
     if os.geteuid() != 0:
         argv = ["/usr/bin/sudo", "-n", *argv]
-    return subprocess.run(argv, check=False).returncode
+    return subprocess.run(argv, check=False, stdout=sys.stderr if quiet else None).returncode
 
 
 def _show(data: Any) -> None:
@@ -957,6 +958,259 @@ def run_tests(
     if failed:
         _fail(f"failed: {', '.join(failed)}")
     typer.echo("all system tests passed")
+
+
+# ------------------------------------------------------------- backup and restore (§18.8)
+BACKUP_TIMER = "ossbot-backup.timer"
+BACKUP_PAUSE_REASON = "backup"
+BACKUP_STAGE_WAIT_S = 300.0
+# restore stops everything that holds state; the boot gate, both firewall units and the Docker filter
+# stay (they are controls, §13.1)
+RESTORE_STOP = (*WORKER_UNITS, WATCHDOG_TIMER, "ossbot-skills-scan.timer", "ossbot-hermes-tier.timer", *CORE_UNITS)
+RESTORE_START = ("ossbot-gatekeeper.service", "ossbot-proxy.service", WATCHDOG_TIMER, "ossbot-skills-scan.timer",
+                 "ossbot-hermes-tier.timer")  # fmt: skip
+
+
+def _audit_seq(paths: Paths) -> int:
+    import sqlite3  # noqa: PLC0415
+
+    conn = sqlite3.connect(f"file:{paths.db_path}?mode=ro", uri=True, timeout=10.0)
+    try:
+        return int(conn.execute("SELECT COALESCE(MAX(seq), 0) FROM audit_events").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _others_since(paths: Paths, seq: int) -> int:
+    """Pause, kill or resume events by anyone after the backup's own pause."""
+    import sqlite3  # noqa: PLC0415
+
+    conn = sqlite3.connect(f"file:{paths.db_path}?mode=ro", uri=True, timeout=10.0)
+    try:
+        return int(conn.execute(
+            "SELECT COUNT(*) FROM audit_events WHERE seq > ? AND event IN ('paused', 'killed', 'resume_requested',"
+            " 'control_reconciled', 'resumed')", (seq,)).fetchone()[0])  # fmt: skip
+    finally:
+        conn.close()
+
+
+def _audit_direct(paths: Paths, actor: str, event: str, data: dict[str, Any]) -> None:
+    """Append one audit event straight to the DB (the gatekeeper is stopped or unreachable)."""
+    from ossbot.common.clock import SystemClock  # noqa: PLC0415
+    from ossbot.ctl.restore import fix_db_owner  # noqa: PLC0415
+    from ossbot.gatekeeper import db  # noqa: PLC0415
+    from ossbot.gatekeeper.audit import AuditLog  # noqa: PLC0415
+
+    conn = db.connect(paths.db_path)
+    try:
+        with db.transaction(conn):
+            AuditLog(conn, SystemClock()).append(actor, event, data)
+    finally:
+        conn.close()
+    fix_db_owner(paths.db_path)
+
+
+def _backup_pause(paths: Paths) -> int | None:
+    """§18.8 step 1: pause (unless already paused or killed) and let running stages checkpoint.
+    Returns the audit seq right after the backup's own pause, or None when it did not pause."""
+    flags = read_flags(paths.control_dir)
+    if flags.killed is not None or flags.paused is not None:
+        return None
+    try:
+        code, data = api("POST", "/v1/control/pause", {"reason": BACKUP_PAUSE_REASON})
+    except GatekeeperDown:
+        _fail("gatekeeper unreachable and ossbot neither paused nor killed: pause or kill first (DESIGN 18.8)")
+    if code != 200:
+        _fail(f"pause refused ({code}): {data}")
+    seq = _audit_seq(paths)
+    if not _wait(lambda: _lifecycle_field("running_stages") == 0, BACKUP_STAGE_WAIT_S, step=2.0):
+        typer.echo(f"warning: stages still running after {BACKUP_STAGE_WAIT_S:.0f} s; backing up anyway", err=True)
+    return seq
+
+
+def _backup_resume(paths: Paths, seq: int) -> str:
+    """Lift the backup's own pause only: not when anyone paused, killed or resumed meanwhile. Root removes
+    only ``paused`` (``ossbot-resume --paused-only``), logged to resume.log and announced (N4)."""
+    flags = read_flags(paths.control_dir)
+    if flags.killed is not None:
+        return "left killed (a kill arrived during the backup)"
+    if flags.paused is None:
+        return "already resumed"
+    if flags.paused.reason != BACKUP_PAUSE_REASON or _others_since(paths, seq):
+        return "left paused (someone else paused, killed or resumed during the backup)"
+    rc = _root_helper("ossbot-resume", "--offline", "--via", "backup", "--actor", "ossctl-backup", "--paused-only",
+                      quiet=True)  # fmt: skip
+    return "resumed" if rc == 0 else f"resume failed (ossbot-resume exit {rc}); still paused"
+
+
+def _run_backup(include_secrets: bool, include_artifacts: bool, include_attachments: bool, out: Path | None,
+                recipients: list[str] | None) -> None:  # fmt: skip
+    from ossbot.ctl import backup as bk  # noqa: PLC0415
+
+    _require_root("backup")
+    paths = Paths.default()
+    try:
+        _, files = read_current(paths.snapshot_root)
+        bundle = parse_bundle(files)
+    except (OSError, ValueError, ConfigError) as exc:
+        _fail(f"config snapshot unreadable ({type(exc).__name__}); is ossbot provisioned?")
+    try:
+        chosen = bk.valid_recipients(recipients or bundle.profile.backup.age_recipients)
+    except bk.BackupError as exc:
+        _fail(str(exc), 2)
+    if not bk.AGE.is_file():
+        _fail(f"{bk.AGE} missing (provision step apt-base installs the pinned age)")
+    secrets = include_secrets or bundle.policy.backup.include_secrets
+    options = bk.Options(secrets, include_artifacts, include_attachments)
+    seq = _backup_pause(paths)
+    report: dict[str, Any] = {"paused_for_backup": seq is not None}
+    try:
+        result = bk.create_archive(bk.Layout(paths), options, chosen, out or paths.repo / "backups",
+                                   keep=bundle.policy.backup.keep)  # fmt: skip
+    except bk.BackupError as exc:
+        report["error"] = str(exc)
+        result = None
+    finally:
+        if seq is not None:
+            report["resume"] = _backup_resume(paths, seq)
+    if result is None:
+        _show(report)
+        _fail("backup failed; nothing written")
+    record = {"archive": result.archive.name, "sha256": result.sha256, "size": result.size, "items": result.files,
+              "includes_secrets": options.include_secrets, "includes_artifacts": options.include_artifacts,
+              "includes_attachments": options.include_attachments}  # fmt: skip
+    try:
+        code, _ = api("POST", "/v1/audit/backup-created", record)
+        report["audit"] = "recorded" if code == 200 else f"not recorded ({code})"
+    except GatekeeperDown:
+        _audit_direct(paths, "ossctl:backup", "backup_created", record)
+        report["audit"] = "recorded directly (gatekeeper down)"
+    report.update(record)
+    report.update(archive=str(result.archive), deleted=result.deleted, absent=result.manifest["absent"],
+                  skipped=result.manifest["skipped"], audit_rows=result.manifest["audit"]["rows"])  # fmt: skip
+    _show(report)
+
+
+backup_app = typer.Typer(help="encrypted backups (DESIGN §18.8): ossctl backup [now] | backup schedule on|off")
+app.add_typer(backup_app, name="backup")
+BackupSecrets = Annotated[bool, typer.Option("--include-secrets", help="also /etc/ossbot/secrets/*.env")]
+BackupArtifacts = Annotated[bool, typer.Option("--include-artifacts", help="every artifact and run log")]
+BackupAttachments = Annotated[bool, typer.Option("--include-attachments", help="the transient chat attachments")]
+BackupOut = Annotated[Path | None, typer.Option("--out", help="output dir (default: <repo>/backups)")]
+BackupRecipients = Annotated[list[str] | None, typer.Option("--recipient", help="age recipient (not the profile's)")]
+
+
+@backup_app.callback(invoke_without_command=True)
+def backup_main(
+    ctx: typer.Context, include_secrets: BackupSecrets = False, include_artifacts: BackupArtifacts = False,
+    include_attachments: BackupAttachments = False, out: BackupOut = None, recipient: BackupRecipients = None,
+) -> None:  # fmt: skip
+    """One encrypted archive of the state outside git under backups/ (root; keeps the newest 8)."""
+    if ctx.invoked_subcommand is None:
+        _run_backup(include_secrets, include_artifacts, include_attachments, out, recipient)
+
+
+@backup_app.command("now")
+def backup_now(
+    include_secrets: BackupSecrets = False, include_artifacts: BackupArtifacts = False,
+    include_attachments: BackupAttachments = False, out: BackupOut = None, recipient: BackupRecipients = None,
+) -> None:  # fmt: skip
+    """Same as `ossctl backup` (the timer runs this)."""
+    _run_backup(include_secrets, include_artifacts, include_attachments, out, recipient)
+
+
+@backup_app.command("schedule")
+def backup_schedule(state: Annotated[str, typer.Argument(help="on | off")]) -> None:
+    """Enable or disable the weekly ossbot-backup.timer (installed disabled)."""
+    _require_root("backup")
+    if state not in {"on", "off"}:
+        _fail("usage: ossctl backup schedule on|off", 2)
+    action = ["enable", "--now"] if state == "on" else ["disable", "--now"]
+    rc = subprocess.run([SYSTEMCTL, *action, BACKUP_TIMER], check=False).returncode
+    if rc != 0:
+        _fail(f"systemctl {' '.join(action)} {BACKUP_TIMER} failed ({rc})")
+    typer.echo(f"{BACKUP_TIMER}: {'enabled (weekly)' if state == 'on' else 'disabled'}")
+
+
+def _restore_confirm(yes: bool) -> None:
+    """stdin carries the identity, so the confirm reads the terminal directly (or --yes from restore.ps1,
+    which asked on Windows)."""
+    if yes:
+        return
+    try:
+        with open("/dev/tty", "r+", encoding="utf-8") as tty:
+            tty.write("Restore replaces the current state (moved aside, not deleted). Type RESTORE to confirm: ")
+            tty.flush()
+            answer = tty.readline().strip()
+    except OSError:
+        _fail("refused: restore needs a terminal to confirm (or --yes after confirming elsewhere)", 2)
+    if answer != "RESTORE":
+        _fail("not confirmed", 1)
+
+
+@app.command()
+def restore(
+    archive: Annotated[Path, typer.Argument(help="backups/ossbot-<ts>.tar.age (or a name in <repo>/backups)")],
+    identity: Annotated[str, typer.Option("--identity", help="'-': the age identity on stdin (never on disk)")] = "-",
+    yes: Annotated[bool, typer.Option("--yes", help="already confirmed (restore.ps1)")] = False,
+) -> None:
+    """Restore a backup (root): kill, decrypt, verify, move the current state aside, install, dry-run ON,
+    approvals invalidated; stays killed until /resume (DESIGN §18.8)."""
+    import shutil  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    from ossbot.ctl import backup as bk  # noqa: PLC0415
+    from ossbot.ctl import restore as rs  # noqa: PLC0415
+
+    _require_root("restore")
+    paths = Paths.default()
+    path = archive if archive.is_absolute() or archive.exists() else paths.repo / "backups" / archive
+    if not path.is_file() or not path.name.endswith(".tar.age"):
+        _fail(f"no archive at {path}", 2)
+    if identity != "-" or sys.stdin.isatty():
+        _fail("stream the age identity on stdin (--identity -; scripts\\restore.ps1 does it from Windows)", 2)
+    key = sys.stdin.buffer.read(rs.MAX_IDENTITY + 1)
+    _restore_confirm(yes)
+    layout = bk.Layout(paths)
+    actor = "ossctl:restore"
+    report: dict[str, Any] = {"archive": str(path), "sha256": bk.sha256_file(path)}
+    # 1. killed (reason restore) and every unit holding state stopped
+    report["kill_exit"] = _root_helper("ossbot-kill", "--soft", "--reason", "restore", "--actor", "ossctl-restore",
+                                       quiet=True)  # fmt: skip
+    report["stop_failed"] = _systemctl("stop", RESTORE_STOP)
+    staging = Path(tempfile.mkdtemp(prefix="ossbot-restore-", dir=bk.STAGING_PARENT))
+    try:
+        # 2. decrypt to a root-only temp dir on ext4, verify the manifest
+        tar_path = staging / "archive.tar"
+        try:
+            rs.decrypt(path, key, tar_path)
+            manifest = rs.unpack(tar_path, staging, layout)
+        except rs.RestoreError as exc:
+            report["start_failed"] = _systemctl("start", RESTORE_START)  # killed mode: /resume works again
+            _show(report)
+            _fail(f"refused, nothing installed (ossbot stays killed): {exc}")
+        del key
+        tar_path.unlink(missing_ok=True)
+        # 3. current state aside, archive installed with its owners and modes
+        aside = rs.aside_dir(layout)
+        report["moved_aside_to"] = str(aside)
+        report["moved"] = len(rs.install(manifest, staging, layout, aside))
+        report["installed"] = {"files": len(manifest["items"]), "dirs": len(manifest["dirs"]),
+                               "links": len(manifest["links"])}  # fmt: skip
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    rs.chattr("+a", paths.audit_anchors_log)
+    # 4. migrations, audit verify, approvals invalidated, dry-run ON, killed
+    db_report = rs.finalize_db(layout, actor, {"name": path.name, "sha256": report["sha256"],
+                                               "created_at": manifest.get("created_at")})  # fmt: skip
+    report["db"] = {"schema_version": db_report.schema_version, "audit_ok": db_report.audit_ok,
+                    "audit_rows": db_report.audit_rows, "audit_errors": db_report.audit_errors,
+                    "invalidated": len(db_report.invalidated)}  # fmt: skip
+    report["start_failed"] = _systemctl("start", RESTORE_START)  # the gatekeeper in killed mode for /resume
+    _show(report)
+    if not db_report.audit_ok:
+        _fail("restored, but the audit chain does not verify against the restored anchors; ossbot stays killed")
+    typer.echo("Restored. Run ossctl doctor, then /resume on Telegram.")
 
 
 def main() -> None:

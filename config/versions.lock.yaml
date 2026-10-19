@@ -96,6 +96,10 @@ tofu:
   source: "GitHub releases API latest = v1.13.1 (2026-10-01)"
 
 age:
+  # Backup encryption (DESIGN §18.8, ADR-0016); installed by the apt-base step as /usr/local/bin/age and
+  # age-keygen. `age -d -i -` reads the identity from stdin (then the archive must be a file argument),
+  # and a passphrase-protected identity file is asked for interactively (age(1) v1.3.2, DESIGN §23 item 26).
   version: "1.3.2"
-  sha256: "pending (recorded when installed, FEAT-008)"
-  source: "GitHub releases API latest = v1.3.2 (2026-08-29)"
+  url: "https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz"
+  sha256: "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
+  source: "GitHub releases API latest = v1.3.2 (2026-08-29, re-checked 2026-10-19); sha256 = release asset digest; man page doc/age.1.ronn at v1.3.2"

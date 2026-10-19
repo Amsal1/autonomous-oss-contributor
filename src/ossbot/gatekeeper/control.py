@@ -413,7 +413,8 @@ class ControlService:
         fyis: list[str] = []
         offline = 0
         with db.transaction(self.conn):
-            for entry in self._read_resume_log():
+            entries = self._read_resume_log()
+            for entry in entries:
                 offline += 1
                 self.audit.append("system", "operator_resume_offline", entry)
                 fyis.append(
@@ -423,9 +424,12 @@ class ControlService:
             row = self._row()
             flags = self.flags()
             resumed_by_enforcer = (self._resume_pending or offline > 0) and flags.running
-            if offline and flags.killed is None:
+            removes_kill = any(entry.get("paused_only") is not True for entry in entries)
+            if offline and flags.killed is None and removes_kill:
                 # An offline resume (ossbot-resume) may have removed a root-written kill flag before
                 # any reconcile saw it (P1-7): treat the resume.log line as evidence of that kill.
+                # A ``paused_only`` line (ossctl backup lifting its own pause) never removes a kill flag,
+                # so it is no such evidence (PLAN item 43).
                 gone = self._kill_invalidate("resume_log")
                 if gone:
                     self.audit.append(

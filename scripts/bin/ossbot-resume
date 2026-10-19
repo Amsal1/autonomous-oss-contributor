@@ -6,6 +6,9 @@
 #   ossbot-resume --offline --via V [--actor A] resume.ps1 / ossctl when the gatekeeper is down: append
 #                                              one JSON line to resume.log FIRST (the gatekeeper turns it
 #                                              into an audit event + Telegram FYI on its next start)
+#   ossbot-resume --offline --via backup --paused-only   ossctl backup lifting the pause it set itself:
+#                                              the log line (paused_only: true) first, then only 'paused'
+#                                              is removed; a kill flag and the marker always stay
 # Then: remove killed, paused, resume-request and the Windows marker together, and start in order
 # gatekeeper, proxy, dockerfilter, sandboxd, runner, hermes (units that do not exist are skipped).
 # Dry-run is never changed. Exit 0 done, 1 refused, 3 partial (a unit did not start).
@@ -15,7 +18,7 @@ REPO=${OSSBOT_REPO:-/mnt/d/Work/autonomous-oss-contributor}
 CONTROL=${OSSBOT_CONTROL_DIR:-/var/lib/ossbot/control}
 RESUME_LOG=${OSSBOT_RESUME_LOG:-/srv/ossbot/logs/resume.log}
 MARKER="$REPO/.ossbot-local/KILL"
-mode="" via="" actor="${SUDO_USER:-root}"
+mode="" via="" actor="${SUDO_USER:-root}" paused_only=0
 actor_uid=${SUDO_UID:-$EUID}
 while (($#)); do
   case $1 in
@@ -24,9 +27,13 @@ while (($#)); do
     --via) via=${2:-}; shift 2 ;;
     --actor) actor=${2:-}; shift 2 ;;
     --actor-uid) actor_uid=${2:-}; shift 2 ;;
-    *) echo "usage: ossbot-resume --request | --offline --via V [--actor A] [--actor-uid N]" >&2; exit 2 ;;
+    # ossctl backup lifting its own pause (DESIGN 18.8): only 'paused' is removed, never 'killed' or the
+    # Windows marker, so a kill that arrived during the backup always stays.
+    --paused-only) paused_only=1; shift ;;
+    *) echo "usage: ossbot-resume --request | --offline --via V [--actor A] [--actor-uid N] [--paused-only]" >&2; exit 2 ;;
   esac
 done
+[[ $paused_only == 0 || $mode == offline ]] || { echo "ossbot-resume: --paused-only needs --offline" >&2; exit 2; }
 [[ -n $mode ]] || { echo "usage: ossbot-resume --request | --offline --via V" >&2; exit 2; }
 [[ $EUID -eq 0 ]] || { echo "ossbot-resume: must run as root" >&2; exit 2; }
 log() { printf 'ossbot-resume: %s\n' "$*"; }
@@ -60,14 +67,22 @@ else
   [[ -e $RESUME_LOG ]] || install -o root -g root -m 0644 /dev/null "$RESUME_LOG"
   jq -cn --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg via "$via" --arg actor "$actor" \
     --argjson uid "$actor_uid" --arg killed "$(head -c 1024 "$CONTROL/killed" 2>/dev/null | jq -c . 2>/dev/null || echo null)" \
-    '{ts: $ts, event: "operator_resume_offline", via: $via, actor: $actor, actor_uid: $uid, killed: $killed}' \
+    --argjson paused_only "$( ((paused_only)) && echo true || echo false)" \
+    '{ts: $ts, event: "operator_resume_offline", via: $via, actor: $actor, actor_uid: $uid, killed: $killed}
+     + (if $paused_only then {paused_only: true} else {} end)' \
     >>"$RESUME_LOG" || { log "refused: could not append to $RESUME_LOG"; exit 1; }
 fi
 
-rm -f "$CONTROL/killed" "$CONTROL/paused" "$CONTROL/resume-request" "$MARKER"
-# Re-arm the kill path unit (RemainAfterExit) for the next kill.
-systemctl stop ossbot-enforce-kill.service >/dev/null 2>&1 || true
-log "flags and marker removed (via $via)"
+if ((paused_only)); then
+  rm -f "$CONTROL/paused"
+  log "pause removed (paused-only, via $via); a kill flag stays"
+  if [[ -e $CONTROL/killed || -L $CONTROL/killed ]]; then log "killed: no unit started"; exit 0; fi
+else
+  rm -f "$CONTROL/killed" "$CONTROL/paused" "$CONTROL/resume-request" "$MARKER"
+  # Re-arm the kill path unit (RemainAfterExit) for the next kill.
+  systemctl stop ossbot-enforce-kill.service >/dev/null 2>&1 || true
+  log "flags and marker removed (via $via)"
+fi
 
 failed=()
 start_unit() {

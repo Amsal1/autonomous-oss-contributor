@@ -65,6 +65,24 @@ def test_root_kill_paths_invalidate_all_three(ctx: AppContext, path: str) -> Non
     assert _statuses(ctx, *ids) == ("invalidated",) * 3
 
 
+def test_backup_paused_only_resume_is_no_kill_evidence(ctx: AppContext) -> None:
+    """PLAN item 43: ``ossbot-resume --paused-only`` (ossctl backup lifting its own pause) never removes a
+    kill flag, so its resume.log line does not invalidate armed approvals; a normal offline line still does."""
+    ids = _three_armed(ctx)
+    ctx.control.pause("backup", "uid:0/operator")
+    ctx.paths.paused_flag.unlink()  # what ossbot-resume --paused-only removes
+    line = {"event": "operator_resume_offline", "via": "backup", "killed": "null", "paused_only": True}
+    ctx.paths.resume_log.parent.mkdir(parents=True, exist_ok=True)
+    ctx.paths.resume_log.write_text(json.dumps(line) + "\n")
+    report = ctx.control.reconcile()
+    assert report.state == "running" and report.offline_resumes == 1
+    assert _statuses(ctx, *ids) == ("armed",) * 3
+    with ctx.paths.resume_log.open("a") as fh:
+        fh.write(json.dumps({"event": "operator_resume_offline", "via": "resume.ps1"}) + "\n")
+    ctx.control.reconcile()
+    assert _statuses(ctx, *ids) == ("invalidated",) * 3
+
+
 def test_confirmed_reload_invalidates_all_three(ctx: AppContext) -> None:
     ids = _three_armed(ctx)
     policy = ctx.paths.config_dir / "policy.yaml"
