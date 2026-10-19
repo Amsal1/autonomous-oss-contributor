@@ -106,7 +106,8 @@ if wait_for 60 streaming; then
   rm -f "$second"
 else
   wait "$st_pid"
-  skip "Hermes mid-relay case: no chat turn started (relay closed: $(head -c 120 "$first"))"
+  # the AC needs this case to pass: a closed relay (tier, probe, Hermes down) fails the run, never skips
+  fail "Hermes mid-relay case could not run: no chat turn started (relay closed? $(head -c 120 "$first"))"
 fi
 rm -f "$first" "$first.code"
 finish
