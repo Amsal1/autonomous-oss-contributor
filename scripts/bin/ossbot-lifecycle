@@ -2,7 +2,9 @@
 # ossbot-lifecycle (installed as /opt/ossbot/bin/ossbot-lifecycle; DESIGN 13.5, CR-001 5, PLAN item 42).
 # Self-contained. Run by ossbot-lifecycle.service when ossbot-lifecycle.path sees the gatekeeper write
 # /var/lib/ossbot/control/lifecycle-request (Telegram /down and /up after a confirm, FEAT-009; operator
-# POST /v1/control/lifecycle-request now). The request is always consumed, then refused unless it is a
+# POST /v1/control/lifecycle-request now). The request is always consumed first (renamed into the
+# root-only /var/lib/ossbot/lifecycle, so the checks and the read see one inode the gatekeeper can no
+# longer swap), then refused unless it is a
 # regular file (no symlink) owned by gatekeeper or root, at most 4 KiB, written within the last 5 min
 # (mtime and its ts field), scope "workers", action "down" or "up":
 #   down  ossctl down --scope workers [--timeout S]   runner, Hermes and sandboxd stop; the gatekeeper,
@@ -15,6 +17,9 @@ set -uo pipefail
 CONTROL=${OSSBOT_CONTROL_DIR:-/var/lib/ossbot/control}
 OSSCTL=${OSSBOT_OSSCTL:-/opt/ossbot/app/.venv/bin/ossctl}
 REQ="$CONTROL/lifecycle-request"
+# Root-only dir on the same filesystem as the control dir (/var/lib/ossbot is root 0755): the request
+# is renamed in first, so every check and read below sees one inode nobody else can swap.
+WORK=${OSSBOT_LIFECYCLE_WORK:-$(dirname "$CONTROL")/lifecycle}
 MAX_BYTES=4096
 MAX_AGE_S=300
 [[ $# -eq 1 && $1 == --request ]] || { echo "usage: ossbot-lifecycle --request" >&2; exit 2; }
@@ -23,20 +28,29 @@ log() { printf 'ossbot-lifecycle: %s\n' "$*"; }
 refuse() { log "refused: $*"; exit 1; }
 
 main() {
-  local owner size mtime now body action scope ts ts_s timeout
+  local owner size mtime now body action scope ts ts_s timeout req
   if [[ ! -e $REQ && ! -L $REQ ]]; then
     log "no request"
     exit 0
   fi
-  if [[ -L $REQ || ! -f $REQ ]]; then
+  if ! install -d -o root -g root -m 0700 "$WORK" || [[ -L $WORK ]] \
+     || [[ $(stat -c %u:%a "$WORK") != 0:700 || $(stat -c %d "$WORK") != "$(stat -c %d "$CONTROL")" ]]; then
     rm -rf --one-file-system "$REQ"
+    refuse "$WORK is not a root-only directory on the control dir's filesystem"
+  fi
+  req="$WORK/request"
+  rm -rf --one-file-system "$req"
+  # always consumed, whatever follows: rename(2) moves a symlink or a directory itself, never its target
+  mv -fT -- "$REQ" "$req" || { rm -rf --one-file-system "$REQ"; refuse "could not consume lifecycle-request"; }
+  if [[ -L $req || ! -f $req ]]; then
+    rm -rf --one-file-system "$req"
     refuse "lifecycle-request is not a regular file"
   fi
-  owner=$(stat -c %U "$REQ")
-  size=$(stat -c %s "$REQ")
-  mtime=$(stat -c %Y "$REQ")
-  body=$(head -c "$((MAX_BYTES + 1))" "$REQ" | tr -d '\000')
-  rm -f "$REQ"  # always consumed, whatever follows
+  owner=$(stat -c %U "$req")
+  size=$(stat -c %s "$req")
+  mtime=$(stat -c %Y "$req")
+  body=$(head -c "$((MAX_BYTES + 1))" "$req" | tr -d '\000')
+  rm -f "$req"
   [[ $owner == gatekeeper || $owner == root ]] || refuse "lifecycle-request owned by $owner"
   ((size <= MAX_BYTES)) || refuse "lifecycle-request larger than $MAX_BYTES bytes"
   now=$(date +%s)
