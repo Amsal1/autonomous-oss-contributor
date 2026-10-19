@@ -26,8 +26,16 @@ git -C "$work/up" checkout --quiet -b ossbot-change "$base"
     cp "$vendor/$f" "$work/up/$f"
   done
 
-name="Amsal Khan"
-email="md.amsalkhan@gmail.com"
+# The author identity comes from the caller's git config (git var GIT_AUTHOR_IDENT), never from this
+# file (no personal values in tracked files outside docs/); without one, no bundle is built.
+ident=$(git -C "$repo_root" var GIT_AUTHOR_IDENT 2>/dev/null || true)
+name=${ident%% <*}
+email=${ident#*<}
+email=${email%%>*}
+if [[ -z $ident || -z $name || $name == "$ident" || ! $email =~ ^[^@[:space:]]+@[^@[:space:]]+$ ]]; then
+  echo "no git author identity (git var GIT_AUTHOR_IDENT); set user.name and user.email first" >&2
+  exit 1
+fi
 title_body="$repo_root/docs/upstream/hermes-kiro-provider-v3.md"
 git -C "$work/up" add -A
 git -C "$work/up" -c user.name="$name" -c user.email="$email" commit --quiet \
