@@ -10,14 +10,15 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 
+from ossbot.common.config import all_targets
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
-from ossbot.runner import github_read
+from ossbot.runner import github_read, verify_targets
 from ossbot.runner.errors import Deferred, StageFailed
 from ossbot.runner.github_read import GitHubRateLimited, GitHubRead, GitHubReadError
 from ossbot.runner.pipeline import StageContext
-from ossbot.runner.scheduler import Scheduler
+from ossbot.runner.scheduler import DISCOVER_UNAVAILABLE_RETRY, Scheduler
 from tests.conftest import insert_contribution
 
 T0 = 1_790_000_000.0
@@ -175,3 +176,59 @@ def test_a_rate_limited_discovery_cycle_waits_for_the_reset(sc: StageContext, ct
     ctx.clock.advance(seconds=timedelta(minutes=10).total_seconds())  # type: ignore[attr-defined]
     scheduler.tick()
     assert len(seen) > 1 and scheduler.last_discovery is not None and scheduler.discover_after is None
+
+
+# ------------------------------------------- F006-R4-1: an outage costs one read's retries
+def repos_read(seen: list[str]) -> set[str]:
+    return {"/".join(p.split("/")[2:4]) for p in seen if p.startswith("/repos/")}
+
+
+def test_github_unavailable_ends_the_discovery_cycle_and_dispatch_goes_on(
+    sc: StageContext, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refusing proxy over every target (config/targets.yaml has dozens): the cycle stops after
+    the first target's retries, so the tick dispatches the owner's Start work in the same tick."""
+    assert sum(1 for t in all_targets(ctx.config.targets) if t.enabled and t.discovery) >= 3
+    sc.gh, slept, seen = reader([REFUSED], lambda: ctx.clock.now().timestamp())
+    approved = insert_contribution(ctx, State.PROPOSAL_APPROVED)
+    scheduler = ready(sc, ctx)
+    scheduler.last_discovery = None
+    ran: list[str] = []
+    monkeypatch.setattr(scheduler, "run_one", ran.append)
+    assert approved in scheduler.tick().started and ran == [approved]
+    assert sum(slept) <= 40 and len(repos_read(seen)) == 1  # one read's retries, not one per target
+    assert scheduler.last_discovery is None  # the full cycle runs again ...
+    assert scheduler.discover_after is not None
+    assert near(scheduler.discover_after, ctx.clock.now() + DISCOVER_UNAVAILABLE_RETRY)
+    reads = len(seen)
+    ctx.clock.advance(seconds=300)  # type: ignore[attr-defined]
+    scheduler.tick()
+    assert len(seen) == reads  # ... but not before the retry time
+    ctx.clock.advance(seconds=DISCOVER_UNAVAILABLE_RETRY.total_seconds())  # type: ignore[attr-defined]
+    scheduler.tick()
+    assert len(seen) > reads
+
+
+def test_a_requested_discover_cut_by_github_unavailable_is_kept(sc: StageContext, ctx: AppContext) -> None:
+    sc.gh, slept, _ = reader([status(502)], lambda: ctx.clock.now().timestamp())
+    scheduler = ready(sc, ctx)
+    assert scheduler.discover(["langfuse/langfuse", "o/r"]) == [] and sum(slept) <= 40
+    assert scheduler.pending_discover == ["langfuse/langfuse", "o/r"] and scheduler.discover_after is not None
+
+
+def test_a_plain_4xx_skips_only_that_target(sc: StageContext, ctx: AppContext) -> None:
+    sc.gh, slept, seen = reader([status(403)])  # github_http_403: per target, the cycle goes on
+    enabled = {t.repo for t in all_targets(ctx.config.targets) if t.enabled and t.discovery}
+    scheduler = ready(sc, ctx)
+    assert scheduler.discover() == [] and slept == []
+    assert repos_read(seen) == enabled and scheduler.discover_after is None
+
+
+def test_targets_verify_stops_reading_once_github_is_unavailable() -> None:
+    gh, slept, seen = reader([REFUSED])
+    rows = verify_targets.verify(gh, ["a/one", "b/two", "c/three"], 60, datetime.now(UTC))
+    assert [r["status"] for r in rows] == ["FAIL"] * 3 and sum(slept) <= 40 and repos_read(seen) == {"a/one"}
+    assert rows[0]["detail"].startswith("github_unavailable") and rows[2]["detail"] == "not checked: github_unavailable"
+    gh403, _, seen403 = reader([status(403)])  # a plain 4xx is per repo
+    verify_targets.verify(gh403, ["a/one", "b/two"], 60, datetime.now(UTC))
+    assert repos_read(seen403) == {"a/one", "b/two"}

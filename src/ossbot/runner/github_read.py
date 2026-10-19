@@ -34,6 +34,7 @@ SEARCH_GAP_S = 2.1
 RETRY_DELAYS_S = (2.0, 8.0, 30.0)  # §20: timeout / 5xx, then github_unavailable
 RATE_LIMIT_MAX_S = 3600.0  # §20: sleep until reset, at most 1 h
 RATE_LIMIT_DEFAULT_S = 60.0  # a limit answer without a usable reset or retry-after header
+UNAVAILABLE = "github_unavailable"
 
 
 class GitHubReadError(StageFailed):
@@ -42,7 +43,7 @@ class GitHubReadError(StageFailed):
 
     def __init__(self, message: str, status: int | None = None) -> None:
         unavailable = status is None or status >= 500
-        super().__init__("github_unavailable" if unavailable else f"github_http_{status}", message)
+        super().__init__(UNAVAILABLE if unavailable else f"github_http_{status}", message)
         self.status = status
 
 

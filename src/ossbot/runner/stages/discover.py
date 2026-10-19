@@ -6,6 +6,11 @@ label, drop PRs, assigned/locked issues, ``skip_labels``, stale or crowded issue
 PR; create at most ``discovery.proposals_per_cycle`` contributions. The gatekeeper applies the
 re-discovery rules (409 refusals are cached for one cycle). Reads only; nothing is posted. A cycle
 reads for minutes, so a service stop (SIGTERM), kill, pause or drain ends it between targets.
+
+A read that fails as ``github_http_<status>`` skips that target. A read that fails as
+``github_unavailable`` (its retries used up) ends the cycle with ``GitHubUnavailable``: the next
+target would wait through the same retries, and the scheduler tick that runs discovery dispatches
+no stage until the cycle returns (F006-R4-1). The scheduler runs the cycle again later.
 """
 
 from __future__ import annotations
@@ -18,13 +23,23 @@ from typing import Any
 
 from ossbot.common.config import DiscoveryFilters, all_targets
 from ossbot.runner import scoring
-from ossbot.runner.github_read import GitHubReadError
+from ossbot.runner.errors import Deferred
+from ossbot.runner.github_read import UNAVAILABLE, GitHubReadError
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.pipeline import Interrupted, StageContext
 
 log = logging.getLogger(__name__)
 STAGE = "discover"
 ACTIVE_PR_STATES = frozenset({"AWAITING_APPROVAL", "APPROVED", "SUBMITTING", "SUBMITTED", "WATCHING"})
+
+
+class GitHubUnavailable(Deferred):
+    """GitHub's API stayed unavailable through a read's retries: the cycle ends and runs again later."""
+
+
+def _end_if_unavailable(exc: GitHubReadError) -> None:
+    if exc.error_class == UNAVAILABLE:
+        raise GitHubUnavailable(str(exc)) from exc
 
 
 def issue_hash(issue: dict[str, Any]) -> str:
@@ -91,6 +106,7 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
                         language=info.get("language")))  # fmt: skip
         except GitHubReadError as exc:
             log.warning("discovery read failed for %s: %s", entry.repo, exc, extra={"event": "discover_read_failed"})
+            _end_if_unavailable(exc)
     created: list[str] = []
     budget = bundle.policy.discovery.proposals_per_cycle
     by_repo: dict[str, list[scoring.Candidate]] = {}
@@ -121,6 +137,7 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
                 refused.add(key)  # not_rediscoverable / duplicate_active: cached for this cycle
                 continue
             raise
-        except GitHubReadError:
+        except GitHubReadError as exc:
+            _end_if_unavailable(exc)
             continue
     return created

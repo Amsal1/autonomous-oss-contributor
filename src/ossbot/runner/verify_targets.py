@@ -15,17 +15,25 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ossbot.common.clock import from_iso
-from ossbot.runner.github_read import GitHubRateLimited, GitHubRead, GitHubReadError
+from ossbot.runner.github_read import UNAVAILABLE, GitHubRateLimited, GitHubRead, GitHubReadError
 
 
 def verify(gh: GitHubRead, repos: list[str], stale_days: int, now: datetime) -> list[dict[str, Any]]:
+    """One row per repo. Once a read fails as ``github_unavailable`` (its retries used up), the
+    rest are FAIL without a read, so an outage costs one read's retries, not one per target."""
     rows: list[dict[str, Any]] = []
+    unavailable: str | None = None
     for repo in repos:
         row: dict[str, Any] = {"repo": repo}
+        if unavailable is not None:
+            rows.append({**row, "status": "FAIL", "detail": f"not checked: {unavailable}"[:120]})
+            continue
         try:
             info = gh.repo(repo)
         except (GitHubReadError, GitHubRateLimited) as exc:
             rows.append({**row, "status": "FAIL", "detail": str(exc)[:120]})
+            if isinstance(exc, GitHubReadError) and exc.error_class == UNAVAILABLE:
+                unavailable = UNAVAILABLE
             continue
         if info is None:
             rows.append({**row, "status": "FAIL", "detail": "not found (or not readable with the read token)"})

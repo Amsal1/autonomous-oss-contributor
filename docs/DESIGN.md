@@ -4896,6 +4896,7 @@ Docker-, system-, and WSL-marked tests do not run in CI (they need the provision
 | Operation | Failure | Recoverable? | Caller receives | Logged |
 |---|---|---|---|---|
 | GitHub read (runner) | timeout / 5xx | yes: 3 retries 2/8/30 s | stage retry or `failed`, `error_class=github_unavailable` | WARNING per retry, ERROR final |
+| GitHub read in a discovery cycle or `ossctl targets verify` | `github_unavailable` after the retries | yes: the cycle runs again after 15 min | the cycle ends (no further target is read; stages dispatch in the same tick; a requested `ossctl discover` is kept); `targets verify` marks the remaining targets FAIL `not checked`; a `github_http_<status>` skips only its target | WARNING |
 | GitHub read | 403 rate limit | yes: sleep until reset (≤ 1 h) | stage delayed | INFO |
 | GitHub read | 404 repo/issue | no | `SKIPPED reason=not_found`; repo auto-disabled (DB override) if repo 404 | WARNING |
 | Upstream fetch (gatekeeper `/package`) | network / 5xx | yes: 3 retries | 503 to runner; runner retries package step | WARNING |

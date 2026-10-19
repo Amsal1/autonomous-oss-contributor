@@ -16,7 +16,9 @@ in a gate-owned state (a re-scout from PROPOSED or RESCOPE_REQUIRED) the item ke
 the stage is retried after 10 min, doubling up to 6 h, with one owner message, for as long as the
 item stays in that state (the owner's next decision is dispatched at once). GitHub reads retry
 network errors and 5xx themselves (``github_read``, then ``github_unavailable``); a rate limit
-delays the stage, or the discovery cycle, until the reset (§20). Interruptions
+delays the stage, or the discovery cycle, until the reset (§20). Discovery runs on the tick before
+dispatch, so ``github_unavailable`` ends the cycle (not just the target) and the cycle runs again
+after ``DISCOVER_UNAVAILABLE_RETRY``: an outage costs one read's retries, not one per target. Interruptions
 (control state, a sandbox job cut by a drain or crash, sandboxd unreachable) only end the stage
 run as ``interrupted`` and the next tick re-queues it (max 3 by the gatekeeper). On start, stage
 runs left ``running`` by a crashed runner become ``interrupted``; ``resumed`` counts them
@@ -58,6 +60,7 @@ PROBE_ROLES = ("planner", "coder")  # the agents the five probes exercise (§10.
 GATE_1 = frozenset({"PROPOSED", "RESCOPE_REQUIRED"})  # NO_FAIL states with a stage: the re-scout
 HELD_RETRY = timedelta(minutes=10)  # first retry of a stage that failed in a NO_FAIL state (re-scout)
 HELD_RETRY_MAX = timedelta(hours=6)  # doubling up to this
+DISCOVER_UNAVAILABLE_RETRY = timedelta(minutes=15)  # a cycle ended by github_unavailable runs again after this
 
 
 @dataclasses.dataclass
@@ -95,7 +98,7 @@ class Scheduler:
         self.held: dict[str, tuple[str, int, datetime]] = {}
         # cid -> (state, until): the stage met GitHub's rate limit, retried after the reset (§20)
         self.delayed: dict[str, tuple[str, datetime]] = {}
-        self.discover_after: datetime | None = None  # discovery met the rate limit: no cycle before
+        self.discover_after: datetime | None = None  # rate limit or github_unavailable: no cycle before
         self.pending_discover: list[str] | None = None  # an ossctl discover request a stop cut short
 
     # ------------------------------------------------------------------ start
@@ -262,6 +265,8 @@ class Scheduler:
                 self.pending_discover = repos  # the claimed ossctl discover request is not lost
             if isinstance(exc, GitHubRateLimited):
                 self.discover_after = datetime.fromtimestamp(exc.until, UTC)
+            elif isinstance(exc, discover.GitHubUnavailable):
+                self.discover_after = self.now() + DISCOVER_UNAVAILABLE_RETRY
             log.info("discovery interrupted: %s", exc, extra={"event": "discover_interrupted"})
             return []
         except GkError as exc:
