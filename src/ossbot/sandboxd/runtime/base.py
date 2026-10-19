@@ -29,6 +29,7 @@ class RunSpec:
     mounts: tuple[Mount, ...]
     env: tuple[tuple[str, str], ...] = ()
     key: bool = False  # --env KIRO_API_KEY (name-only, value from sandboxd's environment)
+    github_read: bool = False  # --env GITHUB_READ_TOKEN (name-only): research scout/reviewer only (GHMCP-2)
     tmp_exec: bool = False
     llm_home: bool = False
     workdir: str = "/"

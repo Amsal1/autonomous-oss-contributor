@@ -7,10 +7,10 @@
 #   TELEGRAM_BOT_TOKEN GITHUB_WRITE_TOKEN GITHUB_READ_TOKEN KIRO_API_KEY_SANDBOX KIRO_API_KEY_HERMES
 #   REVERSE_IMAGE_SEARCH_KEY (optional)
 # Files (root:<svc> 0640): gatekeeper.env (GITHUB_WRITE_TOKEN, TELEGRAM_BOT_TOKEN, HERMES_API_KEY,
-# OSSBOT_TOKEN_PEPPER, KIRO_KEY_SHA256 = sha256 of both Kiro keys, comma-separated,
+# OSSBOT_TOKEN_PEPPER, KIRO_KEY_SHA256 = sha256 of both Kiro keys and the read token, comma-separated,
 # REVERSE_IMAGE_SEARCH_KEY when set), runner.env
-# (GITHUB_READ_TOKEN), sandboxd.env (KIRO_API_KEY), hermes.env (API_SERVER_ENABLED, API_SERVER_KEY =
-# HERMES_API_KEY, KIRO_API_KEY). The seeded randoms (OSSBOT_TOKEN_PEPPER, HERMES_API_KEY) are kept.
+# (GITHUB_READ_TOKEN), sandboxd.env (KIRO_API_KEY, GITHUB_READ_TOKEN for the MCP jobs), hermes.env
+# (API_SERVER_ENABLED, API_SERVER_KEY = HERMES_API_KEY, KIRO_API_KEY, GITHUB_READ_TOKEN). The seeded randoms (OSSBOT_TOKEN_PEPPER, HERMES_API_KEY) are kept.
 # Values are never printed. Exit 0 ok, 1 validation error, 2 usage.
 set -uo pipefail
 
@@ -94,12 +94,16 @@ apply() {
   ris=${NEW[REVERSE_IMAGE_SEARCH_KEY]:-$(env_get "$gk" REVERSE_IMAGE_SEARCH_KEY)}
   [[ -n $ksb ]] && hashes=$(sha "$ksb")
   [[ -n $khe ]] && hashes=${hashes:+$hashes,}$(sha "$khe")
+  # GHMCP-2: the read token reaches the MCP jobs and Hermes, so a leak of it is caught like a Kiro key
+  [[ -n $read ]] && hashes=${hashes:+$hashes,}$(sha "$read")
   write_env "$gk" gatekeeper "GITHUB_WRITE_TOKEN=$write" "TELEGRAM_BOT_TOKEN=$telegram" \
     "HERMES_API_KEY=$hkey" "OSSBOT_TOKEN_PEPPER=$pepper" "KIRO_KEY_SHA256=$hashes" \
     "REVERSE_IMAGE_SEARCH_KEY=$ris"
   write_env "$d/runner.env" ossrunner "GITHUB_READ_TOKEN=$read"
-  write_env "$d/sandboxd.env" ossbox "KIRO_API_KEY=$ksb"
-  write_env "$d/hermes.env" hermes "API_SERVER_ENABLED=true" "API_SERVER_KEY=$hkey" "KIRO_API_KEY=$khe"
+  # GHMCP-2/4: the read-only GitHub MCP server of the scout/reviewer jobs and of Hermes
+  write_env "$d/sandboxd.env" ossbox "KIRO_API_KEY=$ksb" "GITHUB_READ_TOKEN=$read"
+  write_env "$d/hermes.env" hermes "API_SERVER_ENABLED=true" "API_SERVER_KEY=$hkey" "KIRO_API_KEY=$khe" \
+    "GITHUB_READ_TOKEN=$read"
   local key set=()
   for key in "${KEYS[@]}"; do [[ -n ${NEW[$key]:-} ]] && set+=("$key"); done
   log "written (${set[*]:-no new values}; seeded randoms preserved)"
@@ -142,9 +146,11 @@ selftest() {
   done
   check "pepper preserved" '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" OSSBOT_TOKEN_PEPPER) == seeded-pepper ]]'
   check "hermes key preserved" '[[ $(env_get "$SECRETS_DIR/hermes.env" API_SERVER_KEY) == seeded-hermes ]]'
-  check "KIRO_KEY_SHA256 lists both keys" \
-    '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" KIRO_KEY_SHA256) == "$(sha ksk_fake_sandbox_0123456789),$(sha ksk_fake_hermes_0123456789)" ]]'
+  check "KIRO_KEY_SHA256 lists both keys and the read token" \
+    '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" KIRO_KEY_SHA256) == "$(sha ksk_fake_sandbox_0123456789),$(sha ksk_fake_hermes_0123456789),$(sha github_pat_FAKE_FAKE_FAKE_FAKE_FAKE)" ]]'
   check "runner holds only the read token" '[[ $(cut -d= -f1 "$SECRETS_DIR/runner.env") == GITHUB_READ_TOKEN ]]'
+  check "sandboxd and hermes get the read token, never the write token" \
+    '[[ $(env_get "$SECRETS_DIR/sandboxd.env" GITHUB_READ_TOKEN) == github_pat_FAKE_FAKE_FAKE_FAKE_FAKE && $(env_get "$SECRETS_DIR/hermes.env" GITHUB_READ_TOKEN) == github_pat_FAKE_FAKE_FAKE_FAKE_FAKE && -z $(env_get "$SECRETS_DIR/sandboxd.env" GITHUB_WRITE_TOKEN) && -z $(env_get "$SECRETS_DIR/hermes.env" GITHUB_WRITE_TOKEN) ]]'
   # Empty values keep what is there.
   NEW=([GITHUB_WRITE_TOKEN]='')
   apply >/dev/null

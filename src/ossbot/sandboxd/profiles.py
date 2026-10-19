@@ -12,6 +12,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from ossbot.common import github_mcp_tools
 from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort
 from ossbot.common.schemas import BASE_REF_RE, SHA1_RE
 
@@ -113,11 +114,12 @@ PROFILE_MAX_TIMEOUT: dict[str, int] = {
     "extract": 300, "code": CODE_MAX_TIMEOUT_S + 60,
 }  # fmt: skip
 # Fixed per role, never caller-supplied (§15.3). [VERIFY §23 item 5: exact V3 internal tool ids]
+_GITHUB_READ = ",".join(github_mcp_tools.kiro_tool_ids())  # GHMCP-2: the read-only GitHub MCP tools
 TRUST_TOOLS: dict[str, str] = {
     "vetter": "read,web_search,web_fetch",
-    "scout": "read,web_search,web_fetch",  # shallow snapshot ro + web per egress mode (§9.5a)
+    "scout": f"read,web_search,web_fetch,{_GITHUB_READ}",  # shallow snapshot ro + web per egress mode (§9.5a)
     "planner": "read,web_search,web_fetch",
-    "reviewer": "read,web_search,web_fetch",
+    "reviewer": f"read,web_search,web_fetch,{_GITHUB_READ}",
     "summarizer": "read",
     "coder": "@ossbot-exec/read_file,@ossbot-exec/write_file,@ossbot-exec/list_dir,@ossbot-exec/run",
 }

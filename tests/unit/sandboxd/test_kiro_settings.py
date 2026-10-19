@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ossbot.common.github_mcp_tools import MCP_ROLES, READ_TOOLS, kiro_tool_ids
 from ossbot.common.yamlio import safe_load
 from ossbot.sandboxd.probes import SETTINGS_REQUIRED, agent_configs_hash, settings_hash
 
@@ -23,6 +24,8 @@ NINE = {
     "toolSearch.enabled": False,  # §23 item 5 N8: no Tool Search bridge (ADR-0005 addendum, FEAT-006)
 }
 DENY_SYS = ["/proc/**", "/sys/**", "/dev/**", "/run/**", "/etc/**", "/home/agent/.kiro/**", "/io/output/**"]
+# scout/reviewer also never read the read-token file kiro.sh writes for ossbot-github-mcp (GHMCP-2)
+DENY_SYS_MCP = [*DENY_SYS[:6], "/home/agent/.ossbot/**", DENY_SYS[6]]
 
 
 def test_cli_json_has_exactly_the_nine_keys() -> None:
@@ -65,6 +68,11 @@ def test_llm_image_bakes_these_files_and_kiro_only_there() -> None:
     for marker in ("KIRO_CLI", "/opt/kiro-cli", "kiro.sh", "list_models.sh", "kiro/settings", "exec_mcp"):
         assert marker not in full, marker
     assert "KIRO_CLI_SHA256" in llm
+    # GHMCP-1: the pinned, sha256-verified GitHub MCP server and its wrapper in sandbox-llm only
+    assert "GITHUB_MCP_SHA256" in llm and "sha256sum -c" in llm and "/opt/ossbot/bin/ossbot-github-mcp" in llm
+    assert "github-mcp-server" not in full and "github_mcp" not in full
+    lock = safe_load((ROOT / "config" / "versions.lock.yaml").read_bytes())["github_mcp_server"]
+    assert lock["version"] == "2.0.2" and len(lock["sha256"]) == 64 and lock["url"].startswith("https://github.com/")
 
 
 def test_agents_match_the_fixed_trust_tools() -> None:
@@ -81,19 +89,28 @@ def test_agents_match_the_fixed_trust_tools() -> None:
         assert doc["name"] == f"ossbot-{role}" and f"prompts/{role}.md" in doc["prompt"]
         assert "file://" not in doc["prompt"]
         assert doc["tools"] == doc["allowedTools"] == trusted.split(",")
-        assert doc["toolsSettings"]["read"]["deniedPaths"] == DENY_SYS
+        deny = DENY_SYS_MCP if role in MCP_ROLES else DENY_SYS
+        assert doc["toolsSettings"]["read"]["deniedPaths"] == deny
         assert (ROOT / "prompts" / f"{role}.md").is_file()
         # universal format (V3 engine, kiro-cli 2.32 `agent upgrade`): the same denials as V3 rules,
         # and no catch-all read allow (reads stay limited to the allowed paths)
         rules = doc["permissions"]["rules"]
-        assert {"capability": "fs_read", "match": DENY_SYS, "effect": "deny"} in rules
+        assert {"capability": "fs_read", "match": deny, "effect": "deny"} in rules
         assert not [r for r in rules if r.get("effect") == "allow" and "match" not in r
                     and r.get("capability") in {"fs_read", "fs_write", "shell"}]  # fmt: skip
         if role == "coder":
             assert set(doc["mcpServers"]) == {"ossbot-exec"}
             assert not {"read", "write", "shell", "glob", "grep", "web_search", "web_fetch"} & set(doc["tools"])
+        elif role in MCP_ROLES:
+            # GHMCP-2: only the read-only GitHub server, through the wrapper, exactly its read tools
+            assert doc["mcpServers"] == {"github": {"command": "/opt/ossbot/bin/ossbot-github-mcp", "args": []}}
+            assert [t for t in doc["tools"] if t.startswith("@")] == kiro_tool_ids()
+            mcp = [r for r in rules if r.get("capability") == "mcp"]
+            assert mcp == [{"capability": "mcp", "match": [f"github/{t}" for t in READ_TOOLS], "effect": "allow"}]
+            assert "shell" not in doc["tools"]
         else:
             assert "mcpServers" not in doc and "shell" not in doc["tools"]
+            assert not [t for t in doc["tools"] if t.startswith("@")]
 
 
 def test_chat_agent_has_only_the_web_tools() -> None:

@@ -45,6 +45,19 @@ RUN --network=none mkdir -p /tmp/bake /opt/kiro-cli/engine/kas \
  && chown -R 0:0 /opt/kiro-cli/engine && chmod -R a+rX,go-w /opt/kiro-cli/engine \
  && rm -rf /tmp/bake /tmp/bake.log
 
+# github-mcp-server (read-only GitHub tools for scout and self-review, GHMCP-1): the pinned release
+# binary, sha256-verified, root-owned 0755; only ever started through ossbot-github-mcp (fixed flags).
+ARG GITHUB_MCP_VERSION=2.0.2
+ARG GITHUB_MCP_URL=https://github.com/github/github-mcp-server/releases/download/v2.0.2/github-mcp-server_Linux_x86_64.tar.gz
+ARG GITHUB_MCP_SHA256=815e27d931c796af0c97f24fd211e14f8a4607d4528377719a5ad2352086b0b0
+RUN curl -fsSL -o /tmp/ghmcp.tar.gz "${GITHUB_MCP_URL}" \
+ && echo "${GITHUB_MCP_SHA256}  /tmp/ghmcp.tar.gz" | sha256sum -c - \
+ && mkdir -p /tmp/ghmcp /opt/ossbot/bin \
+ && tar -xzf /tmp/ghmcp.tar.gz -C /tmp/ghmcp github-mcp-server \
+ && install -o 0 -g 0 -m 0755 /tmp/ghmcp/github-mcp-server /opt/ossbot/bin/github-mcp-server \
+ && rm -rf /tmp/ghmcp /tmp/ghmcp.tar.gz \
+ && /opt/ossbot/bin/github-mcp-server --version | grep -F "${GITHUB_MCP_VERSION}"
+
 RUN groupadd -g 10001 agent \
  && useradd -u 10001 -g 10001 -d /home/agent -s /bin/bash -M agent \
  && install -d -o 10001 -g 10001 -m 0700 /work /work/repo /io/output /run/exec /snap /home/agent \
@@ -52,6 +65,7 @@ RUN groupadd -g 10001 agent \
       /opt/ossbot/kiro/agents /opt/ossbot/kiro/settings /opt/ossbot/prompts /opt/ossbot/probes
 
 COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/exec_mcp.py /opt/ossbot/bin/ossbot-exec-mcp
+COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/github_mcp.py /opt/ossbot/bin/ossbot-github-mcp
 COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/kiro.sh sandbox/entrypoints/list_models.sh \
      sandbox/entrypoints/probe.sh /opt/ossbot/entrypoints/
 COPY --chown=0:0 --chmod=0444 sandbox/kiro/settings/cli.json sandbox/kiro/settings/permissions.yaml \

@@ -42,6 +42,14 @@ hermes:
   repo: "https://github.com/NousResearch/hermes-agent.git"
   source: "GitHub releases API latest = v0.22.2 (2026-10-15); git/ref/tags/v0.22.2 -> annotated tag object above; peeled with git rev-parse v0.22.2^{commit} on a --depth 1 clone, 2026-10-18 (FEAT-007 item 33)"
 
+github_mcp_server:
+  # Read-only GitHub MCP server for scout, self-review and Hermes (plan addition, GHMCP-1). Wrapped by
+  # /opt/ossbot/bin/ossbot-github-mcp (fixed --read-only flags + the fail-closed startup check).
+  version: "2.0.2"
+  url: "https://github.com/github/github-mcp-server/releases/download/v2.0.2/github-mcp-server_Linux_x86_64.tar.gz"
+  sha256: "815e27d931c796af0c97f24fd211e14f8a4607d4528377719a5ad2352086b0b0"
+  source: "GitHub release v2.0.2 (2026-10-08, immutable, tag commit eb47a99 signed); sha256 = release API asset digest (phase2-build-plan addition)"
+
 base_images:
   # Index digest of ubuntu:24.04 (multi-arch); every sandbox and proxy Dockerfile pins FROM to it.
   ubuntu_24_04: "sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac"

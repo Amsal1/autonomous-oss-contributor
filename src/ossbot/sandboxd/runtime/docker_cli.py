@@ -33,6 +33,9 @@ class DockerCliRuntime:
         key = os.environ.get("KIRO_API_KEY")
         if key:
             self._env["KIRO_API_KEY"] = key  # only consumed by the name-only --env KIRO_API_KEY
+        read = os.environ.get("GITHUB_READ_TOKEN")
+        if read:
+            self._env["GITHUB_READ_TOKEN"] = read  # only the name-only --env of scout/reviewer jobs (GHMCP-2)
 
     def _run(self, args: list[str], *, data: bytes | None = None, timeout: int | None = None) -> bytes:
         try:

@@ -134,9 +134,11 @@ def _proxy_log() -> str:
 
 def main() -> int:
     key = os.environ.get("KIRO_API_KEY") or ""
+    read_token = os.environ.get("GITHUB_READ_TOKEN") or ""  # scout/reviewer MCP jobs only (GHMCP-2)
     redactor = Redactor()
-    if key:
-        redactor.add_secret(key)
+    for value in (key, read_token):
+        if value:
+            redactor.add_secret(value)
     setup_logging("sandboxd", redactor)
     if not key:
         log.warning("no KIRO_API_KEY: Kiro and catalog jobs will fail (awaiting secret)")
@@ -148,7 +150,7 @@ def main() -> int:
     jobs = JobService(
         store=store, runtime=runtime, pins=lambda: load_image_pins(DEFAULT_LOCK_COPY),
         catalog=CatalogCache(gatekeeper.catalog, clock), gatekeeper=gatekeeper,
-        scanner=KeyScanner([key] if key else []), clock=clock,
+        scanner=KeyScanner([k for k in (key, read_token) if k]), clock=clock,  # MCP outputs too (GHMCP-2)
         settings=Settings(
             artifacts_dir=paths.artifacts_dir, logs_dir=paths.logs_dir, staging_dir=paths.srv / "sandboxd" / "staging",
             control_dir=paths.control_dir, input_roots=(paths.srv / "runner", paths.artifacts_dir),

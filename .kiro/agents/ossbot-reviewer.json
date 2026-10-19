@@ -2,15 +2,73 @@
   "name": "ossbot-reviewer",
   "description": "Self-reviews the change: style, scope, tests that exercise it; read-only snapshot.",
   "prompt": "You are the ossbot reviewer. The user message carries the shared rules, your role prompt (prompts/reviewer.md) and the task; follow them exactly.",
+  "mcpServers": {
+    "github": {
+      "command": "/opt/ossbot/bin/ossbot-github-mcp",
+      "args": []
+    }
+  },
   "tools": [
     "read",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "@github/actions_get",
+    "@github/actions_list",
+    "@github/get_commit",
+    "@github/get_file_contents",
+    "@github/get_job_logs",
+    "@github/get_label",
+    "@github/get_latest_release",
+    "@github/get_me",
+    "@github/get_release_by_tag",
+    "@github/get_tag",
+    "@github/issue_read",
+    "@github/list_branches",
+    "@github/list_commits",
+    "@github/list_issue_fields",
+    "@github/list_issue_types",
+    "@github/list_issues",
+    "@github/list_pull_requests",
+    "@github/list_releases",
+    "@github/list_repository_collaborators",
+    "@github/list_tags",
+    "@github/pull_request_read",
+    "@github/search_code",
+    "@github/search_commits",
+    "@github/search_issues",
+    "@github/search_pull_requests",
+    "@github/search_repositories"
   ],
   "allowedTools": [
     "read",
     "web_search",
-    "web_fetch"
+    "web_fetch",
+    "@github/actions_get",
+    "@github/actions_list",
+    "@github/get_commit",
+    "@github/get_file_contents",
+    "@github/get_job_logs",
+    "@github/get_label",
+    "@github/get_latest_release",
+    "@github/get_me",
+    "@github/get_release_by_tag",
+    "@github/get_tag",
+    "@github/issue_read",
+    "@github/list_branches",
+    "@github/list_commits",
+    "@github/list_issue_fields",
+    "@github/list_issue_types",
+    "@github/list_issues",
+    "@github/list_pull_requests",
+    "@github/list_releases",
+    "@github/list_repository_collaborators",
+    "@github/list_tags",
+    "@github/pull_request_read",
+    "@github/search_code",
+    "@github/search_commits",
+    "@github/search_issues",
+    "@github/search_pull_requests",
+    "@github/search_repositories"
   ],
   "toolsSettings": {
     "read": {
@@ -25,6 +83,7 @@
         "/run/**",
         "/etc/**",
         "/home/agent/.kiro/**",
+        "/home/agent/.ossbot/**",
         "/io/output/**"
       ]
     }
@@ -48,6 +107,7 @@
           "/run/**",
           "/etc/**",
           "/home/agent/.kiro/**",
+          "/home/agent/.ossbot/**",
           "/io/output/**"
         ],
         "effect": "deny"
@@ -58,6 +118,38 @@
       },
       {
         "capability": "web_search",
+        "effect": "allow"
+      },
+      {
+        "capability": "mcp",
+        "match": [
+          "github/actions_get",
+          "github/actions_list",
+          "github/get_commit",
+          "github/get_file_contents",
+          "github/get_job_logs",
+          "github/get_label",
+          "github/get_latest_release",
+          "github/get_me",
+          "github/get_release_by_tag",
+          "github/get_tag",
+          "github/issue_read",
+          "github/list_branches",
+          "github/list_commits",
+          "github/list_issue_fields",
+          "github/list_issue_types",
+          "github/list_issues",
+          "github/list_pull_requests",
+          "github/list_releases",
+          "github/list_repository_collaborators",
+          "github/list_tags",
+          "github/pull_request_read",
+          "github/search_code",
+          "github/search_commits",
+          "github/search_issues",
+          "github/search_pull_requests",
+          "github/search_repositories"
+        ],
         "effect": "allow"
       }
     ]

@@ -14,6 +14,14 @@ kiro_llm_build_args() {
   [[ $sha =~ ^[0-9a-f]{64}$ ]] || die "kiro_cli.headless_tar_gz_sha256 is not pinned"
   printf '%s\n' --build-arg "KIRO_CLI_VERSION=$version" --build-arg "KIRO_CLI_URL=$url" \
     --build-arg "KIRO_CLI_SHA256=$sha"
+  version=$(lock_get github_mcp_server.version)
+  url=$(lock_get github_mcp_server.url)
+  sha=$(lock_get github_mcp_server.sha256)
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "github_mcp_server.version '$version' is not a version"
+  [[ $url == https://github.com/github/github-mcp-server/releases/download/* ]] || die "github_mcp_server.url"
+  [[ $sha =~ ^[0-9a-f]{64}$ ]] || die "github_mcp_server.sha256 is not pinned"
+  printf '%s\n' --build-arg "GITHUB_MCP_VERSION=$version" --build-arg "GITHUB_MCP_URL=$url" \
+    --build-arg "GITHUB_MCP_SHA256=$sha"
 }
 
 # kiro_manifest_check: WARN (never fail) when the release manifest's latest differs from the pin.

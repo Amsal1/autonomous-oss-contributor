@@ -49,6 +49,14 @@ if [[ -d "$ENGINE/kas" ]]; then
   done
 fi
 
+# GHMCP-2: sandboxd passes the GitHub read token only to scout/reviewer jobs. It goes to a 0600 file
+# for ossbot-github-mcp (outside every agent's read paths) and out of kiro-cli's environment.
+if [[ -n "${GITHUB_READ_TOKEN:-}" ]]; then
+  [[ "$ROLE" =~ ^(scout|reviewer)$ ]] || fail bad_args "GITHUB_READ_TOKEN for role $ROLE"
+  (umask 077 && mkdir -p "$HOME/.ossbot" && printf '%s\n' "$GITHUB_READ_TOKEN" >"$HOME/.ossbot/github-read-token")
+fi
+unset GITHUB_READ_TOKEN
+
 # research_deny probe target under the denied /io/output root (a harmless file; reads must be denied).
 [[ "$PROMPT_DIR" == /opt/ossbot/probes ]] && printf 'inventory\n' >"$OUT/inventory.txt"
 

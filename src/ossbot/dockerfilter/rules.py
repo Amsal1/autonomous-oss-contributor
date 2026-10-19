@@ -54,6 +54,8 @@ CMD_BY_PROFILE: Mapping[str, frozenset[str]] = {
 KEY_PAIRS: frozenset[tuple[str, str]] = frozenset(
     {("research", "kiro"), ("agent-llm", "kiro"), ("catalog", "list_models")}
 )
+# the read token's roles, kept here on purpose (the filter does not import sandboxd or common)
+GITHUB_READ_ROLES: frozenset[str] = frozenset({"scout", "reviewer"})
 # code: the validate rules (exec /tmp) with the network forced to none (owner decision F007-R1-2)
 TMP_EXEC_PROFILES: frozenset[str] = frozenset({"fetch", "validate", "agent-exec", "package", "code"})
 NETWORK_NONE_PROFILES: frozenset[str] = frozenset({"agent-exec", "package", "extract", "code", "snapshot", "stage-in"})
@@ -355,6 +357,7 @@ def _check_env(env: Any, profile: str, entry: str) -> None:
     if not isinstance(env, list):
         raise Denied("type:Env")
     seen: set[str] = set()
+    roles: dict[str, str] = {}
     for item in env:
         if not isinstance(item, str) or "=" not in item:
             raise Denied("env_format")
@@ -367,8 +370,16 @@ def _check_env(env: Any, profile: str, entry: str) -> None:
         if name == "KIRO_API_KEY":
             if (profile, entry) not in KEY_PAIRS:
                 raise Denied(f"env_key_not_allowed:{profile}:{entry}")
+        elif name == "GITHUB_READ_TOKEN":
+            roles[name] = value  # checked below, once ROLE is known
         elif name not in ENV_FIXED and not name.startswith("OSSBOT_"):
             raise Denied(f"env_name:{name}")
+        if name == "ROLE":
+            roles["ROLE"] = value
+    # GHMCP-2: the read token only for research-profile Kiro jobs of the scout and reviewer roles
+    if "GITHUB_READ_TOKEN" in roles and ((profile, entry) != ("research", "kiro")
+                                          or roles.get("ROLE") not in GITHUB_READ_ROLES):  # fmt: skip
+        raise Denied(f"env_read_token_not_allowed:{profile}:{entry}")
 
 
 def _check_labels(labels: Any) -> str:

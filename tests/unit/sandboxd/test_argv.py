@@ -95,6 +95,34 @@ def test_key_only_for_research_agent_llm_catalog(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", sorted(variants()))
+def test_read_token_only_for_research_scout_and_reviewer(name: str) -> None:
+    """GHMCP-2: name-only GITHUB_READ_TOKEN for the MCP roles; never fetch/validate or code-running jobs."""
+    spec = variants()[name]
+    env = _pairs(build_argv(spec), "--env")
+    role = dict(spec.env).get("ROLE")
+    expected = (spec.profile, spec.entrypoint) == ("research", "kiro") and role in {"scout", "reviewer"}
+    assert ("GITHUB_READ_TOKEN" in env) is expected, name
+    assert not any(v.startswith("GITHUB_READ_TOKEN=") for v in env)
+
+
+@pytest.mark.parametrize("role", ["scout", "reviewer", "planner", "vetter", "summarizer"])
+def test_job_spec_sets_the_read_token_by_role(role: str) -> None:
+    from tests.sandboxharness import CID, LLM, NET, RUN
+
+    spec = job_spec("research", run_id=RUN, cid=CID, entrypoint="kiro", image_ref=LLM, network=NET,
+                    repo_mode="snapshot", env={"ROLE": role})  # fmt: skip
+    assert spec.github_read is (role in {"scout", "reviewer"})
+
+
+def test_a_forged_read_token_spec_is_refused() -> None:
+    import dataclasses
+
+    spec = dataclasses.replace(variants()["agent-llm"], github_read=True)
+    with pytest.raises(ArgvError, match="github_read"):
+        build_argv(spec)
+
+
+@pytest.mark.parametrize("name", sorted(variants()))
 def test_tmp_exec_only_for_code_running_profiles(name: str) -> None:
     spec = variants()[name]
     tmpfs = dict(t.split(":", 1) for t in _pairs(build_argv(spec), "--tmpfs"))

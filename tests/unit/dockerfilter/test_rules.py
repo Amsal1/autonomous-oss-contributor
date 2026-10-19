@@ -142,6 +142,27 @@ def test_key_only_for_key_pairs(tmp_path: Path) -> None:
         assert ("KIRO_API_KEY" in env) is expected, name
 
 
+@pytest.mark.parametrize(
+    ("variant", "role", "allowed"),
+    [("research-scout", "scout", True), ("research-scout", "reviewer", True), ("research-scout", "planner", False),
+     ("agent-llm", "scout", False), ("fetch", None, False), ("validate", None, False)],
+)  # fmt: skip
+def test_read_token_env_only_for_research_kiro_mcp_roles(
+    tmp_path: Path, variant: str, role: str | None, allowed: bool
+) -> None:
+    """GHMCP-2, second layer: the filter refuses GITHUB_READ_TOKEN outside research/kiro scout|reviewer."""
+    body = create_body(variants()[variant])
+    env = [e for e in body["Env"] if not e.startswith(("GITHUB_READ_TOKEN=", "ROLE="))]
+    env.append("GITHUB_READ_TOKEN=github_pat_" + "T" * 30)
+    if role is not None:
+        env.append(f"ROLE={role}")
+    body["Env"] = env
+    decision = rules.decide(body_request(body), _lookup(), policy(tmp_path))
+    assert decision.allow is allowed, decision.reason
+    if not allowed:
+        assert decision.reason.startswith("env_read_token_not_allowed")
+
+
 # -------------------------------------------------------------------- kill / pause (N5)
 @pytest.mark.parametrize("flag", ["killed", "paused"])
 def test_create_refused_while_flagged(flag: str, tmp_path: Path) -> None:

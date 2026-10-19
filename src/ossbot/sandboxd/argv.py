@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from ossbot.common import github_mcp_tools
 from ossbot.sandboxd.profiles import AGENT_LLM_CPUS, AGENT_LLM_MEMORY_MB, TEMPLATES, cid_slug
 from ossbot.sandboxd.runtime.base import Mount, RunSpec
 
@@ -107,12 +108,19 @@ def job_spec(
     if template_name == "agent-llm":
         cpus, memory_mb = AGENT_LLM_CPUS, AGENT_LLM_MEMORY_MB
     name = f"ossbot-{run_id}-exec" if template_name == "agent-exec" else f"ossbot-{run_id}"
+    key = t.key and (t.profile, entrypoint) in KEY_PAIRS
     return RunSpec(
         name=name, run_id=run_id, cid=cid_slug(cid), profile=t.profile, entrypoint=entrypoint, image_ref=image_ref,
-        network=network, mounts=tuple(mounts), env=tuple(sorted((env or {}).items())),
-        key=t.key and (t.profile, entrypoint) in KEY_PAIRS, tmp_exec=t.tmp_exec, llm_home=t.llm_home,
-        workdir=workdir, home=home, cpus=cpus, memory_mb=memory_mb,
+        network=network, mounts=tuple(mounts), env=tuple(sorted((env or {}).items())), key=key,
+        github_read=key and github_read_allowed(t.profile, entrypoint, (env or {}).get("ROLE")),
+        tmp_exec=t.tmp_exec, llm_home=t.llm_home, workdir=workdir, home=home, cpus=cpus, memory_mb=memory_mb,
     )  # fmt: skip
+
+
+def github_read_allowed(profile: str, entrypoint: str, role: str | None) -> bool:
+    """The read token goes only to research-profile Kiro jobs of the MCP roles (scout, self-review),
+    never to fetch/validate or any job that runs repository code (GHMCP-2)."""
+    return profile == "research" and entrypoint == "kiro" and role in github_mcp_tools.MCP_ROLES
 
 
 def stagein_spec(run_id: str, cid: str, image_ref: str) -> RunSpec:
@@ -172,6 +180,8 @@ def _check(spec: RunSpec) -> None:
             raise ArgvError(f"env value {key}")
     if spec.key and (spec.profile, spec.entrypoint) not in KEY_PAIRS:
         raise ArgvError("key")
+    if spec.github_read and not github_read_allowed(spec.profile, spec.entrypoint, dict(spec.env).get("ROLE")):
+        raise ArgvError("github_read")
     if not 0 < spec.cpus <= 8 or not 64 <= spec.memory_mb <= 6144:
         raise ArgvError("limits")
 
@@ -206,6 +216,8 @@ def build_argv(spec: RunSpec, docker: str = "docker") -> list[str]:
     argv += ["--env", f"HTTPS_PROXY={PROXY_URL}", "--env", f"HTTP_PROXY={PROXY_URL}", "--env", "NO_PROXY="]
     if spec.key:
         argv += ["--env", "KIRO_API_KEY"]  # name-only: the value never appears in argv (ps)
+    if spec.github_read:
+        argv += ["--env", "GITHUB_READ_TOKEN"]  # name-only, for ossbot-github-mcp (GHMCP-2)
     for key, value in spec.env:
         argv += ["--env", f"{key}={value}"]
     argv += [spec.image_ref, cmd]

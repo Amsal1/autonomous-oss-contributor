@@ -114,7 +114,8 @@ step_images() {
     src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py sandbox/entrypoints sandbox/fixtures
   full=$OSSBOT_IMAGE_ID
   _build sandbox-llm sandbox/images/llm/Dockerfile "$llm_args" \
-    src/ossbot/sandbox_tools/exec_mcp.py sandbox/entrypoints sandbox/kiro .kiro/agents prompts sandbox/probes
+    src/ossbot/sandbox_tools/exec_mcp.py src/ossbot/sandbox_tools/github_mcp.py sandbox/entrypoints sandbox/kiro \
+    .kiro/agents prompts sandbox/probes
   llm=$OSSBOT_IMAGE_ID
   _build proxy sandbox/images/proxy/Dockerfile "$proxy_args"
   proxy=$OSSBOT_IMAGE_ID

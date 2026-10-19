@@ -22,7 +22,7 @@ DIGESTS = {"sandbox-full": frozenset({FULL_DIGEST}), "sandbox-llm": frozenset({L
 CID = "c_01ABCDEFGH"
 RUN = "r1-plan"
 NET = "ossbot-t-c-01abcdefgh-research"
-ENVIRON = {"KIRO_API_KEY": "ksk_test_key_value_0123456789"}
+ENVIRON = {"KIRO_API_KEY": "ksk_test_key_value_0123456789", "GITHUB_READ_TOKEN": "github_pat_" + "T" * 30}
 
 
 def variants() -> dict[str, RunSpec]:
@@ -46,6 +46,9 @@ def variants() -> dict[str, RunSpec]:
                                       repo_mode="snapshot", env=kiro_env),
         "research-none": job_spec("research", run_id=RUN, cid=CID, entrypoint="kiro", image_ref=LLM, network=NET,
                                   repo_mode="none", env={**kiro_env, "ROLE": "vetter"}),
+        # GHMCP-2: scout (and reviewer) get the name-only GITHUB_READ_TOKEN for ossbot-github-mcp
+        "research-scout": job_spec("research", run_id=RUN, cid=CID, entrypoint="kiro", image_ref=LLM, network=NET,
+                                   repo_mode="snapshot", env={**kiro_env, "ROLE": "scout"}),
         "agent-llm": job_spec("agent-llm", run_id=RUN, cid=CID, entrypoint="kiro", image_ref=LLM,
                               network="ossbot-t-c-01abcdefgh-llm", repo_mode="none", env=coder_env),
         "agent-exec": job_spec("agent-exec", run_id=RUN, cid=CID, entrypoint="exec", image_ref=FULL, network="none",
