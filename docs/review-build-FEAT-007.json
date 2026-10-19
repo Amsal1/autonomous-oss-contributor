@@ -1,28 +1,18 @@
 {
-  "verdict": "CHANGES_REQUESTED",
+  "verdict": "APPROVED",
   "feat": "FEAT-007",
-  "round": 3,
+  "round": 4,
   "findings": [
     {
-      "id": "F007-R3-1",
-      "severity": "MEDIUM",
-      "title": "Shared matrix rows left missing with no owning FEAT (DES-AC-13, CR3-AC-59, CR3-AC-67, CR3-BA-15)",
-      "detail": "The matrix check for FEAT-007 lists four rows whose phase column names only completed FEATs (FEAT-005/006/007) but whose status is still missing. DES-AC-13 leaves /model ('remain (FEAT-007/009)'); CR3-AC-59 leaves stopped_message_generation ending the stream within 2 s (build-plan item 49, FEAT-010); CR3-AC-67 leaves the next turn after /resume and the U12 409 for a crashed streaming row; CR3-BA-15 records both parts done but stays missing. None of these ids is in a FEAT-009/010 item's Rows list, so only the final gate's $f='.' check would surface them, after FEAT-009/010 closed without testing those criteria (the FEAT-005 close-out rule: no row whose phase names only a closed FEAT). Fix: set each row done where nothing remains (CR3-BA-15 looks complete); otherwise add the owning FEAT to the phase column and the row id to that item's Rows (item 49 for the Stop/U12 parts, the FEAT-009 /model item for DES-AC-13).",
+      "id": "F007-R4-1",
+      "severity": "NIT",
+      "title": "CR3-AC-66 lacks its FEAT-007 part; CR3-AC-66, MDL-3 and CR3-IH-4 are in no later item's Rows",
+      "detail": "CR3-AC-66's evidence ends '... are FEAT-007/009' with no FEAT-007 part, although TurnStore.done stores chat_turns.answer_text redacted (test_turns.py::test_stored_answer_is_redacted_and_bounded, test_backend.py::test_ask_stores_the_redacted_answer). CR3-AC-66 and MDL-3 (phase names FEAT-009) and CR3-IH-4 (phase names FEAT-010) appear in no FEAT-009/010 item's Rows list in phase2-build-plan.md or the FEAT JSON; the phase-based matrix check at those close-outs still lists them, so nothing is lost. Fix (Phase 2 gate): record the FEAT-007 part on CR3-AC-66 and add the three ids to the Rows of items 47/49 (or close-out items 48/53).",
       "files": [
         "docs/TRACEABILITY.md",
-        "docs/plan/phase2-build-plan.md"
-      ]
-    },
-    {
-      "id": "F007-R3-2",
-      "severity": "NIT",
-      "title": "Scout/reviewer GitHub MCP path never exercised live",
-      "detail": "In the sandbox-llm container the wrapper reads the token from $HOME/.ossbot/github-read-token and the server needs HTTPS_PROXY; the agents' mcpServers.github sets no env, so both depend on kiro-cli forwarding its environment to MCP children, which nothing has shown (the Hermes path sets them explicitly and passed live). A miss fails closed into a scout without GitHub tools, while GHMCP-2 reads done on hermetic evidence. Fix: add literal env values (HOME=/home/agent, the 3128 proxy URL; no ${VAR} expansion needed) to mcpServers.github in ossbot-scout/ossbot-reviewer, and run one research-profile scout or reviewer job in the Phase 2 gate.",
-      "files": [
-        ".kiro/agents/ossbot-scout.json",
-        ".kiro/agents/ossbot-reviewer.json",
-        "sandbox/entrypoints/kiro.sh",
-        "docs/TRACEABILITY.md"
+        "docs/plan/phase2-build-plan.md",
+        "docs/plan/task-ossbot-v1/features/FEAT-009.json",
+        "docs/plan/task-ossbot-v1/features/FEAT-010.json"
       ]
     }
   ],
