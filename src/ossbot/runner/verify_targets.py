@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ossbot.common.clock import from_iso
-from ossbot.runner.github_read import GitHubRead, GitHubReadError
+from ossbot.runner.github_read import GitHubRateLimited, GitHubRead, GitHubReadError
 
 
 def verify(gh: GitHubRead, repos: list[str], stale_days: int, now: datetime) -> list[dict[str, Any]]:
@@ -24,7 +24,7 @@ def verify(gh: GitHubRead, repos: list[str], stale_days: int, now: datetime) -> 
         row: dict[str, Any] = {"repo": repo}
         try:
             info = gh.repo(repo)
-        except GitHubReadError as exc:
+        except (GitHubReadError, GitHubRateLimited) as exc:
             rows.append({**row, "status": "FAIL", "detail": str(exc)[:120]})
             continue
         if info is None:

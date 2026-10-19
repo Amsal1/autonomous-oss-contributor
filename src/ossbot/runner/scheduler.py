@@ -13,7 +13,10 @@ within ``limits.max_concurrent_pipelines`` and ``proposal.max_concurrent_scouts`
 contribution at a time); autonomous first scouts wait while ``proposal.max_per_day`` is used up.
 Stage failures move the item to FAILED (the gatekeeper redirects to WATCHING while a PR is open);
 in a gate-owned state (a re-scout from PROPOSED or RESCOPE_REQUIRED) the item keeps its state and
-the stage is retried after 10 min, doubling up to 6 h, with one owner message; interruptions
+the stage is retried after 10 min, doubling up to 6 h, with one owner message, for as long as the
+item stays in that state (the owner's next decision is dispatched at once). GitHub reads retry
+network errors and 5xx themselves (``github_read``, then ``github_unavailable``); a rate limit
+delays the stage, or the discovery cycle, until the reset (§20). Interruptions
 (control state, a sandbox job cut by a drain or crash, sandboxd unreachable) only end the stage
 run as ``interrupted`` and the next tick re-queues it (max 3 by the gatekeeper). On start, stage
 runs left ``running`` by a crashed runner become ``interrupted``; ``resumed`` counts them
@@ -34,6 +37,7 @@ from ossbot.common.clock import from_iso
 from ossbot.common.models import LIVE_TEST_ROLE, Catalog, ModelUnavailable
 from ossbot.runner import stages
 from ossbot.runner.errors import CapReached, Deferred, Interrupted, ProbesNotReady, StageFailed
+from ossbot.runner.github_read import GitHubRateLimited
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.sbx_client import SbxError
@@ -51,6 +55,7 @@ CATALOG_RETRY = timedelta(hours=1)  # §20: catalog_empty is retried hourly
 PROBE_RETRY = timedelta(minutes=30)  # probes that ran but did not all pass (a failure also pauses, §10.9)
 CAP_RECHECK = timedelta(hours=1)  # daily cap without a known next slot
 PROBE_ROLES = ("planner", "coder")  # the agents the five probes exercise (§10.9)
+GATE_1 = frozenset({"PROPOSED", "RESCOPE_REQUIRED"})  # NO_FAIL states with a stage: the re-scout
 HELD_RETRY = timedelta(minutes=10)  # first retry of a stage that failed in a NO_FAIL state (re-scout)
 HELD_RETRY_MAX = timedelta(hours=6)  # doubling up to this
 
@@ -84,9 +89,14 @@ class Scheduler:
         self.last_catalog: datetime | None = None
         self.refused: set[str] = set()
         self.resumed = 0
-        # cid -> (failures, next try): a stage error in a NO_FAIL state cannot fail the item, so it
-        # is retried with backoff and the owner is told once instead of a silent retry every tick
-        self.held: dict[str, tuple[int, datetime]] = {}
+        # cid -> (state, failures, next try): a stage error in a NO_FAIL state cannot fail the item,
+        # so it is retried with backoff and the owner is told once instead of a silent retry every
+        # tick; the entry holds only that state (a decision that moves the item drops it)
+        self.held: dict[str, tuple[str, int, datetime]] = {}
+        # cid -> (state, until): the stage met GitHub's rate limit, retried after the reset (§20)
+        self.delayed: dict[str, tuple[str, datetime]] = {}
+        self.discover_after: datetime | None = None  # discovery met the rate limit: no cycle before
+        self.pending_discover: list[str] | None = None  # an ossctl discover request a stop cut short
 
     # ------------------------------------------------------------------ start
     def recover_interrupted(self) -> int:
@@ -221,14 +231,18 @@ class Scheduler:
             out.skipped = "not_ready"  # M11: no discovery, no stage before catalog + probes
             return out
         interval = timedelta(hours=bundle.policy.discovery.interval_hours)
-        try:
-            asked = self.sc.gk.claim_discover()  # ossctl discover [repo...]
-        except GkError:
-            asked = None
-        if asked is not None:
-            self.discover(asked or None)
-        elif self.last_discovery is None or self.now() - self.last_discovery >= interval:
-            self.discover()
+        if self.discover_after is None or self.now() >= self.discover_after:
+            self.discover_after = None
+            try:
+                asked = self.sc.gk.claim_discover()  # ossctl discover [repo...]
+            except GkError:
+                asked = None
+            if asked is None and self.pending_discover is not None:
+                asked, self.pending_discover = self.pending_discover, None  # cut short earlier: again
+            if asked is not None:
+                self.discover(asked or None)
+            elif self.last_discovery is None or self.now() - self.last_discovery >= interval:
+                self.discover()
         if self.sc.stopping():
             out.skipped = "stopping"  # SIGTERM during discovery: start nothing new
             return out
@@ -241,9 +255,13 @@ class Scheduler:
             self.refused.clear()  # refusals are cached for one discovery cycle
         try:
             return discover.run(self.sc, repos=repos, refused=self.refused)
-        except Interrupted as exc:  # stopped mid-cycle: the full cycle runs again once open
+        except (Interrupted, Deferred) as exc:  # stopped or rate limited mid-cycle: it runs again later
             if repos is None:
-                self.last_discovery = None
+                self.last_discovery = None  # the full cycle runs again once open
+            else:
+                self.pending_discover = repos  # the claimed ossctl discover request is not lost
+            if isinstance(exc, GitHubRateLimited):
+                self.discover_after = datetime.fromtimestamp(exc.until, UTC)
             log.info("discovery interrupted: %s", exc, extra={"event": "discover_interrupted"})
             return []
         except GkError as exc:
@@ -281,9 +299,8 @@ class Scheduler:
             cid, state = str(c["id"]), str(c.get("state"))
             if state in TERMINAL or cid in self.running:
                 continue
-            held = self.held.get(cid)
-            if held is not None and self.now() < held[1]:
-                continue  # repeated stage errors in a gate-owned state: backing off
+            if self._waiting(cid, state):
+                continue  # backing off (stage errors in a gate-owned state) or GitHub rate limit
             stage = stages.stage_for(c)
             if stage is None or not self._eligible(c, stage):
                 continue
@@ -299,6 +316,20 @@ class Scheduler:
             else:
                 self.running[cid] = (name, self.pool.submit(self.run_one, cid))
 
+    def _waiting(self, cid: str, state: str) -> bool:
+        """True while the item waits in the state its hold or delay was recorded for; once the
+        state changed (the owner's Continue, a new proposal) the entry is dropped."""
+        now = self.now()
+        held = self.held.get(cid)
+        if held is not None and held[0] != state:
+            del self.held[cid]
+            held = None
+        delayed = self.delayed.get(cid)
+        if delayed is not None and (delayed[0] != state or now >= delayed[1]):
+            del self.delayed[cid]
+            delayed = None
+        return delayed is not None or (held is not None and now < held[2])
+
     # --------------------------------------------------------------- one stage
     def run_one(self, cid: str) -> None:
         sc = dataclasses.replace(self.sc, run=None)  # per-thread stage context
@@ -309,6 +340,7 @@ class Scheduler:
                 return
             stage(sc, c)
             self.held.pop(cid, None)
+            self.delayed.pop(cid, None)
         except ProbesNotReady:
             log.warning("probe gate refused a Kiro job for %s; holding stages", cid,
                         extra={"event": "probe_gate", "cid": cid})  # fmt: skip
@@ -319,6 +351,14 @@ class Scheduler:
             self.scout_hold_until = exc.until or self.now() + CAP_RECHECK
             log.info("proposal.max_per_day reached; autonomous scouting waits until %s", self.scout_hold_until,
                      extra={"event": "scout_hold", "cid": cid})  # fmt: skip
+        except GitHubRateLimited as exc:  # §20: the stage is delayed until the reset, not failed
+            until = datetime.fromtimestamp(exc.until, UTC)
+            try:  # the state the stage left it in (vet moves DISCOVERED -> VETTING first)
+                self.delayed[cid] = (str(sc.gk.contribution(cid)["state"]), until)
+            except GkError:
+                self.delayed[cid] = (str(c.get("state")), until)
+            log.info("stage delayed for %s until %s: %s", cid, until, exc,
+                     extra={"event": "stage_delayed", "cid": cid})  # fmt: skip
         except (Interrupted, Deferred) as exc:
             log.info("stage stopped for %s: %s", cid, exc, extra={"event": "stage_stopped", "cid": cid})
         except StageFailed as exc:
@@ -356,17 +396,25 @@ class Scheduler:
     def _hold(self, sc: StageContext, c: dict[str, Any], error_class: str) -> None:
         """A gate-owned state (a re-scout from PROPOSED or RESCOPE_REQUIRED) keeps its state; the
         stage is retried after 10 min, doubling up to 6 h, and the owner is told on the first one."""
-        cid = str(c["id"])
-        count = self.held.get(cid, (0, self.now()))[0] + 1
+        cid, state = str(c["id"]), str(c["state"])
+        prev = self.held.get(cid)
+        count = prev[1] + 1 if prev is not None and prev[0] == state else 1
         delay = min(HELD_RETRY * 2 ** (count - 1), HELD_RETRY_MAX)
-        self.held[cid] = (count, self.now() + delay)
-        log.warning("stage failed for %s in %s (%s); retry #%d in %s", cid, c.get("state"), error_class, count, delay,
+        self.held[cid] = (state, count, self.now() + delay)
+        log.warning("stage failed for %s in %s (%s); retry #%d in %s", cid, state, error_class, count, delay,
                     extra={"event": "stage_held", "cid": cid})  # fmt: skip
         if count == 1:
             where = f"{c['upstream']}#{c['issue_number']}" if c.get("issue_number") else str(c.get("upstream"))
-            minutes = int(delay.total_seconds() // 60)
-            sc.say(f"⚠️ {where}: revising the proposal failed ({error_class[:64]}). It stays at"
-                   f" {c.get('state')}; retrying in {minutes} min, then less often.")  # fmt: skip
+            if state in GATE_1:
+                minutes = int(delay.total_seconds() // 60)
+                sc.say(f"⚠️ {where}: revising the proposal failed ({error_class[:64]}). It stays at"
+                       f" {state}; retrying in {minutes} min, then less often.")  # fmt: skip
+            else:  # a stage error after the item reached gate 2 or submit: the gatekeeper owns it now
+                sc.say(f"⚠️ {where}: a runner step failed ({error_class[:64]}) after the item reached {state}."
+                       " It stays there.")  # fmt: skip
 
     def shutdown(self, wait: bool = True) -> None:
+        if self.pending_discover is not None:  # kept in memory only: a restart does not run it
+            log.warning("ossctl discover request for %s dropped at shutdown; send it again",
+                        ", ".join(self.pending_discover), extra={"event": "discover_dropped"})  # fmt: skip
         self.pool.shutdown(wait=wait, cancel_futures=True)

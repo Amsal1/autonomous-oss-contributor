@@ -157,7 +157,7 @@ def sbx(tmp_path: Path) -> FakeSbx:
 def sc(ctx: AppContext, gk: Gatekeeper, sbx: FakeSbx, github: FakeGitHub, tmp_path: Path) -> StageContext:
     ctx.models.upsert_catalog([CatalogEntry(model_id=m) for m in MODELS], "uid:2001/worker")
     return StageContext(
-        gk=gk, sbx=sbx, gh=GitHubRead(github.sync_client()),  # type: ignore[arg-type]
+        gk=gk, sbx=sbx, gh=GitHubRead(github.sync_client(), sleep=lambda s: None),  # type: ignore[arg-type]
         models=ModelsFile(ctx.paths.config_dir / "models.yaml"), gate=Gate(ctx.paths.control_dir),
         inputs_root=tmp_path / "runner" / "inputs", config=lambda: ctx.config, clocks=FakeClocks(),
         state_dir=tmp_path / "runner" / "state", notify=lambda text: None,

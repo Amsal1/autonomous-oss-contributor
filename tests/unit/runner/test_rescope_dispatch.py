@@ -10,6 +10,7 @@ from typing import Any
 
 import pytest
 
+from ossbot.common.config import all_targets
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
@@ -105,13 +106,45 @@ def test_stage_errors_in_a_gate_state_back_off_with_one_message(
     assert scouts() == tries
     ctx.clock.advance(seconds=HELD_RETRY.total_seconds())  # type: ignore[attr-defined]
     assert cid in scheduler.tick().started  # retried once the backoff is over
-    assert scheduler.held[cid][0] == 2 and len(said) == 1  # the owner was told once
-    held_until = scheduler.held[cid][1]
+    assert scheduler.held[cid][:2] == ("RESCOPE_REQUIRED", 2) and len(said) == 1  # the owner was told once
+    held_until = scheduler.held[cid][2]
     assert held_until - ctx.clock.now() >= 2 * HELD_RETRY - HELD_RETRY / 10  # doubled
     sbx.kiro("scout", fenced(SMALLER))
     ctx.clock.advance(seconds=(2 * HELD_RETRY).total_seconds())  # type: ignore[attr-defined]
     assert cid in scheduler.tick().started
     assert row(ctx, cid)["state"] == "PROPOSED" and cid not in scheduler.held
+
+
+def test_the_owners_continue_during_the_backoff_is_dispatched_at_once(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F006-R3-2: the backoff holds only the state it was recorded in. After a failed re-scout the
+    owner taps ✅ Continue (RESCOPE_REQUIRED -> PACKAGING): the package stage runs on the next
+    tick, not when the backoff ends."""
+    sbx.handlers["kiro:scout"] = lambda spec, out: 1
+    cid = rescoped(ctx, sc)
+    scheduler = ready(sc, ctx)
+    assert cid in scheduler.tick().started
+    assert scheduler.held[cid][:2] == ("RESCOPE_REQUIRED", 1)
+    ProposalService(ctx).continue_rescope(cid, OWNER, at_measured=True)
+    ran: list[str] = []
+    monkeypatch.setattr(scheduler, "run_one", ran.append)
+    ctx.clock.advance(seconds=20)  # type: ignore[attr-defined]  # well inside the 10 min backoff
+    assert cid in scheduler.tick().started and ran == [cid]
+    assert cid not in scheduler.held  # dropped with the state it was for
+
+
+def test_a_failure_in_a_new_gate_state_starts_a_new_backoff(sc: StageContext, ctx: AppContext) -> None:
+    """The count of an old state does not carry over, and only gate 1 says 'revising the proposal'."""
+    said: list[str] = []
+    sc.notify = said.append
+    cid = insert_contribution(ctx, State.AWAITING_APPROVAL)
+    scheduler = ready(sc, ctx)
+    scheduler.held[cid] = ("RESCOPE_REQUIRED", 4, ctx.clock.now())
+    scheduler.fail(sc, cid, "internal:keyerror")
+    assert scheduler.held[cid][:2] == ("AWAITING_APPROVAL", 1)
+    assert row(ctx, cid)["state"] == "AWAITING_APPROVAL"
+    assert len(said) == 1 and "revising the proposal" not in said[0] and "AWAITING_APPROVAL" in said[0]
 
 
 # ------------------------------------------------------------------ F006-R2-2: the dispatch view
@@ -159,6 +192,32 @@ def test_discovery_ends_at_the_next_target_when_stopped(
     assert len(read) == 1, read  # the next target was never read
     assert scheduler.last_discovery is None  # not counted as a finished cycle
     assert ran == [] and out.skipped == ("stopping" if how == "sigterm" else None)
+
+
+def test_a_cut_short_ossctl_discover_request_runs_again(
+    sc: StageContext, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F006-R3-5: the claimed request is kept when a stop ends its cycle, and runs on the next tick."""
+    repo = next(e.repo for e in all_targets(ctx.config.targets) if e.enabled and e.discovery)
+    requests = [[repo]]
+    monkeypatch.setattr(sc.gk, "claim_discover", lambda: requests.pop(0) if requests else None)
+    read: list[str] = []
+    real_repo = sc.gh.repo
+
+    def record(name: str) -> Any:
+        read.append(name)
+        return real_repo(name)
+
+    monkeypatch.setattr(sc.gh, "repo", record)
+    stopping = [True]
+    sc.stopping = lambda: stopping[0]
+    scheduler = ready(sc, ctx)
+    monkeypatch.setattr(scheduler, "run_one", lambda cid: None)
+    assert scheduler.tick().skipped == "stopping"
+    assert read == [] and scheduler.pending_discover == [repo] and requests == []
+    stopping[0] = False
+    scheduler.tick()
+    assert read == [repo] and scheduler.pending_discover is None
 
 
 def test_active_list_pages_past_the_page_size(sc: StageContext, ctx: AppContext) -> None:
