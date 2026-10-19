@@ -96,11 +96,22 @@ def test_selftest_passes() -> None:
 def test_launch_params_come_from_the_root_adapter_copy(tmp_path: Path) -> None:
     core = hp.load_core(VENDOR, require_root=False)
     assert Path(core.__file__).resolve() == (VENDOR / "kiro_acp" / "v3_core.py").resolve()
-    spec = core.launch_spec(api_key="ksk_x")
+    spec = core.launch_spec(api_key="ksk_x", kiro_cli=str(hp.KIRO_CLI), cwd=str(hp.KIRO_CWD),
+                            home=str(hp.HERMES_HOME), proxy=hp.PROXY)  # fmt: skip
     assert spec.argv == ("/home/hermes/.local/bin/kiro-cli", "acp", "--agent-engine=v3")
-    params = core.session_new_params(model_id="m", effort="low")
+    assert spec.env["HOME"] == "/home/hermes" and spec.env["HTTPS_PROXY"] == "http://10.212.0.2:3141"
+    params = core.session_new_params(model_id="m", effort="low", mode_id=hp.EXPECTED_MODE, cwd=str(hp.WORKSPACE))
     assert params["_meta"]["kiro"]["modeId"] == "ossbot-chat"
     assert params["cwd"] == "/home/hermes/.hermes/workspace" and params["mcpServers"] == []
+
+
+def test_run_session_uses_ossbots_values_not_the_generic_defaults(fake: Callable[..., FakeRun]) -> None:
+    core = hp.load_core(VENDOR, require_root=False)
+    run = fake(prompts=[[{"text": "nothing"}]])
+    hp.run_session(core, auth_method="default", api_key="ksk_x", model="claude-haiku-4.5", effort="low",
+                   fallbacks=[], handshake_only=True, spawn=run.spawn, timeout=10)  # fmt: skip
+    new = run.requests("session/new")[0]["params"]
+    assert new["_meta"]["kiro"]["modeId"] == "ossbot-chat" and new["cwd"] == "/home/hermes/.hermes/workspace"
 
 
 def test_run_session_against_the_fake(fake: Callable[..., FakeRun]) -> None:

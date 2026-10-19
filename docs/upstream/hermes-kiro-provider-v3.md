@@ -7,6 +7,8 @@ Kiro CLI 2.32 ships a second ACP server generation (`kiro-cli acp --agent-engine
 - `kiro_acp/v3.py`: the provider client. One `kiro-cli acp --agent-engine=v3` process; a fresh session per completion (Hermes re-sends the transcript, as with the V2 path); model and effort from an optional models file, applied through `_meta.kiro` on `session/new` and `session/set_config_option` when the session reports another value; image parts become ACP image blocks when `promptCapabilities.image` is advertised; a dropped transport is reloaded with `session/load` and the prompt is not resent; `--auth-method=client` answers `_kiro/auth/getAccessToken` and keeps the token out of every log record.
 - `kiro_acp/hermes_plugin.py` and two small hooks in `__init__.py`: `HERMES_KIRO_ACP_ENGINE=v3|v2` (default `v3`). `kiro_acp_client.py` and `kiro_acp_models.py` are unchanged.
 
+Configuration: everything is set through `HERMES_KIRO_ACP_*` environment variables (`CLI`, `HOME`, `CWD`, `WORKSPACE`, `PROXY`, `EXPECTED_MODE`, `ALLOWED_TOOLS`, `AUTH`, `TOKEN_FILE`, `MODELS_FILE`, ...). The defaults are generic: `kiro-cli` under `~/.local/bin`, working directories under `~/.hermes`, no proxy, and the custom Kiro agent `hermes-chat` as the expected session mode.
+
 Security notes: the V3 client advertises no client capabilities, so the agent gets no file or terminal bridge (V2 offered `fs/read_text_file`/`fs/write_text_file` within the cwd). Every `session/request_permission` is answered with a reject option or `cancelled`; options are never synthesized and no consent metadata is returned. Unknown agent-to-client requests get `-32601`.
 
 ## Testing

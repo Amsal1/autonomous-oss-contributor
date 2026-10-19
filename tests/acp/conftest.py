@@ -112,11 +112,19 @@ def models_file(
     return path
 
 
+# what ossbot-hermes.service sets over the fork's generic defaults (HERMES_KIRO_ACP_*)
+OSSBOT_SETTINGS: dict[str, Any] = {
+    "kiro_cli": "/home/hermes/.local/bin/kiro-cli", "home": "/home/hermes",
+    "kiro_cwd": "/home/hermes/.hermes/kiro-cwd", "workspace": "/home/hermes/.hermes/workspace",
+    "proxy": "http://10.212.0.2:3141", "expected_mode": "ossbot-chat",
+}  # fmt: skip
+
+
 def client(
     run: FakeRun, tmp_path: Path, *, models: Path | None = None, hook: Any = None, **settings: Any
 ) -> v3.KiroV3Client:
     path = models or models_file(tmp_path)
-    s = v3.V3Settings(models_file=str(path), **settings)
+    s = v3.V3Settings(models_file=str(path), **{**OSSBOT_SETTINGS, **settings})
     return v3.KiroV3Client(
         settings=s, spawn=run.spawn, bridge=Bridge(), on_surface_violation=hook or (lambda exc: None)
     )
@@ -126,4 +134,4 @@ def ask(c: v3.KiroV3Client, text: str = "hello", **kw: Any) -> Any:
     return c.chat.completions.create(model="kiro-acp", messages=[{"role": "user", "content": text}], timeout=20, **kw)
 
 
-__all__ = ["VENDOR", "Bridge", "FakeRun", "ask", "client", "models_file", "v3", "v3_core"]
+__all__ = ["OSSBOT_SETTINGS", "VENDOR", "Bridge", "FakeRun", "ask", "client", "models_file", "v3", "v3_core"]

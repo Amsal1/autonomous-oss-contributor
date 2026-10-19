@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from tests.acp.conftest import FakeRun, ask, client, v3, v3_core
+from tests.acp.conftest import OSSBOT_SETTINGS, FakeRun, ask, client, v3, v3_core
 
 
 def test_launch_argv_is_v3_without_v2_flags() -> None:
+    o = OSSBOT_SETTINGS
     for auth in v3_core.AUTH_METHODS:
-        spec = v3_core.launch_spec(auth_method=auth, api_key="ksk_" + "x" * 20)
+        spec = v3_core.launch_spec(auth_method=auth, api_key="ksk_" + "x" * 20, kiro_cli=o["kiro_cli"],
+                                   cwd=o["kiro_cwd"], home=o["home"], proxy=o["proxy"])  # fmt: skip
         assert spec.argv[:3] == ("/home/hermes/.local/bin/kiro-cli", "acp", "--agent-engine=v3")
         for flag in v3_core.V2_ONLY_FLAGS:
             assert not any(a == flag or a.startswith(flag + "=") for a in spec.argv)
@@ -22,6 +25,26 @@ def test_launch_argv_is_v3_without_v2_flags() -> None:
         assert ("--auth-method=client" in spec.argv) is (auth == "client")
     with pytest.raises(ValueError):
         v3_core.launch_spec(kiro_cli="kiro-cli")  # full executable path only
+
+
+def test_generic_defaults_carry_no_deployment_values() -> None:
+    """The upstream contribution's defaults: the user's home, no proxy, mode hermes-chat (F007-R1-7)."""
+    spec = v3_core.launch_spec()
+    home = os.path.expanduser("~")
+    assert spec.argv[0] == os.path.join(home, ".local", "bin", "kiro-cli") and spec.env["HOME"] == home
+    assert "HTTPS_PROXY" not in spec.env and "https_proxy" not in spec.env
+    assert v3_core.EXPECTED_MODE == "hermes-chat"
+    src = (Path(v3_core.__file__)).read_text(encoding="utf-8") + Path(v3.__file__).read_text(encoding="utf-8")
+    for value in ("10.212.", "/home/hermes", "ossbot-chat", "DESIGN §"):
+        assert value not in src, value
+
+
+def test_settings_from_env_take_the_deployment_values() -> None:
+    env = {"HERMES_KIRO_ACP_PROXY": "http://10.212.0.2:3141", "HERMES_KIRO_ACP_EXPECTED_MODE": "ossbot-chat",
+           "HERMES_KIRO_ACP_WORKSPACE": "/home/hermes/.hermes/workspace"}  # fmt: skip
+    s = v3.V3Settings.from_env(env)
+    assert (s.proxy, s.expected_mode, s.workspace) == (
+        "http://10.212.0.2:3141", "ossbot-chat", "/home/hermes/.hermes/workspace")  # fmt: skip
 
 
 def test_initialize_offers_no_client_capabilities() -> None:

@@ -58,8 +58,9 @@ def gatekeeper_uds() -> Iterator[tuple[str, list[dict[str, Any]]]]:
 
 
 def _uds_client(run: FakeRun, tmp_path: Path, path: str) -> v3.KiroV3Client:
-    s = v3.V3Settings(models_file=str(tmp_path / "none.json"), violation_uds=path)
-    from tests.acp.conftest import Bridge
+    from tests.acp.conftest import OSSBOT_SETTINGS, Bridge
+
+    s = v3.V3Settings(models_file=str(tmp_path / "none.json"), violation_uds=path, **OSSBOT_SETTINGS)
 
     return v3.KiroV3Client(settings=s, spawn=run.spawn, bridge=Bridge())
 
@@ -128,10 +129,14 @@ def test_ossbot_chat_with_web_tools_is_served(fake: Callable[..., FakeRun], tmp_
 
 
 def test_assert_surface_unit() -> None:
-    ok = {"modes": {"currentModeId": "ossbot-chat"}}
-    v3_core.assert_surface(ok)
-    v3_core.assert_surface({**ok, "tools": ["web_fetch"]})
-    v3_core.assert_surface({"configOptions": [{"id": "mode", "currentValue": "ossbot-chat"}]})
+    mode = "ossbot-chat"
+    ok = {"modes": {"currentModeId": mode}}
+    v3_core.assert_surface(ok, expected_mode=mode)
+    v3_core.assert_surface({**ok, "tools": ["web_fetch"]}, expected_mode=mode)
+    v3_core.assert_surface({"configOptions": [{"id": "mode", "currentValue": mode}]}, expected_mode=mode)
+    v3_core.assert_surface({"modes": {"currentModeId": "hermes-chat"}})  # the generic default mode
     for bad in ({"modes": {"currentModeId": "vibe"}}, {}, {**ok, "tools": ["web_search", "execute_bash"]}):
         with pytest.raises(v3_core.SurfaceViolation):
-            v3_core.assert_surface(bad)
+            v3_core.assert_surface(bad, expected_mode=mode)
+    with pytest.raises(v3_core.SurfaceViolation):
+        v3_core.assert_surface(ok)  # ossbot-chat is not the generic default

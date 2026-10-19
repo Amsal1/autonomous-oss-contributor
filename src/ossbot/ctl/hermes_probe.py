@@ -47,6 +47,10 @@ VENDOR_ROOT = Path("/opt/ossbot/app/vendor/hermes-kiro-provider")
 HERMES_HOME = Path("/home/hermes")
 HERMES_ADAPTER = HERMES_HOME / ".hermes/plugins/model-providers/kiro-acp"
 KIRO_CLI = HERMES_HOME / ".local/bin/kiro-cli"
+KIRO_CWD = HERMES_HOME / ".hermes/kiro-cwd"  # empty directory, not a repository
+WORKSPACE = HERMES_HOME / ".hermes/workspace"
+PROXY = "http://10.212.0.2:3141"  # squid web_public, the only egress of uid hermes
+EXPECTED_MODE = "ossbot-chat"  # .kiro/agents/ossbot-chat.json
 AGENT_FILE = HERMES_HOME / ".kiro/agents/ossbot-chat.json"
 PERMISSIONS_FILE = HERMES_HOME / ".kiro/settings/permissions.yaml"
 SETTINGS_FILE = HERMES_HOME / ".kiro/settings/cli.json"
@@ -421,12 +425,16 @@ def run_session(
         if direction == "in" and len(incoming) < 20000:
             incoming.append(data.rstrip(b"\n"))
 
-    spec = core.launch_spec(auth_method=auth_method, api_key=api_key)
+    # ossbot's values, never the fork's generic defaults (they would resolve against root's home)
+    spec = core.launch_spec(auth_method=auth_method, api_key=api_key, kiro_cli=str(KIRO_CLI), cwd=str(KIRO_CWD),
+                            home=str(HERMES_HOME), proxy=PROXY)  # fmt: skip
     agent = core.KiroV3Agent(
         spawn or core.popen_spawn(spec, user="hermes"),
         auth_method=auth_method,
         token=(lambda: api_key or "") if auth_method == "client" else None,
         on_frame=on_frame,
+        expected_mode=EXPECTED_MODE,
+        cwd=str(WORKSPACE),
     )
     details: dict[str, Any] = {"auth_method": auth_method, "argv": list(spec.argv)}
     try:

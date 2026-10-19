@@ -1,7 +1,9 @@
 """Kiro CLI V3 ACP client core: launch, session, surface gate, permissions, NDJSON transport.
 
-Stdlib only and free of Hermes imports, so a root-run probe can import it from a root-owned copy
-without loading any Hermes code (ossbot DESIGN §15.2, R4-M2). Behaviour follows the Kiro "Migrate an
+Stdlib only and free of Hermes imports, so a separate (e.g. privileged) health probe can import it from
+its own copy without loading any Hermes code. The defaults are generic (the user's home, no proxy, mode
+``hermes-chat``); deployments set their paths, proxy and expected mode through the keyword arguments
+or the ``HERMES_KIRO_ACP_*`` environment of ``v3.V3Settings``. Behaviour follows the Kiro "Migrate an
 ACP client to CLI V3" guide:
 
 * launch ``kiro-cli acp --agent-engine=v3`` (``--auth-method=client`` when the client answers
@@ -23,6 +25,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import queue
 import subprocess
 import threading
@@ -33,18 +36,18 @@ from typing import IO, Any
 
 log = logging.getLogger("kiro_acp.v3")
 
-DEFAULT_KIRO_CLI = "/home/hermes/.local/bin/kiro-cli"
-DEFAULT_HOME = "/home/hermes"
-DEFAULT_KIRO_CWD = "/home/hermes/.hermes/kiro-cwd"  # empty directory, not a repository
-DEFAULT_WORKSPACE = "/home/hermes/.hermes/workspace"
-DEFAULT_PROXY = "http://10.212.0.2:3141"
-EXPECTED_MODE = "ossbot-chat"
+DEFAULT_HOME = os.path.expanduser("~")
+DEFAULT_KIRO_CLI = os.path.join(DEFAULT_HOME, ".local", "bin", "kiro-cli")  # where the Kiro installer puts it
+DEFAULT_KIRO_CWD = os.path.join(DEFAULT_HOME, ".hermes", "kiro-cwd")  # empty directory, not a repository
+DEFAULT_WORKSPACE = os.path.join(DEFAULT_HOME, ".hermes", "workspace")
+DEFAULT_PROXY = ""  # no HTTPS_PROXY unless one is configured
+EXPECTED_MODE = "hermes-chat"  # the custom Kiro agent every session must run
 ALLOWED_TOOLS: frozenset[str] = frozenset({"web_search", "web_fetch"})
 AUTH_METHODS = ("default", "client")
 V2_ONLY_FLAGS = ("--agent", "--model", "--effort", "--trust-all-tools", "--trust-tools")
 TOKEN_METHOD = "_kiro/auth/getAccessToken"
 TOOLS_CHANGED = "_kiro/tools/didChange"
-MAX_LINE = 8 * 1024 * 1024  # ossbot DESIGN §20: one JSON object per line, at most 8 MB
+MAX_LINE = 8 * 1024 * 1024  # one JSON object per line, at most 8 MB
 MAX_MALFORMED = 3  # malformed lines before the transport is closed (§20)
 REDACTED = "[redacted]"
 METHOD_NOT_FOUND = -32601
@@ -107,11 +110,10 @@ def launch_spec(
         "HOME": home,
         "PATH": "/usr/local/bin:/usr/bin:/bin",
         "LANG": "C.UTF-8",
-        "HTTPS_PROXY": proxy,
-        "https_proxy": proxy,
-        "NO_PROXY": "localhost,127.0.0.1",
-        "no_proxy": "localhost,127.0.0.1",
     }
+    if proxy:
+        env.update({"HTTPS_PROXY": proxy, "https_proxy": proxy, "NO_PROXY": "localhost,127.0.0.1",
+                    "no_proxy": "localhost,127.0.0.1"})  # fmt: skip
     if api_key and auth_method == "default":
         env["KIRO_API_KEY"] = api_key
     return LaunchSpec(argv=tuple(argv), cwd=cwd, env=env)
