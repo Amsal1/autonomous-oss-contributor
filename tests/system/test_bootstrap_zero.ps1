@@ -31,5 +31,13 @@ if ($LASTEXITCODE -ne 0 -or $changed.Count) {
     Write-Host "FAIL second run: exit $LASTEXITCODE, changed steps: $($changed -join '; ')"
     exit 1
 }
+# CR-001 6 (PLAN item 41): the host phases are skipped for a test distro (no second autostart, blocker
+# or shutdown-hook task), and -Uninstall refuses anything but the ossbot distro's registrations.
+if (@($out | Where-Object { $_ -match '^step shutdownhooks: unchanged \(skipped for test distro' }).Count -ne 1) {
+    Write-Host 'FAIL second run: phase shutdownhooks not skipped for the test distro'
+    exit 1
+}
+& powershell -NoProfile -File $bootstrap -DistroName $DistroName -Uninstall | Out-Null
+if ($LASTEXITCODE -ne 2) { Write-Host "FAIL bootstrap -Uninstall for a test distro: exit $LASTEXITCODE (want 2, refused)"; exit 1 }
 Write-Host 'PASS bootstrap from zero is idempotent'
 exit 0

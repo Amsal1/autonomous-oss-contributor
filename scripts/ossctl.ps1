@@ -80,11 +80,32 @@ if ($inside -and -not $reached) { Add-Check 'PASS' 'localhost forwarding' 'distr
 elseif (-not $inside) { Add-Check 'FAIL' 'localhost forwarding' 'probe listener did not start in the distro' }
 else { Add-Check 'FAIL' 'localhost forwarding' 'distro listener reachable from Windows localhost' 'check localhostForwarding=false in .wslconfig' }
 
-# Autostart task (7.6) and kill marker.
-$task = Get-ScheduledTask -TaskName 'ossbot-autostart' -ErrorAction SilentlyContinue
+# Autostart task (7.6) with the shutdown blocker action (CR-001 6a), the blocker process, the
+# shutdown-hook task (6b) and Fast Startup (ADR-0021), then the kill marker.
+$task = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
+$autoProblems = @(Get-OssAutostartProblems -Task $task)
 if (-not $task) { Add-Check 'FAIL' 'autostart task' 'ossbot-autostart missing' 'powershell -File scripts\bootstrap.ps1 -Only autostart' }
 elseif ($task.State -eq 'Disabled') { Add-Check 'WARN' 'autostart task' 'disabled (kill.ps1 -Hard?)' 'powershell -File scripts\resume.ps1' }
-else { Add-Check 'PASS' 'autostart task' "ossbot-autostart ($($task.State))" }
+elseif ($autoProblems.Count) { Add-Check 'WARN' 'autostart task' ('drift: ' + ($autoProblems -join '; ')) 'powershell -File scripts\bootstrap.ps1 -Only autostart' }
+else { Add-Check 'PASS' 'autostart task' "ossbot-autostart ($($task.State)): distro boot + shutdown blocker actions, no time limit" }
+if (Test-OssBlockerRunning) {
+    $bst = Get-OssBlockerState
+    $bpid = if ($bst -and $bst.PSObject.Properties['pid']) { " pid $($bst.pid)" } else { '' }
+    $win = Find-OssBlockerWindow
+    if ($win -ne [IntPtr]::Zero -and [OssbotWin32.Native]::IsWindowVisible($win)) { Add-Check 'PASS' 'shutdown blocker' "running$bpid, window visible off-screen (6a)" }
+    else { Add-Check 'WARN' 'shutdown blocker' "running$bpid but its window is missing or hidden (cannot block)" 'powershell -File scripts\bootstrap.ps1 -Uninstall -Only shutdownhooks, then -Only shutdownhooks' }
+} else {
+    Add-Check 'WARN' 'shutdown blocker' 'not running (starts at logon)' 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks'
+}
+$hook = Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue
+$hookProblems = @(Get-OssHookProblems -Task $hook)
+if (-not $hook) { Add-Check 'FAIL' 'shutdown hook task' "$($script:OssHookTask) missing" 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
+elseif ($hook.State -eq 'Disabled') { Add-Check 'WARN' 'shutdown hook task' 'disabled' 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
+elseif ($hookProblems.Count) { Add-Check 'WARN' 'shutdown hook task' ('drift: ' + ($hookProblems -join '; ')) 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
+else { Add-Check 'PASS' 'shutdown hook task' "$($script:OssHookTask) ($($hook.State)): System User32 1074 only, non-elevated, PT2M (6b)" }
+$hiber = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction SilentlyContinue)
+$fast = if ($hiber) { [int]$hiber.HiberbootEnabled } else { -1 }
+Add-Check 'PASS' 'fast startup' $(if ($fast -eq 1) { 'on: Shut down logs the session off first, so the blocker is still asked (ADR-0021)' } elseif ($fast -eq 0) { 'off' } else { 'unknown (registry value absent)' })
 $marker = Join-Path (Get-OssRepoRoot) '.ossbot-local\KILL'
 if (Test-Path -LiteralPath $marker) { Add-Check 'WARN' 'kill marker' '.ossbot-local\KILL present (killed at level full)' 'powershell -File scripts\resume.ps1' }
 else { Add-Check 'PASS' 'kill marker' 'absent' }

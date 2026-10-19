@@ -419,6 +419,148 @@ function Get-OssHostTaskStates {
     return [pscustomobject]@{ Autostart = $auto; Blocker = $blk; Hook = $hook }
 }
 
+# ---------------------------------------------------- 6b: the shutdown-hook task (CR-001 6b, ADR-0021)
+# System log, provider User32, Event ID 1074 (shutdown/restart initiated, incl. Windows Update restarts)
+# only: never a sleep event (Kernel-Power 42). Per-user, non-elevated, InteractiveToken (same session
+# as the blocker, so the lifecycle mutex is shared). Windows does not wait for it: best effort.
+$script:OssHookQuery = "<QueryList><Query Id=`"0`" Path=`"System`"><Select Path=`"System`">*[System[Provider[@Name='User32'] and EventID=1074]]</Select></Query></QueryList>"
+
+function Get-OssHookArguments {
+    $down = Join-Path $script:OssRepo 'scripts\down.ps1'
+    return "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$down`" -Timeout 20 -Kind hook -Caller hook"
+}
+
+function Get-OssHookTaskXml {
+    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $esc = { param($s) [Security.SecurityElement]::Escape($s) }
+    $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
+    return @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>ossbot: best-effort graceful down when Windows logs a shutdown or restart (System, User32 1074), CR-001 6b, ADR-0021. The event-task idea is credited to SpiralPool's wsl2-shutdown-hook.ps1 (BSD-3-Clause); no code adapted.</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <EventTrigger>
+      <Enabled>true</Enabled>
+      <Subscription>$(& $esc $script:OssHookQuery)</Subscription>
+    </EventTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>$sid</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>false</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>true</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>
+    <Priority>7</Priority>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>$(& $esc $conhost)</Command>
+      <Arguments>$(& $esc (Get-OssHookArguments))</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+}
+
+function Get-OssHookProblems {
+    # How the registered ossbot-shutdown-hook differs from its spec (empty = as required).
+    param([object]$Task)
+    $p = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Task) { $p.Add('missing'); return $p.ToArray() }
+    $triggers = @($Task.Triggers)
+    $sub = if ($triggers.Count -eq 1 -and $triggers[0].PSObject.Properties['Subscription']) { [string]$triggers[0].Subscription } else { '' }
+    if ($triggers.Count -ne 1) { $p.Add("$($triggers.Count) trigger(s), want 1") }
+    elseif (($sub -replace '\s', '') -ne ($script:OssHookQuery -replace '\s', '')) { $p.Add('trigger is not the System User32 1074 subscription') }
+    $actions = @($Task.Actions)
+    $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
+    if ($actions.Count -ne 1 -or $actions[0].Execute -ne $conhost -or $actions[0].Arguments -ne (Get-OssHookArguments)) { $p.Add('action differs') }
+    if ([string]$Task.Principal.RunLevel -ne 'Limited') { $p.Add("run level $($Task.Principal.RunLevel)") }
+    if ([string]$Task.Settings.ExecutionTimeLimit -ne 'PT2M') { $p.Add("time limit $($Task.Settings.ExecutionTimeLimit)") }
+    return $p.ToArray()
+}
+
+function Install-OssHookTask {
+    # Register (or re-register on drift) ossbot-shutdown-hook. Returns 'unchanged', 'changed' or 'WARN: ...'.
+    $existing = Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue
+    if ($existing -and @(Get-OssHookProblems -Task $existing).Count -eq 0) { return 'unchanged' }
+    try {
+        Register-ScheduledTask -TaskName $script:OssHookTask -Xml (Get-OssHookTaskXml) -Force -ErrorAction Stop | Out-Null
+        return 'changed'
+    } catch {
+        return "WARN: could not register $($script:OssHookTask) (non-elevated event trigger refused?): $($_.Exception.Message)"
+    }
+}
+
+# ------------------------------------------------- Start-menu shortcuts (CR-001 5, bootstrap -Shortcuts)
+function Get-OssShortcutDir { return (Join-Path ([Environment]::GetFolderPath('Programs')) 'ossbot') }
+
+function Get-OssShortcutSpecs {
+    $ps = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $specs = @()
+    foreach ($s in @(@('Up', 'up.ps1'), @('Down', 'down.ps1'), @('Status', 'status.ps1'), @('Kill', 'kill.ps1'))) {
+        $file = Join-Path $script:OssRepo "scripts\$($s[1])"
+        $specs += [pscustomobject]@{
+            Path = Join-Path (Get-OssShortcutDir) "ossbot $($s[0]).lnk"; Target = $ps
+            Arguments = "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$file`""; Description = "ossbot $($s[0]) (scripts\$($s[1]))"
+        }
+    }
+    return $specs
+}
+
+function Install-OssShortcuts {
+    # Creates or fixes the four shortcuts; returns 'unchanged' or 'changed'.
+    $shell = New-Object -ComObject WScript.Shell
+    $dir = Get-OssShortcutDir
+    $changed = $false
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null; $changed = $true }
+    foreach ($s in Get-OssShortcutSpecs) {
+        if (Test-Path -LiteralPath $s.Path) {
+            $have = $shell.CreateShortcut($s.Path)
+            if ($have.TargetPath -eq $s.Target -and $have.Arguments -eq $s.Arguments -and $have.WorkingDirectory -eq $script:OssRepo) { continue }
+        }
+        $lnk = $shell.CreateShortcut($s.Path)
+        $lnk.TargetPath = $s.Target
+        $lnk.Arguments = $s.Arguments
+        $lnk.WorkingDirectory = $script:OssRepo
+        $lnk.Description = $s.Description
+        $lnk.Save()
+        $changed = $true
+    }
+    if ($changed) { return 'changed' }
+    return 'unchanged'
+}
+
+function Remove-OssShortcuts {
+    # Removes only the four ossbot shortcuts, and the folder when it is then empty. Returns the count.
+    $n = 0
+    foreach ($s in Get-OssShortcutSpecs) {
+        if (Test-Path -LiteralPath $s.Path) { Remove-Item -LiteralPath $s.Path -Force; $n++ }
+    }
+    $dir = Get-OssShortcutDir
+    if ((Test-Path -LiteralPath $dir) -and @(Get-ChildItem -LiteralPath $dir -Force).Count -eq 0) { Remove-Item -LiteralPath $dir -Force }
+    return $n
+}
+
 function Get-OssSha256Hex {
     param([Parameter(Mandatory)][byte[]]$Bytes)
     $sha = [Security.Cryptography.SHA256]::Create()

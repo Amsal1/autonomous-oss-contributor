@@ -9,10 +9,20 @@
                anything changed, then verifies resources and the single drvfs mount (rollback on failure).
     hyperv     Hyper-V firewall rules (7.8) only when this session is already elevated, else WARN.
     provision  streams scripts/provision.sh over stdin as root (never runs it from the mount, N4).
-    autostart  per-user Scheduled Task 'ossbot-autostart' (7.6).
+    autostart  per-user Scheduled Task 'ossbot-autostart' (7.6): boots the distro at logon, then starts
+               the shutdown blocker (CR-001 6a, ADR-0021), which is also started now if it does not run.
+    shutdownhooks  the autostart blocker action as above plus the per-user, non-elevated Scheduled Task
+               'ossbot-shutdown-hook' (System User32 1074 -> down.ps1 -Timeout 20 -Kind hook, CR-001 6b).
+    shortcuts  Start-menu shortcuts 'ossbot Up/Down/Status/Kill' (only with -Shortcuts; off by default).
   Never unregisters, deletes or overwrites a distro or VHD.
 .PARAMETER Only
-  Comma-separated subset of phases (preflight always runs), e.g. -Only wsl.
+  Comma-separated subset of phases (preflight always runs), e.g. -Only wsl. With -Uninstall: the
+  parts to remove (shortcuts, shutdownhooks, autostart, hyperv, wsl; see scripts\uninstall-host.ps1).
+.PARAMETER Uninstall
+  Remove ossbot's host registrations instead (scripts\uninstall-host.ps1): only the ossbot-* tasks,
+  the blocker, the shortcuts and the documented host files; never the distro, its VHD or the repo.
+.PARAMETER Shortcuts
+  Also create the Start-menu shortcuts (phase 'shortcuts').
 .PARAMETER DistroName
   Distro to bootstrap (default ossbot). Other names are for tests/system/test_bootstrap_zero.ps1.
 .PARAMETER Location
@@ -25,7 +35,9 @@ param(
     [string]$Only = '',
     [string]$DistroName = 'ossbot',
     [string]$Location = '',
-    [string]$Steps = ''
+    [string]$Steps = '',
+    [switch]$Uninstall,
+    [switch]$Shortcuts
 )
 # Native stderr must not become terminating errors under PowerShell 5.1; failures are explicit.
 $ErrorActionPreference = 'Continue'
@@ -33,15 +45,26 @@ $script:OssDistro = $DistroName
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 . (Join-Path $PSScriptRoot 'lib\wslconfig.ps1')
 
+if ($Uninstall) {
+    if ($DistroName -ne 'ossbot') { Write-Host 'refused: -Uninstall removes the host registrations of the ossbot distro only'; exit 2 }
+    $uargs = @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'uninstall-host.ps1'))
+    if ($Only) { $uargs += @('-Only', $Only) }
+    & powershell @uargs
+    exit $LASTEXITCODE
+}
+
 $repo = Get-OssRepoRoot
-$phases = @('wsl', 'hyperv', 'provision', 'autostart')
-$selected = $phases
+$phases = @('wsl', 'hyperv', 'provision', 'autostart', 'shutdownhooks', 'shortcuts')
+$selected = @($phases | Where-Object { $_ -ne 'shortcuts' })
 if ($Only) {
     $selected = @($Only -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
     foreach ($p in $selected) {
         if ($p -notin ($phases + 'preflight')) { Write-Host "unknown phase '$p' (known: preflight, $($phases -join ', '))"; exit 2 }
     }
 }
+# The shortcuts live outside the project folder: only with -Shortcuts (CR-001 5, NFR-3).
+if ($Shortcuts -and $selected -notcontains 'shortcuts') { $selected += 'shortcuts' }
+if (-not $Shortcuts -and $selected -contains 'shortcuts') { Write-Host "phase 'shortcuts' needs -Shortcuts"; exit 2 }
 if (-not $Location) { $Location = Join-Path $repo ".wsl\$DistroName" }
 $script:Failed = $false
 
@@ -220,6 +243,22 @@ function Invoke-AutostartPhase {
     else { Write-OssStep 'shutdown-blocker' 'WARN' 'did not start; see .ossbot-local\shutdown-blocker.log' }
 }
 
+# ---------------------------------------------------------------------- 7. shutdown hooks
+function Invoke-ShutdownHooksPhase {
+    # CR-001 6a (the blocker, through the autostart task) and 6b (the User32 1074 task), ADR-0021.
+    if ($DistroName -ne 'ossbot') { Write-OssStep 'shutdownhooks' 'unchanged' "skipped for test distro $DistroName"; return }
+    if ($selected -notcontains 'autostart') { Invoke-AutostartPhase }
+    $r = Install-OssHookTask
+    if ($r -like 'WARN*') { Write-OssStep 'shutdown-hook' 'WARN' ($r -replace '^WARN: ', ''); return }
+    Write-OssStep 'shutdown-hook' $r "$($script:OssHookTask): System User32 1074 -> down.ps1 -Timeout 20 -Kind hook (non-elevated, PT2M, best effort)"
+}
+
+# --------------------------------------------------------------------------- 8. shortcuts
+function Invoke-ShortcutsPhase {
+    if ($DistroName -ne 'ossbot') { Write-OssStep 'shortcuts' 'unchanged' "skipped for test distro $DistroName"; return }
+    Write-OssStep 'shortcuts' (Install-OssShortcuts) "ossbot Up/Down/Status/Kill in $(Get-OssShortcutDir)"
+}
+
 Invoke-Preflight
 foreach ($phase in $phases) {
     if ($selected -notcontains $phase) { continue }
@@ -228,6 +267,8 @@ foreach ($phase in $phases) {
         'hyperv' { Invoke-HyperVPhase }
         'provision' { Invoke-ProvisionPhase }
         'autostart' { Invoke-AutostartPhase }
+        'shutdownhooks' { Invoke-ShutdownHooksPhase }
+        'shortcuts' { Invoke-ShortcutsPhase }
     }
 }
 Write-Host 'bootstrap: done' -ForegroundColor Green

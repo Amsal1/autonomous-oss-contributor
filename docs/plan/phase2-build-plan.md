@@ -320,7 +320,7 @@ Depends on everything above.
       Verify: `DEV pytest -m unit tests/unit/test_ci_workflow.py` green.
 
 - [ ] 57. Final verification and report.
-      Rows: DES-FR-11, DES-AC-3, NOTE-2, NOTE-9, CHAT-34, CHAT-37, GHMCP-2 (live part).
+      Rows: DES-FR-11, DES-AC-3, NOTE-2, NOTE-9, CHAT-34, CHAT-37, GHMCP-2 (live part), CR1-6a, CR1-6b, DES-V-31, DES-AC-32 (the real-restart parts; FEAT-008 built and tested 6a/6b with simulated shutdowns, ADR-0021).
       What: run "Required overall verification" and the "Phase 2 verification" block of PLAN.md; full `ossctl doctor --probes` and `scripts\ossctl.ps1 doctor`; one research-profile scout or reviewer job (dry-run, read-only) whose events show a successful `@github/...` read tool call, the in-container GitHub MCP path of GHMCP-2; the real Windows restart test of 6a/6b (ask the user to restart the laptop with `send_message` severity `warning`, then record the observed shutdown types); every matrix row `done` or `deferred`; write `docs/FINAL_REPORT.md` (summary, doctor results, live checks, user actions needed); FEAT-011 `completed`; commit.
       Verify: every command of both blocks passes; the matrix check with `$f='.'` lists no row; `git status --porcelain` empty.
 
