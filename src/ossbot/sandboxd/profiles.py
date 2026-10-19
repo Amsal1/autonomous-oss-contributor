@@ -15,17 +15,19 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort
 from ossbot.common.schemas import BASE_REF_RE, SHA1_RE
 
-JobProfile = Literal["fetch", "research", "coder", "validate", "package", "catalog", "stack"]
-JobEntrypoint = Literal["fetch", "kiro", "validate", "package", "unbundle", "list_models", "probe"]
+JobProfile = Literal["fetch", "research", "coder", "validate", "package", "catalog", "extract", "stack"]
+JobEntrypoint = Literal["fetch", "kiro", "validate", "package", "unbundle", "list_models", "extract_text", "probe"]
 RepoMode = Literal["none", "snapshot", "rw"]
 ResearchRole = Literal["vetter", "scout", "planner", "reviewer", "summarizer"]  # scout: decision B8 (CR-004)
 KiroRole = Literal["vetter", "scout", "planner", "reviewer", "summarizer", "coder"]
 
 RUN_ID_RE = r"^[a-z0-9][a-z0-9_-]{0,30}$"
-CID_RE = r"^(c_[0-9A-Z]{10}|sys-catalog)$"
+CID_RE = r"^(c_[0-9A-Z]{10}|sys-catalog|sys-chat)$"
 INPUT_NAME_RE = r"^[a-z0-9_.-]{1,64}$"
 PROMPT_FILE_RE = r"^[a-z0-9_-]{1,64}\.md$"
 CATALOG_CID = "sys-catalog"
+CHAT_CID = "sys-chat"  # the assistant's PDF text jobs (extract_text, §14.12.5)
+EXTRACT_INPUT = "doc.pdf"
 MAX_CPUS = 8.0
 MAX_MEMORY_MB = 6144
 MIN_MEMORY_MB = 64
@@ -52,6 +54,8 @@ TEMPLATES: dict[str, ContainerTemplate] = {
     "agent-llm": ContainerTemplate("agent-llm", "sandbox-llm", "llm", False, True, True, True),
     "agent-exec": ContainerTemplate("agent-exec", "sandbox-full", "none", True, False, False, True),
     "catalog": ContainerTemplate("catalog", "sandbox-llm", "catalog", False, True, True, False),
+    # pdftotext on an owner's PDF: no network, no key, no repo, noexec /tmp (§14.12.5)
+    "extract": ContainerTemplate("extract", "sandbox-full", "none", False, False, False, False),
     # internal helpers (never submitted through POST /v1/jobs)
     "stage-in": ContainerTemplate("stage-in", "sandbox-full", "none", False, False, False, False),
     "snapshot": ContainerTemplate("snapshot", "sandbox-full", "none", False, False, False, False),
@@ -82,6 +86,7 @@ PROFILE_REPO_MODE: dict[str, RepoMode] = {
     "package": "rw",
     "coder": "rw",
     "catalog": "none",
+    "extract": "none",
 }
 PROFILE_ENTRYPOINTS: dict[str, frozenset[str]] = {
     "fetch": frozenset({"fetch"}),
@@ -90,9 +95,11 @@ PROFILE_ENTRYPOINTS: dict[str, frozenset[str]] = {
     "validate": frozenset({"validate"}),
     "package": frozenset({"package", "unbundle"}),
     "catalog": frozenset({"list_models"}),
+    "extract": frozenset({"extract_text"}),
 }
 PROFILE_MAX_TIMEOUT: dict[str, int] = {
     "fetch": 3600, "research": 3600, "coder": 7200, "validate": 7200, "package": 900, "catalog": 300,
+    "extract": 300,
 }  # fmt: skip
 # Fixed per role, never caller-supplied (§15.3). [VERIFY §23 item 5: exact V3 internal tool ids]
 TRUST_TOOLS: dict[str, str] = {
@@ -167,6 +174,10 @@ class ListModelsArgs(Strict):
     pass
 
 
+class ExtractTextArgs(Strict):
+    pass
+
+
 ARGS_MODELS: dict[str, type[Strict]] = {
     "fetch": FetchArgs,
     "kiro": KiroArgs,
@@ -174,6 +185,7 @@ ARGS_MODELS: dict[str, type[Strict]] = {
     "package": PackageArgs,
     "unbundle": UnbundleArgs,
     "list_models": ListModelsArgs,
+    "extract_text": ExtractTextArgs,
 }
 
 
@@ -242,6 +254,10 @@ def validate_job(spec: JobSpec) -> ValidatedJob:
         raise SpecError("catalog jobs use the pseudo-cid sys-catalog, and only they do")
     if spec.profile == "catalog" and spec.inputs:
         raise SpecError("catalog jobs take no inputs")
+    if (spec.profile == "extract") != (spec.cid == CHAT_CID):
+        raise SpecError("extract jobs use the pseudo-cid sys-chat, and only they do")
+    if spec.profile == "extract" and set(spec.inputs) != {EXTRACT_INPUT}:
+        raise SpecError(f"extract jobs take exactly the input {EXTRACT_INPUT}")
     if spec.timeout_s > PROFILE_MAX_TIMEOUT[spec.profile]:
         raise SpecError(f"timeout_s exceeds the {spec.profile} maximum")
     return ValidatedJob(spec=spec, args=args)

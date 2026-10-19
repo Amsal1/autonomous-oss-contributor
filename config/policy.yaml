@@ -83,6 +83,13 @@ telegram:
   mode: single
 hermes:                            # §15.5; switch with ossctl hermes tier <tier> (TTY confirm) or /hermes tier
   capability_tier_default: self_improve   # locked | research | self_improve; unparseable flag = locked
+chat:                               # §15.6: files the owner sends the assistant
+  attachments:
+    max_mb: 20                      # Bot API getFile limit; bigger files are refused with a reply
+    strip_metadata: true            # EXIF/XMP/text chunks removed without decoding pixels (no Pillow)
+    allowed: [image, pdf, text, audio]   # audio: answered "Voice isn't supported yet" until Kiro takes audio
+    pdf_text_max_bytes: 2097152     # text extracted in a --network none sandbox job (pdftotext)
+    retention_hours: 24             # attachment files are deleted after this
 backup:
   include_secrets: false
   keep: 8

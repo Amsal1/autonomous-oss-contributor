@@ -52,6 +52,8 @@ def variants() -> dict[str, RunSpec]:
                                repo_mode="rw"),
         "catalog": job_spec("catalog", run_id=RUN, cid="sys-catalog", entrypoint="list_models", image_ref=LLM,
                             network="ossbot-t-sys-catalog-catalog", repo_mode="none"),
+        "extract": job_spec("extract", run_id=RUN, cid="sys-chat", entrypoint="extract_text", image_ref=FULL,
+                            network="none", repo_mode="none", cpus=1.0, memory_mb=512),
         "stage-in": stagein_spec(RUN, CID, FULL),
         "snapshot": snapshot_spec(RUN, CID, FULL),
         "snapcheck": probe_spec(RUN, CID, FULL, "snapshot_check", (Mount(v.ro, "/work/repo", read_only=True),),

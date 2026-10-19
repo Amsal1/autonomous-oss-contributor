@@ -70,6 +70,9 @@ class V3Settings:
     models_file: str | None = None
     chat_role: str = "chat"
     vision_role: str = "vision"
+    # Roles a request may select with ``model="role:<name>"`` (e.g. a live check on a cheap test model);
+    # empty = the request's model is always ignored. ``<name>_vision`` is used for image turns when listed.
+    request_roles: frozenset[str] = frozenset()
     expected_mode: str = core.EXPECTED_MODE
     allowed_tools: frozenset[str] = core.ALLOWED_TOOLS
     violation_uds: str | None = None
@@ -94,6 +97,7 @@ class V3Settings:
             models_file=get("MODELS_FILE", "") or None,
             chat_role=get("CHAT_ROLE", "chat"),
             vision_role=get("VISION_ROLE", "vision"),
+            request_roles=frozenset(r.strip() for r in get("REQUEST_ROLES", "").split(",") if r.strip()),
             expected_mode=get("EXPECTED_MODE", core.EXPECTED_MODE),
             allowed_tools=frozenset(t.strip() for t in tools.split(",") if t.strip()),
             violation_uds=get("VIOLATION_UDS", "") or None,
@@ -397,8 +401,20 @@ class KiroV3Client:
             agent.close()
 
     # -------------------------------------------------------------- completions
-    def _turn(self, text: str, images: list[tuple[str, str]], timeout: float) -> core.TurnResult:
-        role = self.settings.vision_role if images else self.settings.chat_role
+    def request_role(self, model: str | None, images: bool) -> str | None:
+        """``role:<name>`` from the request when ``<name>`` is in ``request_roles``, else None."""
+        if not isinstance(model, str) or not model.startswith("role:"):
+            return None
+        name = model[5:].strip()
+        if name not in self.settings.request_roles:
+            return None
+        vision = f"{name}_vision"
+        return vision if images and vision in self.settings.request_roles else name
+
+    def _turn(
+        self, text: str, images: list[tuple[str, str]], timeout: float, role: str | None = None
+    ) -> core.TurnResult:
+        role = role or (self.settings.vision_role if images else self.settings.chat_role)
         resolved = self.models.resolve(role)
         started = time.monotonic()
         with self._lock:
@@ -455,11 +471,13 @@ class KiroV3Client:
         stream: bool = False,
         **_: Any,
     ) -> Any:
-        del model  # the models file decides; Hermes' provider name is not a Kiro model id
+        # The models file decides; Hermes' provider name is not a Kiro model id. Only ``role:<name>`` of an
+        # allowlisted request role picks another role of the same file.
         bridge = self._bridge if self._bridge is not None else _hermes_bridge()
         msgs = list(messages or [])
         text = format_prompt(msgs, tools, tool_choice, bridge)
-        result = self._turn(text, latest_images(msgs), _timeout_s(timeout))
+        images = latest_images(msgs)
+        result = self._turn(text, images, _timeout_s(timeout), self.request_role(model, bool(images)))
         if bridge is not None:
             tool_calls, cleaned = bridge.extract_tool_calls_from_text(result.text)
         else:

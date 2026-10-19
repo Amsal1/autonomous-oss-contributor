@@ -2,7 +2,8 @@
 
 The gatekeeper derives the caller's role from the socket peer uid (``hermes`` = requester), so these
 tools can read status, file a discovery request for an issue URL, send the owner a note, pause or
-kill; they cannot approve, submit, resume or change settings. Stdlib only; never imports ossbot.
+kill; they cannot approve, submit, resume or change settings. ``ossbot_feature_*`` work on the
+per-feature SQLite stores (``features.py``) without the gatekeeper. Stdlib only; never imports ossbot.
 Every result is a JSON string; gatekeeper errors are returned as ``{"success": false, ...}``.
 """
 
@@ -13,8 +14,11 @@ import json
 import os
 import re
 import socket
+import sqlite3
 import urllib.parse
 from typing import Any
+
+from .features import FEATURES, FeatureStore
 
 SOCKET = os.environ.get("OSSBOT_GATEKEEPER_SOCK", "/run/ossbot/gatekeeper.sock")
 CID_RE = re.compile(r"^c_[0-9A-Z]{10}$")
@@ -64,6 +68,8 @@ def _safe(fn: Any) -> Any:
             return json.dumps({"success": False, "error": f"gatekeeper unavailable: {type(exc).__name__}"})
         except ValueError as exc:
             return json.dumps({"success": False, "error": str(exc)[:200]})
+        except sqlite3.Error as exc:
+            return json.dumps({"success": False, "error": f"feature store: {type(exc).__name__}"})
 
     wrapper.__name__ = fn.__name__
     return wrapper
@@ -130,6 +136,24 @@ def ossbot_kill(params: dict[str, Any]) -> str:
     return _result(*call("POST", "/v1/control/kill", {"reason": _text(params, "reason", 500)}))
 
 
+@_safe
+def ossbot_feature_save(params: dict[str, Any]) -> str:
+    """A record in the feature's own SQLite store (local to Hermes; no gatekeeper call)."""
+    store = FeatureStore(_text(params, "feature", 40))
+    data = params.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("data must be a JSON object")
+    return json.dumps({"success": True, "data": store.save(_text(params, "key", 80), data)}, ensure_ascii=False)
+
+
+@_safe
+def ossbot_feature_query(params: dict[str, Any]) -> str:
+    store = FeatureStore(_text(params, "feature", 40))
+    prefix = params.get("prefix") if isinstance(params.get("prefix"), str) else ""
+    limit = params.get("limit") if isinstance(params.get("limit"), int) else 50
+    return json.dumps({"success": True, "data": store.query(prefix.strip(), limit)}, ensure_ascii=False)
+
+
 def _schema(
     name: str, description: str, props: dict[str, Any] | None = None, required: tuple[str, ...] = ()
 ) -> dict[str, Any]:
@@ -179,5 +203,25 @@ TOOLS: list[tuple[dict[str, Any], Any]] = [
             ("reason",),
         ),
         ossbot_kill,
+    ),
+    (
+        _schema(
+            "ossbot_feature_save",
+            "Save one record in a personal feature store. Features: "
+            + "; ".join(f"{f.name}: {f.purpose}" for f in FEATURES.values())
+            + " Use a sortable key such as 2026-10-20T13:05-lunch.",
+            {"feature": _STR, "key": _STR, "data": {"type": "object"}},
+            ("feature", "key", "data"),
+        ),
+        ossbot_feature_save,
+    ),
+    (
+        _schema(
+            "ossbot_feature_query",
+            "Read records of a personal feature store, newest key first, optionally by key prefix (e.g. 2026-10).",
+            {"feature": _STR, "prefix": _STR, "limit": {"type": "integer"}},
+            ("feature",),
+        ),
+        ossbot_feature_query,
     ),
 ]

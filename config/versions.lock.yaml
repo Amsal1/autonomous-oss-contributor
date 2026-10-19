@@ -58,6 +58,11 @@ squid:
   apt_version: "6.14-0ubuntu0.24.04.4"
   source: "apt-cache policy squid on the ossbot distro, 2026-10-17"
 
+poppler_utils:
+  # Ubuntu noble-updates package in ossbot/sandbox-full: pdftotext for the extract_text entrypoint (§14.12.5).
+  apt_version: "24.02.0-1ubuntu9.10"
+  source: "apt-cache policy poppler-utils in the pinned ubuntu:24.04 base, FEAT-007 item 37"
+
 images:
   # Written by the provision 'images' step (FEAT-004) after each build; the root-owned copy at
   # /etc/ossbot/versions.lock.yaml is what the Docker filter and sandboxd read. 'pending' = not

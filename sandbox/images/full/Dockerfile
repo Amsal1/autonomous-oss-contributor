@@ -1,5 +1,5 @@
 # ossbot/sandbox-full (DESIGN §10.1): code-running image for fetch, validate, package, unbundle,
-# agent-exec, snapshot, stage-in and probe. No kiro-cli and no secrets, ever.
+# agent-exec, snapshot, stage-in, probe and extract_text (PDF text, §14.12.5). No kiro-cli and no secrets, ever.
 # Build (root, FEAT-004 'images' step, context = repo root):
 #   docker build -f sandbox/images/full/Dockerfile -t ossbot/sandbox-full:<date> .
 # Pins come from config/versions.lock.yaml (tests/unit/sandbox/test_gitcmd_image_env.py checks them).
@@ -12,6 +12,7 @@ ARG MISE_SHA256=b775d3feee8f0cdb1934c60a1ec26526d6eb7cdeb258b48c64cfadcec07a8fec
 ARG TOFU_VERSION=1.13.1
 ARG KIND_VERSION=0.33.0
 ARG GITLEAKS_VERSION=8.30.1
+ARG POPPLER_VERSION=24.02.0-1ubuntu9.10
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
@@ -29,6 +30,7 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       ca-certificates curl git jq dnsutils rsync build-essential shellcheck unzip xz-utils zstd \
       python3 python3-venv openjdk-17-jdk-headless openjdk-21-jdk-headless \
+      "poppler-utils=${POPPLER_VERSION}" \
  && rm -rf /var/lib/apt/lists/*
 
 # uv (pinned, sha256-verified) and Python 3.13 next to the distro's 3.12.
@@ -63,7 +65,8 @@ COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/numstat2json.py /opt/ossb
 COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/execd.py /opt/ossbot/bin/ossbot-execd
 COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/fetch.sh sandbox/entrypoints/exec.sh \
      sandbox/entrypoints/validate.sh sandbox/entrypoints/package.sh sandbox/entrypoints/unbundle.sh \
-     sandbox/entrypoints/snapshot.sh sandbox/entrypoints/probe.sh /opt/ossbot/entrypoints/
+     sandbox/entrypoints/snapshot.sh sandbox/entrypoints/probe.sh sandbox/entrypoints/extract_text.sh \
+     /opt/ossbot/entrypoints/
 
 # Safety-probe fixture as a tar so its symlinks survive (DESIGN §10.1, §10.9).
 COPY --chown=0:0 sandbox/fixtures/ /tmp/fixtures/

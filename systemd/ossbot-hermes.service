@@ -25,7 +25,12 @@ Environment=HTTPS_PROXY=http://10.212.0.2:3141 https_proxy=http://10.212.0.2:314
 Environment=API_SERVER_HOST=127.0.0.1 API_SERVER_PORT=8642
 Environment=HERMES_KIRO_ACP_ENGINE=v3 HERMES_KIRO_ACP_COMMAND=/home/hermes/.local/bin/kiro-cli HERMES_KIRO_ACP_CLI=/home/hermes/.local/bin/kiro-cli
 Environment=HERMES_KIRO_ACP_AUTH=default HERMES_KIRO_ACP_TOKEN_FILE=/etc/ossbot/secrets/hermes.env
+# ossbot's values for the fork's generic defaults (the probe passes the same, ctl/hermes_probe.py)
+Environment=HERMES_KIRO_ACP_HOME=/home/hermes HERMES_KIRO_ACP_CWD=/home/hermes/.hermes/kiro-cwd HERMES_KIRO_ACP_WORKSPACE=/home/hermes/.hermes/workspace
+Environment=HERMES_KIRO_ACP_PROXY=http://10.212.0.2:3141 HERMES_KIRO_ACP_EXPECTED_MODE=ossbot-chat
 Environment=HERMES_KIRO_ACP_MODELS_FILE=/mnt/d/Work/autonomous-oss-contributor/config/models.yaml
+# MDL-3: `ossctl chat selftest` asks for model "role:test" so live checks run on roles.test / test_vision.
+Environment=HERMES_KIRO_ACP_REQUEST_ROLES=test,test_vision
 Environment=HERMES_KIRO_ACP_VIOLATION_UDS=/run/ossbot/gatekeeper.sock OSSBOT_GATEKEEPER_SOCK=/run/ossbot/gatekeeper.sock
 ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
 ExecStart=/home/hermes/.hermes/hermes-agent/.venv/bin/hermes gateway

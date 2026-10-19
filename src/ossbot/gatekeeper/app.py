@@ -23,6 +23,7 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.api import (
     actions,
     audit,
+    chat,
     config,
     contributions,
     control,
@@ -140,6 +141,11 @@ async def housekeeping_once(ctx: AppContext) -> None:
     ctx.state_machine.sweep_expired()
     ProposalService(ctx).sweep_expired()  # CR-004: PROPOSED past proposal.ttl_hours -> PROPOSAL_EXPIRED
     prune_retention(ctx)
+    if ctx.chat is not None:  # §15.6: attachment files older than chat.attachments.retention_hours
+        try:
+            ctx.chat.media.prune(ctx.config.policy.chat.attachments.retention_hours)
+        except OSError:
+            log.exception("attachment prune failed", extra={"event": "media_prune_failed"})
     # §15.5: skills Hermes staged (root hasher's pending.json) -> skill_reviews + skill cards; root decisions back
     if ctx.skill_reviews is not None:
         try:
@@ -192,6 +198,6 @@ def create_app(ctx: AppContext, *, housekeeping: bool = True, services: Sequence
                   openapi_url=None)  # fmt: skip
     app.state.ctx = ctx
     _install_handlers(app)
-    for module in (control, config, contributions, actions, models, audit, notify, work, prefs, stage_runs):
+    for module in (control, config, contributions, actions, models, audit, notify, work, prefs, stage_runs, chat):
         app.include_router(module.router)
     return app

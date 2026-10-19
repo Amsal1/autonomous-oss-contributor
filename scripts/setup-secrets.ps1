@@ -34,6 +34,8 @@ $values = [ordered]@{
     GITHUB_READ_TOKEN    = Read-Secret 'GitHub fine-grained PAT, public repositories read-only (github_pat_...)'
     KIRO_API_KEY_SANDBOX = Read-Secret 'Kiro API key "ossbot-sandbox" (ksk_...)'
     KIRO_API_KEY_HERMES  = Read-Secret 'Kiro API key "ossbot-hermes" (ksk_...)'
+    # Optional hook (DESIGN 14.12.7): no reverse image search provider is wired yet; leave it empty.
+    REVERSE_IMAGE_SEARCH_KEY = Read-Secret 'Optional: reverse image search provider key (none wired yet)'
 }
 
 # Telegram user id -> config/profile.yaml (pre-filled from the existing profile).

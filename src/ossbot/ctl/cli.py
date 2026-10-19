@@ -43,6 +43,8 @@ app.add_typer(config_app, name="config")
 app.add_typer(audit_app, name="audit")
 app.add_typer(egress_app, name="egress")
 app.add_typer(hermes_app, name="hermes")
+chat_app = typer.Typer(no_args_is_help=True, help="assistant backend (selftest)")
+app.add_typer(chat_app, name="chat")
 model_app = typer.Typer(no_args_is_help=True, help="global model switch (config/models.yaml)")
 models_app = typer.Typer(no_args_is_help=True, help="Kiro model catalog")
 app.add_typer(model_app, name="model")
@@ -438,6 +440,27 @@ def hermes_probe(
     doc = _hermes_probe(handshake_only=handshake_only)
     _show(doc)
     raise typer.Exit(0 if doc.get("verdict") == "pass" else 1)
+
+
+@chat_app.command("selftest")
+def chat_selftest(
+    prompt: Annotated[str | None, typer.Option(help="the question (default: a fixed one-line check)")] = None,
+    fixture: Annotated[str | None, typer.Option(help="a file under tests/fixtures/chat/ to attach")] = None,
+    no_deliver: Annotated[bool, typer.Option("--no-deliver", help="do not send the answer to Telegram")] = False,
+) -> None:
+    """One real assistant turn: gatekeeper -> Hermes -> kiro-acp V3 on roles.test (operator; DESIGN §15.6).
+    The answer goes to the owner's Telegram chat only; this prints redacted metadata."""
+    body: dict[str, Any] = {"deliver": not no_deliver}
+    if prompt is not None:
+        body["prompt"] = prompt
+    if fixture is not None:
+        body["fixture"] = fixture
+    try:
+        code, data = api("POST", "/v1/chat/selftest", body, timeout=900.0)
+    except GatekeeperDown as exc:
+        _fail(f"gatekeeper unreachable ({exc})")
+    _show(data)
+    raise typer.Exit(0 if code == 200 and isinstance(data, dict) and data.get("status") == "done" else 1)
 
 
 @hermes_app.command("upgrade")

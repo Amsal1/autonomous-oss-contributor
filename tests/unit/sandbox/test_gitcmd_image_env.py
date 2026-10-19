@@ -62,6 +62,7 @@ def test_tool_pins_equal_lock() -> None:
     assert _arg(llm, "KIRO_CLI_URL") == LOCK["kiro_cli"]["headless_tar_gz_url"]
     assert _arg(llm, "KIRO_CLI_SHA256") == LOCK["kiro_cli"]["headless_tar_gz_sha256"]
     assert _arg(proxy, "SQUID_VERSION") == LOCK["squid"]["apt_version"]
+    assert _arg(full, "POPPLER_VERSION") == LOCK["poppler_utils"]["apt_version"]
 
 
 @pytest.mark.parametrize("image", ["full", "llm"])

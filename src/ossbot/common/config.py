@@ -196,6 +196,24 @@ class HermesPolicy(Strict):
     capability_tier_default: HermesTier = "self_improve"
 
 
+AttachmentKind = Literal["image", "pdf", "text", "audio"]
+ATTACHMENT_KINDS: tuple[AttachmentKind, ...] = ("image", "pdf", "text", "audio")
+
+
+class AttachmentsPolicy(Strict):
+    """§15.6: files the owner sends the assistant (downloaded by the gatekeeper through proxy 3150)."""
+
+    max_mb: Annotated[int, Field(ge=1, le=20)] = 20  # Bot API getFile serves at most 20 MB
+    strip_metadata: bool = True
+    allowed: list[AttachmentKind] = Field(default_factory=lambda: list(ATTACHMENT_KINDS))
+    pdf_text_max_bytes: Annotated[int, Field(ge=1024, le=2 * 1024 * 1024)] = 2 * 1024 * 1024
+    retention_hours: Annotated[int, Field(ge=1, le=720)] = 24
+
+
+class ChatPolicy(Strict):
+    attachments: AttachmentsPolicy = AttachmentsPolicy()
+
+
 class BackupPolicy(Strict):
     include_secrets: bool = False
     keep: PosInt = 8
@@ -231,6 +249,7 @@ class PolicyConfig(Strict):
     discovery: DiscoveryPolicy = DiscoveryPolicy()
     telegram: TelegramPolicy = TelegramPolicy()
     hermes: HermesPolicy = HermesPolicy()
+    chat: ChatPolicy = ChatPolicy()
     backup: BackupPolicy = BackupPolicy()
 
     @model_validator(mode="after")

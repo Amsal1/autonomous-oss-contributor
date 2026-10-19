@@ -7,17 +7,26 @@ import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from typing import Any
 
 from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
+from ossbot.ctl import hermes_probe
 from ossbot.gatekeeper import db, policy, proposals, secret_scan
 from ossbot.gatekeeper.anchors import AnchorClient
-from ossbot.gatekeeper.anomaly import AnomalyHandler
+from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
 from ossbot.gatekeeper.approvals import ApprovalService, ArtifactSource, Invalidated
 from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.authz import Role, interactive_ancestry
+from ossbot.gatekeeper.chat import hermes_api
+from ossbot.gatekeeper.chat.backend import ChatRuntime, ChatService, HermesApiBackend, RelayGate
+from ossbot.gatekeeper.chat.hermes_api import HermesClient
+from ossbot.gatekeeper.chat.hermes_surface import SurfaceResult, check_toolsets
+from ossbot.gatekeeper.chat.media import MediaStore
+from ossbot.gatekeeper.chat.pdf_jobs import PdfJobs
+from ossbot.gatekeeper.chat.turns import TurnStore
 from ossbot.gatekeeper.config_snapshot import SnapshotManager
 from ossbot.gatekeeper.contributions import ContributionService
 from ossbot.gatekeeper.control import ControlService
@@ -69,6 +78,7 @@ class AppContext:
     skill_reviews: SkillReviews = field(default=None)  # type: ignore[assignment]  # set by build_context
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
     card_recover: Callable[[], None] = field(default=lambda: None)
+    chat: ChatRuntime | None = None  # the assistant backend (§15.6), set by build_context
 
     @property
     def config(self) -> ConfigBundle:
@@ -297,4 +307,34 @@ def build_context(
 
     approvals.text_check = text_check
     ui_redact.bind(lambda: ctx.secret_scanner)  # U14: the one redactor follows the current snapshot
+    ctx.chat = chat_runtime(ctx, hermes_tier)
+    ctx.chat.service.turns.reset_streaming()  # turns a crash or restart left open (§14.18.5)
     return ctx
+
+
+def chat_runtime(ctx: AppContext, tier: Callable[[], HermesTier]) -> ChatRuntime:
+    """The assistant backend (§15.6): relay gate, Hermes API client, turns, attachments, PDF jobs."""
+    key = ctx.env.get("HERMES_API_KEY") or ""
+    probe_path = ctx.paths.var_lib / "probes" / "hermes-kiro.json"
+
+    def surface(t: HermesTier) -> SurfaceResult:
+        if not key:
+            return SurfaceResult("unavailable", "HERMES_API_KEY missing")
+        return check_toolsets(hermes_api.DEFAULT_URL, key, t)
+
+    def lifecycle() -> str | None:
+        info = ctx.control.lifecycle()
+        return None if info is None else info.state
+
+    def surface_kill(result: SurfaceResult) -> None:
+        detail = f"{result.outcome}: {result.detail}; unexpected {', '.join(result.unexpected) or '-'}"
+        ctx.anomaly.report(Signal.HERMES_TOOL_SURFACE, detail[:300])
+
+    def probe_doc() -> Mapping[str, Any] | None:
+        return hermes_probe.read_result(probe_path)
+
+    gate = RelayGate(flags=ctx.control.flags, lifecycle=lifecycle, probe_doc=probe_doc, surface=surface, tier=tier,
+                     on_surface_kill=surface_kill)  # fmt: skip
+    service = ChatService(HermesApiBackend(HermesClient(key), gate), TurnStore(ctx.conn, ctx.clock))
+    media_store = MediaStore(ctx.paths.gatekeeper_dir / "chat")
+    return ChatRuntime(service, gate, media_store, PdfJobs(ctx.paths.artifacts_dir), probe_path)

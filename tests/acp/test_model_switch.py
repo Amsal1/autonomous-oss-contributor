@@ -3,6 +3,7 @@ new model reaches the next session without a restart, and only ``session/set_con
 
 from __future__ import annotations
 
+import json
 import os
 import time
 from collections.abc import Callable
@@ -59,6 +60,25 @@ def test_unavailable_model_falls_back_per_models_file(fake: Callable[..., FakeRu
     c = client(run, tmp_path, models=models_file(tmp_path, chat="claude-gone-1"))
     ask(c)
     assert _sets(run) == [("model", "claude-opus-5.5")]
+    c.close()
+
+
+def test_request_role_only_from_the_allowlist(fake: Callable[..., FakeRun], tmp_path: Path) -> None:
+    """``model="role:test"`` selects roles.test only when ``test`` is a request role; anything else is ignored."""
+    path = tmp_path / "models.json"
+    path.write_text(json.dumps({
+        "default": {"model": "claude-opus-5.5", "effort": "high"},
+        "roles": {"chat": {"model": "claude-sonnet-5.5", "effort": "medium"},
+                  "test": {"model": "claude-haiku-4.5", "effort": "low"}, "coder": {"model": "claude-opus-5.5"}},
+    }), encoding="utf-8")  # fmt: skip
+    run = fake(session={"honour_meta_model": True})
+    c = client(run, tmp_path, models=path, request_roles=frozenset({"test"}))
+    msgs = [{"role": "user", "content": "hello"}]
+    for model in ("role:test", "role:coder", "claude-opus-5.5", "kiro-acp"):
+        c.chat.completions.create(model=model, messages=msgs, timeout=20)
+    metas = [f["params"]["_meta"]["kiro"]["modelId"] for f in run.requests("session/new")]
+    assert metas == ["claude-haiku-4.5", "claude-sonnet-5.5", "claude-sonnet-5.5", "claude-sonnet-5.5"]
+    assert c.request_role("role:test", True) == "test"  # no test_vision listed: the same role
     c.close()
 
 

@@ -32,7 +32,7 @@ WHITESPACE = " \t\n\r\f\v\u00a0\u2028\u2029"
 # U14: the gatekeeper-held values (gatekeeper.env), loaded when set.
 SECRET_ENV_KEYS: tuple[str, ...] = (
     "TELEGRAM_BOT_TOKEN", "GITHUB_WRITE_TOKEN", "HERMES_API_KEY", "OSSBOT_TOKEN_PEPPER",
-    "GITHUB_REVIEW_MIRROR_TOKEN", "TELEGRAPH_ACCESS_TOKEN",
+    "GITHUB_REVIEW_MIRROR_TOKEN", "TELEGRAPH_ACCESS_TOKEN", "REVERSE_IMAGE_SEARCH_KEY",
 )  # fmt: skip
 TOKENISH_RE = re.compile(r"[A-Za-z0-9_\-]{20,}")  # same candidates as policy.TOKENISH_RE
 

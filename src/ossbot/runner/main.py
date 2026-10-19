@@ -20,6 +20,7 @@ from ossbot.common.logging import setup_logging
 from ossbot.common.models import ModelsFile
 from ossbot.common.paths import Paths
 from ossbot.common.redact import Redactor
+from ossbot.runner import chat_jobs
 from ossbot.runner.github_read import GitHubRead
 from ossbot.runner.gk_client import Gatekeeper, GkError
 from ossbot.runner.pipeline import Gate, StageContext
@@ -97,6 +98,7 @@ def main() -> int:
         stop.wait(5.0)
     cache.refresh()
     scheduler = Scheduler(sc, workers=int(os.environ.get("OSSBOT_RUNNER_WORKERS", "4")))
+    chat_jobs.start(sc, stop)  # PDF text for the assistant (extract_text), its own thread
     try:
         log.info("runner started; %d interrupted stage(s) re-queued", scheduler.recover_interrupted(),
                  extra={"event": "runner_started"})  # fmt: skip
