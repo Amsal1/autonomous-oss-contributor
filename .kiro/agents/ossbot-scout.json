@@ -5,7 +5,12 @@
   "mcpServers": {
     "github": {
       "command": "/opt/ossbot/bin/ossbot-github-mcp",
-      "args": []
+      "args": [],
+      "env": {
+        "HOME": "/home/agent",
+        "HTTPS_PROXY": "http://proxy:3128",
+        "HTTP_PROXY": "http://proxy:3128"
+      }
     }
   },
   "tools": [

@@ -50,7 +50,9 @@ if [[ -d "$ENGINE/kas" ]]; then
 fi
 
 # GHMCP-2: sandboxd passes the GitHub read token only to scout/reviewer jobs. It goes to a 0600 file
-# for ossbot-github-mcp (outside every agent's read paths) and out of kiro-cli's environment.
+# for ossbot-github-mcp (outside every agent's read paths) and out of kiro-cli's environment. The
+# agents' mcpServers.github env names this HOME and the proxy literally, so the wrapper finds both
+# whether or not kiro-cli forwards its own environment to MCP children.
 if [[ -n "${GITHUB_READ_TOKEN:-}" ]]; then
   [[ "$ROLE" =~ ^(scout|reviewer)$ ]] || fail bad_args "GITHUB_READ_TOKEN for role $ROLE"
   (umask 077 && mkdir -p "$HOME/.ossbot" && printf '%s\n' "$GITHUB_READ_TOKEN" >"$HOME/.ossbot/github-read-token")

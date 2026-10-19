@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ossbot.common.github_mcp_tools import MCP_ROLES, READ_TOOLS, kiro_tool_ids
 from ossbot.common.yamlio import safe_load
+from ossbot.sandboxd.argv import PROXY_URL
 from ossbot.sandboxd.probes import SETTINGS_REQUIRED, agent_configs_hash, settings_hash
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -102,8 +103,12 @@ def test_agents_match_the_fixed_trust_tools() -> None:
             assert set(doc["mcpServers"]) == {"ossbot-exec"}
             assert not {"read", "write", "shell", "glob", "grep", "web_search", "web_fetch"} & set(doc["tools"])
         elif role in MCP_ROLES:
-            # GHMCP-2: only the read-only GitHub server, through the wrapper, exactly its read tools
-            assert doc["mcpServers"] == {"github": {"command": "/opt/ossbot/bin/ossbot-github-mcp", "args": []}}
+            # GHMCP-2: only the read-only GitHub server, through the wrapper, exactly its read tools.
+            # Literal env (no ${VAR}, so no approved-env expansion and nothing secret): the token-file
+            # HOME of kiro.sh and the container's proxy, whatever kiro-cli forwards to MCP children.
+            env = {"HOME": "/home/agent", "HTTPS_PROXY": PROXY_URL, "HTTP_PROXY": PROXY_URL}
+            assert doc["mcpServers"] == {"github": {"command": "/opt/ossbot/bin/ossbot-github-mcp", "args": [],
+                                                    "env": env}}  # fmt: skip
             assert [t for t in doc["tools"] if t.startswith("@")] == kiro_tool_ids()
             mcp = [r for r in rules if r.get("capability") == "mcp"]
             assert mcp == [{"capability": "mcp", "match": [f"github/{t}" for t in READ_TOOLS], "effect": "allow"}]
