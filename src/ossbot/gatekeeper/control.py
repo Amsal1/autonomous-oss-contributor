@@ -238,6 +238,26 @@ class ControlService:
         self.notify(f"▶️ Back up: {resumed} resumed, {awaiting} awaiting approval")
         return self.view()
 
+    def request_lifecycle(
+        self, action: Literal["down", "up"], actor: str, timeout_s: int, scope: LifecycleScope = "workers"
+    ) -> dict[str, Any]:
+        """Hand a workers-scope ``down`` or an ``up`` to the root helper (CR-001 5, PLAN item 42): write
+        ``lifecycle-request`` (ossbot-lifecycle.path -> ossbot-lifecycle --request, which checks it is a
+        regular file of the gatekeeper or root, at most 4 KiB and 5 min old, always consumes it, and
+        runs ``ossctl down --scope workers`` or ``ossctl up``). Those report back through the usual
+        drain/down/up endpoints (the "Going down" / "Back up" FYIs). ``up`` is refused while killed,
+        here and again by root. Not a kill: approvals stay valid."""
+        if scope != "workers":
+            raise ControlConflict("only the workers scope is requested here; a full down is Windows-side (down.ps1)")
+        if action == "up" and (self.flags().killed is not None or self._row()["state"] == "killed"):
+            raise ControlConflict("killed: up refused; resume first (/resume, ossctl resume, resume.ps1)")
+        request = {"action": action, "scope": scope, "actor": actor, "ts": to_iso(self.clock.now()),
+                   "timeout_s": timeout_s}  # fmt: skip
+        with db.transaction(self.conn):
+            write_flag(self.paths.lifecycle_request, request)
+            self.audit.append(actor, "lifecycle_requested", {"action": action, "scope": scope, "timeout_s": timeout_s})
+        return {"requested": True, **{k: request[k] for k in ("action", "scope", "timeout_s")}}
+
     def lifecycle_status(self, *, egress_default: EgressMode, tier_default: HermesTier) -> dict[str, Any]:
         """One-screen state for ``ossctl status`` / ``status.ps1`` (CR-001 item 5, PLAN item 39): the
         lifecycle, running work, approvals, outbox, and the egress mode and Hermes tier in effect

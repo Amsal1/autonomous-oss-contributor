@@ -157,6 +157,20 @@ def test_egress_path_watches_the_flag_the_gatekeeper_writes() -> None:
     assert "ossbot-egress-apply" in services_sh.split("OSSBOT_BINS=(", 1)[1].split(")", 1)[0]
 
 
+def test_lifecycle_path_watches_the_request_the_gatekeeper_writes() -> None:
+    """PLAN item 42: ossbot-lifecycle.path -> ossbot-lifecycle --request (root) runs Telegram /down, /up."""
+    watched = _unit(UNITS / "ossbot-lifecycle.path")["Path"]["PathExists"]
+    assert watched == str(Paths.default().lifecycle_request)
+    svc = _unit(UNITS / "ossbot-lifecycle.service")["Service"]
+    assert svc["ExecStart"] == "/opt/ossbot/bin/ossbot-lifecycle --request" and svc["Type"] == "oneshot"
+    assert "User" not in svc  # root: it stops and starts units
+    assert _seconds(svc["TimeoutStartSec"]) > 3600  # the longest drain the request may ask for
+    # refused requests in a burst must not trip the start limit and leave the path unit failed
+    assert _unit(UNITS / "ossbot-lifecycle.service")["Unit"]["StartLimitIntervalSec"] == "0"
+    services_sh = (UNITS.parent / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    assert "ossbot-lifecycle" in services_sh.split("OSSBOT_BINS=(", 1)[1].split(")", 1)[0]
+
+
 def test_proxy_renders_before_its_firewall_check() -> None:
     """--check compares the live squid.conf with the render for the current mode, so the proxy
     renders first (a mode switched while it was stopped would otherwise fail its own start)."""

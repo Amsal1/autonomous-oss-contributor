@@ -1,0 +1,12 @@
+# Lifecycle request watcher (DESIGN §13.5, CR-001 5): the gatekeeper writes lifecycle-request (Telegram
+# /down and /up after a confirm; operator POST /v1/control/lifecycle-request); root runs the request.
+[Unit]
+Description=ossbot lifecycle request watcher
+After=ossbot-boot-gate.service
+
+[Path]
+PathExists=/var/lib/ossbot/control/lifecycle-request
+Unit=ossbot-lifecycle.service
+
+[Install]
+WantedBy=multi-user.target

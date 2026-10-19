@@ -1,0 +1,18 @@
+# Root lifecycle helper (DESIGN §13.5, CR-001 5, PLAN item 42): consumes lifecycle-request (always),
+# checks it (regular file of gatekeeper or root, <= 4 KiB, <= 5 min old, scope workers) and runs
+# `ossctl down --scope workers` (runner, Hermes, sandboxd stop; the gatekeeper stays) or `ossctl up`
+# (refused while killed).
+[Unit]
+Description=ossbot lifecycle request (workers down / up)
+After=ossbot-boot-gate.service
+# No start rate limit: every run consumes the request first, so a run only follows a new request, and
+# a burst of refused requests must not leave ossbot-lifecycle.path failed (unit-start-limit-hit).
+StartLimitIntervalSec=0
+
+[Service]
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
+Type=oneshot
+ExecStart=/opt/ossbot/bin/ossbot-lifecycle --request
+# a workers down drains for up to timeout_s (<= 3600) plus the summary; an up waits for health (180 s)
+TimeoutStartSec=4000

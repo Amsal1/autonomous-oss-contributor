@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+# ossbot-lifecycle (installed as /opt/ossbot/bin/ossbot-lifecycle; DESIGN 13.5, CR-001 5, PLAN item 42).
+# Self-contained. Run by ossbot-lifecycle.service when ossbot-lifecycle.path sees the gatekeeper write
+# /var/lib/ossbot/control/lifecycle-request (Telegram /down and /up after a confirm, FEAT-009; operator
+# POST /v1/control/lifecycle-request now). The request is always consumed, then refused unless it is a
+# regular file (no symlink) owned by gatekeeper or root, at most 4 KiB, written within the last 5 min
+# (mtime and its ts field), scope "workers", action "down" or "up":
+#   down  ossctl down --scope workers [--timeout S]   runner, Hermes and sandboxd stop; the gatekeeper,
+#                                                    the proxy and the watchdog stay (scope workers)
+#   up    ossctl up [--timeout S]                     refused while a kill flag exists (kill overrides)
+# The gatekeeper refuses an up while killed before it writes the request; this is the second check.
+# Exit 0 done or nothing to do, 1 refused or the ossctl run failed, 2 usage.
+set -uo pipefail
+
+CONTROL=${OSSBOT_CONTROL_DIR:-/var/lib/ossbot/control}
+OSSCTL=${OSSBOT_OSSCTL:-/opt/ossbot/app/.venv/bin/ossctl}
+REQ="$CONTROL/lifecycle-request"
+MAX_BYTES=4096
+MAX_AGE_S=300
+[[ $# -eq 1 && $1 == --request ]] || { echo "usage: ossbot-lifecycle --request" >&2; exit 2; }
+[[ $EUID -eq 0 ]] || { echo "ossbot-lifecycle: must run as root" >&2; exit 2; }
+log() { printf 'ossbot-lifecycle: %s\n' "$*"; }
+refuse() { log "refused: $*"; exit 1; }
+
+main() {
+  local owner size mtime now body action scope ts ts_s timeout
+  if [[ ! -e $REQ && ! -L $REQ ]]; then
+    log "no request"
+    exit 0
+  fi
+  if [[ -L $REQ || ! -f $REQ ]]; then
+    rm -rf --one-file-system "$REQ"
+    refuse "lifecycle-request is not a regular file"
+  fi
+  owner=$(stat -c %U "$REQ")
+  size=$(stat -c %s "$REQ")
+  mtime=$(stat -c %Y "$REQ")
+  body=$(head -c "$((MAX_BYTES + 1))" "$REQ" | tr -d '\000')
+  rm -f "$REQ"  # always consumed, whatever follows
+  [[ $owner == gatekeeper || $owner == root ]] || refuse "lifecycle-request owned by $owner"
+  ((size <= MAX_BYTES)) || refuse "lifecycle-request larger than $MAX_BYTES bytes"
+  now=$(date +%s)
+  ((now - mtime <= MAX_AGE_S && mtime - now <= 60)) || refuse "lifecycle-request older than $MAX_AGE_S s (mtime)"
+  action=$(jq -r 'if type == "object" then (.action // "") else "" end' <<<"$body" 2>/dev/null || true)
+  scope=$(jq -r 'if type == "object" then (.scope // "") else "" end' <<<"$body" 2>/dev/null || true)
+  ts=$(jq -r 'if type == "object" then (.ts // "") else "" end' <<<"$body" 2>/dev/null || true)
+  timeout=$(jq -r 'if type == "object" and (.timeout_s | type) == "number" then (.timeout_s | floor | tostring) else "" end' <<<"$body" 2>/dev/null || true)
+  [[ $ts =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$ ]] || refuse "lifecycle-request has no valid ts"
+  ts_s=$(date -u -d "$ts" +%s 2>/dev/null) || refuse "lifecycle-request ts unparseable"
+  ((now - ts_s <= MAX_AGE_S && ts_s - now <= 60)) || refuse "lifecycle-request older than $MAX_AGE_S s (ts $ts)"
+  [[ $scope == workers ]] || refuse "scope '${scope:0:20}' (only workers; a full down is Windows-side)"
+  local -a extra=()
+  if [[ -n $timeout ]]; then
+    if [[ ! $timeout =~ ^[0-9]{1,4}$ ]] || ((timeout > 3600)); then refuse "timeout_s out of range"; fi
+    extra=(--timeout "$timeout")
+  fi
+  case $action in
+    down)
+      log "down (scope workers${timeout:+, timeout $timeout s})"
+      "$OSSCTL" down --scope workers "${extra[@]}" || { log "ossctl down failed (exit $?)"; exit 1; }
+      ;;
+    up)
+      if [[ -e $CONTROL/killed || -L $CONTROL/killed ]]; then
+        refuse "up while killed (kill overrides lifecycle; resume first)"
+      fi
+      log "up"
+      "$OSSCTL" up || { log "ossctl up failed (exit $?)"; exit 1; }
+      ;;
+    *) refuse "action '${action:0:20}' (down or up)" ;;
+  esac
+  log "done: $action"
+  exit 0
+}
+
+main </dev/null

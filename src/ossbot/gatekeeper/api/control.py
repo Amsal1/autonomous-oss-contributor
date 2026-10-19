@@ -15,6 +15,7 @@ from ossbot.common.schemas import (
     EgressModeView,
     HermesTierRequest,
     HermesTierView,
+    LifecycleRequestBody,
     ReasonRequest,
     UpRequest,
 )
@@ -74,6 +75,17 @@ async def down(request: Request, body: DownRequest, caller: Annotated[Caller, De
 async def up(request: Request, body: UpRequest, caller: Annotated[Caller, Depends(require(OP))]) -> ControlView:
     """Refused (409 conflict) while killed: kill overrides lifecycle and needs the human resume."""
     return ctx(request).control.up(caller.actor, body.resumed)
+
+
+@router.post("/control/lifecycle-request", status_code=202)
+async def lifecycle_request(
+    request: Request, body: LifecycleRequestBody, caller: Annotated[Caller, Depends(require(OP))]
+) -> dict[str, Any]:
+    """CR-001 5 (PLAN item 42): workers-scope down or up through the root helper (operator now; the
+    human via Telegram /down and /up with a confirm in FEAT-009). 409 for up while killed."""
+    c = ctx(request)
+    timeout = body.timeout_s if body.timeout_s is not None else c.config.policy.lifecycle.drain_timeout_s
+    return c.control.request_lifecycle(body.action, caller.actor, timeout, body.scope)
 
 
 @router.post("/control/resume", status_code=202)

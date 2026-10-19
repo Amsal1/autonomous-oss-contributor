@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from typing import Any
 
+import httpx
 import pytest
 
 from ossbot.common.control_flags import FlagState, HermesTier
@@ -188,6 +190,38 @@ async def test_bounded_lines_refuse_an_unterminated_line_before_buffering_it_all
         async for _ in hermes_api.bounded_lines(endless(), 4096):
             pass
     assert sent == 5  # stopped at the first chunk past the limit
+
+
+class _CutStream(httpx.AsyncByteStream):
+    """Hermes SIGKILLed mid-relay: some SSE bytes, then the peer closes the chunked body."""
+
+    def __init__(self, first: bytes) -> None:
+        self.first = first
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self.first
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+async def test_hermes_gone_mid_stream_fails_the_turn_and_invalidates_the_surface(ctx: AppContext) -> None:
+    """PLAN item 42 (test_crash_safety.sh found it live): a cut stream was an uncaught
+    RemoteProtocolError (HTTP 500, the turn left streaming). It is HermesUnavailable now: the turn
+    ends failed and the next turn re-runs the surface check."""
+    calls: list[HermesTier] = []
+
+    def surface(t: HermesTier) -> SurfaceResult:
+        calls.append(t)
+        return SurfaceResult("ok")
+
+    first = sse("response.output_text.delta", {"type": "response.output_text.delta", "delta": "par"}).encode()
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, stream=_CutStream(first)))
+    g = RelayGate(flags=lambda: FlagState(None, None), lifecycle=lambda: None, probe_doc=lambda: PASSED,
+                  surface=surface, tier=lambda: "locked", on_surface_kill=lambda r: None, now=lambda: NOW)  # fmt: skip
+    svc = ChatService(HermesApiBackend(HermesClient("hk_test", transport=transport), g), TurnStore(ctx.conn, ctx.clock))
+    out = await svc.ask([], "tg-1-1")
+    assert out.status == "failed" and "RemoteProtocolError" in out.error
+    assert TurnStore(ctx.conn, ctx.clock).status(out.turn_id) == "failed"
+    assert (await g.check()).open and len(calls) == 2  # the surface is checked again, not cached
 
 
 async def test_failed_event_marks_the_turn_failed(ctx: AppContext) -> None:

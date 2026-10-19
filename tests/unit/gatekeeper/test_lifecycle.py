@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
+from ossbot.common.clock import from_iso
 from ossbot.common.control_flags import read_lifecycle, require_up
 from ossbot.common.schemas import State
 from ossbot.gatekeeper.context import AppContext
@@ -96,6 +99,49 @@ def test_lifecycle_status_shows_the_flags_fail_closed(ctx: AppContext) -> None:
     (ctx.paths.control_dir / "hermes-tier").write_text('{"tier": "root"}')
     st = ctx.control.lifecycle_status(egress_default="open", tier_default="self_improve")
     assert (st["egress_mode"], st["hermes_tier"]) == ("allowlist", "locked")
+
+
+def test_lifecycle_request_file_follows_the_root_helper_rules(ctx: AppContext) -> None:
+    """PLAN item 42: what ossbot-lifecycle --request accepts: a regular 0640 file (gatekeeper or root),
+    at most 4 KiB, with a fresh ts, scope workers and action down|up; the request is audited."""
+    out = ctx.control.request_lifecycle("down", "tg:4242", 120)
+    assert out == {"requested": True, "action": "down", "scope": "workers", "timeout_s": 120}
+    path = ctx.paths.lifecycle_request
+    assert path.is_file() and not path.is_symlink() and (path.stat().st_mode & 0o777) == 0o640
+    raw = path.read_bytes()
+    assert len(raw) <= 4096
+    doc = json.loads(raw)
+    assert set(doc) == {"action", "scope", "actor", "ts", "timeout_s"}
+    assert (doc["action"], doc["scope"], doc["timeout_s"]) == ("down", "workers", 120)
+    assert abs((from_iso(doc["ts"]) - ctx.clock.now()).total_seconds()) < 1
+    event = ctx.conn.execute("SELECT actor, data_json FROM audit_events WHERE event = 'lifecycle_requested'").fetchone()
+    assert event["actor"] == "tg:4242" and json.loads(event["data_json"])["action"] == "down"
+    assert ctx.control.view().lifecycle == "up"  # nothing changes until root runs ossctl down
+
+
+def test_lifecycle_request_up_refused_while_killed_and_no_distro_scope(ctx: AppContext) -> None:
+    ctx.control.kill("test", "tg:4242")
+    with pytest.raises(ControlConflict):
+        ctx.control.request_lifecycle("up", "tg:4242", 120)
+    assert not ctx.paths.lifecycle_request.exists()
+    ctx.control.request_lifecycle("down", "tg:4242", 120)  # a down while killed is harmless
+    assert ctx.paths.lifecycle_request.exists()
+    with pytest.raises(ControlConflict):
+        ctx.control.request_lifecycle("down", "op", 120, scope="distro")
+
+
+async def test_lifecycle_request_api(ctx: AppContext) -> None:
+    async with client(ctx, UID_WORKER) as c:
+        assert (await c.post("/v1/control/lifecycle-request", json={"action": "down"})).status_code == 403
+    async with client(ctx, UID_OPERATOR) as c:
+        assert (await c.post("/v1/control/lifecycle-request", json={"action": "reboot"})).status_code == 400
+        assert (await c.post("/v1/control/lifecycle-request",
+                             json={"action": "down", "scope": "distro"})).status_code == 400  # fmt: skip
+        resp = await c.post("/v1/control/lifecycle-request", json={"action": "down"})
+        assert resp.status_code == 202
+        assert resp.json()["timeout_s"] == ctx.config.policy.lifecycle.drain_timeout_s
+        write_flag(ctx.paths.killed_flag, {"level": "soft", "reason": "x", "actor": "root"})
+        assert (await c.post("/v1/control/lifecycle-request", json={"action": "up"})).status_code == 409
 
 
 async def test_lifecycle_api_operator_only(ctx: AppContext) -> None:

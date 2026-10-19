@@ -45,6 +45,8 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/control/drain"): frozenset({O}),
     ("POST", "/v1/control/down"): frozenset({O}),
     ("POST", "/v1/control/up"): frozenset({O}),
+    # PLAN item 42: workers down / up through the root helper (Telegram /down, /up are FEAT-009)
+    ("POST", "/v1/control/lifecycle-request"): frozenset({O}),
     ("GET", "/v1/config/snapshot"): ANY,
     ("POST", "/v1/config/reload"): frozenset({O}),
     ("GET", "/v1/contributions"): ANY,

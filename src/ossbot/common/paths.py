@@ -102,6 +102,10 @@ class Paths:
         return self.control_dir / "lifecycle"
 
     @property
+    def lifecycle_request(self) -> Path:
+        return self.control_dir / "lifecycle-request"
+
+    @property
     def shutdown_marker(self) -> Path:
         return self.control_dir / "shutdown-marker"
 

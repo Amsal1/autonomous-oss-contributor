@@ -138,6 +138,15 @@ class UpRequest(ApiModel):
     resumed: Annotated[int, Field(ge=0)] | None = None  # None: the gatekeeper counts the re-queued stages
 
 
+class LifecycleRequestBody(ApiModel):
+    """CR-001 5 (PLAN item 42): ask the root helper for a workers-scope ``down`` or an ``up`` (Telegram
+    /down and /up in FEAT-009; operator now). The distro scope is Windows-side only (down.ps1)."""
+
+    action: Literal["down", "up"]
+    scope: Literal["workers"] = "workers"
+    timeout_s: Annotated[int, Field(ge=0, le=3600)] | None = None  # None: policy lifecycle.drain_timeout_s
+
+
 class DryRunRequest(ApiModel):
     enabled: bool
 

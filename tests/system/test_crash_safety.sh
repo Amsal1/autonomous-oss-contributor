@@ -2,6 +2,8 @@
 # CR-001 item 6c: SIGKILL the services (battery death / force shutdown of a process), let systemd
 # restart them, and check reconciliation: gatekeeper healthy with an intact audit chain, sandboxd
 # up with no leftover sandbox containers, no outbound action stuck 'executing' and none re-sent.
+# Covers gatekeeper, sandboxd, dockerfilter and the runner (mid-stage) together, then Hermes alone
+# (mid-relay: one roles.test selftest turn, not delivered to Telegram).
 # The mid-job sandbox case is tests/sandbox/test_crash_safety.py (ROOTDEV pytest -m sandbox).
 # shellcheck source=tests/system/lib.sh disable=SC1091,SC2317
 source "$(dirname "$0")/lib.sh"
@@ -61,4 +63,50 @@ check "no outbound action re-sent" test "$(q "SELECT COUNT(*) FROM outbound_acti
 check "no sandbox containers left" test -z "$(docker ps -aq --filter label=ossbot.sandbox=1)"
 check "firewall unchanged" /opt/ossbot/bin/ossbot-firewall --check
 refuse "no pause/kill flag written by the crash" test -e "$CONTROL/killed" -o -e "$CONTROL/paused"
+
+# Hermes (FEAT-007, PLAN item 42): SIGKILL ossbot-hermes mid-relay. One selftest turn on roles.test
+# (deliver false: nothing goes to Telegram) is streaming when Hermes and its kiro-cli die; the turn
+# must end failed (no row left streaming, the gatekeeper keeps answering), systemd restarts Hermes,
+# and the next turn passes the relay gate again (probe result + a fresh /v1/toolsets surface check:
+# a HermesUnavailable invalidates the cached surface).
+selftest() {  # selftest OUTFILE: POST /v1/chat/selftest as root (operator), up to 300 s
+  curl -s -o "$1" -w '%{http_code}' --max-time 300 --unix-socket "$GK_SOCK" -X POST \
+    -H 'content-type: application/json' --data '{"deliver":false}' http://ossbot/v1/chat/selftest 2>/dev/null
+}
+streaming() { [[ $(q "SELECT COUNT(*) FROM chat_turns WHERE status = 'streaming'") -ge 1 ]]; }
+no_streaming() { [[ $(q "SELECT COUNT(*) FROM chat_turns WHERE status = 'streaming'") -eq 0 ]]; }
+json_field() { python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2]))' "$1" "$2" 2>/dev/null; }
+turns_since=$(date -u +%Y-%m-%dT%H:%M:%S)  # turn ids are random: count by start time
+first=$(mktemp)
+selftest "$first" >"$first.code" &
+st_pid=$!
+if wait_for 60 streaming; then
+  pass "a chat turn is streaming before the kill"
+  systemctl kill --signal=SIGKILL ossbot-hermes.service
+  wait "$st_pid"
+  code=$(cat "$first.code")
+  if [[ $code == 200 && $(json_field "$first" status) == failed ]] || [[ $code == 503 ]]; then
+    pass "the cut turn ends failed (HTTP $code, $(json_field "$first" error | head -c 80))"
+  else
+    fail "the cut turn: HTTP $code $(head -c 200 "$first")"
+  fi
+  check "no chat turn left streaming" wait_for 30 no_streaming
+  check "the gatekeeper keeps answering" gk_health
+  check "Hermes restarted by systemd" wait_for 90 units_active ossbot-hermes
+  second=$(mktemp)
+  ok=0
+  for _ in 1 2 3 4 5 6; do  # Hermes needs a few seconds before its API server listens
+    sleep 10
+    code=$(selftest "$second")
+    if [[ $code == 200 && $(json_field "$second" status) == "done" ]]; then ok=1; break; fi
+  done
+  if ((ok)); then pass "the next turn passes the relay gate again (done, $(json_field "$second" latency_s) s)"
+  else fail "the next turn after the restart: HTTP $code $(head -c 200 "$second")"; fi
+  check "both turns recorded (no lost row)" test "$(q "SELECT COUNT(*) FROM chat_turns WHERE started_at >= '$turns_since'")" -ge 2
+  rm -f "$second"
+else
+  wait "$st_pid"
+  skip "Hermes mid-relay case: no chat turn started (relay closed: $(head -c 120 "$first"))"
+fi
+rm -f "$first" "$first.code"
 finish

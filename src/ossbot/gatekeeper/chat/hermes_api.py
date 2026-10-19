@@ -145,7 +145,10 @@ class HermesClient:
                     raise HermesError(f"HTTP {resp.status_code}: {text}")
                 async for event in self._events(resp):
                     yield event
-        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:
+        except httpx.TransportError as exc:
+            # Not reachable (connect errors) or gone mid-stream (Hermes killed or restarted: a peer that
+            # closes the chunked body, a read error): the turn fails and the relay gate re-checks the
+            # surface before the next one (PLAN item 42, test_crash_safety.sh Hermes case).
             raise HermesUnavailable(type(exc).__name__) from exc
 
     @staticmethod
