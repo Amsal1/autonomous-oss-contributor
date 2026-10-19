@@ -1,0 +1,4 @@
+# ~hermes/.hermes/.env, installed root:hermes 0640 by provision (step hermes). Intentionally empty:
+# Hermes loads this file with override, so a writable copy could redirect HERMES_MANAGED_DIR.
+# Secrets come from /etc/ossbot/secrets/hermes.env (systemd EnvironmentFile); settings from the
+# managed scope /etc/hermes/config.yaml and the ossbot-hermes unit.

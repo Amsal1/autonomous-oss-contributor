@@ -63,9 +63,40 @@ NON_ROOT = [p for p in SERVICES if _unit(p)["Service"].get("User", "root") != "r
 
 def test_non_root_units_are_known() -> None:
     """The restriction test below must not pass vacuously; Phase 2 runner/hermes units join it."""
-    assert {"ossbot-gatekeeper.service", "ossbot-sandboxd.service", "ossbot-runner.service"} <= {
-        p.name for p in NON_ROOT
-    }
+    assert {
+        "ossbot-gatekeeper.service",
+        "ossbot-sandboxd.service",
+        "ossbot-runner.service",
+        "ossbot-hermes.service",
+    } <= {p.name for p in NON_ROOT}
+
+
+def test_hermes_units_are_wired_everywhere() -> None:
+    """FEAT-007 item 35: Hermes (non-root, ProtectHome=tmpfs + the hermes home bound back, P1-17) and
+    the root probe socket are enabled by provisioning, stopped by the kill, resumed, watched by system tests."""
+    root = UNITS.parent
+    service = _unit(UNITS / "ossbot-hermes.service")["Service"]
+    text = (UNITS / "ossbot-hermes.service").read_text(encoding="utf-8")
+    assert service["User"] == "hermes" and service["ProtectHome"] == "tmpfs"
+    assert service["BindPaths"] == "/home/hermes" and service["ProtectSystem"] == "strict"
+    assert "ConditionPathExists=!/var/lib/ossbot/control/killed" in text
+    assert service["ExecStartPre"] == "+/opt/ossbot/bin/ossbot-firewall --check"
+    assert "HERMES_DISABLE_LAZY_INSTALLS=1" in text and "HTTPS_PROXY=http://10.212.0.2:3141" in text
+    assert "API_SERVER_HOST=127.0.0.1 API_SERVER_PORT=8642" in text
+    sock = _unit(UNITS / "ossbot-hermes-probe.socket")["Socket"]
+    assert sock["ListenStream"] == "/run/ossbot/hermes-probe.sock" and sock["SocketGroup"] == "gatekeeper"
+    assert sock["SocketMode"] == "0660" and sock["Accept"] == "yes" and sock["MaxConnections"] == "1"
+    probe = _unit(UNITS / "ossbot-hermes-probe@.service")
+    assert probe["Service"].get("User", "root") == "root"
+    assert "python -I -m ossbot.ctl.hermes_probe" in probe["Service"]["ExecStart"]
+    assert probe["Unit"]["ConditionPathExists"] == "!/var/lib/ossbot/control/killed"
+    services_sh = (root / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    enable = services_sh.split("OSSBOT_ENABLE_UNITS=(", 1)[1].split(")", 1)[0]
+    assert "ossbot-hermes.service" in enable and "ossbot-hermes-probe.socket" in enable
+    assert "ossbot-hermes.service" in (root / "scripts" / "bin" / "ossbot-kill").read_text()
+    assert "ossbot-hermes.service" in (root / "scripts" / "bin" / "ossbot-resume").read_text()
+    lib = (root / "tests" / "system" / "lib.sh").read_text(encoding="utf-8")
+    assert "ossbot-hermes " in lib.split("PHASE1_UNITS=(", 1)[1].split(")", 1)[0]
 
 
 def test_runner_unit_is_wired_everywhere() -> None:

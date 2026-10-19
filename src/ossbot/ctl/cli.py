@@ -409,6 +409,82 @@ def hermes_tier(tier: Annotated[str | None, typer.Argument(help="locked | resear
     _show(data)
 
 
+def _hermes_probe(*, force: bool = True, handshake_only: bool = False) -> dict[str, Any]:
+    argv = ["/opt/ossbot/app/.venv/bin/python", "-I", "-m", "ossbot.ctl.hermes_probe"]
+    argv += ["--force"] if force else []
+    argv += ["--handshake-only"] if handshake_only else []
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=900, check=False, cwd="/")
+    try:
+        doc: dict[str, Any] = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _fail(f"hermes probe failed (exit {proc.returncode}): {proc.stderr.strip()[-400:]}")
+    return doc
+
+
+def _provision(steps: str) -> None:
+    """Run provision steps as root, streamed like bootstrap does (the script is never run from drvfs)."""
+    script = (Paths.default().repo / "scripts" / "provision.sh").read_bytes().replace(b"\r", b"")
+    proc = subprocess.run(["/usr/bin/bash", "-s", "--", "--only", steps], input=script, check=False, timeout=1800)
+    if proc.returncode != 0:
+        _fail(f"provision --only {steps} failed (exit {proc.returncode})")
+
+
+@hermes_app.command("probe")
+def hermes_probe(
+    handshake_only: Annotated[bool, typer.Option("--handshake-only", help="initialize + session/new only")] = False,
+) -> None:
+    """Run the Hermes-side Kiro probe now (root; DESIGN §15.2 M9): the chat relay opens only on a pass."""
+    _require_root("hermes probe")
+    doc = _hermes_probe(handshake_only=handshake_only)
+    _show(doc)
+    raise typer.Exit(0 if doc.get("verdict") == "pass" else 1)
+
+
+@hermes_app.command("upgrade")
+def hermes_upgrade() -> None:
+    """Install the Hermes tag pinned in config/versions.lock.yaml (root; DESIGN §15.4): verified clone in
+    root staging, swap, ``uv sync --frozen`` as hermes, rollback on failure; then the probe again."""
+    _require_root("hermes upgrade")
+    _provision("hermes")
+    doc = _hermes_probe()
+    _show({"probe": doc.get("verdict"), "reason": doc.get("reason")})
+    raise typer.Exit(0 if doc.get("verdict") == "pass" else 1)
+
+
+@hermes_app.command("login")
+def hermes_login() -> None:
+    """Device-flow Kiro login as uid hermes (auth option c, DESIGN §15.2): the IdC login hosts are open on
+    proxy port 3141 only while this command runs. Needs a TTY (the code is shown here)."""
+    _require_root("hermes login")
+    if not sys.stdin.isatty():
+        _fail("hermes login needs a terminal")
+    render = ["/opt/ossbot/app/.venv/bin/python", "-I", "-m", "ossbot.ctl.render", "squid"]
+    restart = ["/usr/bin/systemctl", "restart", "ossbot-proxy.service"]
+    subprocess.run([*render, "--hermes-login"], check=True, timeout=120)
+    subprocess.run(restart, check=True, timeout=120)
+    try:
+        env = {"HOME": "/home/hermes", "PATH": "/usr/bin:/bin", "HTTPS_PROXY": "http://10.212.0.2:3141"}
+        subprocess.run(["/usr/sbin/runuser", "-u", "hermes", "--", "/home/hermes/.local/bin/kiro-cli", "login",
+                        "--use-device-flow"], env=env, cwd="/", check=False, timeout=900)  # fmt: skip
+    finally:
+        subprocess.run(render, check=True, timeout=120)
+        subprocess.run(restart, check=True, timeout=120)
+    _show(_hermes_probe())
+
+
+@kiro_app.command("upgrade")
+def kiro_upgrade() -> None:
+    """Apply the kiro_cli pin of config/versions.lock.yaml (root; DESIGN §15.3): new sandbox-llm image, the
+    hermes-side CLI, then the safety probes and the Hermes-side probe must pass again."""
+    _require_root("kiro upgrade")
+    _provision("images,kiro-cli-hermes")
+    doc = _hermes_probe()
+    _show({"hermes_probe": doc.get("verdict"), "reason": doc.get("reason"),
+           "sandbox_probes": "the new image tuple has no pass yet: the runner re-runs the five safety probes before any"
+                             " stage (or run ossctl doctor --probes)"})  # fmt: skip
+    raise typer.Exit(0 if doc.get("verdict") == "pass" else 1)
+
+
 @model_app.command("list")
 def model_list() -> None:
     """Every role: configured model, effort and what it resolves to against the current catalog."""
@@ -531,11 +607,62 @@ SMOKE_PROMPT = (
 )
 
 
+def _hermes_key() -> str:
+    from ossbot.ctl.hermes_probe import read_env_key  # noqa: PLC0415
+
+    key = read_env_key()
+    if not key:
+        _fail("KIRO_API_KEY is not set in hermes.env (scripts/setup-secrets)")
+    return str(key)
+
+
+def _kiro_smoke_hermes(timeout: int) -> None:
+    """``kiro-cli chat --v3 --no-interactive --agent ossbot-chat`` as uid hermes with the Hermes key (root
+    loads it from hermes.env into the child's environment only; nothing secret is printed)."""
+    from pydantic import BaseModel, ConfigDict  # noqa: PLC0415
+
+    from ossbot.common.config import parse_models  # noqa: PLC0415
+    from ossbot.common.models import LIVE_TEST_ROLE, requested  # noqa: PLC0415
+    from ossbot.runner import output_parse  # noqa: PLC0415
+
+    class Pong(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+        answer: str
+
+    model, effort = requested(parse_models((Paths.default().config_dir / "models.yaml").read_bytes()), LIVE_TEST_ROLE)
+    env = {"HOME": "/home/hermes", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "KIRO_API_KEY": _hermes_key(),
+           "HTTPS_PROXY": "http://10.212.0.2:3141", "https_proxy": "http://10.212.0.2:3141"}  # fmt: skip
+    argv = ["/usr/sbin/runuser", "-u", "hermes", "--", "/home/hermes/.local/bin/kiro-cli", "chat", "--v3",
+            "--no-interactive", "--agent", "ossbot-chat", "--model", model, "--effort", effort,
+            "--output-format", "stream-json"]  # fmt: skip
+    started = time.monotonic()
+    proc = subprocess.run(argv, input=SMOKE_PROMPT.encode(), capture_output=True, env=env, timeout=timeout,
+                          cwd="/home/hermes/.hermes/kiro-cwd", check=False)  # fmt: skip
+    out = output_parse.read_events(proc.stdout, proc.stderr)
+    report: dict[str, Any] = {"key": "hermes", "agent": "ossbot-chat", "model": model, "effort": effort,
+                              "exit": proc.returncode, "model_actual": out.model_actual,
+                              "duration_s": round(time.monotonic() - started, 1)}  # fmt: skip
+    try:
+        report["answer"] = output_parse.parse_model(out.text, Pong).answer
+    except output_parse.OutputInvalid as exc:
+        report["answer_error"] = exc.reason[:200]
+    _show(report)
+    raise typer.Exit(0 if report.get("answer") == "pong" else 1)
+
+
 @kiro_app.command("smoke")
-def kiro_smoke(timeout: Annotated[int, typer.Option(help="job timeout in s")] = 300) -> None:
-    """Headless ``chat --v3`` round-trip with the sandbox key (root): one sandboxd job, role
-    summarizer, research profile, a canned prompt; the answer is parsed like any stage output."""
+def kiro_smoke(
+    timeout: Annotated[int, typer.Option(help="job timeout in s")] = 300,
+    key: Annotated[str, typer.Option(help="sandbox (a sandboxd job) or hermes (as uid hermes)")] = "sandbox",
+) -> None:
+    """Headless ``chat --v3`` round-trip (root). ``--key sandbox``: one sandboxd job, role summarizer,
+    research profile. ``--key hermes``: the ossbot-chat agent as uid hermes with the Hermes key. A canned
+    prompt; the answer is parsed like any stage output; roles.test model."""
     _require_root("kiro smoke")
+    if key not in ("sandbox", "hermes"):
+        _fail("--key is sandbox or hermes", 2)
+    if key == "hermes":
+        _kiro_smoke_hermes(timeout)
     import secrets as pysecrets  # noqa: PLC0415
 
     from pydantic import BaseModel, ConfigDict  # noqa: PLC0415

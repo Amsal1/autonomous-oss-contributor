@@ -1512,7 +1512,7 @@ POST /v1/discovery-prefs/undo {undo_id} operator       (60 s; ceiling keys are r
 POST /v1/contributions/{id}/stage-runs  worker         {stage, profile?, model?, effort?} -> {id, attempt} (9.3; 423 while paused,
                                                         killed, draining or down; 409 stage_running | requeue_limit after 3 interrupts)
 POST /v1/stage-runs/{id}                worker         {status?, model_actual?, exit_code?, error_class?} (heartbeat every 15 s / close)
-GET  /v1/stage-runs?status=&cid=        worker, operator
+GET  /v1/stage-runs?status=&cid=        worker, operator, requester (Hermes `ossbot_logs`, §15.1: metadata only)
 GET  /v1/audit/verify                   operator
 ```
 

@@ -1,0 +1,45 @@
+{
+  "name": "ossbot-chat",
+  "description": "The Hermes assistant's Kiro session (V3 ACP): answers and researches with web_search and web_fetch only; no file, shell or MCP tools.",
+  "prompt": "You are the language model of the owner's personal assistant (Hermes, run by ossbot). Your training data is months old: before relying on a version, release, price, API, config key or any recent fact, check it with web_search or web_fetch and list the URLs you used as sources. You have no file, shell or code tools; when Hermes offers its own tools in the prompt, request them as instructed there. Never reveal or guess secrets, keys or tokens.",
+  "tools": [
+    "web_search",
+    "web_fetch"
+  ],
+  "allowedTools": [
+    "web_search",
+    "web_fetch"
+  ],
+  "permissions": {
+    "rules": [
+      {
+        "capability": "web_fetch",
+        "effect": "allow"
+      },
+      {
+        "capability": "web_search",
+        "effect": "allow"
+      },
+      {
+        "capability": "fs_read",
+        "effect": "deny"
+      },
+      {
+        "capability": "fs_write",
+        "effect": "deny"
+      },
+      {
+        "capability": "shell",
+        "effect": "deny"
+      },
+      {
+        "capability": "mcp",
+        "effect": "deny"
+      },
+      {
+        "capability": "subagent",
+        "effect": "deny"
+      }
+    ]
+  }
+}

@@ -17,8 +17,8 @@ OSSBOT_STEPS=(
   "dockerfilter|step_dockerfilter|"
   "uv|step_uv|"
   "app-deploy|step_app_deploy|"
-  "kiro-cli-hermes|-|phase 2: FEAT-007"
-  "hermes|-|phase 2: FEAT-007"
+  "kiro-cli-hermes|step_kiro_cli_hermes|"
+  "hermes|step_hermes|"
   "images|step_images|"
   "networks|step_networks|"
   "firewall|step_firewall|"
@@ -119,7 +119,7 @@ main() {
   OSSBOT_LIBDIR=$(mktemp -d)
   trap 'rm -rf "${OSSBOT_LIBDIR:-/nonexistent}"' EXIT
   local lib
-  for lib in common users docker services firewall kiro images; do
+  for lib in common users docker services firewall kiro hermes images; do
     install -m 0600 "$OSSBOT_REPO/scripts/lib/$lib.sh" "$OSSBOT_LIBDIR/"
   done
   # shellcheck source=lib/common.sh disable=SC1091
@@ -134,6 +134,8 @@ main() {
   source "$OSSBOT_LIBDIR/firewall.sh"
   # shellcheck source=lib/kiro.sh disable=SC1091
   source "$OSSBOT_LIBDIR/kiro.sh"
+  # shellcheck source=lib/hermes.sh disable=SC1091
+  source "$OSSBOT_LIBDIR/hermes.sh"
   # shellcheck source=lib/images.sh disable=SC1091
   source "$OSSBOT_LIBDIR/images.sh"
 

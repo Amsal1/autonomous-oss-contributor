@@ -442,13 +442,18 @@ def run_session(
         details["config_option_ids"] = [
             o.get("id") for o in session.result.get("configOptions") or [] if isinstance(o, dict)
         ]
+        details["config_current"] = {
+            str(i): core.config_current(session.result, str(i)) for i in details["config_option_ids"] if i != "model"
+        }
+        details["text_chars"] = 0
         details["advertised_tools"] = core.advertised_tools(session.result)
         details["model"], details["effort"] = session.model, session.effort
         details["config_sets"] = session.config_sets
         if details["model_values"] and model not in details["model_values"] and not fallbacks:
             return ProbeRun("inconclusive", f"model_unavailable: {model} not offered", details=details)
         if not handshake_only:
-            agent.prompt(session, [{"type": "text", "text": PROBE_PROMPT}], timeout=timeout)
+            turn = agent.prompt(session, [{"type": "text", "text": PROBE_PROMPT}], timeout=timeout)
+            details["stop_reason"], details["text_chars"] = turn.stop_reason, len(turn.text)
     except core.SurfaceViolation as exc:
         details["violation"] = exc.reason
     except (core.TransportClosed, TimeoutError, OSError) as exc:
@@ -462,6 +467,10 @@ def run_session(
     ev = evaluate(incoming, key_hashes=hashes, core=core)
     if "violation" in details and ev.verdict != "fail":  # the adapter's own gate refused the session
         ev.verdict, ev.reasons = "fail", [*ev.reasons, f"surface violation: {details['violation']}"]
+    if ev.verdict == "pass" and not handshake_only and not details.get("text_chars"):
+        # a turn that produced no answer proves nothing about the session (auth, quota, refusal)
+        return ProbeRun("inconclusive", f"empty answer (stop {details.get('stop_reason')})", _digest(incoming),
+                        ev.mode, ev.tools_used, details)  # fmt: skip
     reason = "; ".join(ev.reasons) or ("handshake ok" if handshake_only else "clean")
     return ProbeRun(ev.verdict, reason, _digest(incoming), ev.mode, ev.tools_used, details)
 

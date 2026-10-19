@@ -6,12 +6,13 @@ OSSBOT_APP=/opt/ossbot/app
 OSSBOT_UNIT_DIR=/etc/systemd/system
 OSSBOT_UNITS_CHANGED=0
 OSSBOT_APP_CHANGED=0
-# Units, boot gate first (§18.2 "boot gate enabled first"). The runner arrived with FEAT-006; the
-# Hermes unit arrives with FEAT-007.
+# Units, boot gate first (§18.2 "boot gate enabled first"). The runner arrived with FEAT-006, Hermes
+# and its probe socket with FEAT-007.
 OSSBOT_ENABLE_UNITS=(
   ossbot-boot-gate.service ossbot-nointerop.service ossbot-firewall.service ossbot-firewall-docker.service
   ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service
-  ossbot-runner.service ossbot-anchor.socket ossbot-killswitch.path ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer
+  ossbot-runner.service ossbot-hermes.service ossbot-hermes-probe.socket
+  ossbot-anchor.socket ossbot-killswitch.path ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer
 )
 OSSBOT_BINS=(ossbot-firewall ossbot-boot-gate ossbot-kill ossbot-resume ossbot-proxy-run ossbot-egress-apply)
 
@@ -39,7 +40,7 @@ step_app_deploy() {
   ensure_dir /var/cache/ossbot-uv root root 0700
   local -a sources=()
   local p
-  for p in src pyproject.toml uv.lock prompts vendor sandbox/proxy; do
+  for p in src pyproject.toml uv.lock prompts vendor hermes sandbox/proxy; do
     [[ -e $OSSBOT_REPO/$p ]] && sources+=("$p")
   done
   # The wheel metadata names docs/DESIGN.md as the readme; ship it so the build is reproducible.
@@ -207,7 +208,8 @@ step_enable_start() {
     ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-anchor.socket ossbot-killswitch.path
     ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer)
   case $level in
-    none) units+=(ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service ossbot-runner.service) ;;
+    none) units+=(ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service ossbot-runner.service
+      ossbot-hermes.service ossbot-hermes-probe.socket) ;;
     soft) units+=(ossbot-gatekeeper.service ossbot-proxy.service) ;;
   esac
   [[ $level == none ]] || warn "killed (level $level): not starting the units the kill stops"
@@ -216,7 +218,7 @@ step_enable_start() {
     # firewall in ExecStartPre). The firewall units are one-shot appliers: step 'firewall' already
     # re-applied them on drift, and restarting them would stop every unit that Requires= them.
     for u in ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service \
-      ossbot-runner.service; do
+      ossbot-runner.service ossbot-hermes.service; do
       if systemctl is-active --quiet "$u"; then
         systemctl restart "$u" || die "restart $u failed"
         mark_changed "restarted $u"

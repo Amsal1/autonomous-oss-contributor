@@ -1,0 +1,16 @@
+# One Hermes-side Kiro probe run (DESIGN §15.2 M9, R4-M2), root. Imports kiro_acp.v3_core only from
+# the root-owned /opt/ossbot/app/vendor copy, runs kiro-cli as hermes, writes
+# /var/lib/ossbot/probes/hermes-kiro.json and answers one JSON line on the socket.
+[Unit]
+Description=ossbot Hermes-side Kiro probe
+ConditionPathExists=!/var/lib/ossbot/control/killed
+After=ossbot-firewall.service ossbot-proxy.service
+[Service]
+Type=oneshot
+WorkingDirectory=/
+ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.hermes_probe --socket
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+TimeoutStartSec=600
+TimeoutStopSec=150

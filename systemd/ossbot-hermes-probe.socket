@@ -1,0 +1,14 @@
+# Hermes-side Kiro probe trigger (DESIGN §15.2 M9, §7.5): the gatekeeper connects with an empty
+# payload; each connection starts one root ossbot-hermes-probe@.service, which answers one JSON line.
+[Unit]
+Description=ossbot Hermes-side Kiro probe trigger
+ConditionPathExists=!/var/lib/ossbot/control/killed
+[Socket]
+ListenStream=/run/ossbot/hermes-probe.sock
+SocketUser=root
+SocketGroup=gatekeeper
+SocketMode=0660
+Accept=yes
+MaxConnections=1
+[Install]
+WantedBy=sockets.target

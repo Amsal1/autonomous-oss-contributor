@@ -503,7 +503,16 @@ fi
 # socket of the WSL VM itself (an NTP or DNS-tunnel client outside this distro's PID namespace, so
 # ss shows no owning process and no uid): one owned by any process of this distro must be listed.
 read -r eph _ </proc/sys/net/ipv4/ip_local_port_range
-LISTEN_OK=" udp/$NS:53 tcp/$NS:53 udp/127.0.0.1:323 udp/[::1]:323 "
+# FEAT-007: Hermes' API server on 127.0.0.1:8642 (bearer API_SERVER_KEY; Windows cannot reach it,
+# localhostForwarding=false; the bridges cannot, OSSBOT-IN) is the only addition.
+LISTEN_OK=" udp/$NS:53 tcp/$NS:53 udp/127.0.0.1:323 udp/[::1]:323 tcp/127.0.0.1:8642 "
+hermes_uid=$(id -u hermes)
+if systemctl is-active --quiet ossbot-hermes.service; then
+  check "the 8642 listener belongs to uid hermes" bash -c "ss -H -ltne 'sport = :8642' | grep -q ' uid:$hermes_uid '"
+  refuse "Hermes listens on no other TCP port" bash -c "ss -H -ltne | grep ' uid:$hermes_uid ' | grep -v '127.0.0.1:8642 '"
+else
+  skip "ossbot-hermes not active (listener checks)"
+fi
 bad=$(ss -H -ltnupe | awk -v ok="$LISTEN_OK" -v eph="$eph" '{port=$5; sub(/^.*:/, "", port)
   if ($1 == "udp" && port + 0 >= eph + 0 && $0 !~ /users:\(/ && $0 !~ / uid:/) next
   if (index(ok, " " $1 "/" $5 " ") == 0) print $1 " " $5}')

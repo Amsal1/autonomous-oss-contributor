@@ -74,7 +74,7 @@ def test_agents_match_the_fixed_trust_tools() -> None:
 
     agents_dir = ROOT / ".kiro" / "agents"
     names = {p.stem for p in agents_dir.glob("ossbot-*.json")}
-    assert names == {f"ossbot-{role}" for role in TRUST_TOOLS}
+    assert names == {f"ossbot-{role}" for role in TRUST_TOOLS} | {"ossbot-chat"}  # chat: Hermes, below
     for role, trusted in TRUST_TOOLS.items():
         doc = json.loads((agents_dir / f"ossbot-{role}.json").read_text(encoding="utf-8"))
         # V3 refuses absolute file:// prompts: the role prompt is inlined in the task (runner/prompts.py)
@@ -94,6 +94,23 @@ def test_agents_match_the_fixed_trust_tools() -> None:
             assert not {"read", "write", "shell", "glob", "grep", "web_search", "web_fetch"} & set(doc["tools"])
         else:
             assert "mcpServers" not in doc and "shell" not in doc["tools"]
+
+
+def test_chat_agent_has_only_the_web_tools() -> None:
+    """§15.2/§15.3: the Hermes ``ossbot-chat`` agent lists only web_search and web_fetch (H2), no MCP
+    servers, and its rules deny every file, shell, MCP and sub-agent capability."""
+    doc = json.loads((ROOT / ".kiro" / "agents" / "ossbot-chat.json").read_text(encoding="utf-8"))
+    assert doc["name"] == "ossbot-chat"
+    assert doc["tools"] == doc["allowedTools"] == ["web_search", "web_fetch"]
+    assert "mcpServers" not in doc and "toolsSettings" not in doc
+    rules = doc["permissions"]["rules"]
+    allowed = {r["capability"] for r in rules if r["effect"] == "allow"}
+    denied = {r["capability"] for r in rules if r["effect"] == "deny" and "match" not in r}
+    assert allowed == {"web_search", "web_fetch"}
+    assert denied >= {"fs_read", "fs_write", "shell", "mcp", "subagent"}
+    perms = (ROOT / "hermes" / "config" / "permissions.yaml").read_text(encoding="utf-8")
+    for cap in ("fs_read", "fs_write", "shell", "mcp", "subagent"):
+        assert f"capability: {cap}" in perms
 
 
 def test_settings_list_parser_reads_the_live_2_32_format() -> None:

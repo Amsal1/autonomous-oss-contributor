@@ -505,14 +505,120 @@ def check_sandbox_kiro(probes: bool = False) -> list[Result]:
     return [*out, Result(FAIL, "safety probes", "no pass for the current tuple", "ossctl doctor --probes")]
 
 
-def check_hermes() -> list[Result]:
-    out = [
-        Result(SKIP, "hermes commit vs versions.lock", "phase 2 (FEAT-007)"),
-        Result(SKIP, "hermes-side Kiro probe", "phase 2 (FEAT-007)"),
-        Result(SKIP, "kiro settings (hermes)", "phase 2 (FEAT-007)"),
-    ]
+HERMES_HOME_DIR = Path("/home/hermes")
+HERMES_API = "http://127.0.0.1:8642"
+
+
+def _lock_scalar(section: str, key: str, path: Path = LOCK_COPY) -> str | None:
+    """A scalar of a top-level section of versions.lock.yaml (flat 2-space layout)."""
+    current = None
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line and not line.startswith(" ") and line.endswith(":"):
+            current = line[:-1]
+        elif current == section and line.startswith(f"  {key}:"):
+            return line.split(":", 1)[1].split(" #", 1)[0].strip().strip('"')
+    return None
+
+
+def check_hermes_install() -> list[Result]:
+    """§15.4: the checked-out commit (read as data, root never runs git in the hermes tree), the
+    hermes-side Kiro files (§15.2) and the root-owned paths inside the hermes home (§15.5)."""
+    from ossbot.ctl import hermes_probe as hp  # noqa: PLC0415
+
+    out: list[Result] = []
+    want = _lock_scalar("hermes", "peeled_commit") or ""
+    try:
+        head_path = HERMES_HOME_DIR / ".hermes/hermes-agent/.git/HEAD"
+        fd = os.open(head_path, os.O_RDONLY | os.O_NOFOLLOW)
+        with os.fdopen(fd, "rb") as fh:
+            head = fh.read(80).decode("ascii", "replace").strip()
+        out.append(Result(PASS if head == want else FAIL, "hermes commit vs versions.lock",
+                          f"{head[:12]} (lock {want[:12]})", "ossctl hermes upgrade"))  # fmt: skip
+    except OSError as exc:
+        out.append(Result(FAIL, "hermes commit vs versions.lock", f"not installed: {exc.strerror}",
+                          "provision step hermes"))  # fmt: skip
+    repo = Paths.default().repo
+    pairs = (
+        (HERMES_HOME_DIR / ".kiro/settings/cli.json", repo / "sandbox/kiro/settings/cli.json"),
+        (HERMES_HOME_DIR / ".kiro/settings/permissions.yaml", repo / "hermes/config/permissions.yaml"),
+        (HERMES_HOME_DIR / ".kiro/agents/ossbot-chat.json", repo / ".kiro/agents/ossbot-chat.json"),
+        (HERMES_HOME_DIR / ".hermes/.env", repo / "hermes/config/dotenv"),
+    )
+    bad: list[str] = []
+    for deployed, source in pairs:
+        try:
+            if hp.file_sha256(deployed) != hp.file_sha256(source):
+                bad.append(f"{deployed.name} differs")
+        except (OSError, hp.Drift) as exc:
+            bad.append(f"{deployed.name}: {exc}")
+    for path in (
+        HERMES_HOME_DIR / ".hermes/skills",
+        HERMES_HOME_DIR / ".hermes/hooks",
+        HERMES_HOME_DIR / ".hermes/.env",
+    ):
+        try:
+            st = os.lstat(path)
+            if st.st_uid != 0 or st.st_mode & 0o022:
+                bad.append(f"{path.name} is not root-owned read-only")
+        except OSError:
+            bad.append(f"{path.name} missing")
+    out.append(Result(FAIL if bad else PASS, "kiro settings (hermes)", "; ".join(bad) or
+                      "cli.json, permissions.yaml, ossbot-chat agent, .env, skills/hooks root-owned",
+                      "provision steps kiro-cli-hermes,hermes"))  # fmt: skip
+    try:
+        from ossbot.ctl.hermes_render import MANAGED_CONFIG, render, tier_from_flag  # noqa: PLC0415
+
+        tier = tier_from_flag()
+        same = MANAGED_CONFIG.read_text(encoding="utf-8") == render(tier)
+        out.append(Result(PASS if same else FAIL, "hermes managed config", f"/etc/hermes/config.yaml, tier {tier}",
+                          "python -I -m ossbot.ctl.hermes_render"))  # fmt: skip
+    except OSError as exc:
+        out.append(Result(FAIL, "hermes managed config", str(exc), "provision step hermes"))
+    return out
+
+
+def check_hermes_surface() -> Result:
+    """§15.1 runtime check: ``GET /v1/toolsets`` against the active tier's allowlist."""
+    from ossbot.ctl.hermes_render import tier_from_flag  # noqa: PLC0415
+    from ossbot.gatekeeper.chat.hermes_surface import check_toolsets  # noqa: PLC0415
+
+    key = env_value("gatekeeper.env", "HERMES_API_KEY")
+    if not key:
+        return Result(AWAITING, "hermes tool surface", "HERMES_API_KEY missing", "provision step secrets-seed")
+    tier = tier_from_flag()
+    res = check_toolsets(HERMES_API, key, tier)
+    status = {"ok": PASS, "unavailable": WARN}.get(res.outcome, FAIL)
+    detail = f"{res.outcome}: {res.detail}" + (f"; unexpected {', '.join(res.unexpected)}" if res.unexpected else "")
+    return Result(status, "hermes tool surface", detail[:400], "systemctl status ossbot-hermes")
+
+
+def check_hermes_probe(run_probe: bool = False) -> list[Result]:
+    """§15.2 M9: the Hermes-side Kiro probe result (``--probes`` runs it) and the chat relay state."""
+    from ossbot.ctl import hermes_probe as hp  # noqa: PLC0415
+
+    doc = hp.probe(force=True) if run_probe else hp.read_result()
+    if doc is None:
+        probe = Result(WARN, "hermes-side Kiro probe", "not run yet", "ossctl hermes probe")
+    else:
+        status = {"pass": PASS, "fail": FAIL}.get(str(doc.get("verdict")), WARN)
+        probe = Result(status, "hermes-side Kiro probe",
+                       f"{doc.get('verdict')}: {str(doc.get('reason'))[:200]} (checked {doc.get('checked_at')})",
+                       "ossctl hermes probe")  # fmt: skip
+    killed = Paths.default().killed_flag.exists() or Paths.default().paused_flag.exists()
+    fresh = hp.relay_open(doc)
+    relay = Result(PASS if fresh and not killed else WARN, "chat relay",
+                   "enabled" if fresh and not killed else
+                   ("disabled: killed or paused" if killed else "disabled: no Hermes-side probe pass younger than 2 h"),
+                   "ossctl hermes probe")  # fmt: skip
+    return [probe, relay]
+
+
+def check_hermes(probes: bool = False) -> list[Result]:
+    out = check_hermes_install()
     missing = _secret("hermes.env", "KIRO_API_KEY", "hermes Kiro key")
     out.append(missing or Result(PASS, "hermes Kiro key", "present"))
+    out.append(check_hermes_surface())
+    out.extend(check_hermes_probe(probes))
     return out
 
 
@@ -694,7 +800,12 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     ]  # fmt: skip
     if not quick:
         steps += [check_uid_probes, check_proxy_denies]
-    steps += [check_images, lambda: check_kiro_cli(quick), lambda: check_sandbox_kiro(probes), check_hermes]
+    steps += [
+        check_images,
+        lambda: check_kiro_cli(quick),
+        lambda: check_sandbox_kiro(probes),
+        lambda: check_hermes(probes),
+    ]
     if not quick:
         steps.append(check_proxy_dns)
     steps += [

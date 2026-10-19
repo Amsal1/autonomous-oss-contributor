@@ -1,0 +1,18 @@
+# Global Kiro permission rules for uid hermes (~hermes/.kiro/settings/permissions.yaml; DESIGN §15.2).
+# Defence in depth behind the ossbot-chat agent, which lists only web_search and web_fetch: every
+# file, shell, MCP and sub-agent capability is denied, and reads of the Kiro state and system paths
+# are denied explicitly. Same V3 loader format as sandbox/kiro/settings/permissions.yaml (ADR-0011).
+rules:
+  - capability: fs_read
+    match: [/home/hermes/.kiro/**, /proc/**, /sys/**, /dev/**, /run/**, /etc/**]
+    effect: deny
+  - capability: fs_read
+    effect: deny
+  - capability: fs_write
+    effect: deny
+  - capability: shell
+    effect: deny
+  - capability: mcp
+    effect: deny
+  - capability: subagent
+    effect: deny

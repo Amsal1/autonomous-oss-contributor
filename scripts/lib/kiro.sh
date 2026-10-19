@@ -1,7 +1,7 @@
 # shellcheck shell=bash
 # kiro-cli pins (DESIGN §15.3, ADR-0011). Requires common.sh.
-# Phase 1: kiro-cli is only baked into the sandbox-llm image (images step, PLAN Decision 8). The
-# Hermes-side install ('kiro-cli-hermes' step) is FEAT-007 and stays a named no-op until then.
+# kiro-cli is baked into the sandbox-llm image (images step) and installed for uid hermes by the
+# 'kiro-cli-hermes' step (scripts/lib/hermes.sh, FEAT-007), both from the same pinned tarball.
 
 # kiro_llm_build_args: the --build-arg list for sandbox/images/llm/Dockerfile from versions.lock.yaml.
 kiro_llm_build_args() {

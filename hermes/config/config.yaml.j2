@@ -1,0 +1,39 @@
+# Hermes v0.22.2 managed scope: /etc/hermes/config.yaml (root:root 0644). Rendered by root
+# (python -I -m ossbot.ctl.hermes_render) for capability tier "{{ tier }}"; never edit by hand.
+# Hermes documents this layer as winning over ~/.hermes/config.yaml and the environment, per leaf
+# (lists are replaced whole). DESIGN §15.1, §15.5; ADR-0002 and ADR-0018 addenda (FEAT-007).
+model:
+  provider: kiro-acp            # vendored hermes-kiro-provider fork, V3 ACP (HERMES_KIRO_ACP_ENGINE)
+  default: kiro-acp             # the provider resolves the real model from config/models.yaml per turn
+platform_toolsets:
+  api_server: [{{ toolsets | join(", ") }}]
+agent:
+  # applied after platform_toolsets; "always removed" (configuration.md "Global Toolset Disable")
+  disabled_toolsets: [{{ disabled | join(", ") }}]
+mcp_servers: {}
+tools:
+  tool_search:
+    enabled: "off"              # M8: no tool_search/tool_describe/tool_call bridge
+approvals:
+  mode: manual                  # defence in depth only: no terminal or code toolset exists to approve
+  cron_mode: deny
+  unattended_mode: deny
+updates:
+  check: false
+plugins:
+  enabled: [ossbot]
+  auto_update_check_hours: 0
+curator:
+  enabled: false                # no background skill maintenance; every skill change is staged
+skills:
+  write_approval: true          # skill_manage stages to ~/.hermes/pending/skills/; root activates (§15.5)
+  project_discovery: false
+  trusted_project_dirs: []
+  create_dir: ""
+  external_dirs: []
+  inline_shell: false
+  ledger: false
+gateway:
+  api_server:
+    host: 127.0.0.1
+    port: 8642

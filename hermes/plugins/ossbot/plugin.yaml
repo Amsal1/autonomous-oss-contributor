@@ -1,0 +1,4 @@
+name: ossbot
+version: "0.1.0"
+description: ossbot status and requests over the gatekeeper's Unix socket (requester role only)
+author: ossbot

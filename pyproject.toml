@@ -87,6 +87,8 @@ ignore = [
 "src/ossbot/gatekeeper/anomaly.py" = ["S105"]
 # Hermes loads the plugin directory as a package under its own name, so the fork imports relatively.
 "vendor/hermes-kiro-provider/kiro_acp/*.py" = ["TID252", "BLE001", "S110", "PLC0415", "S105"]
+# loaded by Hermes as a plugin package under its own name
+"hermes/plugins/**/*.py" = ["TID252"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

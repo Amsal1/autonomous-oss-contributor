@@ -1,0 +1,53 @@
+# Hermes v0.22.2, the owner's assistant (DESIGN §15.1, §15.5, §15.6): API-server platform only, on
+# 127.0.0.1:8642 (bearer API_SERVER_KEY, the gatekeeper's HERMES_API_KEY). Model provider: the
+# vendored hermes-kiro-provider fork on Kiro V3 ACP. Egress only through squid port 3141 (OSSBOT-OUT).
+# The tool surface comes from the root-owned managed scope /etc/hermes/config.yaml (capability tier);
+# the gatekeeper checks it over /v1/toolsets and the root Hermes-side probe gates the chat relay.
+# Not started while killed; the gatekeeper keeps the relay closed while paused.
+[Unit]
+Description=ossbot Hermes assistant (API server, Kiro V3 ACP)
+ConditionPathExists=!/var/lib/ossbot/control/killed
+Requires=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service
+Wants=ossbot-proxy.service
+After=ossbot-boot-gate.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-proxy.service ossbot-gatekeeper.service
+[Service]
+TimeoutStopSec=150
+Type=simple
+User=hermes
+Group=hermes
+# ossapi: gatekeeper.sock (requester role: the ossbot plugin and the provider's surface-violation kill)
+SupplementaryGroups=ossapi
+EnvironmentFile=/etc/ossbot/secrets/hermes.env
+# HERMES_DISABLE_LAZY_INSTALLS: no dependency sync or install at launch or first use; everything comes
+# from the tag's uv.lock at provisioning (ADR-0002 addendum FEAT-007).
+Environment=HOME=/home/hermes HERMES_HOME=/home/hermes/.hermes LANG=C.UTF-8 HERMES_DISABLE_LAZY_INSTALLS=1
+Environment=HTTPS_PROXY=http://10.212.0.2:3141 https_proxy=http://10.212.0.2:3141 HTTP_PROXY=http://10.212.0.2:3141 http_proxy=http://10.212.0.2:3141 NO_PROXY=127.0.0.1,localhost no_proxy=127.0.0.1,localhost
+Environment=API_SERVER_HOST=127.0.0.1 API_SERVER_PORT=8642
+Environment=HERMES_KIRO_ACP_ENGINE=v3 HERMES_KIRO_ACP_COMMAND=/home/hermes/.local/bin/kiro-cli HERMES_KIRO_ACP_CLI=/home/hermes/.local/bin/kiro-cli
+Environment=HERMES_KIRO_ACP_AUTH=default HERMES_KIRO_ACP_TOKEN_FILE=/etc/ossbot/secrets/hermes.env
+Environment=HERMES_KIRO_ACP_MODELS_FILE=/mnt/d/Work/autonomous-oss-contributor/config/models.yaml
+Environment=HERMES_KIRO_ACP_VIOLATION_UDS=/run/ossbot/gatekeeper.sock OSSBOT_GATEKEEPER_SOCK=/run/ossbot/gatekeeper.sock
+ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
+ExecStart=/home/hermes/.hermes/hermes-agent/.venv/bin/hermes gateway
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+# P1-17: /home and /run/user hidden; only the hermes home is bound back in.
+ProtectHome=tmpfs
+BindPaths=/home/hermes
+ReadWritePaths=/home/hermes
+ReadOnlyPaths=/mnt/d/Work/autonomous-oss-contributor
+PrivateTmp=yes
+CapabilityBoundingSet=
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+# P1-13: no AF_VSOCK, AF_NETLINK or AF_PACKET (Hyper-V sockets bypass netfilter).
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# P1-14: io_uring creates sockets without socket(2); refused (EPERM) here and system-wide.
+SystemCallFilter=~io_uring_setup io_uring_enter io_uring_register
+SystemCallErrorNumber=EPERM
+[Install]
+WantedBy=multi-user.target

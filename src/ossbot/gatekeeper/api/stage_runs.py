@@ -36,7 +36,8 @@ async def update_run(
 @router.get("/stage-runs")
 async def list_runs(
     request: Request,
-    caller: Annotated[Caller, Depends(require(Role.WORKER, Role.OPERATOR))],
+    # requester: Hermes' ossbot_logs tool (DESIGN §15.1) reads the stage-run metadata, never output
+    caller: Annotated[Caller, Depends(require(Role.WORKER, Role.OPERATOR, Role.REQUESTER))],
     status: Annotated[str | None, Query(pattern=r"^[a-z]{1,16}$")] = None,
     cid: Annotated[str | None, Query(pattern=r"^c_[0-9A-Z]{10}$")] = None,
 ) -> list[dict[str, Any]]:
