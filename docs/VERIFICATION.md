@@ -4,6 +4,17 @@ Results of the phase verification bars (docs/PLAN.md) and of the live checks of 
 
 ## Phase 2 live checks
 
+### FEAT-007 live checks (round 4: review round 3 fixes, 2026-10-19 about 19:40-19:55 +07)
+
+Same rules as below. No Telegram message, no Kiro chat turn and no GitHub write in this round.
+
+| Check | Command / trigger | Outcome |
+|---|---|---|
+| Scout/reviewer GitHub MCP env (F007-R3-2) | `.kiro/agents/ossbot-{scout,reviewer}.json` `mcpServers.github.env` = literal `HOME=/home/agent`, `HTTPS_PROXY`/`HTTP_PROXY` = `http://proxy:3128` (no `${VAR}`, so Kiro's approved-env expansion list is not involved and nothing secret is in the file); redeploy | sandbox-llm rebuilt (`agent_configs_sha256` 961f128e…, digests in `config/versions.lock.yaml`); the in-container scout/reviewer run stays for the Phase 2 gate (item 57, GHMCP-2 reopened as `missing` for that live part) |
+| Doctor with probes (new tuple) | `ossctl doctor --probes` | PASS 46; safety probes passed for tuple `a15074dd6d44`; `github mcp (read-only): get_me Amsal1, github/github-mcp-server root 29 entries`; chat relay enabled |
+| Redeploy idempotence | `bootstrap.ps1 -Only provision` twice | The first rebuilt the images; the second printed only `unchanged` (17 steps) |
+| Hermetic bar and lint | `DEV pytest -m "unit or telegram or acp or e2e" -n auto`; lint gate; `shellcheck sandbox/entrypoints/kiro.sh` | 2895 passed in 77 s; ruff, format (335 files), mypy (167 files), lint-imports (6 contracts) clean; shellcheck clean |
+
 ### FEAT-007 live checks (round 3: review round 2 fixes, 2026-10-19 about 17:55-19:20 +07)
 
 Same rules as below: product code only (`ossctl` as root, the gatekeeper API, the runner, sandboxd, Hermes), dry-run ON, no GitHub write, answers only to the owner through the outbox, no secret value read or printed by hand. Every turn ran on `roles.test`/`test_vision` (`claude-haiku-4.5`). The provider now logs one metadata line per completion: `kiro_acp tools: offered=<n> bridged=<bool> blocks=<n> parsed=<n> rejected=<reason:count> names=<tool names>` (never arguments or text).

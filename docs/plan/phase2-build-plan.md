@@ -254,7 +254,7 @@ Depends on FEAT-005…008.
       Verify: `DEV pytest -m "unit or telegram or e2e"` green.
 
 - [ ] 47. Controls, notifications and states.
-      Rows: DES-FR-6, DES-FR-17 (Telegram part), DES-AC-31 (Telegram part), DES-AC-35, CR1-5c, CR2-2a, CR2-3a, CR2-3d, CR2-7k (M1 part), CHAT-12, CHAT-25, TGRW-14, CR3-D11, CR3-D14, CR3-D15, CR3-U7, CR3-AC-16, CR3-AC-17, CR3-AC-21, CR3-AC-33, CR3-AC-34, CR3-AC-49, CR3-F6-5.
+      Rows: DES-FR-6, DES-FR-17 (Telegram part), DES-AC-13 (`/model` part), DES-AC-31 (Telegram part), DES-AC-35, CR1-5c, CR2-2a, CR2-3a, CR2-3d, CR2-7k (M1 part), CHAT-12, CHAT-25, TGRW-14, CR3-D11, CR3-D14, CR3-D15, CR3-U7, CR3-AC-16, CR3-AC-17, CR3-AC-21, CR3-AC-33, CR3-AC-34, CR3-AC-49, CR3-F6-5.
       What: the full §14.14.1 command set with pickers and confirmation patterns: `/drain /undrain /down /up` (item 42 helper), `/egress` (go class, two-tap, item 23 API), `/hermes tier` (two-tap, item 23a/36), `/skills` + skill card (§14.15), `/model` + new-model card, `/reload`, `/repos`, `/limits`, `/logs`, `/settings`, `/quiet`, `/notify`, `/new`; priorities P0–P3, quiet hours, coalescing and batching (never for rows with buttons), offline and killed states (§14.16), short-description updates.
       Tests: new `tests/telegram/{test_commands_full.py,test_egress_cmd.py,test_hermes_tier_cmd.py,test_skill_card.py,test_model_cmd.py,test_lifecycle_cmds.py,test_priorities.py,test_quiet_hours.py,test_coalesce.py,test_offline_states.py}`.
       Verify: `DEV pytest -m "unit or telegram"` green.
@@ -268,9 +268,9 @@ Depends on FEAT-005…008.
 Depends on FEAT-009.
 
 - [ ] 49. Streaming assistant UX.
-      Rows: DES-FR-13, DES-AC-36, CR2-7a, CR2-7h, CR2-7k, CR2-7l, CHAT-26, TGRW-9, CR3-D8, CR3-D9, CR3-D10, CR3-D21, CR3-U10, CR3-U12, CR3-AC-18, CR3-AC-19, CR3-AC-20, CR3-AC-22, CR3-AC-35, CR3-AC-48, CR3-AC-55, CR3-BA-14, CR3-BA-22, CR3-F6-2, CR3-M2, CR3-V-2, CR3-V-3, CR3-V-7, CR3-V-8, CR3-V-13, CR3-V-16, CR3-IH-9, CR3-IH-10.
+      Rows: DES-FR-13, DES-AC-36, CR2-7a, CR2-7h, CR2-7k, CR2-7l, CHAT-26, TGRW-9, CR3-D8, CR3-D9, CR3-D10, CR3-D21, CR3-U10, CR3-U12, CR3-AC-18, CR3-AC-19, CR3-AC-20, CR3-AC-22, CR3-AC-35, CR3-AC-48, CR3-AC-55, CR3-AC-59 (Stop part), CR3-AC-67 (`/resume` and U12 parts), CR3-BA-14, CR3-BA-15 (chat-turn wiring, album and test part), CR3-BA-22, CR3-F6-2, CR3-M2, CR3-V-2, CR3-V-3, CR3-V-7, CR3-V-8, CR3-V-13, CR3-V-16, CR3-IH-9, CR3-IH-10.
       What: drafts with Stop (`sendRichMessageDraft`/`sendMessageDraft`, `can_stop`), `ALLOWED_UPDATES` gains `stopped_message_generation` authorized by `auth.authorized_chat_only()`; `chat/{stream,drafts,md2blocks,followups,answer_view}.py` (flat mode and Reviews wrap drafts too); sources and footer; follow-ups; albums (1.5 s grouping) and reactions; `/new /title /memory`; feature cards and Hermes notifications (U12); assistant-unavailable states; PDF and voice UX of §14.12.5 on the item 37 backend. Every stream runs as a spawned `chat_turn`.
-      Tests: new `tests/telegram/{test_stream_drafts.py,test_stop.py,test_md2blocks.py,test_followups.py,test_albums.py,test_answer_view.py,test_assistant_unavailable.py,test_pdf_voice_ux.py}`; `test_handlers_nonblocking.py` extended with Stop during a stream.
+      Tests: new `tests/telegram/{test_stream_drafts.py,test_stop.py,test_md2blocks.py,test_followups.py,test_albums.py,test_answer_view.py,test_assistant_unavailable.py,test_pdf_voice_ux.py}`; `test_handlers_nonblocking.py` extended with Stop during a stream (`stopped_message_generation` ends it within 2 s, AC 59) and the AC 67 / BA-15 cases on real `chat_turns` rows (`chat/turns.py: finalize_turn(conn, turn_id)` as the chat turn's `on_done`; message + `/kill` in one batch → row `stopped`, the next message after `/resume` answered; an older task's callback leaves a newer turn's `_sessions` entry; album + `/kill` → buffer empty); new `tests/telegram/test_hermes_routing.py` (U12 answers 409 for a row `reset_streaming` failed and for a `streaming` row older than 30 min).
       Verify: `DEV pytest -m "unit or telegram"` green.
 
 - [ ] 50. Rich views and status.
@@ -320,8 +320,8 @@ Depends on everything above.
       Verify: `DEV pytest -m unit tests/unit/test_ci_workflow.py` green.
 
 - [ ] 57. Final verification and report.
-      Rows: DES-FR-11, DES-AC-3, NOTE-2, NOTE-9, CHAT-34, CHAT-37.
-      What: run "Required overall verification" and the "Phase 2 verification" block of PLAN.md; full `ossctl doctor --probes` and `scripts\ossctl.ps1 doctor`; the real Windows restart test of 6a/6b (ask the user to restart the laptop with `send_message` severity `warning`, then record the observed shutdown types); every matrix row `done` or `deferred`; write `docs/FINAL_REPORT.md` (summary, doctor results, live checks, user actions needed); FEAT-011 `completed`; commit.
+      Rows: DES-FR-11, DES-AC-3, NOTE-2, NOTE-9, CHAT-34, CHAT-37, GHMCP-2 (live part).
+      What: run "Required overall verification" and the "Phase 2 verification" block of PLAN.md; full `ossctl doctor --probes` and `scripts\ossctl.ps1 doctor`; one research-profile scout or reviewer job (dry-run, read-only) whose events show a successful `@github/...` read tool call, the in-container GitHub MCP path of GHMCP-2; the real Windows restart test of 6a/6b (ask the user to restart the laptop with `send_message` severity `warning`, then record the observed shutdown types); every matrix row `done` or `deferred`; write `docs/FINAL_REPORT.md` (summary, doctor results, live checks, user actions needed); FEAT-011 `completed`; commit.
       Verify: every command of both blocks passes; the matrix check with `$f='.'` lists no row; `git status --porcelain` empty.
 
 ---
