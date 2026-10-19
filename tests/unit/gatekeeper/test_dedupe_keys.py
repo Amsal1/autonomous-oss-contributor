@@ -27,6 +27,7 @@ KEY_FORMATS: dict[str, bool] = {
     "stub:{message_id}:{reason}": True,
     "stub:{message_id}:moved": False,  # the "moved ↓" stub of a view re-sent after a failed rich edit
     "stub:{message_id}:delete": False,  # ... deleted when that stub edit failed too
+    "stub:{message_id}:submitted": False,  # S9: the card's one outcome edit after the submit returns
     "view:{token}": False,  # new per send (a fresh token), so it never repeats
 }
 

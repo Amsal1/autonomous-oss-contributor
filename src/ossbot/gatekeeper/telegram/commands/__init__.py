@@ -8,6 +8,9 @@ import importlib
 BUILTIN_MODULES: tuple[str, ...] = (
     "ossbot.gatekeeper.telegram.commands.builtin",
     "ossbot.gatekeeper.telegram.dashboard_actions",
+    "ossbot.gatekeeper.telegram.commands.review",
+    "ossbot.gatekeeper.telegram.review.actions",
+    "ossbot.gatekeeper.telegram.review.edit_text",
 )
 
 

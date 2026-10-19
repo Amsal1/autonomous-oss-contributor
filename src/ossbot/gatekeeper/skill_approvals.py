@@ -25,6 +25,7 @@ from ossbot.common.ids import new_skill_approval_id
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.decisions import TableDecisions
+from ossbot.gatekeeper.telegram import keyboards
 
 
 class SkillSource(Protocol):
@@ -75,7 +76,7 @@ class SkillApprovals(TableDecisions):
     def confirm_text(self, binding: Mapping[str, Any]) -> str:
         return f"Confirm: activate skill {binding['skill']} v{binding['version']} for Hermes. Expires in 5 min."
 
-    def card_rows(self, approval_id: str, tokens: dict[str, str]) -> list[list[tuple[str, str]]]:
+    def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
         return [[("✅ Activate", tokens[self.approve_purpose]), ("❌ Reject", tokens["skill_reject"])]]
 
     # -------------------------------------------------------------------- lifecycle

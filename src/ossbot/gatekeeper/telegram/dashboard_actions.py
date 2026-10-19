@@ -9,6 +9,7 @@ from datetime import timedelta
 from pydantic import BaseModel, ConfigDict, Field
 
 from ossbot.common.clock import to_iso
+from ossbot.gatekeeper import db
 from ossbot.gatekeeper.telegram.actions import Tap, action
 from ossbot.gatekeeper.telegram.commands.registry import COMMANDS, CommandContext
 from ossbot.gatekeeper.telegram.runtime import ui_of
@@ -67,7 +68,8 @@ async def quiet(tap: Tap) -> str:
     prefs = ui_of(tap.app).prefs
     until = tap.app.clock.now() + timedelta(hours=int(tap.arg.hours))
     prefs.set("quiet_until", to_iso(until))
-    tap.app.audit.append(tap.actor, "quiet_set", {"until": to_iso(until)})
+    with db.transaction(tap.app.conn):
+        tap.app.audit.append(tap.actor, "quiet_set", {"until": to_iso(until)})
     return f"🌙 Quiet for {tap.arg.hours} h (P0 alerts still ring)."
 
 

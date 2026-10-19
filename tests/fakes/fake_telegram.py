@@ -21,6 +21,7 @@ class FakeBotRequest(BaseRequest):
 
     def __init__(self, *, topics: bool = False, user_topics: bool = False) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.files: list[tuple[str, str, bytes]] = []  # uploads: (method, filename, bytes)
         self.message_ids = itertools.count(900)
         self.thread_ids = itertools.count(30)
         self.topics = topics
@@ -59,6 +60,9 @@ class FakeBotRequest(BaseRequest):
         endpoint = url.rsplit("/", 1)[-1]
         params = dict(request_data.parameters) if request_data is not None else {}
         self.calls.append((endpoint, params))
+        if request_data is not None and request_data.contains_files:
+            for value in (request_data.multipart_data or {}).values():
+                self.files.append((endpoint, str(value[0]), bytes(value[1])))  # (method, filename, bytes)
         queued = self.fail_queue.get(endpoint)
         if queued:
             code, description = queued.pop(0)
@@ -119,7 +123,8 @@ def callback_update(
 
 def message_update(from_id: int, chat_id: int, text: str, chat_type: str = "private", *,
                    thread_id: int | None = None, reply_to: int | None = None, date: int = FAKE_NOW,
-                   forward: bool = False, message_id: int | None = None) -> dict[str, Any]:  # fmt: skip
+                   forward: bool = False, message_id: int | None = None, quote: str | None = None,
+                   quote_manual: bool = True) -> dict[str, Any]:  # fmt: skip
     message: dict[str, Any] = {
         "message_id": message_id or next(_update_ids),
         "date": date,
@@ -134,6 +139,8 @@ def message_update(from_id: int, chat_id: int, text: str, chat_type: str = "priv
         message["reply_to_message"] = {"message_id": reply_to, "date": date, "chat": chat(chat_id, chat_type),
                                        "from": {"id": BOT_ID, "is_bot": True, "first_name": "ossbot"},
                                        "text": "a bot message"}  # fmt: skip
+    if quote is not None:  # Bot API TextQuote (a reply with quote)
+        message["quote"] = {"text": quote, "position": 0, "is_manual": quote_manual}
     if forward:
         message["forward_origin"] = {"type": "hidden_user", "sender_user_name": "someone", "date": date}
     return {"update_id": next(_update_ids), "message": message}

@@ -33,7 +33,8 @@ class Typed:
     message_id: int
     thread_id: int | None
     quote: str | None = None  # the user's quote of the replied-to message (Bot API TextQuote)
-    document: tuple[str, str | None, int] | None = None  # (file_id, mime, size) of an attached document
+    quote_manual: bool = False  # only a manual quote anchors lines (§14.11.5)
+    document: tuple[str, str | None, int, str | None] | None = None  # (file_id, mime, size, name)
     prompt: Prompt | None = None
     view: sqlite3.Row | None = None
     route: Any = None  # routing.Route (link cards: its links and notes)

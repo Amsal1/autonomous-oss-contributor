@@ -31,8 +31,9 @@
   <rect x="40" y="130" width="300" height="236" rx="16" fill="#ffffff"/>
   <text class="t" x="52" y="150"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r2</text>
   <text class="t" x="52" y="168"><tspan class="b">langfuse/langfuse</tspan> · Issue #1234</text>
-  <text class="t" x="52" y="186">PR: <tspan class="m">fix(web): handle empty spans…</tspan></text>
-  <rect x="50" y="198" width="280" height="34" rx="8" fill="#e3f0ff"/>
+  <text class="t" x="52" y="186">PR: <tspan class="m">fix(web): handle empty spans in trace</tspan></text>
+  <text class="t" x="52" y="198"><tspan class="m">export</tspan></text>
+  <rect x="50" y="202" width="280" height="30" rx="8" fill="#e3f0ff"/>
   <text class="t dry" x="60" y="220">🧪 DRY RUN — nothing will be published</text>
   <text class="t b" x="52" y="254">Confirm: DRY RUN — nothing will be</text>
   <text class="t b" x="52" y="272">published. Expires in 5 min.</text>
@@ -81,8 +82,9 @@
   <rect x="460" y="130" width="300" height="272" rx="16" fill="#ffffff"/>
   <text class="t" x="472" y="150"><tspan class="b">🧩 Ready for review</tspan> · c_01JABC · r2</text>
   <text class="t" x="472" y="168"><tspan class="b">langfuse/langfuse</tspan> · Issue #1234</text>
-  <text class="t" x="472" y="186">PR: <tspan class="m">fix(web): handle empty spans…</tspan></text>
-  <rect x="470" y="198" width="280" height="34" rx="8" fill="#fde7e7"/>
+  <text class="t" x="472" y="186">PR: <tspan class="m">fix(web): handle empty spans in trace</tspan></text>
+  <text class="t" x="472" y="198"><tspan class="m">export</tspan></text>
+  <rect x="470" y="202" width="280" height="30" rx="8" fill="#fde7e7"/>
   <text class="t live" x="480" y="220">🔴 LIVE — this opens a public PR</text>
   <text class="t b" x="472" y="254">Confirm: LIVE — open PR on</text>
   <text class="t b" x="472" y="272">langfuse/langfuse as Amsal1 (author</text>

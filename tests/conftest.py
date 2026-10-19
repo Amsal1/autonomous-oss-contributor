@@ -92,9 +92,18 @@ def artifacts() -> FakeArtifacts:
     return FakeArtifacts()
 
 
+def fast_connection(paths: Paths) -> sqlite3.Connection:
+    """The production connection settings, minus the per-commit fsync (``synchronous = FULL``): a test
+    DB lives in tmp and is thrown away, and the fsyncs were most of each test's setup time."""
+    paths.db_path.parent.mkdir(parents=True, exist_ok=True)
+    connection = db.connect(paths.db_path)
+    connection.execute("PRAGMA synchronous = OFF")
+    return connection
+
+
 @pytest.fixture
 def ctx(paths: Paths, clock: FakeClock, artifacts: FakeArtifacts) -> Iterator[AppContext]:
-    context = build_context(paths, TEST_ROLES, clock=clock, artifacts=artifacts)
+    context = build_context(paths, TEST_ROLES, clock=clock, artifacts=artifacts, conn=fast_connection(paths))
     context.snapshots.load_at_start()
     yield context
     context.conn.close()
@@ -124,7 +133,7 @@ def world(tmp_path: Path, remote: LocalRemote) -> GitWorld:
 def gctx(paths: Paths, clock: FakeClock, remote: LocalRemote) -> Iterator[AppContext]:
     """Context with the real git TCB (production GIT_ENV/GIT_ARGS), recording every git argv."""
     ops = GitOps(paths, Git(home=paths.gatekeeper_dir / "githome", record=True), remote)
-    context = build_context(paths, TEST_ROLES, clock=clock, gitops=ops)
+    context = build_context(paths, TEST_ROLES, clock=clock, gitops=ops, conn=fast_connection(paths))
     context.snapshots.load_at_start()
     context.gitleaks_scanner = fake_scanner
     yield context

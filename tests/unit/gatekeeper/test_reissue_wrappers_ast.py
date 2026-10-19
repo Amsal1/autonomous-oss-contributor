@@ -25,13 +25,21 @@ def _enclosing(tree: ast.AST) -> dict[ast.AST, str]:
     return out
 
 
+# Receivers that are an AppContext in the Telegram layer: calling the wrapper itself is the point.
+APP_CONTEXT_RECEIVERS = frozenset({"ctx", "app", "tap.app", "self.ctx"})
+
+
 def test_only_the_context_wrappers_call_reissue() -> None:
     callers: list[str] = []
     for path in SRC.rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         owner = _enclosing(tree)
+        rel = path.relative_to(SRC).as_posix()
         for call in _calls(tree, "reissue"):
-            callers.append(f"{path.relative_to(SRC).as_posix()}:{owner.get(call, '<module>')}")
+            assert isinstance(call.func, ast.Attribute)
+            if rel.startswith("gatekeeper/telegram/") and ast.unparse(call.func.value) in APP_CONTEXT_RECEIVERS:
+                continue  # AppContext.reissue (the wrapper), not a decision service's
+            callers.append(f"{rel}:{owner.get(call, '<module>')}")
     allowed = {
         "gatekeeper/context.py:reissue",
         "gatekeeper/context.py:reissue_proposal",

@@ -21,6 +21,11 @@ NUMSTAT = (
 )
 FORMAT_PATCH_ARGV: tuple[str, ...] = tuple(FORMAT_PATCH.split())
 NUMSTAT_ARGV: tuple[str, ...] = tuple(NUMSTAT.split())
+# DESIGN §14.11.7 (S6): what changed between rev N-1 and rev N. Same base -> a plain tree diff of the two
+# heads; a moved base -> range-diff of the two one-commit ranges.
+_DIFF_FLAGS: tuple[str, ...] = ("-c", "diff.algorithm=myers", "-c", "diff.renames=false", "-c", "core.quotePath=true")
+INTERDIFF: tuple[str, ...] = (*_DIFF_FLAGS, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--full-index")
+RANGE_DIFF: tuple[str, ...] = (*_DIFF_FLAGS, "range-diff", "--no-color")
 
 # The package job always commits on this branch; bundles carry exactly this one ref (M1).
 CHANGE_BRANCH = "ossbot-change"

@@ -759,7 +759,8 @@ class ApprovalService:
         return cards.render(cards.view_for_approval(self.conn, approval_id))
 
     def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
-        return keyboards.card_rows(self._action_of(approval_id)["kind"], tokens)
+        action = self._action_of(approval_id)
+        return keyboards.card_rows(action["kind"], tokens, files=cards.file_count(self.conn, str(action["id"])))
 
     def part_count(self, approval_id: str) -> int:
         return cards.part_count(self.conn, str(self._action_of(approval_id)["id"]))

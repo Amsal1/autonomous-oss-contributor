@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ossbot review {{ cid }} r{{ rev }}</title>
+<style>
+:root { color-scheme: light dark; --bg: #fff; --fg: #1d2125; --add: #e6ffec; --del: #ffebe9; --hunk: #ddf4ff; --muted: #6e7781; }
+@media (prefers-color-scheme: dark) { :root { --bg: #0d1117; --fg: #e6edf3; --add: #12261e; --del: #25171c; --hunk: #121d2f; --muted: #8b949e; } }
+body { background: var(--bg); color: var(--fg); font: 14px/1.45 system-ui, sans-serif; margin: 1rem; }
+table { border-collapse: collapse; width: 100%; font: 12px/1.4 ui-monospace, monospace; }
+td { vertical-align: top; padding: 0 .4rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+td.n { color: var(--muted); text-align: right; width: 3.5rem; user-select: none; }
+tr.a { background: var(--add); } tr.d { background: var(--del); } tr.h { background: var(--hunk); }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; border: 1px solid var(--muted); padding: .5rem; }
+.muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<h1>{{ upstream }} · {{ cid }} r{{ rev }}</h1>
+<ul>{% for fact in facts %}<li>{{ fact }}</li>{% endfor %}</ul>
+<p class="muted">Derived by the gatekeeper. You approve the full patch on the Telegram card; this file is a display copy.</p>
+<h2>Files</h2>
+<ol>{% for f in files %}<li><a href="#f{{ loop.index }}">{{ f.path }}</a> +{{ f.added }} −{{ f.deleted }}</li>{% endfor %}</ol>
+{% for f in files %}
+<details open id="f{{ loop.index }}">
+<summary><b>{{ f.path }}</b> +{{ f.added }} −{{ f.deleted }}{% if f.binary %} · binary{% endif %}</summary>
+<table>
+{% for r in f.rows %}<tr class="{% if r.sign == '+' %}a{% elif r.sign == '-' %}d{% elif r.sign == '@' %}h{% endif %}"><td class="n">{{ r.old if r.old is not none else '' }}</td><td class="n">{{ r.new if r.new is not none else '' }}</td><td>{{ r.sign if r.sign != '@' else '' }}{{ r.text }}</td></tr>
+{% endfor %}
+</table>
+{% if f.truncated %}<p class="muted">Truncated: the HTML view is capped at 10 MB; the .patch has everything.</p>{% endif %}
+</details>
+{% endfor %}
+<h2>PR title</h2>
+<pre>{{ title }}</pre>
+<h2>PR body</h2>
+<pre>{{ body }}</pre>
+<h2>Commit message</h2>
+<pre>{{ commit_message }}</pre>
+</body>
+</html>

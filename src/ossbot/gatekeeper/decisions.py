@@ -312,7 +312,7 @@ class TableDecisions:
         return self.renderer(self._row(approval_id))
 
     def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
-        row = [("✅ Approve", tokens[self.approve_purpose])]
+        row: list[keyboards.Button] = [("✅ Approve", tokens[self.approve_purpose])]
         row += [("❌ Reject", tokens[p]) for p in self.reject_purposes[:1]]
         return [row]
 

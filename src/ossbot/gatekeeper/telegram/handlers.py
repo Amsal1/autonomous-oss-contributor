@@ -29,7 +29,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, TypeHandler, filters
 
-from ossbot.common.clock import to_iso
+from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.control_flags import Blocked
 from ossbot.common.ids import new_action_id
 from ossbot.common.schemas import State
@@ -52,6 +52,7 @@ from ossbot.gatekeeper.telegram.commands.registry import (
     Reply,
 )
 from ossbot.gatekeeper.telegram.escape import b, esc
+from ossbot.gatekeeper.telegram.review import confirm as review_confirm
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -76,6 +77,9 @@ STOP_COMMANDS = frozenset({"kill", "pause"})
 # AC 22: with a kill active, only these commands run; the rest get the killed message (§14.16).
 KILLED_ALLOWED = frozenset({"status", "resume", "logs", "help", "start", "kill", "pause", "dryrun"})
 KILLED_TEXT = "🛑 ossbot is killed: only /status /resume /logs /help work now. /resume to continue."
+REJECT_REASONS = {"not_valuable": "Not valuable", "wrong_approach": "Wrong approach",
+                  "repo_unsuitable": "Repo unsuitable (7d)", "other": "Other…", "back": "↩️ Back"}  # fmt: skip
+REPO_UNSUITABLE_COOLDOWN = timedelta(days=7)
 MEDIA_LATER = "🤖 Photos, files and voice reach the assistant with the streaming update; send text for now."
 # Gate 1 decision purposes (p_ ids); the kit purposes (skip, adjust, ...) arrive with FEAT-009.
 PROPOSAL_PURPOSES = frozenset({"proposal_start", "proposal_confirm", "proposal_cancel"})
@@ -83,13 +87,13 @@ PROPOSAL_PURPOSES = frozenset({"proposal_start", "proposal_confirm", "proposal_c
 SKILL_PURPOSES = frozenset({"skill_approve", "skill_confirm", "skill_cancel", "skill_reject"})
 
 
+def _button(btn: keyboards.Button) -> InlineKeyboardButton:
+    style = btn[2] if len(btn) == 3 else None
+    return InlineKeyboardButton(btn[0], callback_data=keyboards.callback_data(btn[1]), style=style)
+
+
 def markup(rows: keyboards.Rows) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [InlineKeyboardButton(label, callback_data=keyboards.callback_data(tok)) for label, tok in row]
-            for row in rows
-        ]
-    )
+    return InlineKeyboardMarkup([[_button(btn) for btn in row] for row in rows])
 
 
 class Handlers:
@@ -102,8 +106,10 @@ class Handlers:
         self.tasks: set[asyncio.Task[Any]] = set()
         self._by_kind: dict[TaskKind, set[asyncio.Task[Any]]] = {}
         self._sessions: dict[str, asyncio.Task[Any]] = {}  # session_key -> its running chat_turn
+        self.application: Application[Any, Any, Any, Any, Any, Any] | None = None
 
     def register(self, application: Application[Any, Any, Any, Any, Any, Any]) -> None:
+        self.application = application
         application.add_handler(CallbackQueryHandler(self.on_callback))
         application.add_handler(MessageHandler(filters.ALL, self.on_message))
         application.add_handler(TypeHandler(Update, self.on_raw), group=1)  # 10.3 updates PTB doesn't type
@@ -279,11 +285,13 @@ class Handlers:
             elif purpose == "cancel":
                 self.ctx.approvals.cancel(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id)
                 tokens = self.ctx.approvals.rotate_card_tokens(row["approval_id"])
-                kind = self._kind_of(row["approval_id"])
-                await self._edit(query, self._card_text(row["approval_id"]), keyboards.card_rows(kind, tokens))
+                rows = self.ctx.approvals.card_rows(row["approval_id"], tokens)
+                await self._edit(query, self._card_text(row["approval_id"]), rows)
                 await query.answer("Cancelled; nothing was submitted.")
             elif purpose == "reject":
-                await self._reject(query, token, user_id, chat_id, message_id)
+                await self._reject_reasons(query, token, row, chat_id, message_id)
+            elif purpose == "reject_reason":
+                await self._reject_with_reason(query, token, row, user_id, chat_id, message_id)
             elif purpose == "retry":
                 await self._retry(query, token, row, user_id, chat_id, message_id)
             elif purpose in PROPOSAL_PURPOSES:
@@ -438,9 +446,24 @@ class Handlers:
             await query.answer(f"ossbot is {lifecycle}: nothing was approved. The card stays valid; retry after up.")
             return
         arm = self.ctx.approvals.approve(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id)
-        text = f"{self._card_text(arm.approval_id)}\n\n{b(arm.confirm_text)}"
-        await self._edit(query, text, keyboards.confirm_rows(arm.confirm_token, arm.cancel_token))
+        text = self.confirm_panel(arm.approval_id, arm.confirm_text, arm.live)
+        await self._edit(query, text, keyboards.confirm_rows(arm.confirm_token, arm.cancel_token, live=arm.live))
         await query.answer()
+
+    def confirm_panel(self, approval_id: str, sentence: str, live: bool) -> str:
+        """S8 (§14.11.9): the card's head, the mode line, the exact confirm sentence, the coverage line,
+        the unsent-comments warning and the expiry."""
+        row = db.one(self.ctx.conn, "SELECT o.kind, o.cid, o.payload_json, o.id FROM approvals a JOIN"
+                     " outbound_actions o ON o.id = a.action_id WHERE a.id = ?", (approval_id,))  # fmt: skip
+        if row is None:
+            return b(sentence)
+        rev = json.loads(row["payload_json"]).get("rev")
+        return review_confirm.panel(
+            self._card_text(approval_id), kind=str(row["kind"]), live=live, sentence=sentence, cid=str(row["cid"]),
+            rev=rev if isinstance(rev, int) else None, files=cards.file_count(self.ctx.conn, str(row["id"])),
+            conn=self.ctx.conn, now=self.ctx.clock.now(),
+            confirm_ttl_s=self.ctx.config.policy.limits.confirm_ttl_seconds,
+        )  # fmt: skip
 
     async def _confirm(self, query: Any, token: str, row: Any, user_id: int, chat_id: int, message_id: int) -> None:
         approval_id = str(row["approval_id"])
@@ -477,7 +500,8 @@ class Handlers:
     async def _run_submit(self, approval_id: str) -> None:
         assert self.submit is not None
         try:
-            await self.submit(approval_id)
+            result = await self.submit(approval_id)
+            self._submitted(approval_id, str(result))
         except ApprovalError as exc:
             log.warning("submit refused: %s", exc.code, extra={"event": "submit_refused"})
             self.ctx.notify(f"Submission refused ({esc(exc.code)}); nothing was published.")
@@ -487,11 +511,41 @@ class Handlers:
                 "🚨 Submission crashed; restart reconciliation will resolve it. Nothing is retried automatically."
             )
 
-    async def _reject(self, query: Any, token: str, user_id: int, chat_id: int, message_id: int) -> None:
+    def _submitted(self, approval_id: str, result: str) -> None:
+        """S9 (§14.11.10): the card is finalized: LIVE ``🚀 Submitted · PR #N`` with the PR link and a copy
+        button, or ``🧪 Dry run done — nothing was published``."""
+        row = db.one(self.ctx.conn, "SELECT a.tg_chat_id, a.tg_message_id, o.cid, o.status, c.pr_number, c.pr_url"
+                     " FROM approvals a JOIN outbound_actions o ON o.id = a.action_id JOIN contributions c"
+                     " ON c.id = o.cid WHERE a.id = ?", (approval_id,))  # fmt: skip
+        if row is None or row["tg_message_id"] is None:
+            return
+        card = self._card_text(approval_id)
+        markup: dict[str, Any] | None = None
+        if row["status"] == "dry_run_done" or result == "dry_run_done":
+            text = f"{card}\n\n🧪 {b('Dry run done — nothing was published')}"
+        elif row["status"] == "done":
+            pr = f" · PR #{row['pr_number']}" if row["pr_number"] else ""
+            text = f"{card}\n\n🚀 {b('Submitted' + pr)}"
+            url = str(row["pr_url"] or "")
+            if url.startswith("https://github.com/"):
+                markup = {"inline_keyboard": [[{"text": "🔗 Open PR ↗", "url": url},
+                                               {"text": "📋 Copy link", "copy_text": {"text": url}}]]}  # fmt: skip
+        else:
+            return
+        payload: dict[str, Any] = {"chat_id": row["tg_chat_id"], "message_id": row["tg_message_id"], "text": text,
+                                   "parse_mode": "HTML", "link_preview_options": {"is_disabled": True}}  # fmt: skip
+        if markup is not None:
+            payload["reply_markup"] = markup
+        self.ctx.outbox.enqueue("editMessageText", payload, dedupe_key=f"stub:{row['tg_message_id']}:submitted",
+                                thread_key="reviews")  # fmt: skip
+
+    async def _reject(self, query: Any, token: str, user_id: int, chat_id: int, message_id: int, *,
+                      reason: str | None = None) -> None:  # fmt: skip
         ctx = self.ctx
         actor = f"tg:{user_id}"
         with db.transaction(ctx.conn):
-            action_id = ctx.approvals.reject(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id)
+            action_id = ctx.approvals.reject(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id,
+                                             reason=reason)  # fmt: skip
             action = db.one(ctx.conn, "SELECT * FROM outbound_actions WHERE id = ?", (action_id,))
             assert action is not None
             contrib = db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (action["cid"],))
@@ -517,6 +571,56 @@ class Handlers:
                 )
         await self._edit(query, f"{self._card_text_safe(action_id)}\n\n❌ {b('Rejected')}; nothing was published.")
         await query.answer("Rejected.")
+
+    async def _reject_reasons(self, query: Any, token: str, row: Any, chat_id: int, message_id: int) -> None:
+        """❌ Reject: the card's keyboard becomes the reason row (FEAT-009 item 45); each reason is a
+        single-use ``reject_reason`` token of this approval on this message (U3), and ↩️ Back restores S1."""
+        approval_id = str(row["approval_id"])
+        with db.transaction(self.ctx.conn):
+            self.ctx.approvals.use_token(token, ("reject",), chat_id=chat_id, message_id=message_id)
+            appr = db.one(self.ctx.conn, "SELECT status, expires_at FROM approvals WHERE id = ?", (approval_id,))
+            if appr is None or appr["status"] != "pending":
+                raise ApprovalError("wrong_status", str(appr["status"]) if appr else "unknown")
+            mint = {"chat_id": chat_id, "message_id": message_id, "expires_at": from_iso(appr["expires_at"]),
+                    "approval_id": approval_id, "cid": row["cid"]}  # fmt: skip
+            tokens = {r: self.ctx.approvals.mint_token("reject_reason", arg=r, **mint) for r in REJECT_REASONS}
+        rows: keyboards.Rows = [
+            [(REJECT_REASONS["not_valuable"], tokens["not_valuable"]),
+             (REJECT_REASONS["wrong_approach"], tokens["wrong_approach"])],
+            [(REJECT_REASONS["repo_unsuitable"], tokens["repo_unsuitable"]),
+             (REJECT_REASONS["other"], tokens["other"])],
+            [(REJECT_REASONS["back"], tokens["back"])],
+        ]  # fmt: skip
+        await self._edit(query, f"{self._card_text(approval_id)}\n\n❌ {b('Reject: why?')}", rows)
+        await query.answer()
+
+    async def _reject_with_reason(self, query: Any, token: str, row: Any, user_id: int, chat_id: int,
+                                  message_id: int) -> None:  # fmt: skip
+        approval_id = str(row["approval_id"])
+        reason = str(row["arg"] or "")
+        if reason == "back":
+            self.ctx.approvals.check_token(token, ("reject_reason",), chat_id=chat_id, message_id=message_id)
+            tokens = self.ctx.approvals.rotate_card_tokens(approval_id)
+            await self._edit(query, self._card_text(approval_id), self.ctx.approvals.card_rows(approval_id, tokens))
+            await query.answer()
+            return
+        await self._reject(query, token, user_id, chat_id, message_id, reason=reason)
+        if reason == "repo_unsuitable":
+            contrib = db.one(self.ctx.conn, "SELECT upstream FROM contributions WHERE id = ?", (row["cid"],))
+            if contrib is not None:
+                until = to_iso(self.ctx.clock.now() + REPO_UNSUITABLE_COOLDOWN)
+                with db.transaction(self.ctx.conn):
+                    self.ctx.conn.execute(
+                        "INSERT INTO repo_overrides (upstream, cooldown_until, updated_by, updated_at) VALUES (?,?,?,?)"
+                        " ON CONFLICT(upstream) DO UPDATE SET cooldown_until = excluded.cooldown_until,"
+                        " updated_by = excluded.updated_by, updated_at = excluded.updated_at",
+                        (contrib["upstream"], until, f"tg:{user_id}", to_iso(self.ctx.clock.now())),
+                    )  # fmt: skip
+        elif reason == "other":
+            view = k.plain("confirm_prompt", k.line("Why? Reply with the reason (≤ 500 chars, optional)."))
+            view.placeholder = "Why was it rejected? (optional)"
+            view.state = {"prompt": {"kind": "reject_other", "cid": row["cid"], "approval_id": approval_id}}
+            ui_send.deliver(self.ctx, view, thread="reviews", reply_to=message_id)
 
     def _card_text_safe(self, action_id: str) -> str:
         try:
@@ -582,6 +686,13 @@ class Handlers:
             date=int(message.date.timestamp()) if message.date else 0,
         )  # fmt: skip
 
+    def _count_message(self, inc: routing.Incoming) -> None:
+        """§14.11.3: owner messages count toward the thread's message counter (file-view reuse)."""
+        key = f"{inc.chat_id}:{inc.thread_id or 0}"
+        with db.transaction(self.ctx.conn):
+            self.ctx.conn.execute("INSERT INTO tg_thread_seq (thread_key, n) VALUES (?, 1) ON CONFLICT(thread_key)"
+                                  " DO UPDATE SET n = n + 1", (key,))  # fmt: skip
+
     def _stale_s(self, inc: routing.Incoming) -> int:
         """Seconds the message waited, when that is over ``telegram.stale_message_minutes`` (else 0)."""
         if inc.date <= 0:
@@ -610,8 +721,10 @@ class Handlers:
             message.message_id,
             inc.thread_id,
             quote=quote,
-            document=(doc.file_id, doc.mime_type, doc.file_size or 0) if doc is not None else None,
+            quote_manual=bool(message.quote is not None and message.quote.is_manual),
+            document=(doc.file_id, doc.mime_type, doc.file_size or 0, doc.file_name) if doc is not None else None,
         )
+        self._count_message(inc)
         if route.kind == "pending_input":
             prompt = ui.pending.consume(inc.chat_id, inc.reply_to_message_id)
             handler = inputs.INPUTS.get(prompt.kind) if prompt is not None else None

@@ -46,9 +46,9 @@
   <text class="t" x="64" y="346">· +11 test · within estimate</text>
   <text class="t" x="52" y="364">Tests ✅ lint · unit 212 · smoke</text>
   <text class="t" x="52" y="382">Self-review 🤖 PASS · 0 blocking · 2 nits</text>
-  <text class="t" x="52" y="400">Commit <tspan class="m">abc1234</tspan> on main@def5678 (10:02)</text>
-  <text class="t" x="52" y="418">PR title: <tspan class="m">fix(web): handle empty spans…</tspan></text>
-  <text class="t" x="52" y="436">Body 2,140 chars (1 part ↓) · 0 hidden chars</text>
+  <text class="t" x="52" y="400">PR title: <tspan class="m">fix(web): handle empty spans in</tspan></text>
+  <text class="t" x="52" y="418"><tspan class="m">trace export</tspan>  (full title, wrapped; never cut)</text>
+  <text class="t" x="52" y="436">Commit <tspan class="m">abc1234</tspan> · body 2,140 chars (1 part ↓)</text>
   <text class="t" x="52" y="453">⏳ Approval expires <tspan class="b">in 3 days</tspan></text>
   <text class="s" x="330" y="453" text-anchor="end">10:14</text>
 
@@ -124,7 +124,8 @@
   <text class="note" x="440" y="588">• Issue title: escaped, made visible, defused (U8).</text>
   <text class="note" x="440" y="604">• PR title = publish bytes: escaped in &lt;code&gt;, scanned,</text>
   <text class="note" x="440" y="620">  never defused or redacted (U14); a hit withholds</text>
-  <text class="note" x="440" y="636">  the card. 📋 Copy title copies it unchanged.</text>
+  <text class="note" x="440" y="636">  the card. Shown in full (wrapped, up to 256 chars),</text>
+  <text class="note" x="440" y="648">  never cut; 📋 Copy title copies it unchanged.</text>
   <text class="note b" x="440" y="654">📝 Edit text → picker (reply to card)</text>
   <rect x="440" y="660" width="172" height="30" rx="9" fill="#5f7d64"/>
   <text class="btn" x="526" y="679">✏️ Title</text>

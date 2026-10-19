@@ -23,6 +23,7 @@ from ossbot.common.ids import new_proposal_approval_id
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.decisions import TableDecisions
+from ossbot.gatekeeper.telegram import keyboards
 
 RejectReason = Literal["skipped", "snoozed", "never_repo", "never_kind"]
 # §14.11.15 binding: {v, kind, cid, version} + these (proposals.StoredProposals, PLAN item 29)
@@ -75,7 +76,7 @@ class ProposalApprovals(TableDecisions):
             " Nothing is published; the PR still needs its own approval. Expires in 5 min."
         )
 
-    def card_rows(self, approval_id: str, tokens: dict[str, str]) -> list[list[tuple[str, str]]]:
+    def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
         return [[("✅ Start work", tokens[self.approve_purpose])]]
 
     # -------------------------------------------------------------------- lifecycle

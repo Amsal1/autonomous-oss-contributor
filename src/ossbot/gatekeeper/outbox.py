@@ -18,6 +18,7 @@ from typing import Any, Protocol
 
 from ossbot.common.clock import Clock, to_iso
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper.telegram.pending_input import PendingInputs
 
 log = logging.getLogger(__name__)
 MAX_BACKOFF = timedelta(minutes=10)
@@ -200,6 +201,11 @@ class Outbox:
                 view.get("page"), json.dumps(view.get("state", {}), sort_keys=True), to_iso(self.clock.now()),
             ),
         )  # fmt: skip
+        prompt = (view.get("state") or {}).get("prompt")
+        if isinstance(prompt, dict):  # a ForceReply prompt: correlate replies by this message id (§14.10.4 rule 3)
+            fields = {k_: v for k_, v in prompt.items() if k_ != "kind"}
+            PendingInputs(self.conn, self.clock).open(prompt["kind"], chat_id=int(payload.get("chat_id", 0)),
+                                                      prompt_message_id=message_id, **fields)  # fmt: skip
 
     def mark_retry(self, row: OutboxRow, error: SendError) -> str:
         """Returns the new status (``failed`` when permanent or out of attempts)."""

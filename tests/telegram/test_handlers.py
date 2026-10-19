@@ -91,7 +91,9 @@ async def test_approve_confirm_happy_path_dry_run(ctx: AppContext, bot: Bot) -> 
     await bot.tap(token(ctx, approval, "confirm"))
     assert status(ctx, approval) == "confirmed"
     assert bot.submitted == [approval]
-    assert "Submitting (DRY RUN)" in bot.req.last("editMessageText")["text"]
+    edits = [p["text"] for m, p in bot.req.calls if m == "editMessageText"]
+    assert any("Submitting (DRY RUN)" in t for t in edits)
+    assert "Dry run done" in edits[-1]  # S9: the card shows the outcome once the submit returns
     assert "answerCallbackQuery" in bot.req.methods()
 
 
@@ -215,7 +217,12 @@ def test_callback_format_is_exact() -> None:
 
 async def test_reject_cancels_action(ctx: AppContext, bot: Bot) -> None:
     cid, approval, tokens = card(ctx)
-    await bot.tap(tokens["reject"])
+    await bot.tap(tokens["reject"])  # opens the reason row; nothing is decided yet
+    assert status(ctx, approval) == "pending"
+    assert "Not valuable" in str(bot.req.last("editMessageText")["reply_markup"])
+    reason = db.one(ctx.conn, "SELECT token FROM ui_tokens WHERE approval_id = ? AND purpose = 'reject_reason'"
+                    " AND arg = 'not_valuable' AND used_at IS NULL", (approval,))[0]  # fmt: skip
+    await bot.tap(str(reason))
     assert status(ctx, approval) == "rejected"
     row = db.one(ctx.conn, "SELECT state FROM contributions WHERE id = ?", (cid,))
     assert row[0] == "REJECTED"

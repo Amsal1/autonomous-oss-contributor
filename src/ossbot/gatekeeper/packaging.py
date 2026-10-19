@@ -24,7 +24,7 @@ from ossbot.common.hashing import sha256_hex
 from ossbot.common.ids import new_action_id
 from ossbot.common.schemas import TERMINAL_STATES, OutboundKind, PackageArtifactName, PackageRequest, State
 from ossbot.common.size import SIZE_CLASSES, classify, path_matches, split_numstat
-from ossbot.gatekeeper import db, derive, outcomes, policy
+from ossbot.gatekeeper import db, derive, interdiff, outcomes, policy
 from ossbot.gatekeeper.anomaly import Signal
 from ossbot.gatekeeper.approvals import normalize_text
 from ossbot.gatekeeper.context import AppContext
@@ -304,6 +304,13 @@ class Packager:
         if kind == "push_update":
             cumulative = derive.derive(self.ops, mirror, base_sha, head).numstat_text
         derive.store(self.ops, cid, req.rev, derived, cumulative)
+        if kind == "open_pr" and req.rev >= 2:  # S6 (§14.11.7): what changed since the card you last saw
+            previous = interdiff.read_meta(self.ops, cid, req.rev - 1)
+            current = interdiff.read_meta(self.ops, cid, req.rev)
+            if previous is not None and current is not None:
+                interdiff.compute(self.ops, upstream=upstream, cid=cid, rev=req.rev, old=previous, new=current)
+            else:
+                interdiff.write_unavailable(self.ops, cid, req.rev, "previous revision gone")
 
         # step 6: compare with the sandbox's outputs (never displayed)
         result = derive.compare(self.ops, derived, side["change.patch"], side["diffstat.json"])
@@ -383,6 +390,9 @@ class Packager:
         with db.transaction(ctx.conn):
             if contrib["artifact_rev"] is not None and req.rev > int(contrib["artifact_rev"]):
                 ctx.approvals.invalidate_contribution(cid, "new_package_rev", actor)
+                # the owner's change requests are answered by this rev (the S6 "You asked" block)
+                ctx.conn.execute("UPDATE change_requests SET consumed_at = ? WHERE cid = ? AND consumed_at IS NULL",
+                                 (now, cid))  # fmt: skip
                 ctx.conn.execute(
                     "UPDATE outbound_actions SET status = 'cancelled' WHERE cid = ?"
                     " AND kind IN ('open_pr','push_update') AND status IN ('pending_approval','approved')",

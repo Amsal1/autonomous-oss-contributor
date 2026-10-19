@@ -224,7 +224,13 @@ def build_context(
         if "ctx" in ctx_ref:
             ctx_ref["ctx"].notify(text)
 
-    approvals = ApprovalService(conn, clock, audit, paths.control_dir, limits, profile, artifacts)
+    def has_interdiff(cid: str, rev: int) -> bool:
+        info = cards.interdiff_info(cid, rev)  # derived/<cid>/<rev>/interdiff.json (PLAN item 45)
+        return info is not None and info.get("mode") != "unavailable"
+
+    cards.set_derived_root(paths.gatekeeper_dir / "derived")
+    approvals = ApprovalService(conn, clock, audit, paths.control_dir, limits, profile, artifacts,
+                                interdiff=has_interdiff)  # fmt: skip
     control_ref: dict[str, ControlService] = {}
 
     def gate1_refusal() -> str | None:
