@@ -379,3 +379,7 @@ Add `github/github-mcp-server` as a read-only GitHub tool for **scout**, **self-
   - tool-surface allowlist test with a fake MCP listing
   - "write tool listed → fail closed" test
   - live read check via doctor: `get_me` = Amsal1, read a public repo
+6. **Shell commands must not trigger approval prompts** (user rule). Inline PowerShell with `$variables`, `$(...)` subexpressions, `-replace`, base64 one-liners or long chained pipelines needs manual approval each time and stalls the run.
+   - **Use instead:** short, plain commands. For anything multi-line or with variables, put the script in a file in this workspace, e.g. `.ossbot-local/` (gitignored) or `scripts/dev/` (committed, if reusable). Then run it by reference: `wsl -d ossbot -u root -- bash /mnt/d/Work/autonomous-oss-contributor/scripts/dev/<name>.sh`, or stream it over stdin with `Get-Content <file> -Raw | wsl -d ossbot -u root -- bash -s`.
+   - **Prefer** the existing helpers: `scripts/*.ps1`, `ossctl`, `.ossbot-local/*.sh`.
+   - **Reviewers:** follow the same rule when re-running checks.
