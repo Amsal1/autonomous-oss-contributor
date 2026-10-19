@@ -5,11 +5,16 @@
 model:
   provider: kiro-acp            # vendored hermes-kiro-provider fork, V3 ACP (HERMES_KIRO_ACP_ENGINE)
   default: kiro-acp             # the provider resolves the real model from config/models.yaml per turn
+  # Images go to the provider as image parts; it sends them as ACP image blocks on roles.vision.
+  # Without this Hermes knows no "kiro-acp" vision capability and pre-describes every image through
+  # its auxiliary vision call instead (FEAT-007 review round 2, F007-R2-1).
+  supports_vision: true
 platform_toolsets:
   api_server: [{{ toolsets | join(", ") }}]
 agent:
   # applied after platform_toolsets; "always removed" (configuration.md "Global Toolset Disable")
   disabled_toolsets: [{{ disabled | join(", ") }}]
+  image_input_mode: native      # never the lossy vision_analyze pre-description (image_routing.py)
 mcp_servers: {}
 tools:
   tool_search:

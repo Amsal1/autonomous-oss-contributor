@@ -43,6 +43,8 @@ def test_gates_and_defence_in_depth(tier: HermesTier) -> None:
     assert doc["updates"]["check"] is False and doc["plugins"]["auto_update_check_hours"] == 0
     assert doc["plugins"]["enabled"] == ["ossbot"]
     assert doc["model"]["provider"] == "kiro-acp"
+    # images reach the provider as parts (vision role), never Hermes' lossy auxiliary pre-description
+    assert doc["model"]["supports_vision"] is True and doc["agent"]["image_input_mode"] == "native"
     assert doc["gateway"]["api_server"]["host"] == "127.0.0.1"
 
 

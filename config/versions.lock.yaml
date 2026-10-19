@@ -70,9 +70,9 @@ images:
   sandbox_full:
     digest: "sha256:4c64faf46945601e173d6a500bcf2e67637dc134760cce2653761fa7e78bd477"
   sandbox_llm:
-    digest: "sha256:1949520beecabdc7306f637c06ffe08307d86ca4c0cd080d198a63a8c397a232"
+    digest: "sha256:18c403a23dd64cb494280dc2bca3834de725a2cd40fd89f73050e9756bbae019"
     kiro_cli_version: "2.32.0"
-    agent_configs_sha256: "31dac8c989adaa0d7630008394114d93fa0fc2e8cff97f50faa96d46acd33817"
+    agent_configs_sha256: "b3bb655b6e0648793b0933a3334f127c8623b7d20efcb47cfb94c7664e42f1b2"
     settings_sha256: "d5704ef956978ee321cf864f22e6406bd945086192c7e39a2f36e16c8a46e5a2"
   proxy:
     digest: "sha256:24c46953e1f21cc58ce93e62a69e1cf44326ee089b699060a034ac0542aa3e55"
