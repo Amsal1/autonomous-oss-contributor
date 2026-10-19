@@ -69,6 +69,8 @@ def test_size_with_a_zero_estimate_has_no_percentage() -> None:
     assert facts.flagged and facts.overrun_pct is None
     assert "⚠️ <b>est 0 code</b> · actual +3 / −0 code" in text_of(facts.lines)
     assert overrun_pct(10, 0) is None and overrun_pct(150, 100) == 50
+    # AC 54's worked examples: +142 / −30 code against est 40 and est 48
+    assert overrun_pct(142 + 30, 40) == 330 and overrun_pct(142 + 30, 48) == 258
 
 
 def test_files_outside_the_plan() -> None:

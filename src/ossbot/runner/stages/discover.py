@@ -72,10 +72,14 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
     now = now or datetime.now(UTC)
     bundle = sc.config()
     refused = refused if refused is not None else set()
-    active = {str(c["upstream"]).lower() for c in sc.gk.active_contributions()
-              if c.get("state") in ACTIVE_PR_STATES}  # fmt: skip
+    open_prs: dict[str, int] = {}
+    for open_c in sc.gk.active_contributions():
+        if open_c.get("state") in ACTIVE_PR_STATES:
+            repo_key = str(open_c["upstream"]).lower()
+            open_prs[repo_key] = open_prs.get(repo_key, 0) + 1
     prefs = sc.gk.prefs()
     filters = DiscoveryFilters.model_validate(prefs["filters"])
+    active = {r for r, n in open_prs.items() if n >= filters.max_open_prs_by_me_per_repo}
     candidates: list[scoring.Candidate] = []
     hashes: dict[str, str] = {}
     per_repo_max: dict[str, str] = {}
@@ -84,7 +88,7 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
             continue
         _check(sc)  # a cycle reads for minutes: a stop, kill, pause or drain ends it between targets
         if entry.repo.lower() in active:
-            continue  # one open PR per repo for autonomous work
+            continue  # max_open_prs_by_me_per_repo (default 1) open PRs there already
         repo_prefs = sc.gk.prefs(entry.repo)
         if repo_prefs.get("never_repo"):
             continue

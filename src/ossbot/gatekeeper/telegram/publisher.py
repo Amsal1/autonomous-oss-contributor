@@ -103,6 +103,16 @@ class CardPublisher:
                         " AND next_attempt_at >= ?", (since,))  # fmt: skip
         return int(recent[0] if recent is not None else 0) < self.ctx.config.telegram.loud_cards_per_hour
 
+    def _chain_to(self, approval_id: str, meta: dict[str, Any]) -> int | None:
+        """Later proposal versions and the PR preview card reply to the latest proposal card of the cid."""
+        cid = meta.get("cid")
+        if cid is None or not (approval_id.startswith("p_") or meta.get("kind") == "open_pr"):
+            return None
+        row = db.one(self.ctx.conn, "SELECT tg_message_id FROM proposal_approvals WHERE cid = ? AND id != ? AND"
+                     " tg_message_id IS NOT NULL ORDER BY version DESC, created_at DESC LIMIT 1",
+                     (cid, approval_id))  # fmt: skip
+        return int(row["tg_message_id"]) if row is not None else None
+
     def _invalidate_render_failed(self, approval_id: str) -> None:
         svc: Any = self.ctx.decisions.for_id(approval_id)
         with db.transaction(self.ctx.conn):
@@ -132,6 +142,9 @@ class CardPublisher:
         parts = len(rendered.parts)
         if parts:
             payload["reply_markup"] = keyboards.disabled_markup(f"⏳ delivering {parts} part{'s' * (parts > 1)}…")
+        chain = self._chain_to(approval_id, meta)
+        if chain is not None:  # one candidate's history is one reply chain (§14.11.15 Delivery)
+            payload["reply_parameters"] = {"message_id": chain, "allow_sending_without_reply": True}
         loud = self._loud(approval_id, meta)
         payload["disable_notification"] = not loud
         view = {"kind": CARD_KIND[approval_id[:2]], "approval_id": approval_id, "cid": meta.get("cid"),

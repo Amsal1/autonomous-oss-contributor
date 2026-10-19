@@ -453,21 +453,10 @@ class Packager:
             ctx.state_machine.transition(cid, State.PACKAGING, State.RESCOPE_REQUIRED, Actor.GATEKEEPER,
                                          {"reason": f"rescope_{reason}", "rev": rev}, actor)  # fmt: skip
             ctx.audit.append(actor, "size_rescope", {"reason": reason, "rev": rev, "report": report}, cid)
-        m = report["measured"]
-        measured = f"{m['files']} files · +{m['code_added']} / −{m['code_deleted']} code · +{m['test_added']} test"
-        if reason == "ceiling":
-            ceiling = ctx.config.policy.diff
-            ctx.notify(
-                f"🧱 Size ceiling reached · {cid} · paused\nMeasured {measured}\n"
-                f"Ceiling (config only): {ceiling.max_files} files · {ceiling.max_changed_lines} code ·"
-                f" {ceiling.max_test_lines} test\n"
-                "Split the work, or raise policy.diff in config/policy.yaml and /reload."
-            )
-        else:
-            ctx.notify(
-                f"📏 Re-approval needed · {cid}\nApproved {report['approved_class']} · measured"
-                f" {report['measured_class']}: {measured}"
-            )
+        # the ceiling-hit / re-approval card (§14.11.17/18; the ceiling is shown read-only, U13)
+        from ossbot.gatekeeper.telegram import rescope_cards  # noqa: PLC0415 - telegram imports the context
+
+        rescope_cards.send(ctx, cid, rev, "ceiling" if reason == "ceiling" else "overrun", report)
         return PackageResult(202, {"state": State.RESCOPE_REQUIRED.value, "reason": reason, "size_report": report,
                                    "violations": details})  # fmt: skip
 

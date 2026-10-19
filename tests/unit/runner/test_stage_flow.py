@@ -8,14 +8,15 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ossbot.common.schemas import State
+from ossbot.common.clock import to_iso
+from ossbot.common.schemas import PrefsUpdate, State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import ProposalService
 from ossbot.runner import stages
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.scheduler import Scheduler
-from ossbot.runner.stages import fetch, plan, scout, vet
+from ossbot.runner.stages import discover, fetch, plan, scout, vet
 from tests.conftest import insert_contribution
 from tests.fakes.fake_github import FakeGitHub
 from tests.unit.gatekeeper.test_proposals import sample, start
@@ -56,6 +57,34 @@ def test_vet_scout_propose(sc: StageContext, ctx: AppContext, sbx: FakeSbx, gith
                 ["inputs"]["scout-task.md"]).read_text()  # fmt: skip
     assert "largest class you may propose is s" in task and "<untrusted" in task
     assert stages.stage_for(sc.gk.contribution(cid)) is None  # waiting for gate 1: nothing runs
+
+
+def test_user_request_on_an_ai_ban_repo_gets_the_refusal_card(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                              github: FakeGitHub) -> None:  # fmt: skip
+    """AC 40: the vet stage quotes the banning line; the gatekeeper's transition route sends the card."""
+    github.add_issue("langfuse/langfuse", 4321, title="Bug", body="b")
+    github.files[("langfuse/langfuse", "CONTRIBUTING.md")] = "Hi!\nAI-generated pull requests are not accepted.\n"
+    cid = insert_contribution(ctx, State.DISCOVERED, issue_number=4321, source="user")
+    sbx.kiro("vetter", fenced(VETTING))
+    vet.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "SKIPPED"
+    rows = [json.loads(r[0]) for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox ORDER BY id")]
+    card = next(p for p in rows if "Can't work on this" in str(p.get("text", "")))
+    assert "AI-generated pull requests are not accepted." in card["text"]
+    assert card["reply_markup"]["inline_keyboard"][0][0]["url"].endswith("/blob/HEAD/CONTRIBUTING.md")
+    assert not any("Not working on" in str(p.get("text", "")) for p in rows)  # no duplicate plain note
+
+
+def test_discovery_honours_max_open_prs_by_me_per_repo(sc: StageContext, ctx: AppContext,
+                                                       github: FakeGitHub) -> None:  # fmt: skip
+    """/filters page 4 (§14.14.4): a repo with that many of our PRs open is skipped by autonomous discovery."""
+    github.add_issue("langfuse/langfuse", 501, title="Crash when spans are empty", body="steps",
+                     labels=[{"name": "bug"}], updated_at=to_iso(ctx.clock.now()),
+                     created_at=to_iso(ctx.clock.now()))  # fmt: skip
+    insert_contribution(ctx, State.WATCHING, issue_number=77, pr_number=9)
+    assert discover.run(sc, repos=["langfuse/langfuse"], now=ctx.clock.now()) == []
+    ctx.discovery_prefs.update(PrefsUpdate(filters={"max_open_prs_by_me_per_repo": 2}), "tg:4242")
+    assert len(discover.run(sc, repos=["langfuse/langfuse"], now=ctx.clock.now())) == 1
 
 
 def test_autonomous_too_big_is_skipped_user_directed_is_not(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:

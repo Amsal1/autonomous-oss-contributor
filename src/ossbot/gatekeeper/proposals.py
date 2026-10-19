@@ -26,8 +26,6 @@ from ossbot.common.size import SIZE_CLASSES, classify
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.state_machine import Actor
-from ossbot.gatekeeper.telegram.cards import CardMessages
-from ossbot.gatekeeper.telegram.escape import b, esc
 
 if TYPE_CHECKING:
     from ossbot.gatekeeper.context import AppContext
@@ -76,41 +74,6 @@ class StoredProposals:
             "user_directed": row["source"] == "user",
             "policy_hash": self.policy_hash(),
         }
-
-
-def render_card(conn: sqlite3.Connection, row: sqlite3.Row) -> CardMessages:
-    """Plain gate-1 card (escaped; model fields labelled 🤖). The S1 kit card is FEAT-009 item 45."""
-    cid, version = str(row["cid"]), int(row["version"])
-    found = db.one(
-        conn,
-        "SELECT p.proposal_json, p.est_class, c.upstream, c.issue_number, c.source, c.notes FROM proposals p"
-        " JOIN contributions c ON c.id = p.cid WHERE p.cid = ? AND p.version = ?",
-        (cid, version),
-    )
-    if found is None:
-        return CardMessages(card=f"{b('💡 Proposal')} · {esc(cid)} · v{version} · (content unavailable)")
-    prop = json.loads(found["proposal_json"])
-    est = prop["estimate"]
-    issue = f"#{found['issue_number']}" if found["issue_number"] else ""
-    lines = [f"{b('💡 Proposal')} · {esc(cid)} · v{version} · 🧪 n/a: local change"]
-    if found["source"] == "user":
-        notes = (found["notes"] or "")[:80]
-        lines.append(f"👤 {b('requested by you')}" + (f' · "{esc(notes)}"' if notes else ""))
-    lines.append(f"{b(esc(found['upstream']))} {esc(issue)} · 🤖 kind {esc(prop['kind'])}")
-    lines.append(f"🤖 {b('Problem')} <i>{esc(prop['problem'][:300])}</i>")
-    lines.append(f"🤖 {b('Approach')}")
-    lines += [f"  {i}. {esc(step[:100])}" for i, step in enumerate(prop["approach"][:6], start=1)]
-    if prop["areas"]:
-        lines.append(f"🤖 {b('Likely files')} " + " · ".join(esc(a[:60]) for a in prop["areas"][:4]))
-    lines.append(
-        f"Size 🤖 est {b(found['est_class'])} · ~{est['code_lines']} code · ~{est['test_lines']} test"
-        f" · {est['files']} files"
-    )
-    tests = f"{len(prop['tests'])} to add/update" if prop["tests"] else f"none ({esc(prop['no_suite_reason'] or '')})"
-    lines.append(f"Tests 🤖 {tests}")
-    lines.append(f"Confidence 🤖 {float(prop['confidence']):.2f} · Risks 🤖 {len(prop['risks'])}")
-    lines.append(f"⏳ Proposal expires {esc(str(row['expires_at']))}")
-    return CardMessages(card="\n".join(lines)[:3900])
 
 
 class ProposalService:
@@ -280,10 +243,11 @@ class ProposalService:
                 raise ProposalRefused(409, "wrong_status", str(approval["status"]))
             cid = str(approval["cid"])
             row = self._contribution(cid)
-            self.svc.reject(approval_id, reason, actor)
+            snooze_end = now + timedelta(days=snooze_days) if reason == "snoozed" and snooze_days else None
+            self.svc.reject(approval_id, reason=reason, actor=actor, snooze_until=snooze_end)
             to = S.PROPOSAL_SNOOZED if reason == "snoozed" else S.PROPOSAL_REJECTED
             ctx.state_machine.transition(cid, S.PROPOSED, to, Actor.HUMAN, {"reason": reason}, actor)
-            until = to_iso(now + timedelta(days=snooze_days)) if reason == "snoozed" and snooze_days else None
+            until = to_iso(snooze_end) if snooze_end is not None else None
             self.conn.execute(
                 "UPDATE contributions SET declined_at = ?, declined_reason = ?, snooze_until = ? WHERE id = ?",
                 (to_iso(now), reason, until, cid),

@@ -121,7 +121,14 @@ async def transition(
     caller: Annotated[Caller, Depends(require(Role.WORKER))],
 ) -> TransitionResponse:
     _check_cid(cid)
-    return ctx(request).state_machine.transition(cid, body.from_, body.to, Actor.WORKER, body.evidence, caller.actor)
+    c = ctx(request)
+    out = c.state_machine.transition(cid, body.from_, body.to, Actor.WORKER, body.evidence, caller.actor)
+    if out.state is State.SKIPPED and body.evidence.get("reason") == "ai_policy_banned":
+        # a 👤 request on a repo that bans AI help gets the refusal card instead of a proposal (§14.11.19)
+        from ossbot.gatekeeper.telegram import work_links  # noqa: PLC0415 - telegram imports the context
+
+        work_links.send_refusal(c, cid, body.evidence)
+    return out
 
 
 @router.post("/contributions/{cid}/package")

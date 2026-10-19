@@ -14,7 +14,7 @@ approved). The effects (Start work, declines, Undo) are ``gatekeeper.proposals.P
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 
@@ -56,6 +56,7 @@ class ProposalApprovals(TableDecisions):
     def __init__(self, *args: Any, source: ProposalSource | None = None, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.source: ProposalSource = source or NoProposals()
+        self.rows_hook: Callable[[str, dict[str, str]], keyboards.Rows] | None = None
 
     def subject(self, row: sqlite3.Row) -> dict[str, Any]:
         return {"cid": row["cid"], "version": int(row["version"])}
@@ -71,12 +72,22 @@ class ProposalApprovals(TableDecisions):
         return str(row["cid"])
 
     def confirm_text(self, binding: Mapping[str, Any]) -> str:
+        """§14.11.15: the target, the version, the class and the bound proposal hash."""
+        row = db.one(self.conn, "SELECT upstream, issue_number FROM contributions WHERE id = ?", (binding["cid"],))
+        where = str(binding["cid"])
+        if row is not None:
+            where = f"{row['upstream']}#{row['issue_number']}" if row["issue_number"] else str(row["upstream"])
+        sha = str(binding.get("proposal_sha256") or "")
         return (
-            f"Confirm: start work on {binding['cid']} (proposal v{binding['version']}, class {binding['est_class']})."
-            " Nothing is published; the PR still needs its own approval. Expires in 5 min."
+            f"Confirm: start work on {where} (proposal v{binding['version']} · est {binding['est_class']} · sha256"
+            f" {sha[:4]}…{sha[-4:]}). Local work only — dry-run does not apply; nothing is public before you approve"
+            " the PR. Expires in 5 min."
         )
 
     def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
+        """The kit card keyboard (``telegram.proposal_cards.card_rows``, set by ``build_context``)."""
+        if self.rows_hook is not None:
+            return self.rows_hook(approval_id, tokens)
         return [[("✅ Start work", tokens[self.approve_purpose])]]
 
     # -------------------------------------------------------------------- lifecycle
@@ -92,10 +103,14 @@ class ProposalApprovals(TableDecisions):
             self._insert(approval_id, {"cid": cid, "version": version}, binding, tg_chat_id, expiry, actor, cid)
         return approval_id
 
-    def reject(self, approval_id: str, reason: RejectReason, actor: str) -> None:
-        """Skip, Later and Never (after its confirm); the kit buttons only collect the choice."""
+    def reject(self, approval_id: str, *, reason: RejectReason, actor: str,
+               snooze_until: datetime | None = None) -> None:  # fmt: skip
+        """Skip, Later and Never (after its confirm); the kit buttons only collect the choice (BA-12:
+        ``snooze_until`` is required iff ``reason == "snoozed"``; the contribution row stores it)."""
         if reason not in REJECT_REASONS:
             raise ApprovalError("bad_reason", str(reason))
+        if (reason == "snoozed") != (snooze_until is not None):
+            raise ApprovalError("bad_snooze", "snooze_until is required for snoozed and only then")
         self._reject(approval_id, actor, {"rejected_reason": reason})
 
     def reissue(self, cid: str, *, actor: str, keep_expiry: bool = False) -> list[str]:

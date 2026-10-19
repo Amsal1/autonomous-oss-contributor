@@ -3,6 +3,8 @@ binding recomputed at Approve, Confirm and consume; refused while paused, killed
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 
 from ossbot.common.control_flags import write_flag
@@ -98,8 +100,13 @@ def test_reject_reasons_and_cancel(ctx: AppContext) -> None:
     with pytest.raises(ApprovalError, match="token_used"):
         ctx.decisions.proposals.confirm(arm.confirm_token, tg_user_id=CHAT, chat_id=CHAT, message_id=700)
     with pytest.raises(ApprovalError, match="bad_reason"):
-        ctx.decisions.proposals.reject(pid, "whatever", "tg:4242")  # type: ignore[arg-type]
-    ctx.decisions.proposals.reject(pid, "snoozed", "tg:4242")
+        ctx.decisions.proposals.reject(pid, reason="whatever", actor="tg:4242")  # type: ignore[arg-type]
+    with pytest.raises(ApprovalError, match="bad_snooze"):  # BA-12: snooze_until iff snoozed
+        ctx.decisions.proposals.reject(pid, reason="snoozed", actor="tg:4242")
+    with pytest.raises(ApprovalError, match="bad_snooze"):
+        ctx.decisions.proposals.reject(pid, reason="skipped", actor="tg:4242", snooze_until=ctx.clock.now())
+    ctx.decisions.proposals.reject(pid, reason="snoozed", actor="tg:4242",
+                                   snooze_until=ctx.clock.now() + timedelta(days=3))  # fmt: skip
     row = ctx.conn.execute("SELECT status, rejected_reason FROM proposal_approvals WHERE id = ?", (pid,)).fetchone()
     assert tuple(row) == ("rejected", "snoozed")
 

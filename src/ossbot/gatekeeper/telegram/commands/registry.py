@@ -18,8 +18,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 # read: immediate, no change; stop: immediate (stopping is always safe); go/config: confirm tap first;
-# personal: presentation-only owner preferences (quiet, notify, rich views), immediate (§14.14.1)
-Safety = Literal["read", "stop", "go", "config", "personal"]
+# personal: presentation-only owner preferences (quiet, notify, rich views), immediate (§14.14.1);
+# tune: autonomous-discovery preferences (/size, /filters), immediate + 60 s Undo, never the ceiling (U13);
+# request: /work, creates a scouting item only (both gates still apply)
+Safety = Literal["read", "stop", "go", "config", "personal", "tune", "request"]
 ENTRY_POINT_GROUP = "ossbot.telegram_commands"
 
 
@@ -38,6 +40,7 @@ class Reply:
     confirm: Confirm | None = None
     view: Any = None  # a ui.kit.View (pickers, pagers); replaces ``text`` when set
     document: tuple[str, bytes] | None = None  # (file name, bytes) sent after the reply (/logs)
+    deferred: bool = False  # a spawned task sends the reply itself (e.g. /work after its GitHub read)
 
 
 @dataclass(frozen=True)

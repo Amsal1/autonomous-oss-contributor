@@ -172,6 +172,9 @@ class DiscoveryFilters(Strict):
     min_maintainer_activity_days: PosInt = 60
     languages: list[str] = Field(default_factory=list)
     validation_tier_max: Literal["T0", "T1", "T2"] = "T1"
+    # CR-004 §2 / §14.14.4 page 4: autonomous discovery skips a repo with this many of our PRs open.
+    # The submit-time live check (policy.limits.open_prs_per_repo) stays the hard limit for every PR.
+    max_open_prs_by_me_per_repo: Annotated[int, Field(ge=1, le=3)] = 1
 
 
 class ProposalPolicy(Strict):

@@ -18,7 +18,8 @@ from urllib.parse import urlsplit
 from ossbot.gatekeeper.telegram.escape import WORD_JOINER, defuse_commands, make_visible
 from ossbot.gatekeeper.telegram.ui.limits import LABEL_SINGLE_MAX, label_len
 
-__all__ = ["GithubRef", "defuse_commands", "domain_of", "github_urls", "label_from_untrusted", "parse_github_url",
+__all__ = ["GithubRef", "defuse_commands", "domain_of", "github_urls", "label_from_untrusted", "link_notes",
+           "parse_github_url",
            "undefuse"]  # fmt: skip
 
 _OUR_MARKER = re.compile("/" + WORD_JOINER)
@@ -98,7 +99,7 @@ def parse_github_url(text: str) -> GithubRef | None:
     return GithubRef(match.group("owner"), match.group("repo"), ref, number)
 
 
-def github_urls(text: str, extra: list[str] | None = None) -> list[GithubRef]:
+def github_urls(text: str, extra: list[str] | None = None, *, limit: int | None = MAX_LINK_CARDS) -> list[GithubRef]:
     """GitHub issue, PR and repo links found anywhere in ``text`` plus ``extra`` (entity URLs), in
     order, de-duplicated, at most ``MAX_LINK_CARDS`` (routing rule 6). Trailing punctuation is dropped."""
     found: list[GithubRef] = []
@@ -110,7 +111,7 @@ def github_urls(text: str, extra: list[str] | None = None) -> list[GithubRef]:
             continue
         seen.add(ref.url.lower())
         found.append(ref)
-        if len(found) == MAX_LINK_CARDS:
+        if limit is not None and len(found) == limit:
             break
     return found
 
@@ -118,3 +119,14 @@ def github_urls(text: str, extra: list[str] | None = None) -> list[GithubRef]:
 def strip_urls(text: str) -> str:
     """The message text minus every GitHub link (link-card notes, §14.11.19)."""
     return _WS.sub(" ", _URL_FINDER.sub(" ", text or "")).strip()
+
+
+NOTES_MAX = 1000
+
+
+def link_notes(text: str, *, forwarded: bool) -> str:
+    """Link-card notes (BA-8): the owner's own text minus the URLs, made visible, <= 1,000 characters;
+    always empty for a forward (someone else's text never reaches scout with the owner's authority)."""
+    if forwarded:
+        return ""
+    return make_visible(strip_urls(text))[0][:NOTES_MAX]

@@ -38,7 +38,7 @@ from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import Actor, TransitionError
-from ossbot.gatekeeper.telegram import actions, cards, chat_relay, inputs, keyboards, rawapi, routing
+from ossbot.gatekeeper.telegram import actions, cards, chat_relay, inputs, keyboards, proposal_cards, rawapi, routing
 from ossbot.gatekeeper.telegram.auth import authorized, authorized_chat_only
 from ossbot.gatekeeper.telegram.commands import (
     builtin,  # noqa: F401 - registers the built-ins
@@ -107,6 +107,8 @@ class Handlers:
         self._by_kind: dict[TaskKind, set[asyncio.Task[Any]]] = {}
         self._sessions: dict[str, asyncio.Task[Any]] = {}  # session_key -> its running chat_turn
         self.application: Application[Any, Any, Any, Any, Any, Any] | None = None
+        # the gatekeeper's GitHub reader (GET only): /work and link-card facts, always in a github_read task
+        self.reader: Any = None
 
     def register(self, application: Application[Any, Any, Any, Any, Any, Any]) -> None:
         self.application = application
@@ -193,14 +195,21 @@ class Handlers:
             return "Superseded: content or mode changed since this card; review the new card."
         if exc.code in {"token_expired", "approval_expired"}:
             return "This button has expired."
-        if exc.code == "confirm_refused":
-            return "Paused or killed: nothing was confirmed. /resume first."
+        if exc.code in {"approve_refused", "confirm_refused", "blocked"}:
+            detail = str(exc).split(": ", 1)[-1]
+            verb = "approved" if exc.code == "approve_refused" else "confirmed"
+            if detail == "paused or killed" or exc.code == "blocked":
+                return f"Paused or killed: nothing was {verb}. /resume first."
+            what = "down (workers)" if detail == "down" else detail[:20]
+            return f"ossbot is {what}: nothing was {verb}. The card stays valid; retry after up."
         return "This button is no longer valid."
 
     def _approval_status(self, row: Any) -> str | None:
         if row["approval_id"] is None:
             return None
-        appr = db.one(self.ctx.conn, "SELECT status FROM approvals WHERE id = ?", (row["approval_id"],))
+        aid = str(row["approval_id"])
+        table = {"p_": "proposal_approvals", "s_": "skill_approvals"}.get(aid[:2], "approvals")
+        appr = db.one(self.ctx.conn, f"SELECT status FROM {table} WHERE id = ?", (aid,))  # noqa: S608 - fixed names
         return str(appr["status"]) if appr else None
 
     def _card_text(self, approval_id: str) -> str:
@@ -238,6 +247,8 @@ class Handlers:
     def _send_reply(self, reply: Reply, *, thread_id: int | None = None, reply_to: int | None = None,
                     stale_s: int = 0) -> None:  # fmt: skip
         """Command replies land in the originating topic (§14.10.1)."""
+        if reply.deferred:
+            return
         ui_send.deliver(self.ctx, self.reply_view(reply, stale_s=stale_s), thread_id=thread_id, reply_to=reply_to)
         if reply.document is not None:
             name, data = reply.document
@@ -333,8 +344,8 @@ class Handlers:
         tap = {"tg_user_id": user_id, "chat_id": chat_id, "message_id": message_id}
         if purpose == "proposal_start":
             arm = svc.approve(token, **tap)
-            text = f"{svc.card_view(pid).card}\n\n{b(arm.confirm_text)}"
-            await self._edit(query, text, keyboards.confirm_rows(arm.confirm_token, arm.cancel_token))
+            text, rows = proposal_cards.confirm_panel(self.ctx, pid, arm.confirm_token, arm.cancel_token)
+            await self._edit(query, text, rows)
         elif purpose == "proposal_confirm":
             svc.confirm(token, **tap)
             try:

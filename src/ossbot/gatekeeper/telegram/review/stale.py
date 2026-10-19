@@ -74,7 +74,7 @@ def header_for(status: str, reason: str | None, *, rev: int | None = None) -> st
     if reason in {"new_package_rev"}:
         return f"⚪ <b>Superseded</b> · r{(rev or 0) + 1} is newer" if rev else "⚪ <b>Superseded</b>"
     if reason == "new_proposal_version":
-        return "⚪ <b>Superseded</b> · a newer proposal version exists"
+        return f"⚪ <b>Superseded</b> · v{rev + 1} is newer" if rev else "⚪ <b>Superseded</b> · a newer version exists"
     return f"⚪ <b>Invalidated</b> · {esc(label)}"
 
 

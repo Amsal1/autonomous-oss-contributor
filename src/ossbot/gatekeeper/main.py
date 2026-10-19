@@ -76,6 +76,7 @@ def build_services(ctx: AppContext) -> list[Service]:
         return services
     assert bot_token is not None
     handlers = Handlers(ctx, submitter.submit, submitter.preflight)
+    handlers.reader = GitHubReader(client)
     frontend = TelegramFrontend(ctx, build_application(bot_token, handlers))
     submitter.retry_note = frontend.publisher.retry_note
     reconciler.retry_note = frontend.publisher.retry_note

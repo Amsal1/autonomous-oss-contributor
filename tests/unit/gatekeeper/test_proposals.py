@@ -95,7 +95,8 @@ def test_card_renders_escaped_model_text(ctx: AppContext) -> None:
     cid = scouting(ctx)
     out = submit(ctx, cid, problem="<b>bold</b> & co")
     text = ctx.decisions.proposals.card_view(out["approval_id"]).card
-    assert "&lt;b&gt;bold&lt;/b&gt; &amp; co" in text and "<b>bold</b>" not in text
+    # the kit card (item 46) also defuses the "/" (U8): a word joiner follows it
+    assert "&lt;b&gt;bold&lt;/\u2060b&gt; &amp; co" in text and "<b>bold</b>" not in text
     assert "est <b>s</b>" in text and "🤖" in text
 
 

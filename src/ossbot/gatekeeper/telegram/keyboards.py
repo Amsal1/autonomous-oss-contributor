@@ -16,6 +16,7 @@ CALLBACK_RE = re.compile(r"^t:[A-Za-z0-9_-]{22}\Z")
 # rows of (label, token) or (label, token, style); style is a Bot API 10.3 button colour
 Button = tuple[str, str] | tuple[str, str, str]
 Rows = list[list[Button]]
+DISABLED = ""  # the token of a disabled button (no callback)
 
 APPROVE_LABEL: dict[OutboundKind, str] = {
     "open_pr": "✅ Approve & Submit",
@@ -73,6 +74,8 @@ def single_row(label: str, token: str) -> Rows:
 
 
 def button_json(button: Button) -> dict[str, Any]:
+    if button[1] == DISABLED:  # a Bot API 10.3 DisabledButton (e.g. ⛔ Not startable)
+        return {"text": button[0], "disabled": {}}
     out: dict[str, Any] = {"text": button[0], "callback_data": callback_data(button[1])}
     if len(button) == 3:
         out["style"] = button[2]

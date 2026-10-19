@@ -44,7 +44,7 @@ from ossbot.gatekeeper.skill_approvals import SkillApprovals
 from ossbot.gatekeeper.skill_reviews import DbSkillSource, SkillReviews, render_skill_card
 from ossbot.gatekeeper.stage_runs import StageRuns
 from ossbot.gatekeeper.state_machine import StateMachine
-from ossbot.gatekeeper.telegram import cards
+from ossbot.gatekeeper.telegram import cards, proposal_cards
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 
 log = logging.getLogger(__name__)
@@ -256,7 +256,8 @@ def build_context(
         approvals=approvals,
         proposals=ProposalApprovals(
             conn, clock, audit, approvals, lambda: holder["snap"].current.bundle.policy.proposal.ttl_hours,
-            confirm_ttl, gate1_refusal, renderer=lambda row: proposals.render_card(conn, row), chat_id=owner_chat,
+            confirm_ttl, gate1_refusal, renderer=lambda row: proposal_cards.render(ctx_ref["ctx"], row),
+            chat_id=owner_chat,
             source=proposals.StoredProposals(lambda: holder["snap"].current.hash),
         ),
         skills=SkillApprovals(
@@ -300,6 +301,7 @@ def build_context(
         stage_runs=StageRuns(conn, clock, audit, control),
     )
     ctx_ref["ctx"] = ctx
+    decisions.proposals.rows_hook = lambda approval_id, tokens: proposal_cards.card_rows(ctx, approval_id, tokens)
     ctx.skill_reviews = SkillReviews(conn, paths, clock, audit, decisions.skills, hermes_tier, owner_chat,
                                      on_card=lambda approval_id: ctx.on_approval_created(approval_id))  # noqa: PLW0108 - late-bound: the front-end replaces it  # fmt: skip
     # BA-16: a snapshot whose secret scanner can't be built refuses the start or the /reload.

@@ -24,7 +24,7 @@ from typing import Literal
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.telegram.pending_input import PendingInputs, Prompt
 from ossbot.gatekeeper.telegram.topics import Topics
-from ossbot.gatekeeper.telegram.ui.sanitize import GithubRef, github_urls, strip_urls
+from ossbot.gatekeeper.telegram.ui.sanitize import MAX_LINK_CARDS, GithubRef, github_urls, link_notes, strip_urls
 
 RouteKind = Literal["callback", "stop_generation", "pending_input", "command", "view_reply", "link_card",
                     "reviews_chat", "system_chat", "chat", "ignore"]  # fmt: skip
@@ -90,12 +90,13 @@ def classify(conn: sqlite3.Connection, topics: Topics, pending: PendingInputs, i
             return Route("view_reply", view=view, topic=topic)
     # 6. GitHub links in a non-reply message (forwards included)
     if inc.reply_to_message_id is None:
-        links = tuple(github_urls(inc.text, list(inc.entity_urls)))
-        if links:
+        found = github_urls(inc.text, list(inc.entity_urls), limit=None)
+        if found:
             rest = strip_urls(inc.text)
-            notes = "" if inc.forwarded else rest[:1000]
             then = None if not rest and not inc.has_media else chat_kind(topic)
-            return Route("link_card", links=links, then=then, topic=topic, notes=notes)
+            more = {"more": str(len(found) - MAX_LINK_CARDS)} if len(found) > MAX_LINK_CARDS else {}
+            return Route("link_card", links=tuple(found[:MAX_LINK_CARDS]), then=then, topic=topic,
+                         notes=link_notes(inc.text, forwarded=inc.forwarded), extra=more)  # fmt: skip
     if not inc.text.strip() and not inc.has_media:
         return Route("ignore", topic=topic)
     # 7-9. the assistant

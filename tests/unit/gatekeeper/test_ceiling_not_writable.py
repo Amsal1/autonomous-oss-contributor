@@ -14,7 +14,8 @@ from pathlib import Path
 from ossbot.gatekeeper import approvals
 from ossbot.gatekeeper.app import create_app
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.telegram.commands import builtin  # noqa: F401  (registers the built-ins)
+from ossbot.gatekeeper.telegram import actions
+from ossbot.gatekeeper.telegram.commands import load_builtin_modules
 from ossbot.gatekeeper.telegram.commands.registry import COMMANDS, CONFIRMS
 from tests.conftest import REPO_ROOT
 from tests.unit.gatekeeper.test_authz import api_routes
@@ -37,6 +38,17 @@ def token_purposes() -> set[str]:
         if name.endswith("PURPOSES") and isinstance(value, tuple | frozenset | set):
             out.update(str(v) for v in value)
     return out
+
+
+load_builtin_modules()  # every built-in command, confirm handler and kit action registers on import
+# read-only view purposes whose names contain "diff"
+VIEW_ONLY = frozenset({"interdiff"})
+
+
+def test_no_kit_action_writes_the_ceiling() -> None:
+    """The kit actions of the proposal, rescope/ceiling, /size and /filters surfaces (PLAN item 46)."""
+    assert {"proposal_skip", "rescope_recheck", "size_set", "filters_set"} <= set(actions.ACTIONS)
+    assert [p for p in actions.ACTIONS if CEILING_RE.search(p) and p not in VIEW_ONLY] == []
 
 
 def test_purposes_are_enumerated() -> None:
