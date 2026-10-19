@@ -16,6 +16,7 @@ from telegram.error import NetworkError
 from telegram.request import RequestData
 
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.outbox import OutboxWorker
 from ossbot.gatekeeper.telegram import bot as bot_mod
 from ossbot.gatekeeper.telegram.bot import build_application
 from ossbot.gatekeeper.telegram.handlers import Handlers
@@ -102,8 +103,10 @@ async def test_poller_reconnects_and_keeps_pending_updates(ctx: AppContext) -> N
     await app.start()
     assert app.updater is not None
     await app.updater.start_polling(poll_interval=0.0, timeout=0, drop_pending_updates=False)
+    worker = OutboxWorker(ctx.outbox, bot_mod.TelegramSender(app.bot), batch=20)  # replies go through the outbox
     try:
         for _ in range(300):
+            await worker.run_once()
             if "sendMessage" in req.methods():
                 break
             await asyncio.sleep(0.05)

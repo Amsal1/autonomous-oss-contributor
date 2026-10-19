@@ -25,7 +25,7 @@ def edit_policy(ctx: AppContext) -> None:
 def test_start_writes_snapshot_and_records_it(ctx: AppContext) -> None:
     digest, files = read_current(ctx.paths.snapshot_root)
     assert digest == ctx.snapshots.current.hash == snapshot_hash(read_config_files(ctx.paths))
-    assert set(files) == {"policy.yaml", "targets.yaml", "egress.yaml", "profile.yaml"}
+    assert set(files) == {"policy.yaml", "targets.yaml", "egress.yaml", "profile.yaml", "telegram.yaml"}
     row = db.one(ctx.conn, "SELECT hash FROM config_snapshots WHERE hash = ?", (digest,))
     assert row is not None
     loaded = ctx.conn.execute("SELECT COUNT(*) FROM audit_events WHERE event = 'config_loaded'").fetchone()[0]

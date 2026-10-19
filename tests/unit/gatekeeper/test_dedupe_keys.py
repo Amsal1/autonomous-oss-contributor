@@ -19,6 +19,15 @@ KEY_FORMATS: dict[str, bool] = {
     "retry:{action_id}": False,
     "retry-arm:{action_id}": False,
     "disarm:{approval_id}:{armed_at}": True,
+    # the rest of BA-3 (FEAT-009): stale cards, comment-refresh re-renders, stubs and keyless kit views
+    "stale:{approval_id}": False,
+    "stale:{approval_id}:{comment_id}": True,
+    "stale:{approval_id}:swept": False,
+    "s1:{approval_id}:{comment_id}": True,
+    "stub:{message_id}:{reason}": True,
+    "stub:{message_id}:moved": False,  # the "moved ↓" stub of a view re-sent after a failed rich edit
+    "stub:{message_id}:delete": False,  # ... deleted when that stub edit failed too
+    "view:{token}": False,  # new per send (a fresh token), so it never repeats
 }
 
 

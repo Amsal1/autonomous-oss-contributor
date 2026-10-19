@@ -1,4 +1,4 @@
-"""Built-in safety commands: /status /pause /resume /kill /dryrun /help (DESIGN §14.5, §13).
+"""Built-in safety commands: /status /pause /resume /kill /dryrun /help (DESIGN §14.14.1, §13).
 
 Stop commands act immediately; ``/resume`` and ``/dryrun off`` are ``go`` and need the confirm tap.
 Resume only writes ``resume-request`` (the root enforcer removes the flags, §13.2) and never
@@ -18,6 +18,7 @@ from ossbot.gatekeeper.telegram.commands.registry import (
     confirm_handler,
 )
 from ossbot.gatekeeper.telegram.escape import b, code, esc
+from ossbot.gatekeeper.telegram.runtime import ui_of
 
 REASON_MAX = 300
 
@@ -108,6 +109,26 @@ async def dryrun_off_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
     invalidated = ctx.app.control.set_dry_run(False, ctx.actor)
     ctx.app.reissue_cards(invalidated, ctx.actor)
     return Reply(f"Dry-run is {b('OFF')} (LIVE). {len(invalidated)} open approval(s) re-issued as LIVE.")
+
+
+@command("start", help="What ossbot is and where things are", safety="read")
+async def start(ctx: CommandContext, args: list[str]) -> Reply:
+    mode = ui_of(ctx.app).topics.mode
+    where = ("🚦 Control (dashboard, commands) · ✅ Reviews (every card) · 📈 OSS feed · 💬 Assistant"
+             if mode == "topics" else
+             "one chat; each message starts with its section icon (🚦 ✅ 📈 💬). Turn topics on in @BotFather"
+             " for separate topics.")  # fmt: skip
+    return Reply(
+        f"{b('ossbot')}: open-source contributions you approve, plus your assistant.\n"
+        f"Where things are: {esc(where)}\n"
+        "Nothing is published without your two taps on a card. /status · /queue · /help"
+    )
+
+
+@command("dashboard", help="Re-send and pin the live dashboard", safety="read")
+async def dashboard(ctx: CommandContext, args: list[str]) -> Reply:
+    ui_of(ctx.app).dashboard.send_new()
+    return Reply("📌 Dashboard re-sent; it is pinned in 🚦 Control.")
 
 
 @command("help", help="List commands", safety="read")

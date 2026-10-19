@@ -22,6 +22,7 @@ from ossbot.gatekeeper import db
 log = logging.getLogger(__name__)
 MAX_BACKOFF = timedelta(minutes=10)
 MAX_ATTEMPTS = 50
+PRIORITIES = (0, 1, 2, 3)  # P0 safety (always loud) .. P3 background (§14.13.1)
 # Mirrors the tg_views.kind CHECK of 0002_decisions.sql (DESIGN §14.20.2).
 VIEW_KINDS: frozenset[str] = frozenset({
     "dashboard", "card", "explorer", "file", "interdiff", "draft_review", "status", "digest", "feature", "picker",
@@ -57,15 +58,26 @@ class OutboxRow:
     part_index: int | None
     attempts: int
     dedupe_key: str | None = None
+    thread_key: str | None = None  # system topic name, resolved to message_thread_id at send time
+    priority: int = 2
+    has_buttons: bool = False
 
 
 OnSent = Callable[[OutboxRow, dict[str, Any]], Awaitable[None]]
+
+
+def _has_buttons(payload: Mapping[str, Any]) -> bool:
+    markup = payload.get("reply_markup")
+    return isinstance(markup, dict) and bool(markup.get("inline_keyboard"))
 
 
 class Outbox:
     def __init__(self, conn: sqlite3.Connection, clock: Clock) -> None:
         self.conn = conn
         self.clock = clock
+        # (priority, has buttons or approval) -> hold the row now? Set by telegram.notify (quiet hours,
+        # §14.13.2); rows with buttons, tokens or an approval are never held (§14.13.3).
+        self.hold_policy: Callable[[int, bool], bool] = lambda priority, has_buttons: False
 
     def enqueue(
         self,
@@ -77,40 +89,65 @@ class Outbox:
         part_index: int | None = None,
         bind_tokens: list[str] | None = None,
         view: Mapping[str, Any] | None = None,
+        priority: int = 2,
+        thread_key: str | None = None,
+        coalesce_key: str | None = None,
     ) -> int | None:
         """``bind_tokens`` (minted with ``tg_message_id = NULL``) and ``view`` (the ``tg_views`` row)
         are applied by ``mark_sent`` with the sent message's id ("mint then bind", §14.18.2). The view
-        kind is checked here, so a bad kind fails before anything is sent."""
+        kind is checked here, so a bad kind fails before anything is sent. ``priority`` is P0..P3
+        (§14.13.1); ``thread_key`` names the system topic, resolved when the row is sent."""
         if view is not None and view.get("kind") not in VIEW_KINDS:
             raise ValueError(f"unknown view kind {view.get('kind')!r}")
+        if priority not in PRIORITIES:
+            raise ValueError(f"bad priority {priority!r}")
+        hold = self.hold_policy(priority, bool(bind_tokens) or approval_id is not None or _has_buttons(payload))
+        status = "held" if hold else "pending"
         with db.transaction(self.conn):
             cur = self.conn.execute(
                 "INSERT INTO tg_outbox (method, payload_json, dedupe_key, approval_id, part_index, status,"
-                " next_attempt_at, bind_tokens_json, view_json) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)"
-                " ON CONFLICT(dedupe_key) DO NOTHING",
-                (method, json.dumps(payload, ensure_ascii=False), dedupe_key, approval_id, part_index,
+                " next_attempt_at, bind_tokens_json, view_json, priority, thread_key, coalesce_key)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dedupe_key) DO NOTHING",
+                (method, json.dumps(payload, ensure_ascii=False), dedupe_key, approval_id, part_index, status,
                  to_iso(self.clock.now()), json.dumps(bind_tokens) if bind_tokens else None,
-                 json.dumps(dict(view), sort_keys=True) if view is not None else None),
+                 json.dumps(dict(view), sort_keys=True) if view is not None else None, priority, thread_key,
+                 coalesce_key),
             )  # fmt: skip
             return cur.lastrowid if cur.rowcount else None
 
     def due(self, limit: int = 20) -> list[OutboxRow]:
+        """Due rows, P0 first, then by id (P0 alerts never wait behind feed messages, §14.13.1)."""
         rows = self.conn.execute(
-            "SELECT * FROM tg_outbox WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY id LIMIT ?",
+            "SELECT * FROM tg_outbox WHERE status = 'pending' AND next_attempt_at <= ?"
+            " ORDER BY CASE WHEN priority = 0 THEN 0 ELSE 1 END, id LIMIT ?",
             (to_iso(self.clock.now()), limit),
         ).fetchall()
-        return [
-            OutboxRow(
-                r["id"],
-                r["method"],
-                json.loads(r["payload_json"]),
-                r["approval_id"],
-                r["part_index"],
-                r["attempts"],
-                r["dedupe_key"],
+        return [self._row(r) for r in rows]
+
+    @staticmethod
+    def _row(r: sqlite3.Row) -> OutboxRow:
+        payload = json.loads(r["payload_json"])
+        return OutboxRow(
+            r["id"], r["method"], payload, r["approval_id"], r["part_index"], r["attempts"], r["dedupe_key"],
+            r["thread_key"], int(r["priority"]),
+            bool(r["bind_tokens_json"]) or r["approval_id"] is not None or _has_buttons(payload),
+        )  # fmt: skip
+
+    def has_due_urgent(self) -> bool:
+        """A due P0/P1 row (the dashboard skips its edit meanwhile, §14.10.3)."""
+        return db.one(
+            self.conn, "SELECT 1 FROM tg_outbox WHERE status = 'pending' AND priority <= 1 AND next_attempt_at <= ?"
+            " LIMIT 1", (to_iso(self.clock.now()),),
+        ) is not None  # fmt: skip
+
+    def requeue(self, row: OutboxRow, method: str, payload: dict[str, Any], *, thread_key: str | None = None) -> None:
+        """Re-send a row with another method/payload (rich -> classic fallback, flat-mode resend)."""
+        with db.transaction(self.conn):
+            self.conn.execute(
+                "UPDATE tg_outbox SET method = ?, payload_json = ?, thread_key = ?, status = 'pending',"
+                " next_attempt_at = ?, last_error = NULL WHERE id = ?",
+                (method, json.dumps(payload, ensure_ascii=False), thread_key, to_iso(self.clock.now()), row.id),
             )
-            for r in rows
-        ]
 
     def mark_sent(self, row: OutboxRow, result: Mapping[str, Any] | None = None) -> None:
         """One transaction (delta 6, §14.18.2 step 3): the row is sent with its result message id,
@@ -164,7 +201,8 @@ class Outbox:
             ),
         )  # fmt: skip
 
-    def mark_retry(self, row: OutboxRow, error: SendError) -> None:
+    def mark_retry(self, row: OutboxRow, error: SendError) -> str:
+        """Returns the new status (``failed`` when permanent or out of attempts)."""
         attempts = row.attempts + 1
         if error.permanent or attempts >= MAX_ATTEMPTS:
             status, delay = "failed", timedelta(0)
@@ -180,25 +218,43 @@ class Outbox:
                 "UPDATE tg_outbox SET status = ?, attempts = ?, next_attempt_at = ?, last_error = ? WHERE id = ?",
                 (status, attempts, to_iso(self.clock.now() + delay), str(error)[:500], row.id),
             )
+        return status
+
+
+# (row, error) -> True when the hook recovered the row (re-queued it), else the row stays failed
+OnFailed = Callable[[OutboxRow, SendError], Awaitable[bool]]
+# (row) -> the row to send (thread resolution, flat-mode section icon), or None to send as is
+Prepare = Callable[[OutboxRow], OutboxRow]
 
 
 class OutboxWorker:
-    """``on_sent`` sees each delivered row with the Bot API result (card message ids, §14.4)."""
+    """``on_sent`` sees each delivered row with the Bot API result (card message ids, §14.18.4.4);
+    ``on_failed`` sees permanent failures (rich -> classic fallback, "thread not found", a deleted
+    dashboard, §14.20.5); ``prepare`` resolves the row's topic just before the send."""
 
-    def __init__(self, outbox: Outbox, sender: Sender, on_sent: OnSent | None = None, batch: int = 20) -> None:
+    def __init__(self, outbox: Outbox, sender: Sender, on_sent: OnSent | None = None, batch: int = 20, *,
+                 on_failed: OnFailed | None = None, prepare: Prepare | None = None) -> None:  # fmt: skip
         self.outbox = outbox
         self.sender = sender
         self.on_sent = on_sent
         self.batch = batch
+        self.on_failed = on_failed
+        self.prepare = prepare
 
     async def run_once(self) -> int:
         sent = 0
-        for row in self.outbox.due(self.batch):
+        for queued in self.outbox.due(self.batch):
+            row = self.prepare(queued) if self.prepare is not None else queued
             try:
                 result = await self.sender.send(row.method, row.payload)
             except SendError as exc:
                 log.warning("outbox send failed: %s", exc, extra={"event": "outbox_retry"})
-                self.outbox.mark_retry(row, exc)
+                status = self.outbox.mark_retry(row, exc)
+                if status == "failed" and self.on_failed is not None:
+                    try:
+                        await self.on_failed(row, exc)
+                    except Exception:
+                        log.exception("outbox on_failed hook failed", extra={"event": "outbox_hook_failed"})
                 continue
             self.outbox.mark_sent(row, result)
             sent += 1

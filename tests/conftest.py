@@ -58,7 +58,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 def make_repo(root: Path) -> Path:
     repo = root / "repo"
     (repo / "config").mkdir(parents=True)
-    for name in ("policy.yaml", "egress.yaml", "targets.yaml", "models.yaml"):
+    for name in ("policy.yaml", "egress.yaml", "targets.yaml", "models.yaml", "telegram.yaml"):
         shutil.copy(REPO_ROOT / "config" / name, repo / "config" / name)
     shutil.copy(FIXTURES / "profile.test.yaml", repo / "config" / "profile.yaml")
     return repo

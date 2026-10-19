@@ -1,12 +1,18 @@
-"""Telegram update handlers: the deterministic decision path (DESIGN §14.2, §14.4, §12.4, I1, I3).
+"""Telegram update handlers: the deterministic decision path (DESIGN §14.2, §14.11.9, §12.4, I1, I3)
+and the update routing table (§14.10.4, ``telegram/routing.py``).
 
 * Every update passes ``auth.authorized`` first (owner, private chat); others get no reply.
 * Callback data must be ``t:<22 chars>``; the token row must exist, have the right purpose, be
   bound to this message id, unused and unexpired. Rejections change nothing and log WARNING.
 * Approve -> card edited to the mode-stating Confirm (LIVE / DRY RUN computed at that moment)
   -> Confirm -> live checks -> submit. Reject cancels the action. ``go`` commands confirm first.
-* Nothing typed in chat (or produced by Hermes later) can reach these paths except through the
-  command registry; the registry has no approve command.
+  These U3 edits stay direct Bot API calls; every other reply and view goes through
+  ``telegram.ui.send`` into the originating topic (§14.10.1).
+* Kit buttons (navigation, pickers, comments, proposal and size controls) dispatch through
+  ``telegram.actions.ACTIONS``; nothing typed in chat (or produced by Hermes) can reach a decision
+  path, and ``/approve`` only re-sends a card (§14.18.4 delta 5).
+* The update handler budget (§14.18.5): anything slower than SQLite, an outbox enqueue and one
+  direct edit runs as a spawned task.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ from typing import Any, Literal
 
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
-from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CallbackQueryHandler, ContextTypes, MessageHandler, TypeHandler, filters
 
 from ossbot.common.clock import to_iso
 from ossbot.common.control_flags import Blocked
@@ -32,9 +38,12 @@ from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import Actor, TransitionError
-from ossbot.gatekeeper.telegram import cards, keyboards
-from ossbot.gatekeeper.telegram.auth import authorized
-from ossbot.gatekeeper.telegram.commands import builtin  # noqa: F401 - registers the built-ins
+from ossbot.gatekeeper.telegram import actions, cards, chat_relay, inputs, keyboards, rawapi, routing
+from ossbot.gatekeeper.telegram.auth import authorized, authorized_chat_only
+from ossbot.gatekeeper.telegram.commands import (
+    builtin,  # noqa: F401 - registers the built-ins
+    load_builtin_modules,
+)
 from ossbot.gatekeeper.telegram.commands.registry import (
     COMMANDS,
     CONFIRM_EFFECTS,
@@ -43,7 +52,13 @@ from ossbot.gatekeeper.telegram.commands.registry import (
     Reply,
 )
 from ossbot.gatekeeper.telegram.escape import b, esc
+from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.ui import kit as k
+from ossbot.gatekeeper.telegram.ui import send as ui_send
+from ossbot.gatekeeper.telegram.ui.sanitize import undefuse as sanitize_undefuse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+
+load_builtin_modules()
 
 log = logging.getLogger(__name__)
 Submit = Callable[[str], Awaitable[str]]
@@ -58,6 +73,10 @@ KILL_CANCELS: frozenset[TaskKind] = frozenset({"chat_turn", "media", "telegraph"
 PREFLIGHT_TIMEOUT_S = 8.0  # the one inline await: the Confirm live preflight (timeout = live_check:timeout)
 HANDLER_SLOW_S = 1.0
 STOP_COMMANDS = frozenset({"kill", "pause"})
+# AC 22: with a kill active, only these commands run; the rest get the killed message (§14.16).
+KILLED_ALLOWED = frozenset({"status", "resume", "logs", "help", "start", "kill", "pause", "dryrun"})
+KILLED_TEXT = "🛑 ossbot is killed: only /status /resume /logs /help work now. /resume to continue."
+MEDIA_LATER = "🤖 Photos, files and voice reach the assistant with the streaming update; send text for now."
 # Gate 1 decision purposes (p_ ids); the kit purposes (skip, adjust, ...) arrive with FEAT-009.
 PROPOSAL_PURPOSES = frozenset({"proposal_start", "proposal_confirm", "proposal_cancel"})
 # Skill activation (§14.15, §15.5; s_ ids): two taps; the kit card and the diff/ask views are PLAN item 47.
@@ -74,6 +93,8 @@ def markup(rows: keyboards.Rows) -> InlineKeyboardMarkup:
 
 
 class Handlers:
+    KILL_CANCELS = KILL_CANCELS
+
     def __init__(self, ctx: AppContext, submit: Submit | None = None, preflight: Preflight | None = None) -> None:
         self.ctx = ctx
         self.submit = submit
@@ -85,6 +106,7 @@ class Handlers:
     def register(self, application: Application[Any, Any, Any, Any, Any, Any]) -> None:
         application.add_handler(CallbackQueryHandler(self.on_callback))
         application.add_handler(MessageHandler(filters.ALL, self.on_message))
+        application.add_handler(TypeHandler(Update, self.on_raw), group=1)  # 10.3 updates PTB doesn't type
 
     # ----------------------------------------------------------- task budget (§14.18.5)
     def spawn(
@@ -189,19 +211,35 @@ class Handlers:
         except TelegramError as exc:
             log.warning("edit failed: %s", exc, extra={"event": "telegram_edit_failed"})
 
-    async def _send_reply(self, chat_id: int, reply: Reply, context: ContextTypes.DEFAULT_TYPE) -> None:
-        msg = await context.bot.send_message(chat_id=chat_id, text=reply.text, parse_mode=ParseMode.HTML)
-        if reply.confirm is None:
-            return
-        token = self.ctx.approvals.mint_token(
-            reply.confirm.purpose, chat_id=chat_id, message_id=msg.message_id,
-            expires_at=self.ctx.clock.now() + COMMAND_CONFIRM_TTL, arg=reply.confirm.arg,
-        )  # fmt: skip
-        await context.bot.edit_message_reply_markup(
-            chat_id=chat_id,
-            message_id=msg.message_id,
-            reply_markup=markup(keyboards.single_row(reply.confirm.label, token)),
-        )
+    def reply_view(self, reply: Reply, *, stale_s: int = 0) -> k.View:
+        """A command ``Reply`` as a kit view: its text is gatekeeper HTML; the confirm is a single-use,
+        5-minute, message-bound token minted then bound at send (§14.18.2)."""
+        if reply.view is not None:
+            view: k.View = reply.view
+        else:
+            lines: list[k.Line] = [(k.Html(reply.text),)]
+            if stale_s > 0:
+                when = int(self.ctx.clock.now().timestamp()) - stale_s
+                lines.append((k.Const("(sent "), k.Time(when, f"{stale_s // 60} min ago"),
+                              k.Const(" while I was offline)")))  # fmt: skip
+            kind = "confirm_prompt" if reply.confirm is not None else "fyi"
+            view = k.View(kind=kind, blocks=[k.Block((k.Lines(tuple(lines)),))])
+        if reply.confirm is not None:
+            view.rows = [*view.rows, [k.ButtonSpec(reply.confirm.label, reply.confirm.purpose, single_use=True,
+                                                   ttl=COMMAND_CONFIRM_TTL, raw_arg=reply.confirm.arg)]]  # fmt: skip
+        return view
+
+    def _send_reply(self, reply: Reply, *, thread_id: int | None = None, reply_to: int | None = None,
+                    stale_s: int = 0) -> None:  # fmt: skip
+        """Command replies land in the originating topic (§14.10.1)."""
+        ui_send.deliver(self.ctx, self.reply_view(reply, stale_s=stale_s), thread_id=thread_id, reply_to=reply_to)
+        if reply.document is not None:
+            name, data = reply.document
+            ui_send.document(self.ctx, name, data, thread_id=thread_id)
+
+    def _edit_reply(self, message_id: int, reply: Reply) -> None:
+        """Edit a command reply or confirm panel in place (not an approval card: those are U3)."""
+        ui_send.edit(self.ctx, self.reply_view(reply), message_id=message_id)
 
     # ------------------------------------------------------------------ callbacks
     async def on_callback(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -255,15 +293,19 @@ class Handlers:
             elif purpose in CONFIRMS:
                 with db.transaction(self.ctx.conn):
                     self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
-                effect = CONFIRMS[purpose](CommandContext(self.ctx, user_id), row["arg"])
+                thread = getattr(message, "message_thread_id", None)
+                cctx = CommandContext(self.ctx, user_id, thread_id=thread, message_id=message_id, handlers=self)
+                effect = CONFIRMS[purpose](cctx, row["arg"])
                 if CONFIRM_EFFECTS.get(purpose, "local") == "io":  # BA-18: token used, ⏳ inline, effect spawned
-                    await self._edit(query, "⏳ Working…")
+                    self._edit_reply(message_id, Reply("⏳ Working…"))
                     await query.answer()
-                    self.spawn(self._finish_confirm(query, effect), "command")
+                    self.spawn(self._finish_confirm(message_id, effect), "command")
                 else:
                     reply = await effect
-                    await self._edit(query, reply.text)
+                    self._edit_reply(message_id, reply)
                     await query.answer()
+            elif purpose in actions.ACTIONS:
+                await self._action(query, token, purpose, row, user_id, chat_id, message_id)
             else:
                 await query.answer("Not available yet.")
         except ApprovalError as exc:
@@ -329,12 +371,46 @@ class Handlers:
             await self._edit(query, svc.card_view(sid).card, svc.card_rows(sid, tokens))
         await query.answer()
 
-    async def _finish_confirm(self, query: Any, effect: Awaitable[Reply]) -> None:
+    async def _finish_confirm(self, message_id: int, effect: Awaitable[Reply]) -> None:
         try:
             reply = await effect
         except (Blocked, ApprovalError, TransitionError) as exc:
             reply = Reply(f"Refused: {esc(str(exc)[:300])}")
-        await self._edit(query, reply.text)
+        self._edit_reply(message_id, reply)
+
+    async def _action(
+        self, query: Any, token: str, purpose: str, row: Any, user_id: int, chat_id: int, message_id: int
+    ) -> None:
+        """A kit button (§14.18.2): token rules first, then the purpose's arg model, then the handler."""
+        spec = actions.ACTIONS[purpose]
+        with db.transaction(self.ctx.conn):
+            tok = self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
+        try:
+            arg = actions.parse_arg(spec, tok["arg"])
+        except actions.BadArg:
+            log.warning("callback rejected: bad arg for %s", purpose, extra={"event": "callback_rejected"})
+            await query.answer("This button is no longer valid.")
+            return
+        message = query.message
+        tap = actions.Tap(self.ctx, self, token, tok, arg, user_id, chat_id, message_id,
+                          getattr(message, "message_thread_id", None))  # fmt: skip
+        if spec.effect == "io":
+            await query.answer("⏳")
+            self.spawn(self._run_action(spec, tap), "command")
+            return
+        try:
+            text = await spec.func(tap)
+        except (Blocked, ApprovalError, TransitionError) as exc:
+            text = f"Refused: {str(exc)[:150]}"
+        await query.answer(k.toast(text))
+
+    async def _run_action(self, spec: actions.ActionSpec, tap: actions.Tap) -> None:
+        try:
+            text = await spec.func(tap)
+        except (Blocked, ApprovalError, TransitionError) as exc:
+            text = f"Refused: {str(exc)[:300]}"
+        if text:
+            ui_send.deliver(self.ctx, k.plain("fyi", (k.Const(text),)), thread_id=tap.thread_id)
 
     def _kind_of(self, approval_id: str) -> Any:
         row = db.one(
@@ -488,23 +564,103 @@ class Handlers:
     async def on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await self._timed("message", HANDLER_SLOW_S, self._on_message(update, context))
 
+    def _incoming(self, message: Any) -> routing.Incoming:
+        reply_to = message.reply_to_message
+        urls = tuple(
+            str(e.url) if e.type == "text_link" and e.url else message.parse_entity(e)
+            for e in (message.entities or ())
+            if e.type in {"url", "text_link"}
+        )
+        has_media = bool(message.photo or message.document or message.voice or message.audio or message.video
+                         or message.location)  # fmt: skip
+        return routing.Incoming(
+            kind="message", chat_id=message.chat.id, text=message.text or message.caption or "",
+            thread_id=message.message_thread_id if message.is_topic_message else None,
+            reply_to_message_id=reply_to.message_id if reply_to is not None else None,
+            reply_to_from_bot=bool(reply_to is not None and reply_to.from_user and reply_to.from_user.is_bot),
+            forwarded=message.forward_origin is not None, entity_urls=urls, has_media=has_media,
+            date=int(message.date.timestamp()) if message.date else 0,
+        )  # fmt: skip
+
+    def _stale_s(self, inc: routing.Incoming) -> int:
+        """Seconds the message waited, when that is over ``telegram.stale_message_minutes`` (else 0)."""
+        if inc.date <= 0:
+            return 0
+        waited = int(self.ctx.clock.now().timestamp()) - inc.date
+        return waited if waited > self.ctx.config.telegram.stale_message_minutes * 60 else 0
+
     async def _on_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         message = update.effective_message
         if message is None or not authorized(update, self.ctx.telegram_chat_id):
             return
-        text = (message.text or "").strip()
-        if not text.startswith("/"):
-            log.info("non-command text ignored (chat relay arrives with Hermes)", extra={"event": "chat_ignored"})
+        assert update.effective_user is not None
+        user_id = update.effective_user.id
+        inc = self._incoming(message)
+        ui = ui_of(self.ctx)
+        route = routing.classify(self.ctx.conn, ui.topics, ui.pending, inc)
+        stale_s = self._stale_s(inc)
+        quote = message.quote.text if message.quote is not None else None
+        doc = message.document
+        typed = inputs.Typed(
+            self.ctx,
+            self,
+            sanitize_undefuse(inc.text),
+            user_id,
+            inc.chat_id,
+            message.message_id,
+            inc.thread_id,
+            quote=quote,
+            document=(doc.file_id, doc.mime_type, doc.file_size or 0) if doc is not None else None,
+        )
+        if route.kind == "pending_input":
+            prompt = ui.pending.consume(inc.chat_id, inc.reply_to_message_id)
+            handler = inputs.INPUTS.get(prompt.kind) if prompt is not None else None
+            if prompt is not None and handler is not None:
+                typed.prompt = prompt
+                await handler(typed)
             return
-        words = text.split()
+        if route.kind == "command":
+            await self._command(inc, user_id, message.message_id, stale_s)
+            return
+        if route.kind == "view_reply" and route.view is not None:
+            family = inputs.VIEW_FAMILY.get(str(route.view["kind"]))
+            handler = inputs.VIEW_REPLIES.get(family) if family else None
+            if handler is not None:
+                typed.view = route.view
+                await handler(typed)
+                return
+        if route.kind == "link_card":
+            handler = inputs.VIEW_REPLIES.get("links")
+            if handler is not None:
+                typed.route = route
+                await handler(typed)
+            if route.then is None:
+                return
+        if route.kind == "ignore":
+            return
+        kind = route.then if route.kind == "link_card" and route.then else routing.chat_kind(route.topic)
+        if inc.has_media and not inc.text:
+            ui_send.deliver(self.ctx, k.plain("fyi", k.line(MEDIA_LATER)), thread_id=inc.thread_id,
+                            reply_to=message.message_id)  # fmt: skip
+            return
+        note = None
+        if stale_s:
+            note = (k.Const("↪️ replying to your message from "), k.Time(inc.date, f"{stale_s // 60} min ago"))
+        await chat_relay.relay(self.ctx, self, kind=kind, topic=route.topic, text=typed.text, user_id=user_id,
+                               thread_id=inc.thread_id, message_id=message.message_id, stale_note=note)  # fmt: skip
+
+    async def _command(self, inc: routing.Incoming, user_id: int, message_id: int, stale_s: int) -> None:
+        words = inc.text.strip().split()
         name = words[0][1:].split("@", 1)[0].lower()
         spec = COMMANDS.get(name)
-        assert update.effective_user is not None
-        cctx = CommandContext(self.ctx, update.effective_user.id, words[1:])
+        cctx = CommandContext(self.ctx, user_id, words[1:], thread_id=inc.thread_id, message_id=message_id,
+                              stale_s=stale_s, handlers=self)  # fmt: skip
         if spec is None:
             reply = Reply(f"Unknown command {esc(words[0][:40])}. Try /help.")
+        elif self.ctx.control.view().state == "killed" and name not in KILLED_ALLOWED:
+            reply = Reply(KILLED_TEXT)
         elif spec.effect == "io":  # BA-18: never hold the update slot on I/O
-            self.spawn(self._run_command(message.chat.id, spec.func(cctx, words[1:]), context), "command")
+            self.spawn(self._run_command(spec.func(cctx, words[1:]), inc.thread_id, stale_s), "command")
             return
         else:
             try:
@@ -515,11 +671,28 @@ class Handlers:
                 # §14.18.5 item 4: the local effect (kill/pause transaction) is committed first, then
                 # the cancellable work stops; submit and command tasks keep their Phase 1 rules.
                 self.cancel(KILL_CANCELS)
-        await self._send_reply(message.chat.id, reply, context)
+        self._send_reply(reply, thread_id=inc.thread_id, stale_s=stale_s)
 
-    async def _run_command(self, chat_id: int, effect: Awaitable[Reply], context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _run_command(self, effect: Awaitable[Reply], thread_id: int | None, stale_s: int) -> None:
         try:
             reply = await effect
         except (Blocked, ApprovalError, TransitionError) as exc:
             reply = Reply(f"Refused: {esc(str(exc)[:300])}")
-        await self._send_reply(chat_id, reply, context)
+        self._send_reply(reply, thread_id=thread_id, stale_s=stale_s)
+
+    # ------------------------------------------------- stopped_message_generation (rule 2)
+    async def on_raw(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        """Bot API 10.3 ``stopped_message_generation`` (from ``api_kwargs``; no ``from``, U10): cancel
+        the owner's own stream whose ``draft_id`` is that turn's id. Unknown drafts are ignored."""
+        stopped = rawapi.parse_stopped(update.api_kwargs)
+        if stopped is None:
+            return
+        if not authorized_chat_only(stopped.chat.type, stopped.chat.id, self.ctx.telegram_chat_id):
+            return
+        row = db.one(self.ctx.conn, "SELECT session_key FROM chat_turns WHERE turn_id = ? AND status = 'streaming'",
+                     (stopped.draft_id,))  # fmt: skip
+        task = self._sessions.get(str(row["session_key"])) if row is not None else None
+        if task is None:
+            log.debug("stopped_message_generation for an unknown draft", extra={"event": "stop_ignored"})
+            return
+        task.cancel()

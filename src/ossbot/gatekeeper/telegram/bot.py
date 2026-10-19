@@ -1,39 +1,50 @@
-"""The single gatekeeper-owned bot (DESIGN §12.8, §14.1, ADR-0004): sender, card delivery, polling.
+"""The single gatekeeper-owned bot (DESIGN §12.8, §14.1, ADR-0004, ADR-0020): sender, card delivery,
+the workspace (topics, menus, dashboard; §14.10) and polling.
 
-* python-telegram-bot 22.x ``Application`` with long polling through proxy 3150
+* python-telegram-bot 22.8 ``Application`` with long polling through proxy 3150
   (``HTTPXRequest(proxy=...)``), ``allowed_updates=["message", "callback_query"]``, pending
-  updates processed at start (``drop_pending_updates=False``).
+  updates processed at start (``drop_pending_updates=False``). Bot API 10.1-10.3 payloads go through
+  ``do_api_request`` (``telegram/rawapi.py``).
 * Disabled (WARNING, doctor "awaiting secrets") without ``TELEGRAM_BOT_TOKEN`` or while
   ``profile.telegram.user_id == 0`` (PLAN Decision 5).
 * Cards: message 1 is sent first; its message id binds every token (N12). Body parts follow; the
-  Approve keyboard is minted and attached only when every part was delivered (§14.4).
+  Approve keyboard is minted and attached only when every part was delivered (§14.11.1, §14.18.4.4).
+  Cards go to ✅ Reviews.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import warnings
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from telegram.constants import ParseMode
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError, TimedOut
 from telegram.ext import Application
 from telegram.request import BaseRequest, HTTPXRequest, RequestData
-from telegram.warnings import PTBDeprecationWarning
+from telegram.warnings import PTBDeprecationWarning, PTBUserWarning
 
+from ossbot.common.clock import to_iso
+from ossbot.common.ids import new_token
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow, OutboxWorker, SendError
 from ossbot.gatekeeper.pollstats import PollStats
 from ossbot.gatekeeper.telegram import keyboards
-from ossbot.gatekeeper.telegram.commands.registry import load_plugins, menu
+from ossbot.gatekeeper.telegram.commands.registry import load_plugins
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.handlers import Handlers
-from telegram import Bot
+from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.scopes import ONLINE, offline_description
+from ossbot.gatekeeper.telegram.topics import THREAD_NOT_FOUND
+from ossbot.gatekeeper.telegram.ui import rich as ui_rich
+from telegram import Bot, InputFile
 
 log = logging.getLogger(__name__)
 TELEGRAM_PROXY = "http://10.212.0.2:3150"
@@ -59,8 +70,31 @@ class TelegramSender:
         self.bot = bot
 
     async def send(self, method: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Keys starting with ``_`` are ossbot's own (the classic fallback of a rich view, a spooled
+        document's path) and never reach Telegram."""
+        api_kwargs: dict[str, Any] = {key: value for key, value in payload.items() if not key.startswith("_")}
+        doc_path = payload.get("_document_path")
+        if method == "sendDocument" and isinstance(doc_path, str):
+            path = Path(doc_path)
+            try:
+                data = path.read_bytes()
+            except OSError as exc:
+                raise SendError(f"document spool: {type(exc).__name__}", permanent=True) from exc
+            api_kwargs["document"] = InputFile(data, filename=str(payload.get("_document_name") or path.name))
+        result = await self._call(method, api_kwargs)
+        if method == "sendDocument" and isinstance(doc_path, str):
+            Path(doc_path).unlink(missing_ok=True)
+        return result
+
+    async def call(self, method: str, payload: dict[str, Any]) -> Any:
+        """A direct call outside the outbox (getMe, topics, scopes); the result object."""
+        return await self._call(method, payload)
+
+    async def _call(self, method: str, api_kwargs: dict[str, Any]) -> dict[str, Any]:
         try:
-            result = await self.bot.do_api_request(method, api_kwargs=payload)
+            with warnings.catch_warnings():  # raw calls are deliberate (ADR-0020): one code path for every method
+                warnings.filterwarnings("ignore", message="Please use 'Bot\\.", category=PTBUserWarning)
+                result = await self.bot.do_api_request(method, api_kwargs=api_kwargs)
         except RetryAfter as exc:
             with warnings.catch_warnings():  # PTB 22.2+: int today, timedelta in a future major
                 warnings.simplefilter("ignore", PTBDeprecationWarning)
@@ -300,9 +334,64 @@ class TelegramFrontend:
         self.ctx = ctx
         self.application = application
         self.publisher = CardPublisher(ctx)
-        self.worker = OutboxWorker(ctx.outbox, TelegramSender(application.bot), self.publisher.on_sent, batch=1)
+        self.sender = TelegramSender(application.bot)
+        self.ui = ui_of(ctx)
+        self.worker = OutboxWorker(ctx.outbox, self.sender, self._on_sent, batch=1, on_failed=self._on_failed,
+                                   prepare=self.ui.topics.prepare)  # fmt: skip
         self._task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
+        self._lifecycle_seen: tuple[str, str] | None = None
+
+    async def _on_sent(self, row: OutboxRow, result: dict[str, Any]) -> None:
+        await self.publisher.on_sent(row, result)
+        self.ui.dashboard.on_sent(row, result)
+
+    async def _on_failed(self, row: OutboxRow, error: SendError) -> bool:
+        """Permanent failures with a defined recovery (§14.20.5)."""
+        text = str(error).lower()
+        if THREAD_NOT_FOUND in text and row.thread_key is not None:
+            return await self.ui.topics.on_thread_not_found(row, self.sender.call)
+        classic = row.payload.get("_classic")
+        if isinstance(classic, dict) and "bad request" in text:
+            ui_rich.mark_unavailable(self.ui.prefs)
+            log.warning("rich view refused (%s); classic for 24 h", row.method, extra={"event": "rich_fallback"})
+            if row.payload.get("_edit_fallback"):
+                return self._edit_fallback(row, classic)
+            self.ctx.outbox.requeue(row, "sendMessage", classic, thread_key=row.thread_key)
+            return True
+        key = row.dedupe_key or ""
+        if key.startswith("stub:") and key.endswith(":moved"):  # the stub edit failed too: delete it
+            mid = row.payload.get("message_id")
+            self.ctx.outbox.enqueue("deleteMessage", {"chat_id": row.payload.get("chat_id"), "message_id": mid},
+                                    dedupe_key=f"stub:{mid}:delete")  # fmt: skip
+            return True
+        return self.ui.dashboard.on_failed(row, error)
+
+    def _edit_fallback(self, row: OutboxRow, classic: dict[str, Any]) -> bool:
+        """A failed rich edit (BA-9): the classic view is sent as a new reply, the old message is stubbed
+        "moved ↓" and its view row goes stale; the view's tokens are re-bound to the new message."""
+        old = int(row.payload.get("message_id") or 0)
+        payload = {k_: v for k_, v in classic.items() if k_ != "message_id"}
+        payload["reply_parameters"] = {"message_id": old, "allow_sending_without_reply": True}
+        tokens = [b_["callback_data"][2:] for r in (classic.get("reply_markup") or {}).get("inline_keyboard", [])
+                  for b_ in r if "callback_data" in b_]  # fmt: skip
+        stored = db.one(self.ctx.conn, "SELECT view_json FROM tg_outbox WHERE id = ?", (row.id,))
+        view = json.loads(stored["view_json"]) if stored is not None and stored["view_json"] else None
+        with db.transaction(self.ctx.conn):
+            if tokens:
+                marks = ",".join("?" * len(tokens))
+                self.ctx.conn.execute(f"UPDATE ui_tokens SET tg_message_id = NULL WHERE token IN ({marks})",  # noqa: S608
+                                      tokens)  # fmt: skip
+            self.ctx.conn.execute("UPDATE tg_views SET stale = 1, updated_at = ? WHERE message_id = ?",
+                                  (to_iso(self.ctx.clock.now()), old))  # fmt: skip
+            self.ctx.outbox.enqueue("sendMessage", payload, dedupe_key=f"view:{new_token()}",
+                                    bind_tokens=tokens or None, view=view)  # fmt: skip
+            self.ctx.outbox.enqueue("editMessageText", {"chat_id": classic.get("chat_id"), "message_id": old,
+                                                        "rich_message": {"blocks": [{"type": "paragraph",
+                                                                                     "text": "moved ↓"}],
+                                                                         "skip_entity_detection": True}},
+                                    dedupe_key=f"stub:{old}:moved")  # fmt: skip
+        return True
 
     async def start(self) -> None:
         """Never blocks or fails the gatekeeper start: with the network down (laptop offline,
@@ -332,17 +421,42 @@ class TelegramFrontend:
             except TelegramError as exc:  # InvalidToken, Forbidden: permanent, the front-end stays off
                 log.error("telegram disabled: %s", type(exc).__name__, extra={"event": "telegram_disabled"})
                 return
-        try:
-            await self.application.bot.set_my_commands([(c["command"], c["description"]) for c in menu()])
-        except TelegramError as exc:
-            log.warning("setMyCommands failed: %s", exc, extra={"event": "telegram_menu_failed"})
+        await self.workspace()
         await self.application.start()
         assert self.application.updater is not None
         await self.application.updater.start_polling(allowed_updates=ALLOWED_UPDATES, drop_pending_updates=False)
         self._task = asyncio.create_task(self._outbox_loop())
 
+    async def workspace(self) -> None:
+        """Topics (or flat mode), the owner's menus, the short description and the dashboard (§14.10)."""
+        try:
+            await self.ui.topics.bootstrap(self.sender.call)
+            await self.ui.scopes.apply(self.sender.call)
+            await self.ui.scopes.set_description(self.sender.call, ONLINE)
+            self.ui.dashboard.tick(force=True)
+        except Exception:
+            log.exception("telegram workspace setup failed", extra={"event": "telegram_workspace_failed"})
+
+    async def on_tick(self) -> None:
+        """Once per outbox loop: menus follow the control state, the dashboard is edited when due, and a
+        full (graceful) down sets the offline short description before the outbox drains (§14.10.3)."""
+        await self.ui.scopes.maybe_apply(self.sender.call)
+        info = self.ctx.control.lifecycle()
+        seen = (info.state, info.scope) if info is not None else ("up", "")
+        if seen != self._lifecycle_seen:
+            self._lifecycle_seen = seen
+            graceful = info is not None and info.state == "down" and info.scope != "workers"
+            text = offline_description(self.ctx.clock.now().strftime("%H:%M")) if graceful else ONLINE
+            await self.ui.scopes.set_description(self.sender.call, text)
+            self.ui.dashboard.tick(force=True)
+        self.ui.dashboard.tick()
+
     async def _outbox_loop(self) -> None:
         while True:
+            try:
+                await self.on_tick()
+            except Exception:
+                log.exception("telegram tick failed", extra={"event": "telegram_tick_failed"})
             try:
                 await self.worker.run_once()
             except Exception:

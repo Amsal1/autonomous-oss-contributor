@@ -37,3 +37,15 @@ def authorized(update: Update, user_id: int) -> bool:
             extra={"event": "telegram_unauthorized"},
         )
     return ok
+
+
+def authorized_chat_only(chat_type: str | None, chat_id: int | None, user_id: int) -> bool:
+    """The one exception (U10, DESIGN §14.2): ``stopped_message_generation`` carries no ``from``. It is
+    accepted for the owner's private chat only (a private chat whose id equals the owner's id can only be
+    the owner's) and can only stop a stream the owner's own message started."""
+    ok = user_id != 0 and chat_type == "private" and chat_id == user_id
+    if not ok:
+        REJECTED["unauthorized"] += 1
+        log.warning("telegram stop update rejected: chat %s (%s)", chat_id, chat_type,
+                    extra={"event": "telegram_unauthorized"})  # fmt: skip
+    return ok

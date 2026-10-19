@@ -1,4 +1,4 @@
-"""Inline keyboards. Every button carries an opaque ``t:<22-char token>`` (24 bytes, §14.3)."""
+"""Inline keyboards. Every button carries an opaque ``t:<22-char token>`` (24 bytes; DESIGN §14.17.4, §14.18.2)."""
 
 from __future__ import annotations
 

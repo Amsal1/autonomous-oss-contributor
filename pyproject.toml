@@ -183,6 +183,29 @@ source_modules = ["ossbot.gatekeeper.chat"]
 forbidden_modules = ["ossbot.gatekeeper.submit", "ossbot.gatekeeper.github_writer"]
 
 [[tool.importlinter.contracts]]
+# DESIGN §14.20.1 (PLAN item 44): the chat relay can't reach a decision, a state change or the control
+# plane, and writes Telegram rows only through telegram.ui (never the outbox directly). The features
+# package, review_mirror_writer and telegraph_writer get theirs when they land (FEAT-010).
+name = "The chat relay never imports the approval, state, control or outbox modules"
+type = "forbidden"
+source_modules = ["ossbot.gatekeeper.chat"]
+forbidden_modules = ["ossbot.gatekeeper.approvals", "ossbot.gatekeeper.decisions",
+    "ossbot.gatekeeper.proposal_approvals", "ossbot.gatekeeper.skill_approvals", "ossbot.gatekeeper.state_machine",
+    "ossbot.gatekeeper.control", "ossbot.gatekeeper.outbox"]
+
+[[tool.importlinter.contracts]]
+# DESIGN §14.20.1, U1: the kit renders and queues; it never decides. Only the decision services mint
+# approval tokens with an approval id (U3).
+name = "The UI kit never imports the decision or submit paths"
+type = "forbidden"
+source_modules = ["ossbot.gatekeeper.telegram.ui"]
+# typing only (under TYPE_CHECKING): send.py annotates its AppContext parameter
+ignore_imports = ["ossbot.gatekeeper.telegram.ui.send -> ossbot.gatekeeper.context"]
+unmatched_ignore_imports_alerting = "error"
+forbidden_modules = ["ossbot.gatekeeper.approvals", "ossbot.gatekeeper.decisions", "ossbot.gatekeeper.submit",
+    "ossbot.gatekeeper.github_writer", "ossbot.gatekeeper.state_machine", "ossbot.gatekeeper.control"]
+
+[[tool.importlinter.contracts]]
 # review FEAT-007 round 2 (F007-R2-4): the root ACP probe client and the other root/operator tools stay
 # out of the gatekeeper; it reads the probe file through ossbot.common.probe_result.
 name = "The gatekeeper never imports ossctl or the root probe"

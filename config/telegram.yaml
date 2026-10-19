@@ -1,0 +1,19 @@
+# Telegram presentation (DESIGN §14.20.3). Strict schema: unknown keys and out-of-range values are
+# refused at load and at /reload. Loaded through the config snapshot and changed only by a
+# human-confirmed /reload. Nothing here can approve, publish or change a limit; the opt-in surfaces
+# (review mirror, Telegraph) also need their own enable step (U9).
+version: 1
+topics: auto                 # auto | off   (auto = use topics when getMe.has_topics_enabled)
+rich_views_default: auto     # auto | on | off   (the /settings pref overrides at runtime, never for approval cards)
+loud_cards_per_hour: 2       # cards sent with sound per hour (0-20); the rest arrive silently
+dashboard: {min_edit_interval_s: 30}
+status_card: {min_edit_interval_s: 60}
+progress: {min_edit_interval_s: 5}
+drafts: {min_interval_s: 1.0, heartbeat_s: 20}
+stale_message_minutes: 10    # updates older than this when processed are "sent while I was offline"
+digest: {daily: "21:30", weekly: "Sun 18:00"}
+effects: {merged: null}      # message_effect_id for the merged summary (§14.23 item 5); null = none
+attachments: {max_mb: 20, album_window_s: 1.5}
+review_mirror: {enabled: false, poll_pending_s: 60, poll_other_s: 600}
+telegraph: {enabled: false, offer_min_chars: 1500, max_content_kb: 60, author_name: ""}   # §14.12.8; never automatic
+features: {enabled: []}

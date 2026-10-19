@@ -26,5 +26,5 @@
     "git -C d:\\Work\\autonomous-oss-contributor status --porcelain   # empty after the commit"
   ],
   "blocked_reason": null,
-  "findings": ""
+  "findings": "base_commit: ef4657a70613f711cb447be819390c39a10523b8\nProgress (coder iteration 1): item 44 committed (kit telegram/ui/{kit,blocks,classic,rich,sanitize,limits,icons,send}.py, rawapi.py, routing.py, pending_input.py, topics.py, scopes.py, dashboard.py(+_actions), chat_relay.py (rules 7-9, non-streaming), inputs.py/actions.py registries, prefs.py, runtime.ui_of, migration 0005, config/telegram.yaml + TelegramConfig (optional snapshot file), profile telegram.timezone/quiet_hours, 2 import-linter contracts, ADR-0020 addendum). Tests harness tests/telegram/tgharness.py (real PTB app + outbox flush). Helpers (gitignored .ossbot-local/): dev.ps1 (DEV prefix), hermetic.ps1 (-n 6 to hermetic.txt), rows.ps1 (TRACEABILITY rows), apidoc.py + botapi.html (Bot API reference lookup). Hermetic run after item 44 (before the last fixes): 3039 passed, 3 failed (fixed: dedupe-key list, TypeHandler, no_tunnels wording)."
 }

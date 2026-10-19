@@ -10,8 +10,9 @@ from __future__ import annotations
 import fnmatch
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
@@ -19,7 +20,10 @@ from ossbot.common.control_flags import EGRESS_MODES, EgressMode, HermesTier
 from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
 from ossbot.common.yamlio import YamlError, safe_load
 
-SNAPSHOT_FILES: tuple[str, ...] = ("egress.yaml", "policy.yaml", "profile.yaml", "targets.yaml")
+# telegram.yaml (DESIGN §14.20.3) is optional in a snapshot: a snapshot written before it existed, or a
+# checkout without it, gets the schema defaults (REQUIRED_SNAPSHOT_FILES must all be present).
+SNAPSHOT_FILES: tuple[str, ...] = ("egress.yaml", "policy.yaml", "profile.yaml", "targets.yaml", "telegram.yaml")
+REQUIRED_SNAPSHOT_FILES: tuple[str, ...] = ("egress.yaml", "policy.yaml", "profile.yaml", "targets.yaml")
 REPO_RE = r"^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]{1,100}$"
 MODEL_ID_RE = r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$"
 HOST_RE = r"^\.?[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}[A-Za-z0-9])?)*$"
@@ -442,8 +446,24 @@ class EgressConfig(Strict):
 
 
 # ----------------------------------------------------------------------------------- profile
+QUIET_HOURS_RE = r"^([01]\d|2[0-3]):[0-5]\d-([01]\d|2[0-3]):[0-5]\d$"
+
+
 class TelegramProfile(Strict):
     user_id: NonNegInt = 0  # 0 = not configured; the Telegram front-end stays disabled
+    # DESIGN §14.13.2, §14.20.6: the owner's IANA zone (quiet hours, digests) and quiet hours HH:MM-HH:MM
+    # (may wrap midnight); unset = UTC and no quiet hours.
+    timezone: Annotated[str, Field(min_length=1, max_length=64)] = "UTC"
+    quiet_hours: Annotated[str, Field(pattern=QUIET_HOURS_RE)] | None = None
+
+    @field_validator("timezone")
+    @classmethod
+    def _zone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown IANA time zone {value!r}") from exc
+        return value
 
 
 class KiroProfile(Strict):
@@ -559,6 +579,85 @@ class ModelsConfig(Strict):
         return self
 
 
+# ---------------------------------------------------------------------------------- telegram
+HHMM_RE = r"^([01]\d|2[0-3]):[0-5]\d$"
+WEEKLY_RE = r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun) ([01]\d|2[0-3]):[0-5]\d$"
+
+
+class TgInterval(Strict):
+    min_edit_interval_s: Annotated[int, Field(ge=1, le=3600)]
+
+
+class DashboardConfig(TgInterval):
+    min_edit_interval_s: Annotated[int, Field(ge=30, le=3600)] = 30  # §14.17.4: dashboard <= 1 edit / 30 s
+
+
+class StatusCardConfig(TgInterval):
+    min_edit_interval_s: Annotated[int, Field(ge=60, le=3600)] = 60
+
+
+class ProgressConfig(TgInterval):
+    min_edit_interval_s: Annotated[int, Field(ge=5, le=3600)] = 5
+
+
+class DraftsConfig(Strict):
+    min_interval_s: Annotated[float, Field(ge=1.0, le=10.0)] = 1.0
+    heartbeat_s: Annotated[int, Field(ge=5, le=20)] = 20  # a draft at least every 20 s (§14.12.1)
+
+
+class DigestConfig(Strict):
+    daily: Annotated[str, Field(pattern=HHMM_RE)] = "21:30"
+    weekly: Annotated[str, Field(pattern=WEEKLY_RE)] = "Sun 18:00"
+
+
+class EffectsConfig(Strict):
+    merged: Annotated[str, Field(pattern=r"^[0-9]{1,32}$")] | None = None  # message_effect_id (§14.23 item 5)
+
+
+class TgAttachmentsConfig(Strict):
+    max_mb: Annotated[int, Field(ge=1, le=20)] = 20
+    album_window_s: Annotated[float, Field(ge=0.5, le=5.0)] = 1.5
+
+
+class ReviewMirrorConfig(Strict):
+    enabled: bool = False  # ADR-0019 C; takes effect only after `ossctl review-mirror enable` (U9)
+    poll_pending_s: Annotated[int, Field(ge=30, le=3600)] = 60
+    poll_other_s: Annotated[int, Field(ge=60, le=86400)] = 600
+
+
+class TelegraphConfig(Strict):
+    enabled: bool = False  # §14.12.8; never automatic
+    offer_min_chars: Annotated[int, Field(ge=200, le=60000)] = 1500
+    max_content_kb: Annotated[int, Field(ge=1, le=60)] = 60
+    author_name: Annotated[str, Field(max_length=128)] = ""
+
+
+class FeaturesConfig(Strict):
+    enabled: list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]] = Field(default_factory=list)
+
+
+class TelegramConfig(Strict):
+    """``config/telegram.yaml`` (DESIGN §14.20.3): presentation only; nothing here can approve,
+    publish or raise a limit. Opt-in surfaces (mirror, Telegraph) stay off until a confirmed
+    ``/reload`` plus their own enable step (U9)."""
+
+    version: Literal[1] = 1
+    topics: Literal["auto", "off"] = "auto"
+    rich_views_default: Literal["auto", "on", "off"] = "auto"
+    loud_cards_per_hour: Annotated[int, Field(ge=0, le=20)] = 2
+    dashboard: DashboardConfig = DashboardConfig()
+    status_card: StatusCardConfig = StatusCardConfig()
+    progress: ProgressConfig = ProgressConfig()
+    drafts: DraftsConfig = DraftsConfig()
+    stale_message_minutes: Annotated[int, Field(ge=1, le=1440)] = 10
+    digest: DigestConfig = DigestConfig()
+    effects: EffectsConfig = EffectsConfig()
+    attachments: TgAttachmentsConfig = TgAttachmentsConfig()
+    review_mirror: ReviewMirrorConfig = ReviewMirrorConfig()
+    telegraph: TelegraphConfig = TelegraphConfig()
+    features: FeaturesConfig = FeaturesConfig()
+
+
 # ----------------------------------------------------------------------------------- loading
 def _format_validation(exc: ValidationError) -> list[str]:
     out = []
@@ -587,11 +686,13 @@ class ConfigBundle:
     targets: TargetsConfig
     egress: EgressConfig
     profile: ProfileConfig
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
 
 
 def parse_bundle(files: Mapping[str, bytes]) -> ConfigBundle:
-    """Validate the four snapshot files together; collects every file's errors."""
-    missing = [n for n in SNAPSHOT_FILES if n not in files]
+    """Validate the snapshot files together; collects every file's errors. ``telegram.yaml`` is
+    optional (schema defaults when absent); the other four are required."""
+    missing = [n for n in REQUIRED_SNAPSHOT_FILES if n not in files]
     extra = [n for n in files if n not in SNAPSHOT_FILES]
     errors: dict[str, list[str]] = {n: ["file missing"] for n in missing}
     for n in extra:
@@ -602,6 +703,7 @@ def parse_bundle(files: Mapping[str, bytes]) -> ConfigBundle:
         "targets.yaml": TargetsConfig,
         "egress.yaml": EgressConfig,
         "profile.yaml": ProfileConfig,
+        "telegram.yaml": TelegramConfig,
     }
     for name, model in models.items():
         if name not in files:
@@ -616,11 +718,13 @@ def parse_bundle(files: Mapping[str, bytes]) -> ConfigBundle:
     targets = parsed["targets.yaml"]
     egress = parsed["egress.yaml"]
     profile = parsed["profile.yaml"]
+    telegram = parsed.get("telegram.yaml", TelegramConfig())
     assert isinstance(policy, PolicyConfig)
     assert isinstance(targets, TargetsConfig)
     assert isinstance(egress, EgressConfig)
     assert isinstance(profile, ProfileConfig)
-    return ConfigBundle(policy=policy, targets=targets, egress=egress, profile=profile)
+    assert isinstance(telegram, TelegramConfig)
+    return ConfigBundle(policy=policy, targets=targets, egress=egress, profile=profile, telegram=telegram)
 
 
 def parse_models(data: bytes) -> ModelsConfig:

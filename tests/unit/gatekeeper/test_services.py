@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from telegram.ext import CallbackQueryHandler, MessageHandler
+from telegram.ext import CallbackQueryHandler, MessageHandler, TypeHandler
 
 from ossbot.gatekeeper.app import create_app
 from ossbot.gatekeeper.context import AppContext
@@ -38,7 +38,7 @@ def test_frontend_built_with_proxy_and_handlers(ctx: AppContext, monkeypatch: py
     assert [type(s) for s in services] == [ReconcileService, TelegramFrontend]
     application = build_application("123456:NOT-A-REAL-TOKEN", Handlers(ctx))
     kinds = {type(h) for group in application.handlers.values() for h in group}
-    assert kinds == {CallbackQueryHandler, MessageHandler}
+    assert kinds == {CallbackQueryHandler, MessageHandler, TypeHandler}  # TypeHandler: 10.3 stop updates
 
 
 async def test_services_start_before_requests_and_stop(ctx: AppContext) -> None:
