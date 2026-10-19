@@ -15,7 +15,24 @@ agent:
   # applied after platform_toolsets; "always removed" (configuration.md "Global Toolset Disable")
   disabled_toolsets: [{{ disabled | join(", ") }}]
   image_input_mode: native      # never the lossy vision_analyze pre-description (image_routing.py)
+{% if github_tools %}
+# GHMCP-4: the read-only GitHub MCP server (tiers research and self_improve). ossbot-github-mcp starts
+# github-mcp-server with fixed --read-only flags after a startup check that refuses any write tool; the
+# read token comes from hermes.env; egress only through squid 3141.
+mcp_servers:
+  github:
+    command: /opt/ossbot/bin/ossbot-github-mcp
+    args: []
+    env:
+      GITHUB_READ_TOKEN: "${GITHUB_READ_TOKEN}"
+      HOME: /home/hermes
+      HTTPS_PROXY: http://10.212.0.2:3141
+      https_proxy: http://10.212.0.2:3141
+    tools:
+      include: [{{ github_tools | join(", ") }}]
+{% else %}
 mcp_servers: {}
+{% endif %}
 tools:
   tool_search:
     enabled: "off"              # M8: no tool_search/tool_describe/tool_call bridge

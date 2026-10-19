@@ -8,6 +8,7 @@ import pytest
 from ruamel.yaml import YAML
 
 from ossbot.common.control_flags import HERMES_TIERS, HermesTier
+from ossbot.common.github_mcp_tools import READ_TOOLS
 from ossbot.ctl import hermes_render as hr
 from ossbot.gatekeeper.chat import hermes_surface as hs
 
@@ -28,7 +29,16 @@ def test_surface_per_tier(tier: HermesTier) -> None:
     assert set(hs.ALWAYS_DISABLED) <= set(disabled)
     assert ("skills" in enabled) is (tier == "self_improve")
     assert ("web" in enabled) is (tier != "locked")
-    assert doc["mcp_servers"] == {}
+    # GHMCP-4: the read-only GitHub MCP server only above locked, through the wrapper, read tools only
+    if tier == "locked":
+        assert doc["mcp_servers"] == {} and "mcp-github" not in enabled
+    else:
+        assert "mcp-github" in enabled and set(doc["mcp_servers"]) == {"github"}
+        gh = doc["mcp_servers"]["github"]
+        assert gh["command"] == "/opt/ossbot/bin/ossbot-github-mcp" and gh["args"] == []
+        assert gh["env"]["GITHUB_READ_TOKEN"] == "${GITHUB_READ_TOKEN}"  # interpolated by Hermes from hermes.env
+        assert gh["env"]["HTTPS_PROXY"] == "http://10.212.0.2:3141"
+        assert gh["tools"]["include"] == list(READ_TOOLS)
     assert doc["tools"]["tool_search"]["enabled"] == "off"  # a string, not YAML false
 
 

@@ -227,6 +227,39 @@ _hermes_sync() {
   as_hermes env "${env[@]}" /opt/ossbot/bin/uv sync --frozen --no-dev "${extras[@]}" --project "$dir" --quiet
 }
 
+# _github_mcp_host: GHMCP-4, the read-only GitHub MCP server for Hermes: the pinned release binary
+# (sha256-verified) and the ossbot-github-mcp wrapper (fixed --read-only flags + startup check), both
+# root-owned 0755 in /opt/ossbot/bin; Hermes starts only the wrapper (managed config, tiers research+).
+_github_mcp_host() {
+  local version url sha bin=/opt/ossbot/bin/github-mcp-server wrap=/opt/ossbot/bin/ossbot-github-mcp have tmp
+  local src=/opt/ossbot/app/src/ossbot/sandbox_tools/github_mcp.py
+  version=$(lock_get github_mcp_server.version)
+  url=$(lock_get github_mcp_server.url)
+  sha=$(lock_get github_mcp_server.sha256)
+  [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && $sha =~ ^[0-9a-f]{64}$ ]] || die "github_mcp_server not pinned"
+  [[ $url == https://github.com/github/github-mcp-server/releases/download/* ]] || die "github_mcp_server.url"
+  ensure_dir /opt/ossbot/bin root root 0755
+  have=""
+  if [[ -f $bin && ! -L $bin ]]; then
+    have=$( (as_hermes "$bin" --version 2>/dev/null || true) | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)
+  fi
+  if [[ $have != "$version" ]]; then
+    tmp=$(mktemp -d /var/lib/ossbot/ghmcp.XXXXXX)
+    download_verified "$url" "$sha" "$tmp/ghmcp.tar.gz"
+    tar -xzf "$tmp/ghmcp.tar.gz" -C "$tmp" --no-same-owner github-mcp-server
+    refuse_link "$bin"
+    install -o root -g root -m 0755 "$tmp/github-mcp-server" "$bin"
+    rm -rf "$tmp"
+    mark_changed "github-mcp-server ${have:-absent} -> $version"
+  fi
+  [[ -f $src && ! -L $src ]] || die "app-deploy first ($src missing)"
+  if [[ ! -f $wrap || -L $wrap ]] || ! cmp -s "$src" "$wrap"; then
+    refuse_link "$wrap"
+    install -o root -g root -m 0755 "$src" "$wrap"
+    mark_changed "file $wrap"
+  fi
+}
+
 step_hermes() {
   local tag tag_object commit repo lockfd
   tag=$(lock_get hermes.tag)
@@ -275,6 +308,7 @@ step_hermes() {
     install -o root -g hermes -m 0640 "$OSSBOT_REPO/hermes/config/dotenv" "$envfile"
     mark_changed "file $envfile"
   fi
+  _github_mcp_host
   # the tool surface: Hermes' managed scope, rendered by root for the active tier
   ensure_dir "$HERMES_MANAGED" root root 0755
   local out

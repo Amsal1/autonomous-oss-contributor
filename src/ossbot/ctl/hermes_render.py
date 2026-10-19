@@ -17,10 +17,11 @@ from pathlib import Path
 
 import jinja2
 
+from ossbot.common import github_mcp_tools
 from ossbot.common.config import ConfigError, parse_bundle
 from ossbot.common.control_flags import HERMES_TIERS, HermesTier, read_hermes_tier
 from ossbot.common.snapshot import read_current
-from ossbot.gatekeeper.chat.hermes_surface import allowed_toolsets, disabled_toolsets
+from ossbot.gatekeeper.chat.hermes_surface import GITHUB_TOOLSET, allowed_toolsets, disabled_toolsets
 
 APP = Path("/opt/ossbot/app")
 SNAPSHOT_ROOT = Path("/srv/ossbot/config-snapshot")
@@ -32,8 +33,12 @@ CONTROL_DIR = Path("/var/lib/ossbot/control")
 
 def render(tier: HermesTier, template: Path = TEMPLATE) -> str:
     env = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=False, keep_trailing_newline=True)  # noqa: S701 - YAML, not HTML
+    toolsets = list(allowed_toolsets(tier))
     text = env.from_string(template.read_text(encoding="utf-8")).render(
-        tier=tier, toolsets=list(allowed_toolsets(tier)), disabled=list(disabled_toolsets(tier))
+        tier=tier,
+        toolsets=toolsets,
+        disabled=list(disabled_toolsets(tier)),
+        github_tools=list(github_mcp_tools.READ_TOOLS) if GITHUB_TOOLSET in toolsets else [],
     )
     return text
 

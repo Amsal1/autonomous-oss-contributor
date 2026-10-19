@@ -22,15 +22,30 @@ def test_skills_only_in_self_improve() -> None:
 def test_research_equals_locked_while_web_routing_is_unconfirmed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hs, "HERMES_WEB_VIA_PROXY", False)
     assert hs.allowed_toolsets("locked") == ("memory", "todo", "session_search", "ossbot")
-    assert hs.allowed_toolsets("research") == hs.allowed_toolsets("locked")
-    assert hs.allowed_toolsets("self_improve") == (*hs.LOCKED, "skills")
+    assert hs.allowed_toolsets("research") == (*hs.LOCKED, "mcp-github")
+    assert hs.allowed_toolsets("self_improve") == (*hs.LOCKED, "mcp-github", "skills")
 
 
 def test_research_adds_web_now_that_routing_is_confirmed() -> None:
     assert hs.HERMES_WEB_VIA_PROXY is True  # PLAN item 33 (ADR-0002 addendum FEAT-007)
-    assert hs.allowed_toolsets("research") == (*hs.LOCKED, "web")
-    assert hs.TIER_TOOLSETS["self_improve"] == (*hs.LOCKED, "web", "skills")
-    assert "web" not in hs.allowed_toolsets("locked")
+    assert hs.allowed_toolsets("research") == (*hs.LOCKED, "web", "mcp-github")
+    assert hs.TIER_TOOLSETS["self_improve"] == (*hs.LOCKED, "web", "mcp-github", "skills")
+    assert "web" not in hs.allowed_toolsets("locked") and "mcp-github" not in hs.allowed_toolsets("locked")
+
+
+def test_github_mcp_read_tools_pass_above_locked_and_writes_are_drift() -> None:
+    """GHMCP-3/4: only the pinned read-only tools in ``mcp-github``; a write tool is drift (soft kill)."""
+    gh = {"name": "mcp-github", "enabled": True, "tools": ["mcp_github_get_me", "mcp_github_search_code"]}
+    base = [_entry("memory", ["memory"])]
+    assert hs.evaluate_toolsets(_wrap([*base, gh]), "research").outcome == "ok"
+    assert hs.evaluate_toolsets(_wrap([*base, gh]), "self_improve").outcome == "ok"
+    assert hs.evaluate_toolsets(_wrap([*base, gh]), "locked").outcome == "drift"
+    for bad in ("mcp_github_create_pull_request", "mcp_github_push_files", "get_me", "mcp_other_get_me"):
+        res = hs.evaluate_toolsets(_wrap([*base, {**gh, "tools": [*gh["tools"], bad]}]), "research")  # type: ignore[list-item]
+        assert res.outcome == "drift" and bad in res.unexpected, bad
+    # a GitHub-shaped tool name outside the mcp-github toolset is drift too
+    res = hs.evaluate_toolsets(_wrap([*base, _entry("memory", ["mcp_github_get_me"])]), "research")
+    assert res.outcome == "drift"
 
 
 def _entry(name: str, tools: list[str], enabled: bool = True, **extra: object) -> dict[str, object]:

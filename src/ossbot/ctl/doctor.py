@@ -722,6 +722,58 @@ def check_github(quick: bool) -> list[Result]:
     return out
 
 
+GITHUB_MCP_WRAPPER = Path("/opt/ossbot/bin/ossbot-github-mcp")
+GITHUB_MCP_PUBLIC_REPO = "github/github-mcp-server"  # any public repository; its root listing is read
+
+
+def check_github_mcp(quick: bool) -> Result:
+    """GHMCP-3/4: the read-only GitHub MCP server as Hermes runs it (uid hermes, squid 3141): the
+    startup check (no write tool), and unless ``quick`` ``get_me`` equals ``github_login`` and a public
+    repository's root is listed. The token goes only into the child's environment; output is metadata."""
+    name = "github mcp (read-only)"
+    if not GITHUB_MCP_WRAPPER.is_file():
+        return Result(WARN, name, "not installed", "bootstrap -Only provision")
+    missing = _secret("hermes.env", "GITHUB_READ_TOKEN", name)
+    if missing:
+        return missing
+    proxy = "http://10.212.0.2:3141"
+    env = {"HOME": "/home/hermes", "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HTTPS_PROXY": proxy,
+           "https_proxy": proxy, "GITHUB_READ_TOKEN": env_value("hermes.env", "GITHUB_READ_TOKEN") or ""}  # fmt: skip
+    mode = ["--check"] if quick else ["--doctor", GITHUB_MCP_PUBLIC_REPO]
+    try:
+        proc = subprocess.run(["/usr/sbin/runuser", "-u", "hermes", "--", str(GITHUB_MCP_WRAPPER), *mode], env=env,
+                              cwd="/", capture_output=True, text=True, timeout=90, check=False)  # fmt: skip
+    except (OSError, subprocess.SubprocessError) as exc:
+        return Result(FAIL, name, type(exc).__name__)
+    try:
+        doc = json.loads(proc.stdout.strip().splitlines()[-1]) if proc.stdout.strip() else {}
+    except ValueError:
+        doc = {}
+    if not isinstance(doc, dict) or not doc:
+        return Result(FAIL, name, f"exit {proc.returncode}: {proc.stderr.strip()[-200:]}",
+                      "the startup check refused the server or it could not start")  # fmt: skip
+    if doc.get("refused"):
+        return Result(FAIL, name, f"write tools listed: {', '.join(map(str, doc['refused']))[:200]}")
+    if quick:
+        return Result(PASS if doc.get("ok") else FAIL, name, f"{doc.get('tools')} read-only tools")
+    want = _top_profile_value("github_login")
+    login = doc.get("login")
+    ok = bool(doc.get("ok")) and isinstance(login, str) and want is not None and login.lower() == want.lower()
+    detail = f"get_me {login}, {GITHUB_MCP_PUBLIC_REPO} root {doc.get('entries')} entries"
+    return Result(PASS if ok else FAIL, name, detail, "" if ok else "check GITHUB_READ_TOKEN and github_login")
+
+
+def _top_profile_value(key: str) -> str | None:
+    from ossbot.common.yamlio import YamlError, safe_load  # noqa: PLC0415
+
+    try:
+        data = safe_load((Paths.default().config_dir / "profile.yaml").read_bytes())
+    except (OSError, YamlError):
+        return None
+    value = data.get(key) if isinstance(data, dict) else None
+    return None if value is None else str(value)
+
+
 def check_telegram(quick: bool) -> list[Result]:
     out: list[Result] = []
     missing = _secret("gatekeeper.env", "TELEGRAM_BOT_TOKEN", "Telegram bot token")
@@ -820,6 +872,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps += [
         check_firewall, check_squid_verifiable, check_gatekeeper, check_egress_mode, check_hermes_tier,
         lambda: check_github(quick),
+        lambda: check_github_mcp(quick),
         lambda: check_telegram(quick),
         check_identity_snapshot, check_audit, check_disk, check_lock_drift,
     ]  # fmt: skip

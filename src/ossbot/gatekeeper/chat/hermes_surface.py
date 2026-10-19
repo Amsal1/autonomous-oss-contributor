@@ -15,6 +15,7 @@ from typing import Any, Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationError
 
+from ossbot.common import github_mcp_tools
 from ossbot.common.control_flags import HermesTier
 
 LOCKED: tuple[str, ...] = ("memory", "todo", "session_search", "ossbot")  # the §15.1 allowlist
@@ -26,8 +27,14 @@ HERMES_WEB_VIA_PROXY = True
 ALWAYS_DISABLED: tuple[str, ...] = ("terminal", "code_execution", "file", "browser", "delegation", "cronjob")
 
 
+# GHMCP-4: the read-only GitHub MCP server (``mcp_servers.github`` in the rendered config) is a
+# research tool, so it joins ``research`` and ``self_improve``; Hermes registers its tools under this
+# toolset, and any tool there outside ``github_mcp_tools.READ_TOOLS`` is drift.
+GITHUB_TOOLSET = "mcp-github"
+
+
 def _research() -> tuple[str, ...]:
-    return (*LOCKED, "web") if HERMES_WEB_VIA_PROXY else LOCKED
+    return (*LOCKED, "web", GITHUB_TOOLSET) if HERMES_WEB_VIA_PROXY else (*LOCKED, GITHUB_TOOLSET)
 
 
 def allowed_toolsets(tier: HermesTier) -> tuple[str, ...]:
@@ -57,6 +64,7 @@ TOOLSET_TOOLS: dict[str, frozenset[str]] = {
 }
 PLUGIN_TOOLSET = "ossbot"
 PLUGIN_PREFIX = "ossbot_"
+GITHUB_PREFIX = "mcp_github_"  # [VERIFY] live in FEAT-007 round 3 (VERIFICATION)
 BRIDGE_TOOLS = frozenset({"tool_search", "tool_describe", "tool_call"})
 # §15.1: every built-in toolset outside the allowlist, listed in agent.disabled_toolsets; a tier
 # removes from it only what it adds (web for research, skills for self_improve).
@@ -66,6 +74,11 @@ BUILTIN_DISABLED: tuple[str, ...] = (
     "clarify", "x_search", "desktop_ui", "project", "context_engine", "debugging", "coding", "discord",
     "discord_admin", "feishu_doc", "feishu_drive", "yuanbao",
 )  # fmt: skip
+
+
+def github_read_tool(tool: str) -> bool:
+    """A tool of the GitHub MCP toolset as Hermes names it (``mcp_github_<tool>``) within the read list."""
+    return tool.startswith(GITHUB_PREFIX) and tool[len(GITHUB_PREFIX) :] in github_mcp_tools.READ_TOOLS
 
 
 def disabled_toolsets(tier: HermesTier) -> tuple[str, ...]:
@@ -132,7 +145,8 @@ def evaluate_toolsets(payload: Any, tier: HermesTier) -> SurfaceResult:
             unexpected.append(f"toolset {entry.name}")
         for tool in entry.tools:
             plugin_tool = entry.name == PLUGIN_TOOLSET and tool.startswith(PLUGIN_PREFIX)
-            if tool in BRIDGE_TOOLS or not (plugin_tool or tool in tools_ok):
+            github_tool = entry.name == GITHUB_TOOLSET and entry.name in allowed_sets and github_read_tool(tool)
+            if tool in BRIDGE_TOOLS or not (plugin_tool or github_tool or tool in tools_ok):
                 unexpected.append(tool)
     if unexpected:
         return SurfaceResult("drift", f"tier {tier}", tuple(dict.fromkeys(unexpected)))
