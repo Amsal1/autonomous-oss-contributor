@@ -5,9 +5,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+
+import pytest
 
 from tests.acp.conftest import FakeRun, ask, client, models_file
 
@@ -52,6 +55,34 @@ def test_switch_sends_exactly_one_set_config_option(fake: Callable[..., FakeRun]
     assert c.last_turn.model == "claude-opus-5.5"
     assert run.methods().count("initialize") == 1
     assert "session/set_model" not in run.methods()
+    c.close()
+
+
+YAML_MODELS = """\
+version: 1
+default: {model: claude-opus-5.5, effort: high}   # a comment
+roles:
+  chat:       { model: claude-sonnet-5.5, effort: medium }
+  vision:     { model: chat }
+  test:       { model: claude-haiku-4.5, effort: low, fallback: none }
+fallbacks: [claude-opus-5.5, claude-sonnet-5.5]
+"""
+
+
+def test_the_real_yaml_models_file_is_read_without_pyyaml(
+    fake: Callable[..., FakeRun], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Hermes v0.22.2 ships ruamel.yaml and no PyYAML (found live in item 38): config/models.yaml must load."""
+    monkeypatch.setitem(sys.modules, "yaml", None)  # import yaml -> ImportError
+    path = tmp_path / "models.yaml"
+    path.write_text(YAML_MODELS, encoding="utf-8")
+    run = fake(session={"honour_meta_model": True})
+    c = client(run, tmp_path, models=path, request_roles=frozenset({"test"}))
+    ask(c)
+    c.chat.completions.create(model="role:test", messages=[{"role": "user", "content": "hi"}], timeout=20)
+    metas = [f["params"]["_meta"]["kiro"] for f in run.requests("session/new")]
+    assert [m["modelId"] for m in metas] == ["claude-sonnet-5.5", "claude-haiku-4.5"]
+    assert [m["effortLevel"] for m in metas] == ["medium", "low"]
     c.close()
 
 

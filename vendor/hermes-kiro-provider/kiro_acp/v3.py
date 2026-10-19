@@ -191,9 +191,14 @@ def _load_yaml(text: str) -> Any:
         return json.loads(text)
     except ValueError:
         pass
-    import yaml  # Hermes dependency; imported only inside Hermes
+    # Hermes v0.22.2 ships ruamel.yaml, not PyYAML (found live in FEAT-007 item 38); either one will do.
+    try:
+        from ruamel.yaml import YAML
+    except ImportError:
+        import yaml
 
-    return yaml.safe_load(text)
+        return yaml.safe_load(text)
+    return YAML(typ="safe", pure=True).load(text)
 
 
 # ---------------------------------------------------------------------------- violation hook
@@ -458,6 +463,10 @@ class KiroV3Client:
                 time.monotonic() - started,
                 result.stop_reason,
             )
+            t = self.last_turn
+            # metadata only (no prompt or answer text): which model a turn really ran on
+            log.info("kiro_acp turn: role=%s model=%s effort=%s config_sets=%d images=%d stop=%s %.1fs",
+                     t.role, t.model, t.effort, len(t.config_sets), t.images, t.stop_reason, t.latency_s)  # fmt: skip
             return result
 
     def _create_chat_completion(
