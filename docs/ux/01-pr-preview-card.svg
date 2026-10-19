@@ -125,20 +125,20 @@
   <text class="note" x="440" y="604">• PR title = publish bytes: escaped in &lt;code&gt;, scanned,</text>
   <text class="note" x="440" y="620">  never defused or redacted (U14); a hit withholds</text>
   <text class="note" x="440" y="636">  the card. Shown in full (wrapped, up to 256 chars),</text>
-  <text class="note" x="440" y="648">  never cut; 📋 Copy title copies it unchanged.</text>
-  <text class="note b" x="440" y="654">📝 Edit text → picker (reply to card)</text>
-  <rect x="440" y="660" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="526" y="679">✏️ Title</text>
-  <rect x="616" y="660" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="702" y="679">✏️ Body</text>
-  <rect x="440" y="694" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="526" y="713">📄 Body as file</text>
-  <rect x="616" y="694" width="172" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="702" y="713">📋 Copy title</text>
-  <rect x="440" y="728" width="348" height="30" rx="9" fill="#5f7d64"/>
-  <text class="btn" x="614" y="747">↩️ Clear my edits</text>
-  <text class="note" x="440" y="778">• Body as file: .md/.txt ≤ 64 KiB, strict UTF-8. Any</text>
-  <text class="note" x="440" y="794">  accepted edit → new card; this one turns stale.</text>
-  <text class="note" x="440" y="822">Mode badge flips to "🔴 LIVE — opens a public PR"</text>
-  <text class="note" x="440" y="838">when dry-run is off; any toggle re-issues cards.</text>
+  <text class="note" x="440" y="652">  never cut; 📋 Copy title copies it unchanged.</text>
+  <text class="note b" x="440" y="670">📝 Edit text → picker (reply to card)</text>
+  <rect x="440" y="676" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="526" y="695">✏️ Title</text>
+  <rect x="616" y="676" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="702" y="695">✏️ Body</text>
+  <rect x="440" y="710" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="526" y="729">📄 Body as file</text>
+  <rect x="616" y="710" width="172" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="702" y="729">📋 Copy title</text>
+  <rect x="440" y="744" width="348" height="30" rx="9" fill="#5f7d64"/>
+  <text class="btn" x="614" y="763">↩️ Clear my edits</text>
+  <text class="note" x="440" y="794">• Body as file: .md/.txt ≤ 64 KiB, strict UTF-8. Any</text>
+  <text class="note" x="440" y="810">  accepted edit → new card; this one turns stale.</text>
+  <text class="note" x="440" y="838">Mode badge flips to "🔴 LIVE — opens a public PR"</text>
+  <text class="note" x="440" y="854">when dry-run is off; any toggle re-issues cards.</text>
 </svg>

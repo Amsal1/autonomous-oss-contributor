@@ -15,9 +15,12 @@ from ossbot.common.hashing import sha256_text
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram import cards
+from ossbot.gatekeeper.telegram.ui import kit as k
+from ossbot.gatekeeper.telegram.ui import send as ui_send
+from ossbot.gatekeeper.telegram.ui.limits import COPY_TEXT_MAX
 from tests.conftest import packaged_contribution
 from tests.telegram import golden
-from tests.telegram.reviewkit import publish, text, token, view_message
+from tests.telegram.reviewkit import latest, publish, text, token, view_message
 from tests.telegram.tgharness import TgRig, make_rig
 
 # 256 characters with every escaping hazard and a command-looking word that must not be defused
@@ -60,6 +63,16 @@ async def test_the_full_title_on_card_confirm_and_explorer(rig: TgRig) -> None:
     await rig.tap(token(rig, explorer, "9"), message=explorer)
     match = re.search(r"Title <code>(.*?)</code>", text(rig, explorer), re.S)
     assert match is not None and html.unescape(match.group(1)) == TITLE
+    copy = next(b for row in rig.buttons(latest(rig, explorer)) for b in row if b["text"] == "📋 Copy title")
+    assert copy["copy_text"] == {"text": TITLE}  # copied in full, never cut (F009-R1-7)
+
+
+def test_an_over_long_copy_text_drops_the_button_instead_of_cutting(ctx: AppContext) -> None:
+    view = k.View(kind="explorer", blocks=[k.Block((k.Lines((k.line("x"),)),))],
+                  rows=[[k.copy_button("📋 Copy title", "t" * (COPY_TEXT_MAX + 1)),
+                         k.copy_button("📋 Ok", "ok")]])  # fmt: skip
+    markup = ui_send.keyboard(view, [[None, None]])
+    assert markup == {"inline_keyboard": [[{"text": "📋 Ok", "copy_text": {"text": "ok"}}]]}
 
 
 def test_golden_card_with_a_256_character_title(ctx: AppContext) -> None:

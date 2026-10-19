@@ -61,6 +61,22 @@ def test_class_order_and_gates(ctx: AppContext) -> None:
     assert oldest[0] == (2, pr_cid) and oldest[-1] == (1, early)
 
 
+def test_maintainer_fix_expired_items_and_size_cards(ctx: AppContext) -> None:
+    """F009-R1-8: a maintainer-triggered push_update is class 0; expired approvals aren't listed even
+    before the sweep; ceiling-hit (class 2) and RESCOPE_REQUIRED (class 3) items are listed."""
+    fixed_cid, fixed = packaged_contribution(ctx, pr_number=8)
+    with db.transaction(ctx.conn):
+        ctx.audit.append("uid:2001/worker", "transition", {"from": "WATCHING", "to": "IMPLEMENTING",
+                                                           "evidence": {"reason": "fix_round"}}, fixed_cid)  # fmt: skip
+    _approve(ctx, fixed, hours=60)
+    _, gone = packaged_contribution(ctx)
+    _approve(ctx, gone, hours=-1)  # past expires_at, still 'pending' until the sweep
+    ceiling = insert_contribution(ctx, State.RESCOPE_REQUIRED, size_report_json='{"rescope_reason": "ceiling"}')
+    overrun = insert_contribution(ctx, State.RESCOPE_REQUIRED, size_report_json='{"rescope_reason": "overrun"}')
+    order = [(i.class_rank, i.subject, i.family) for i in queue.ordered(ctx)]
+    assert order == [(0, fixed_cid, "a"), (2, ceiling, "r"), (3, overrun, "r")]
+
+
 def test_autonomous_proposals_rank_by_score_not_target_priority() -> None:
     when = datetime(2026, 10, 19, tzinfo=UTC)
     a = queue.Item(1, 4, when, 9, "t", "p", "c_A", "a", score=0.2)
@@ -96,13 +112,13 @@ async def test_queue_command_and_open_keep_the_expiry(rig: TgRig) -> None:
     await rig.say("/queue")
     mid = sent_with(rig, "Queue")
     assert "📥 <b>Queue</b> · 1 open" in text(rig, mid)
-    assert labels(rig, mid) == ["📥 Open 1", "⬆️ Oldest", "✅ 🎯 Priority"]
+    assert labels(rig, mid) == ["📥 Open 1", "⬆️ Oldest first", "✅ 🎯 By priority"]
     await rig.tap(token(rig, mid, "📥 Open 1"), message=mid)
     assert toast(rig) == "Re-sent the card"
     new = newest_approval(ctx, action)
     assert new != card.approval
     assert db.one(ctx.conn, "SELECT expires_at FROM approvals WHERE id = ?", (new,))[0] == before
     await rig.tap(token(rig, mid, "⬆️ Oldest"), message=mid)
-    assert labels(rig, mid)[-2:] == ["✅ ⬆️ Oldest", "🎯 Priority"]
+    assert labels(rig, mid)[-2:] == ["✅ ⬆️ Oldest first", "🎯 By priority"]
     assert cid in str(ctx.conn.execute("SELECT cid FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
                                        " WHERE a.id = ?", (new,)).fetchone()[0])  # fmt: skip

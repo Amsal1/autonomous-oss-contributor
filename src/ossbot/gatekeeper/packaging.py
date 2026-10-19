@@ -447,7 +447,7 @@ class Packager:
         with db.transaction(ctx.conn):
             ctx.conn.execute(
                 "UPDATE contributions SET size_report_json = ?, updated_at = ? WHERE id = ?",
-                (json.dumps(report), now, cid),
+                (json.dumps({**report, "rescope_reason": reason, "rev": rev}), now, cid),  # /queue re-sends the card
             )
             outcomes.set_measured(ctx.conn, cid, report["measured_class"], now)
             ctx.state_machine.transition(cid, State.PACKAGING, State.RESCOPE_REQUIRED, Actor.GATEKEEPER,

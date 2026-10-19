@@ -29,6 +29,7 @@ from ossbot.gatekeeper.telegram.review import resolve
 from ossbot.gatekeeper.telegram.review.resolve import CID_PATTERN, ReviewArg
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
+from ossbot.gatekeeper.telegram.ui.limits import chunk_verbatim
 from ossbot.gatekeeper.telegram.ui.sanitize import undefuse
 
 MARKER = "<!-- ossbot:action="
@@ -76,9 +77,10 @@ def open_picker(ctx: AppContext, cid: str, rev: int, action_id: str | None, kind
 
 def _prompt(ctx: AppContext, kind: str, text: list[k.Line], verbatim: str, placeholder: str, *, cid: str,
             rev: int | None, action_id: str | None, reply_to: int | None) -> None:  # fmt: skip
-    shown = verbatim if len(verbatim) <= QUOTE_MAX else verbatim[:QUOTE_MAX]
+    # bounded by its escaped length (a text full of "<" and "&" grows when escaped, AC 53)
+    shown = (chunk_verbatim(verbatim, QUOTE_MAX) or [""])[0]
     blocks = [k.Block((k.Lines(tuple(text)),)), k.Block((k.PreBlock(shown, verbatim=True),), name="current")]
-    if len(verbatim) > QUOTE_MAX:
+    if len(shown) < len(verbatim):
         blocks.append(k.Block((k.Lines((k.line(f"… ({len(verbatim):,} characters; the full text is in the parts"
                                                " under the card)"),)),)))  # fmt: skip
     view = k.View(kind="confirm_prompt", blocks=blocks, cid=cid, rev=rev, action_id=action_id,

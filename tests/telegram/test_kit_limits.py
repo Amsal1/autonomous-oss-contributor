@@ -2,7 +2,8 @@
 
 Every view builder renders within its budget in classic and rich mode with random untrusted input;
 every ``callback_data`` is exactly 24 bytes; labels follow the per-row rule; every ForceReply
-placeholder constant is 1-60 characters. Item 45-47 builders are added to ``BUILDERS`` as they land.
+placeholder constant is 1-60 characters. The production builders (S1, explorer, file, interdiff, draft
+review, dashboard, proposal, rescope/ceiling, link and edit views) are fuzzed in ``test_kit_builders.py``.
 """
 
 from __future__ import annotations

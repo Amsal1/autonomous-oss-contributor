@@ -79,7 +79,7 @@ def _button_json(spec: ButtonSpec, token: str | None) -> dict[str, Any]:
     elif spec.url is not None:
         btn["url"] = spec.url
     elif spec.copy_text is not None:
-        btn["copy_text"] = {"text": spec.copy_text[:COPY_TEXT_MAX]}
+        btn["copy_text"] = {"text": spec.copy_text}  # never cut: ``keyboard`` drops an over-long one
     else:
         tok = spec.token or token
         if tok is None:
@@ -110,11 +110,22 @@ def mint(ctx: AppContext, view: View, *, chat_id: int, message_id: int | None) -
     return out
 
 
+def _copy_fits(spec: ButtonSpec) -> bool:
+    """§14.11.2: ``📋 Copy title`` copies the stored text unchanged, so a text over the Bot API limit drops
+    the button instead of being cut."""
+    if spec.copy_text is None or len(spec.copy_text) <= COPY_TEXT_MAX:
+        return True
+    log.warning("copy button %r omitted: %d > %d characters", spec.label, len(spec.copy_text), COPY_TEXT_MAX,
+                extra={"event": "copy_text_too_long"})  # fmt: skip
+    return False
+
+
 def keyboard(view: View, tokens: list[list[str | None]]) -> dict[str, Any] | None:
     if not view.rows:
         return None
-    return {"inline_keyboard": [[_button_json(s, t) for s, t in zip(row, toks, strict=True)]
-                                for row, toks in zip(view.rows, tokens, strict=True)]}  # fmt: skip
+    rows = [[_button_json(s, t) for s, t in zip(row, toks, strict=True) if _copy_fits(s)]
+            for row, toks in zip(view.rows, tokens, strict=True)]  # fmt: skip
+    return {"inline_keyboard": [r for r in rows if r]}
 
 
 # ------------------------------------------------------------------------------- payloads

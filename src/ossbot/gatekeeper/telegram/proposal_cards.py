@@ -352,7 +352,9 @@ def details_view(ctx: AppContext, cid: str, version: int, section: int = 1) -> k
         diff = version_diff(old, prop) if old is not None else []
         text = "\n".join(diff) or ("No structural change (wording only)" if old is not None else "First version.")
         elements.append(k.PreBlock(text[:3000], language="diff"))
-    blocks = [k.Block((k.Lines((crumb,)),), name="crumb"), k.Block(tuple(elements), name="section")]
+    # each element is its own optional block, dropped from the end when the section is too long (AC 53)
+    blocks = [k.Block((k.Lines((crumb,)),), name="crumb")]
+    blocks += [k.Block((e,), required=False, priority=1000 - i, name=f"e{i}") for i, e in enumerate(elements)]
     arg = {"cid": cid, "version": version}
     rows: k.Rows = [k.pager("proposal_details_nav", arg, section, len(DETAIL_SECTIONS))]
     return k.View(kind="proposal_details", blocks=blocks, rows=rows, cid=cid, rev=version, page=section)

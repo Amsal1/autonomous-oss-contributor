@@ -2,7 +2,8 @@
 the workspace (topics, menus, dashboard; §14.10) and polling.
 
 * python-telegram-bot 22.8 ``Application`` with long polling through proxy 3150
-  (``HTTPXRequest(proxy=...)``), ``allowed_updates=["message", "callback_query"]``, pending
+  (``HTTPXRequest(proxy=...)``), ``allowed_updates`` = message, callback_query and
+  stopped_message_generation (§14.2), pending
   updates processed at start (``drop_pending_updates=False``). Bot API 10.1-10.3 payloads go through
   ``do_api_request`` (``telegram/rawapi.py``).
 * Disabled (WARNING, doctor "awaiting secrets") without ``TELEGRAM_BOT_TOKEN`` or while
@@ -45,7 +46,8 @@ from telegram import Bot, InputFile
 
 log = logging.getLogger(__name__)
 TELEGRAM_PROXY = "http://10.212.0.2:3150"
-ALLOWED_UPDATES = ["message", "callback_query"]
+# §14.2: stopped_message_generation (Bot API 10.3, no ``from``) reaches Handlers.on_raw (routing rule 2)
+ALLOWED_UPDATES = ["message", "callback_query", "stopped_message_generation"]
 OUTBOX_INTERVAL_SECONDS = 1.0  # <= 1 msg/s per chat
 CONNECT_BACKOFF_MIN_S = 2.0
 CONNECT_BACKOFF_MAX_S = 60.0

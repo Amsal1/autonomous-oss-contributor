@@ -4,8 +4,9 @@ Ordering is deterministic: ``(class_rank, expires_at, -target_priority, created_
 
 * Class 0: someone is waiting (a ``comment`` on our PR).
 * Class 1: ``issue_claim`` and every 👤 user-directed preview or proposal.
-* Class 2: other ``push_update``; autonomous proposals within 6 h of expiry are promoted here.
-* Class 3: ``open_pr`` previews and skill cards.
+* Class 0 also: a ``push_update`` whose fix round a maintainer review started.
+* Class 2: other ``push_update`` and ceiling-hit cards; autonomous proposals within 6 h of expiry.
+* Class 3: ``open_pr`` previews, RESCOPE_REQUIRED cards and skill cards.
 * Class 4: autonomous proposals (CR-004 rank score, descending, instead of the target priority).
 * Class 5: other ``comment``.
 
@@ -21,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from ossbot.common.clock import from_iso
+from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.config import resolve_target
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.ui import kit as k
@@ -29,6 +30,7 @@ from ossbot.gatekeeper.telegram.ui.limits import middle_cut
 
 PER_PAGE = 5
 PROMOTE_WITHIN = timedelta(hours=6)
+RESCOPE_TTL = timedelta(hours=72)  # the rescope/ceiling card's buttons (rescope_cards.TTL)
 Sort = Literal["priority", "oldest"]
 
 
@@ -39,7 +41,7 @@ class Item:
     expires_at: datetime
     target_priority: int
     created_at: str
-    family: Literal["a", "p", "s"]
+    family: Literal["a", "p", "s", "r"]  # r: a rescope or ceiling-hit card (no approval yet)
     subject: str  # cid, or the skill name
     label: str
     score: float = 0.0
@@ -56,19 +58,34 @@ def _priority(ctx: AppContext, upstream: str) -> int:
     return int(getattr(target, "priority", 0) or 0) if target is not None else 0
 
 
+def maintainer_triggered(ctx: AppContext, cid: str) -> bool:
+    """A ``push_update`` whose fix round a maintainer review started (WATCHING -> IMPLEMENTING, fix_round)."""
+    for (data,) in ctx.conn.execute("SELECT data_json FROM audit_events WHERE cid = ? AND event = 'transition'"
+                                    " ORDER BY seq DESC", (cid,)):  # fmt: skip
+        doc = json.loads(data or "{}")
+        if doc.get("to") == "IMPLEMENTING":
+            reason = (doc.get("evidence") or {}).get("reason")
+            return doc.get("from") == "WATCHING" and reason == "fix_round"
+    return False
+
+
 def items(ctx: AppContext) -> list[Item]:
     now = ctx.clock.now()
+    live = to_iso(now)  # expired items aren't listed, even before the sweep marks them
     out: list[Item] = []
     for r in ctx.conn.execute(
         "SELECT a.id, a.expires_at, a.created_at, o.kind, o.payload_json, c.id AS cid, c.upstream, c.source,"
         " c.pr_number FROM approvals a JOIN outbound_actions o ON o.id = a.action_id JOIN contributions c"
-        " ON c.id = o.cid WHERE a.status IN ('pending','armed')"
+        " ON c.id = o.cid WHERE a.status IN ('pending','armed') AND a.expires_at > ?",
+        (live,),
     ).fetchall():
         kind = str(r["kind"])
         user = r["source"] == "user"
         if kind == "comment":
             target = json.loads(r["payload_json"]).get("target_number")
             rank = 0 if r["pr_number"] and target == r["pr_number"] else 5
+        elif kind == "push_update" and maintainer_triggered(ctx, str(r["cid"])):
+            rank = 0
         elif kind == "issue_claim" or user:
             rank = 1
         elif kind == "push_update":
@@ -84,7 +101,8 @@ def items(ctx: AppContext) -> list[Item]:
     for r in ctx.conn.execute(
         "SELECT p.id, p.expires_at, p.created_at, p.version, c.id AS cid, c.upstream, c.source, c.issue_number,"
         " c.est_class, c.score FROM proposal_approvals p JOIN contributions c ON c.id = p.cid"
-        " WHERE p.status IN ('pending','armed')"
+        " WHERE p.status IN ('pending','armed') AND p.expires_at > ?",
+        (live,),
     ).fetchall():
         expires = from_iso(r["expires_at"])
         user = r["source"] == "user"
@@ -96,9 +114,19 @@ def items(ctx: AppContext) -> list[Item]:
                         float(r["score"] or 0.0)))  # fmt: skip
     for r in ctx.conn.execute(
         "SELECT id, expires_at, created_at, skill, version FROM skill_approvals WHERE status IN ('pending','armed')"
+        " AND expires_at > ?",
+        (live,),
     ).fetchall():
         out.append(Item(2, 3, from_iso(r["expires_at"]), 0, str(r["created_at"]), "s", str(r["skill"]),
                         f"🧠 Skill {middle_cut(str(r['skill']), 30)} v{r['version']}"))  # fmt: skip
+    # items paused for a size decision: ceiling-hit (class 2) and RESCOPE_REQUIRED (class 3) cards
+    for r in ctx.conn.execute("SELECT id, upstream, updated_at, size_report_json FROM contributions WHERE state ="
+                              " 'RESCOPE_REQUIRED'"):  # fmt: skip
+        report = json.loads(r["size_report_json"] or "{}")
+        ceiling = report.get("rescope_reason") == "ceiling"
+        label = f"{'🧱 Ceiling' if ceiling else '📏 Re-approval'} · {middle_cut(str(r['upstream']), 30)}"
+        out.append(Item(2, 2 if ceiling else 3, from_iso(r["updated_at"]) + RESCOPE_TTL, _priority(ctx, r["upstream"]),
+                        str(r["updated_at"]), "r", str(r["id"]), label))  # fmt: skip
     return out
 
 
@@ -129,8 +157,8 @@ def view(ctx: AppContext, page: int = 1, sort: Sort = "priority") -> k.View:
              for i, it in enumerate(shown)]  # fmt: skip
     rows: k.Rows = [opens[i : i + 3] for i in range(0, len(opens), 3)]
     mark = {s: "✅ " if sort == s else "" for s in ("oldest", "priority")}
-    rows.append([k.button(mark["oldest"] + "⬆️ Oldest", "queue_sort", {"sort": "oldest"}),
-                 k.button(mark["priority"] + "🎯 Priority", "queue_sort", {"sort": "priority"})])  # fmt: skip
+    rows.append([k.button(mark["oldest"] + "⬆️ Oldest first", "queue_sort", {"sort": "oldest"}),
+                 k.button(mark["priority"] + "🎯 By priority", "queue_sort", {"sort": "priority"})])  # fmt: skip
     if pages > 1:
         rows.append(k.pager("queue_sort", {"sort": sort}, page, pages))
     return k.View(kind="picker", blocks=[k.Block((k.Lines(tuple(lines)),))], rows=rows[:4],

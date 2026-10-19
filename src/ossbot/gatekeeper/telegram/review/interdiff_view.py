@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import replace
+from typing import Any
 
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.review import explorer, patchview
@@ -38,18 +39,31 @@ def path_for_quote(ctx: AppContext, cid: str, rev: int, quote: str) -> str | Non
     return None
 
 
-def view(ctx: AppContext, cid: str, rev: int, action_id: str | None, page: int = 1) -> k.View:
+def _load(ctx: AppContext, cid: str, rev: int) -> tuple[dict[str, Any], str]:
     derived = ctx.gitops.derived_dir(cid, rev)
     try:
         info = json.loads((derived / "interdiff.json").read_text(encoding="utf-8"))
         text = (derived / "interdiff.patch").read_bytes().decode("utf-8", "replace")
     except (OSError, ValueError):
-        info, text = {"mode": "unavailable"}, ""
+        return {"mode": "unavailable"}, ""
+    return (info if isinstance(info, dict) else {"mode": "unavailable"}), text
+
+
+def subject(ctx: AppContext, cid: str, rev: int, action_id: str | None) -> explorer.Subject:
+    """The file-view subject over ``interdiff.patch`` (``INTERDIFF`` mode): its buttons carry
+    ``source=interdiff``, so file navigation, paging and the hunk picker stay inside the interdiff."""
+    _, text = _load(ctx, cid, rev)
+    base = explorer.subject(ctx.conn, ctx.gitops.derived_dir(cid, rev), cid, rev, action_id)
+    return replace(base, files=patchview.parse(text), source="interdiff")
+
+
+def view(ctx: AppContext, cid: str, rev: int, action_id: str | None, page: int = 1, *, index: int = 0,
+         picker_page: int | None = None, hunk_picker: int | None = None) -> k.View:  # fmt: skip
+    info, text = _load(ctx, cid, rev)
     head = (k.Const("🔀 "), k.Bold(k.Const(f"{cid} r{rev - 1} → r{rev}")))
     if info.get("mode") == "interdiff":
-        subject = explorer.subject(ctx.conn, derived, cid, rev, action_id)
-        subject = replace(subject, files=patchview.parse(text))
-        out = explorer.file_view(subject, 0, page)
+        out = explorer.file_view(subject(ctx, cid, rev, action_id), index, page, picker_page=picker_page,
+                                 hunk_picker=hunk_picker)  # fmt: skip
         out.kind = "interdiff"
         out.blocks.insert(0, k.Block((k.Lines((head,)),), name="interdiff"))
         return out

@@ -123,3 +123,49 @@ async def test_poller_reconnects_and_keeps_pending_updates(ctx: AppContext) -> N
     # the offset only advanced after the update was fetched: nothing skipped across the outage
     assert poll.offsets[0] in (None, 0)
     assert update["update_id"] + 1 in poll.offsets
+
+
+class RecordingPoll(FlakyPoll):
+    def __init__(self, pending: list[dict[str, Any]]) -> None:
+        super().__init__(failures=0, pending=pending)
+        self.allowed: list[Any] = []
+
+    async def do_request(self, url: str, method: str, request_data: RequestData | None = None,
+                         *args: Any, **kwargs: Any) -> tuple[int, bytes]:  # fmt: skip
+        if url.endswith("/getUpdates") and request_data is not None:
+            self.allowed.append(dict(request_data.parameters).get("allowed_updates"))
+        return await super().do_request(url, method, request_data)
+
+
+async def test_polling_requests_stopped_message_generation(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    """§14.2 (F009-R1-10): the poller asks for the 10.3 update and routing rule 2 receives it."""
+    stopped = {"update_id": 777001, "stopped_message_generation": {"chat": {"id": OWNER, "type": "private"},
+                                                                    "draft_id": 42}}  # fmt: skip
+    poll = RecordingPoll([stopped])
+    handlers = Handlers(ctx, None, None)
+    seen: list[Any] = []
+    original = handlers.on_raw
+
+    async def on_raw(update: Any, context: Any) -> None:
+        seen.append(update.api_kwargs.get("stopped_message_generation"))
+        await original(update, context)
+
+    monkeypatch.setattr(handlers, "on_raw", on_raw)
+    app = build_application("123456:TEST-TOKEN-NOT-REAL", handlers, request=FakeBotRequest(), poll_request=poll)
+    await app.initialize()
+    await app.start()
+    assert app.updater is not None
+    await app.updater.start_polling(poll_interval=0.0, timeout=0, allowed_updates=bot_mod.ALLOWED_UPDATES,
+                                    drop_pending_updates=False)  # fmt: skip
+    try:
+        for _ in range(200):
+            if seen:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await app.updater.stop()
+        await app.stop()
+        await app.shutdown()
+    assert "stopped_message_generation" in bot_mod.ALLOWED_UPDATES
+    assert any(a and "stopped_message_generation" in json.dumps(a) for a in poll.allowed)
+    assert seen and seen[0]["draft_id"] == 42

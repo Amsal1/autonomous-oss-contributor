@@ -53,6 +53,7 @@ class ReviewArg(BaseModel):
     line: int | None = Field(default=None, ge=1, le=10_000_000)
     text: str | None = Field(default=None, min_length=1, max_length=4000)  # a pending comment (line picker)
     message_id: int | None = Field(default=None, ge=1)
+    source: Literal["interdiff"] | None = None  # file navigation inside the 🔀 interdiff view (§14.11.7)
 
 
 class StaleShowCurrentArg(BaseModel):

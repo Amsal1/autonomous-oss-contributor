@@ -34,9 +34,13 @@ class Subject:
     upstream: str
     contrib: sqlite3.Row
     files: list[FilePatch]
+    source: str = "change"  # "interdiff": the files come from interdiff.patch (§14.11.7 INTERDIFF mode)
 
     def arg(self, **extra: Any) -> dict[str, Any]:
-        return {"cid": self.cid, "rev": self.rev, "action_id": self.action_id, **extra}
+        out = {"cid": self.cid, "rev": self.rev, "action_id": self.action_id, **extra}
+        if self.source == "interdiff":  # navigation and the hunk picker stay inside the interdiff
+            out["source"] = "interdiff"
+        return out
 
 
 def subject(conn: sqlite3.Connection, derived_dir: Any, cid: str, rev: int, action_id: str | None) -> Subject:

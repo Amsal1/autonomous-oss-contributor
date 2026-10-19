@@ -181,6 +181,49 @@ async def test_revised_card_and_the_interdiff_view(rig: TgRig) -> None:
     assert f"🔀 <b>{cid} r1 → r2</b>" in text(rig, view) and "+y = 4" in text(rig, view)
 
 
+LONG = "".join(f"+interdiff line {i:04d} padding padding\n" for i in range(160))
+TWO_FILES = (f"diff --git a/src/app.py b/src/app.py\n--- a/src/app.py\n+++ b/src/app.py\n@@ -3,1 +3,161 @@\n"
+             f"-y = 3\n+y = 4\n{LONG}"
+             "diff --git a/tests/test_app.py b/tests/test_app.py\n--- a/tests/test_app.py\n+++ b/tests/test_app.py\n"
+             "@@ -1,2 +1,3 @@\n def test_x():\n     assert True\n+    assert only_in_the_interdiff()\n")  # fmt: skip
+
+
+async def test_a_multi_file_multi_page_interdiff_stays_inside_the_interdiff(rig: TgRig) -> None:
+    """F009-R1-3: file navigation, paging, the hunk picker and quote replies use interdiff.patch."""
+    ctx = rig.ctx
+    info = {"mode": "interdiff", "files": [{"path": "src/app.py", "added": 161, "deleted": 1, "new_ranges": [[3, 163]]},
+                                           {"path": "tests/test_app.py", "added": 1, "deleted": 0,
+                                            "new_ranges": [[3, 3]]}]}  # fmt: skip
+    cid, action = _revised(ctx, info, TWO_FILES)
+    card = await publish(rig, action)
+    await rig.tap(token(rig, card.message_id, "🔀 Interdiff"), message=card.message_id)
+    view = view_message(ctx, "interdiff")
+    first = text(rig, view)
+    assert "file 1/2" in first and "page 1/2" in first and "interdiff line 0000" in first
+    await rig.tap(token(rig, view, "▶"), message=view)  # the page pager
+    assert view_message(ctx, "interdiff") == view  # edited in place, still the interdiff view
+    second = text(rig, view)
+    assert "page 2/2" in second and "interdiff line 0159" in second and "interdiff line 0000" not in second
+    await rig.tap(token(rig, view, "Next file ▶"), message=view)
+    shown = text(rig, view)
+    assert "file 2/2" in shown and "only_in_the_interdiff" in shown
+    assert db.one(ctx.conn, "SELECT kind FROM tg_views WHERE message_id = ?", (view,))["kind"] == "interdiff"  # type: ignore[index]
+    # the hunk picker offers the interdiff's hunks and stores the interdiff hunk's range
+    await rig.tap(token(rig, view, "💬 Comment"), message=view)
+    assert labels(rig, view)[:1] == ["H1"]
+    await rig.tap(token(rig, view, "H1"), message=view)
+    prompt = rig.message_id_of(-1)
+    await rig.say("Why a second assert?", reply_to=prompt)
+    (row,) = comments(ctx, cid)
+    assert (row["path"], row["line_start"], row["line_end"], row["rev"]) == ("tests/test_app.py", 3, 3, 2)
+    # a quote reply on the interdiff view is located like on a file view
+    await rig.tap(token(rig, view, "↩️ Back"), message=view)
+    await rig.say("Name it better", reply_to=view, quote="assert only_in_the_interdiff()")
+    rows = comments(ctx, cid)
+    assert len(rows) == 2 and (rows[1]["path"], rows[1]["line_start"], rows[1]["side"]) == ("tests/test_app.py", 3,
+                                                                                            "new")  # fmt: skip
+
+
 async def test_a_quote_on_the_range_diff_is_a_file_level_comment(rig: TgRig) -> None:
     ctx = rig.ctx
     info = {"mode": "range_diff", "old_base": "1" * 40, "new_base": "2" * 40,

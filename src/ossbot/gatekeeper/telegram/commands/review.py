@@ -7,6 +7,7 @@ answers of §14.18.4.3. Without a cid it shows the queue.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Literal
 
@@ -61,7 +62,7 @@ async def approve_cmd(ctx: CommandContext, args: list[str]) -> Reply:
 
 class OpenArg(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    family: Literal["a", "p", "s"]
+    family: Literal["a", "p", "s", "r"]
     subject: str = Field(min_length=1, max_length=64)
 
 
@@ -84,6 +85,8 @@ async def queue_open(tap: Tap) -> str:
         return "Re-sent the skill card"
     if not ID_RE.match(a.subject):
         return resolve.SUPERSEDED
+    if a.family == "r":
+        return resend_rescope(tap.app, a.subject)
     if a.family == "p":
         try:
             tap.app.reissue_proposal(a.subject, tap.actor, keep_expiry=True)
@@ -92,6 +95,19 @@ async def queue_open(tap: Tap) -> str:
                 resolve.state_of(tap.app.conn, a.subject))  # fmt: skip
         return "Re-sent the proposal card"
     return resend(tap.app, a.subject, tap.actor)
+
+
+def resend_rescope(app: AppContext, cid: str) -> str:
+    """The rescope or ceiling-hit card again (it has no approval yet; its buttons check the state)."""
+    from ossbot.gatekeeper.telegram import rescope_cards  # noqa: PLC0415 - rescope_cards imports review actions
+
+    row = db.one(app.conn, "SELECT state, size_report_json FROM contributions WHERE id = ?", (cid,))
+    if row is None or row["state"] != "RESCOPE_REQUIRED":
+        return resolve.nothing_text(resolve.state_of(app.conn, cid))
+    report = json.loads(row["size_report_json"] or "{}")
+    reason: rescope_cards.Reason = "ceiling" if report.get("rescope_reason") == "ceiling" else "overrun"
+    rescope_cards.send(app, cid, int(report.get("rev") or 1), reason, report)
+    return "Re-sent the size card"
 
 
 @action("queue_sort", arg=SortArg)

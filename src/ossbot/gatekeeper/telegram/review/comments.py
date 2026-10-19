@@ -60,13 +60,18 @@ def where(row: Any) -> str:
 
 
 def prompt(ctx: AppContext, kind: str, cid: str, rev: int, action_id: str | None, text: str, placeholder: str, *,
-           reply_to: int | None = None, path: str | None = None, hunk: int | None = None) -> None:  # fmt: skip
-    """A ForceReply prompt; ``pending_input`` is opened when it is sent (``Outbox.mark_sent``)."""
+           reply_to: int | None = None, path: str | None = None, hunk: int | None = None,
+           lines: list[list[Any]] | None = None) -> None:  # fmt: skip
+    """A ForceReply prompt; ``pending_input`` is opened when it is sent (``Outbox.mark_sent``). ``lines``:
+    one ``[side, start, end]`` already resolved (an interdiff hunk), stored as the prompt's candidate."""
     view = k.plain("confirm_prompt", (k.Text(text, 300),))
     view.placeholder = placeholder[:60]
     view.cid, view.rev, view.action_id = cid, rev, action_id
-    view.state = {"prompt": {"kind": kind, "cid": cid, "rev": rev, "action_id": action_id, "path": path,
-                             "hunk": hunk}}  # fmt: skip
+    prompt_state: dict[str, Any] = {"kind": kind, "cid": cid, "rev": rev, "action_id": action_id, "path": path,
+                                    "hunk": hunk}  # fmt: skip
+    if lines:
+        prompt_state["line_candidates"] = lines
+    view.state = {"prompt": prompt_state}
     ui_send.deliver(ctx, view, thread="reviews", reply_to=reply_to)
 
 
@@ -110,19 +115,22 @@ def draft_view(ctx: AppContext, cid: str, rev: int, action_id: str | None, *, sh
     lines: list[k.Line] = [(k.Const("📝 "), k.Bold(k.Const("Draft review")),
                             k.Const(f" · {cid} r{rev} · {len(rows)} comment{'s' * (len(rows) != 1)}"))]  # fmt: skip
     shown = rows if show_all else rows[:10]
-    for i, r in enumerate(shown, 1):
-        lines.append((k.Const(f"{i}. "), k.Text(where(r), 40), k.Const(" — "),
-                      k.Text(str(r["text"]), 70 if show_all else 120)))  # fmt: skip
+    width = 70 if show_all else 120
+    items: list[k.Line] = [(k.Const(f"{i}. "), k.Text(where(r), 40), k.Const(" — "), k.Text(str(r["text"]), width))
+                           for i, r in enumerate(shown, 1)]  # fmt: skip
+    # the header stays; comment lines go in groups of 5 that the budget rule drops from the end (AC 1, AC 53)
+    blocks = [k.Block((k.Lines(tuple(lines)),), name="head")]
+    blocks += [k.Block((k.Lines(tuple(items[i : i + 5])),), required=False, priority=100 - i, name=f"c{i}")
+               for i in range(0, len(items), 5)]  # fmt: skip
     if len(rows) > len(shown):
-        lines.append(k.line(f"+{len(rows) - len(shown)} more"))
+        blocks.append(k.Block((k.Lines((k.line(f"+{len(rows) - len(shown)} more"),)),), name="more"))
     arg = {"cid": cid, "rev": rev, "action_id": action_id}
     buttons: k.Rows = []
     if rows:
         buttons = [[k.button(f"📨 Send {len(rows)} comment{'s' * (len(rows) != 1)}", "review_send", arg)],
                    [k.button("👁 Show all", "nav", {**arg, "view": "draft_all"}),
                     k.button("🗑 Discard", "review_discard", arg)]]  # fmt: skip
-    view = k.View(kind="draft_review", blocks=[k.Block((k.Lines(tuple(lines)),))], rows=buttons, cid=cid, rev=rev,
-                  action_id=action_id)  # fmt: skip
+    view = k.View(kind="draft_review", blocks=blocks, rows=buttons, cid=cid, rev=rev, action_id=action_id)
     return view
 
 

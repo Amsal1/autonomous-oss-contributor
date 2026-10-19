@@ -163,6 +163,14 @@ async def nav(tap: Tap) -> str:
     if refused:
         return refused
     ctx = tap.app
+    if a.source == "interdiff" and a.view in {"file", "file_picker", "hunk_picker"}:
+        if a.view == "hunk_picker" and resolve.refusal(ctx.conn, a.action_id, "comment"):
+            return resolve.refusal(ctx.conn, a.action_id, "comment") or ""
+        pages = {"file": {"page": a.page or 1}, "file_picker": {"picker_page": a.page or 1},
+                 "hunk_picker": {"hunk_picker": a.page or 1}}[a.view]  # fmt: skip
+        ui_send.edit(ctx, interdiff_view.view(ctx, a.cid, a.rev, a.action_id, index=a.index or 0, **pages),
+                     message_id=tap.message_id)  # fmt: skip
+        return ""
     if a.view in {"explorer", "explorer_pick"}:
         # the section pager carries the section as its page; the Files list pager carries both
         section = a.section if a.section is not None else (a.page or 1)
@@ -197,6 +205,10 @@ async def file_pick(tap: Tap) -> str:
                               view_stale=resolve.view_is_stale(tap.app.conn, tap.message_id))  # fmt: skip
     if refused or a.rev is None:
         return refused or resolve.SUPERSEDED
+    if a.source == "interdiff":  # Prev/Next file and the file picker of the 🔀 view, edited in place
+        ui_send.edit(tap.app, interdiff_view.view(tap.app, a.cid, a.rev, a.action_id, index=a.index or 0),
+                     message_id=tap.message_id)  # fmt: skip
+        return ""
     open_file(tap.app, a.cid, a.rev, a.action_id, a.index or 0)
     return ""
 
@@ -225,9 +237,16 @@ async def comment_hunk(tap: Tap) -> str:
                               line_start=a.line, line_end=a.line, actor=tap.actor)  # fmt: skip
         return saved
     label = f"hunk {a.hunk + 1}" if a.hunk is not None else "the file"
+    hunk, lines = a.hunk, None
+    if a.source == "interdiff" and a.hunk is not None:  # the hunk's range in interdiff.patch, fixed now
+        fp = next((f for f in interdiff_view.subject(tap.app, a.cid, a.rev, a.action_id).files if f.path == a.path),
+                  None)  # fmt: skip
+        if fp is not None and a.hunk < len(fp.hunks):
+            start, end = fp.hunks[a.hunk].new_range()
+            hunk, lines = None, [["new", start, end]]
     comments.prompt(tap.app, "comment", a.cid, a.rev, a.action_id, f"💬 Comment on {label} of {a.path}",
                     f"Comment on {label} (≤ 4000 chars)"[:60], reply_to=tap.message_id, path=a.path,
-                    hunk=a.hunk)  # fmt: skip
+                    hunk=hunk, lines=lines)  # fmt: skip
     return ""
 
 
@@ -370,6 +389,9 @@ async def on_comment(t: Typed) -> None:
         return
     start = end = None
     side = p.side
+    if p.path and p.hunk is None and len(p.line_candidates) == 1:  # an interdiff hunk, resolved at prompt time
+        side, start, end = (str(p.line_candidates[0][0]), int(p.line_candidates[0][1]),
+                            int(p.line_candidates[0][2]))  # fmt: skip
     if p.path and p.hunk is not None:
         files = patchview.load(t.app.gitops.derived_dir(p.cid, p.rev))
         fp = next((f for f in files if f.path == p.path), None)
@@ -438,8 +460,10 @@ async def on_view_reply(t: Typed) -> None:
     if not isinstance(rev, int):
         _reply(t, resolve.SUPERSEDED)
         return
-    if view["kind"] == "file" and t.quote and t.quote_manual:
-        state = json.loads(view["state_json"] or "{}")
+    state = json.loads(view["state_json"] or "{}")
+    # a file view, or the 🔀 view in INTERDIFF mode (it records its shown lines; RANGE_DIFF pages don't)
+    located = view["kind"] == "file" or (view["kind"] == "interdiff" and state.get("lines"))
+    if located and t.quote and t.quote_manual:
         lines = tuple(tuple(x) for x in state.get("lines", []))
         hits = patchview.locate(lines, undefuse(t.quote))
         if len(hits) == 1:
