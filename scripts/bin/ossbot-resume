@@ -8,8 +8,9 @@
 #                                              into an audit event + Telegram FYI on its next start)
 #   ossbot-resume --offline --via backup --paused-only   ossctl backup lifting the pause it set itself:
 #                                              the log line (paused_only: true) first, then only 'paused'
-#                                              is removed; a kill flag and the marker always stay
-# Then: remove killed, paused, resume-request and the Windows marker together, and start in order
+#                                              is removed; a kill flag and the marker always stay, and
+#                                              no unit is started (a pause stops none)
+# Otherwise: remove killed, paused, resume-request and the Windows marker together, and start in order
 # gatekeeper, proxy, dockerfilter, sandboxd, runner, hermes, the Hermes probe socket (units that do not
 # exist are skipped).
 # Dry-run is never changed. Exit 0 done, 1 refused, 3 partial (a unit did not start).
@@ -76,8 +77,10 @@ fi
 
 if ((paused_only)); then
   rm -f "$CONTROL/paused"
-  log "pause removed (paused-only, via $via); a kill flag stays"
-  if [[ -e $CONTROL/killed || -L $CONTROL/killed ]]; then log "killed: no unit started"; exit 0; fi
+  # A pause stops no unit, so there is nothing to start: starting the enabled units here would undo a
+  # workers down (runner, Hermes, sandboxd stopped by /down, DESIGN 13.5) behind the owner's back.
+  log "pause removed (paused-only, via $via); a kill flag stays; no unit started"
+  exit 0
 else
   rm -f "$CONTROL/killed" "$CONTROL/paused" "$CONTROL/resume-request" "$MARKER"
   # Re-arm the kill path unit (RemainAfterExit) for the next kill.

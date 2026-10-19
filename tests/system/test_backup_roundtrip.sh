@@ -3,6 +3,8 @@
 # live distro, with a throwaway age identity under /root/.cache/ossbot-test (never the owner's key):
 #   backup   pauses for the copy and lifts its own pause (ossbot-resume --paused-only), writes one
 #            age-encrypted archive (no plaintext), records backup_created;
+#   workers  a backup during a workers down lifts its pause but starts no unit (runner, Hermes and
+#            sandboxd stay stopped, the lifecycle flag stays down); ossctl up;
 #   tamper   a copy with one flipped byte is refused by restore (age integrity), nothing installed;
 #   restore  killed (reason restore) + dry-run ON, no open approval in the three decision services,
 #            audit verify passes against the restored anchors, the anchors append-only again, the
@@ -62,6 +64,20 @@ recorded() { [[ $(q "SELECT COUNT(*) FROM audit_events WHERE event = 'backup_cre
 check "backup_created recorded in the audit log" recorded
 state_running() { [[ $(gk GET /v1/control) == *'"state":"running"'* ]]; }
 check "the gatekeeper is running again (reconciled)" wait_for 60 state_running
+
+# --- a backup during a workers down lifts its pause and starts nothing (F008-R1-2) --------------------
+workers_stopped() { ! systemctl is-active --quiet ossbot-runner && ! systemctl is-active --quiet ossbot-hermes \
+  && ! systemctl is-active --quiet ossbot-sandboxd; }
+check "ossctl down --scope workers before the second backup" "$OSSCTL" down --timeout 5 --scope workers
+report2=$("$OSSCTL" backup --out "$OUT" --recipient "$RECIP" 2>/dev/null)
+rc=$?
+check "the backup during a workers down exits 0" test "$rc" -eq 0
+check "... and lifted its own pause" test "$(jq -r .resume <<<"$report2" 2>/dev/null)" = resumed
+check "runner, Hermes and sandboxd still stopped after that backup" workers_stopped
+check "the lifecycle flag still says down / workers" \
+  test "$(jq -r '.state + "/" + .scope' "$CONTROL/lifecycle" 2>/dev/null)" = down/workers
+check "ossctl up after the workers-down backup" "$OSSCTL" up --timeout 120
+check "every unit active again" wait_for 60 units_active "${PHASE1_UNITS[@]}"
 
 # --- a corrupted archive is refused, nothing installed -------------------------------------------------
 bad=$OUT/ossbot-20000101-000000.tar.age
