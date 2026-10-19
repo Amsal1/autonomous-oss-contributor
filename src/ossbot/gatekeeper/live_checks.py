@@ -15,7 +15,7 @@ from typing import Any
 from ossbot.common.clock import Clock, from_iso
 from ossbot.common.config import Limits
 from ossbot.common.schemas import OutboundKind
-from ossbot.gatekeeper import ratelimit
+from ossbot.gatekeeper import db, ratelimit
 from ossbot.gatekeeper.github_read import GitHubReader
 from ossbot.gatekeeper.gitops import GitError, GitOps
 
@@ -64,6 +64,18 @@ async def _competing_prs(reader: GitHubReader, inp: LiveInput, issue: int) -> li
     ]
 
 
+def _overridden(conn: sqlite3.Connection, inp: LiveInput) -> bool:
+    """§14.11.19: the owner confirmed Start work on a 👤 item while the Confirm panel said "You already have
+    PR #n open here — confirming overrides the limit for this item" (audited ``open_pr_override``). Only
+    ``open_prs_per_repo`` is lifted, for that contribution only; ``prs_per_24h`` and every check stay."""
+    if inp.action_id is None:
+        return False
+    row = db.one(conn, "SELECT 1 FROM outbound_actions o JOIN contributions c ON c.id = o.cid JOIN audit_events a"
+                 " ON a.cid = c.id AND a.event = 'open_pr_override' WHERE o.id = ? AND c.source = 'user' LIMIT 1",
+                 (inp.action_id,))  # fmt: skip
+    return row is not None
+
+
 async def run(
     inp: LiveInput,
     reader: GitHubReader,
@@ -98,7 +110,7 @@ async def run(
         decision = await ratelimit.check(
             conn, clock, limits, "open_pr", inp.upstream, counter, exclude_action_id=inp.action_id
         )
-        if not decision.allowed:
+        if not decision.allowed and not (decision.counter == "open_prs_per_repo" and _overridden(conn, inp)):
             failed.append(decision.code)
     elif inp.kind == "push_update":
         pr = await reader.pull(inp.upstream, inp.pr_number or 0)

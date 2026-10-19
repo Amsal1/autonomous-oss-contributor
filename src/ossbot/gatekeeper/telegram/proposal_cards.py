@@ -99,6 +99,7 @@ def version_diff(old: dict[str, Any], new: dict[str, Any]) -> list[str]:
 
 
 def open_pr_here(conn: sqlite3.Connection, cid: str, upstream: str) -> int | None:
+    """The same rule ``ProposalService.start`` audits as ``open_pr_override`` (one definition)."""
     row = db.one(conn, "SELECT pr_number FROM contributions WHERE upstream = ? AND id != ? AND pr_number IS NOT NULL"
                  " AND state IN ('SUBMITTED','WATCHING') ORDER BY updated_at DESC LIMIT 1",
                  (upstream, cid))  # fmt: skip

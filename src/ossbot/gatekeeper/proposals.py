@@ -185,6 +185,13 @@ class ProposalService:
         out["feedback_pending"] = json.loads(row["proposal_feedback_json"]) if row["proposal_feedback_json"] else None
         return out
 
+    def own_open_pr(self, cid: str) -> int | None:
+        """Our newest open PR on the contribution's repo from another contribution (one-open-PR rule)."""
+        row = db.one(self.conn, "SELECT o.pr_number FROM contributions c JOIN contributions o ON o.upstream ="
+                     " c.upstream AND o.id != c.id WHERE c.id = ? AND o.pr_number IS NOT NULL AND o.state IN"
+                     " ('SUBMITTED','WATCHING') ORDER BY o.updated_at DESC LIMIT 1", (cid,))  # fmt: skip
+        return int(row["pr_number"]) if row is not None else None
+
     # ----------------------------------------------------------------- effects
     def start(self, approval_id: str, actor: str) -> dict[str, Any]:
         """✅ Start work, after Confirm: consume (binding recomputed, refusals) and enter PROPOSAL_APPROVED."""
@@ -198,6 +205,10 @@ class ProposalService:
             evidence = {"approval_id": approval_id, "version": binding["version"]}
             ctx.state_machine.transition(cid, S.PROPOSED, S.PROPOSAL_APPROVED, Actor.HUMAN, evidence, actor)
             self.conn.execute("UPDATE contributions SET approved_class = ? WHERE id = ?", (binding["est_class"], cid))
+            open_pr = self.own_open_pr(cid)
+            if row["source"] == "user" and open_pr is not None:
+                # the Confirm panel said "confirming overrides the limit for this item" (§14.11.19)
+                ctx.audit.append(actor, "open_pr_override", {"approval_id": approval_id, "open_pr": open_pr}, cid)
         return {"cid": cid, "state": S.PROPOSAL_APPROVED.value, "approved_class": binding["est_class"]}
 
     def request_revision(self, cid: str, version: int, kind: RevisionKind, text: str, actor: str) -> dict[str, Any]:
