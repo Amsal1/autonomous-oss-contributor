@@ -295,6 +295,106 @@ function Get-OssBlockerState {
 
 $script:OssAutostartTask = 'ossbot-autostart'
 $script:OssHookTask = 'ossbot-shutdown-hook'
+$script:OssBlockerTitle = 'ossbot shutdown blocker'   # ShutdownBlockerWindow.WindowTitle
+
+function Add-OssWin32 {
+    # The few user32 calls the scripts and tests need (FindWindow, PostMessage, SendMessageTimeout...).
+    if ('OssbotWin32.Native' -as [type]) { return }
+    Add-Type -Namespace OssbotWin32 -Name Native -MemberDefinition @'
+[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+[DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+[DllImport("user32.dll")] public static extern IntPtr SendMessageTimeout(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam, uint flags, uint timeoutMs, out IntPtr result);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern IntPtr GetParent(IntPtr hWnd);
+[DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr hWnd, int nIndex);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+[StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+'@
+}
+
+function Find-OssBlockerWindow {
+    Add-OssWin32
+    return [OssbotWin32.Native]::FindWindow([NullString]::Value, $script:OssBlockerTitle)
+}
+
+function Get-OssBlockerCommand {
+    # What the autostart task's second action runs: the blocker, hidden, from the repo (6a).
+    $script = Join-Path $script:OssRepo 'scripts\windows\ossbot-shutdown-blocker.ps1'
+    return "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$script`""
+}
+
+function Start-OssBlocker {
+    # Start the blocker now (bootstrap, tests), the way the autostart action does. True once its window exists.
+    if (Test-OssBlockerRunning) { return $true }
+    $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
+    Start-Process -FilePath $conhost -ArgumentList (Get-OssBlockerCommand) -WindowStyle Hidden | Out-Null
+    for ($i = 0; $i -lt 60; $i++) {
+        Start-Sleep -Milliseconds 500
+        if ((Test-OssBlockerRunning) -and (Find-OssBlockerWindow) -ne [IntPtr]::Zero) { return $true }
+    }
+    return $false
+}
+
+function Stop-OssBlocker {
+    # Close the blocker's window (WM_CLOSE); it releases its mutex and exits. True when it is gone.
+    if (-not (Test-OssBlockerRunning)) { return $true }
+    $h = Find-OssBlockerWindow
+    if ($h -ne [IntPtr]::Zero) { [void][OssbotWin32.Native]::PostMessage($h, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero) }
+    for ($i = 0; $i -lt 40; $i++) {
+        if (-not (Test-OssBlockerRunning)) { return $true }
+        Start-Sleep -Milliseconds 250
+    }
+    return $false
+}
+
+function Get-OssAutostartActions {
+    # ossbot-autostart (DESIGN 7.6, 13.5): boot the distro at logon, then start the shutdown blocker (6a).
+    param([switch]$WithoutBlocker)
+    $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
+    $actions = @(@{ Execute = $conhost; Arguments = '--headless wsl.exe -d ossbot -u ossnobody --exec /bin/true' })
+    if (-not $WithoutBlocker) { $actions += @{ Execute = $conhost; Arguments = (Get-OssBlockerCommand) } }
+    return $actions
+}
+
+function Get-OssAutostartProblems {
+    # How the registered ossbot-autostart differs from its spec (empty = as required).
+    param([object]$Task, [switch]$WithoutBlocker)
+    $p = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $Task) { $p.Add('missing'); return $p.ToArray() }
+    $want = @(Get-OssAutostartActions -WithoutBlocker:$WithoutBlocker)
+    $have = @($Task.Actions)
+    if ($have.Count -ne $want.Count) { $p.Add("$($have.Count) action(s), want $($want.Count)") }
+    for ($i = 0; $i -lt [Math]::Min($have.Count, $want.Count); $i++) {
+        if ($have[$i].Execute -ne $want[$i].Execute -or $have[$i].Arguments -ne $want[$i].Arguments) { $p.Add("action $($i + 1) differs") }
+    }
+    $t = @($Task.Triggers) | Select-Object -First 1
+    if ($null -eq $t -or @('PT60S', 'PT1M') -notcontains [string]$t.Delay) { $p.Add('logon trigger delay') }
+    # The blocker runs for the whole session: no execution time limit (PT0S), or Task Scheduler ends it.
+    if (-not $WithoutBlocker -and [string]$Task.Settings.ExecutionTimeLimit -ne 'PT0S') { $p.Add("time limit $($Task.Settings.ExecutionTimeLimit)") }
+    return $p.ToArray()
+}
+
+function Install-OssAutostartTask {
+    # Register (or re-register on drift) ossbot-autostart. Returns 'unchanged', 'changed' or 'WARN: ...'.
+    param([switch]$WithoutBlocker)
+    $existing = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
+    if ($existing -and @(Get-OssAutostartProblems -Task $existing -WithoutBlocker:$WithoutBlocker).Count -eq 0) { return 'unchanged' }
+    $user = "$env:USERDOMAIN\$env:USERNAME"
+    $actions = @(Get-OssAutostartActions -WithoutBlocker:$WithoutBlocker | ForEach-Object { New-ScheduledTaskAction -Execute $_.Execute -Argument $_.Arguments })
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
+    $trigger.Delay = 'PT60S'
+    $limit = if ($WithoutBlocker) { New-TimeSpan -Minutes 5 } else { [TimeSpan]::Zero }
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit $limit -Hidden
+    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
+    $enabled = -not ($existing -and $existing.State -eq 'Disabled')   # kill.ps1 -Hard keeps it disabled
+    try {
+        Register-ScheduledTask -TaskName $script:OssAutostartTask -Action $actions -Trigger $trigger -Settings $settings -Principal $principal -Description 'ossbot: boot the ossbot WSL distro at logon and start the shutdown blocker (DESIGN 7.6, 13.5)' -Force | Out-Null
+        if (-not $enabled) { Disable-ScheduledTask -TaskName $script:OssAutostartTask | Out-Null }
+        return 'changed'
+    } catch {
+        return "WARN: could not register $($script:OssAutostartTask): $($_.Exception.Message)"
+    }
+}
 
 function Get-OssHostTaskStates {
     # status.ps1: the autostart task (with the blocker action, 6a), the blocker process and the

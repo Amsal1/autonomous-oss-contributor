@@ -199,7 +199,7 @@ Depends on FEAT-006 and FEAT-007 (runner and Hermes units, Hermes state layout).
 
 - [ ] 40. 6a shutdown blocker.
       Rows: DES-AC-32, DES-V-31, CR1-6a.
-      What: research and record `docs/adr/0021-windows-shutdown-hooks.md` (`WM_QUERYENDSESSION`, `ShutdownBlockReasonCreate/Destroy`, hidden window requirements, Fast Startup). `scripts/windows/ossbot-shutdown-blocker.ps1` (PowerShell 5.1, C# compiled at runtime from repo source, single instance, log in `.ossbot-local\`), started by the `ossbot-autostart` task, runs `down.ps1 -Kind blocker` before releasing.
+      What: research and record `docs/adr/0021-windows-shutdown-hooks.md` (`WM_QUERYENDSESSION`, `ShutdownBlockReasonCreate/Destroy`, hidden window requirements, Fast Startup). `scripts/windows/ossbot-shutdown-blocker.ps1` (PowerShell 5.1, C# compiled at runtime from repo source, single instance, log in `.ossbot-local\`), started by the `ossbot-autostart` task, runs `down.ps1 -Kind blocker` before releasing. (Built: `down.ps1 -Timeout 90 -Caller blocker`, shutdown type `graceful` as DESIGN §13.5 names it; the caller is in `lifecycle.log`.)
       Files: `scripts/windows/ossbot-shutdown-blocker.ps1`, `scripts/windows/ShutdownBlocker.cs`, `scripts/bootstrap.ps1` (autostart action), `docs/adr/0021-windows-shutdown-hooks.md`.
       Tests: new non-destructive `tests/system/test_shutdown_blocker.ps1` (simulated `WM_QUERYENDSESSION` to its own window → `down` invoked, reason registered and destroyed). The real restart test is item 57.
       Verify: `powershell -NoProfile -File tests\system\test_shutdown_blocker.ps1` green.

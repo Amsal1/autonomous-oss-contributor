@@ -207,31 +207,17 @@ function Invoke-ProvisionPhase {
 
 # -------------------------------------------------------------------------- 6. autostart
 function Invoke-AutostartPhase {
+    # ossbot-autostart (7.6) with its second action, the shutdown blocker (CR-001 6a, ADR-0021); the
+    # blocker is started now too when it does not run yet (otherwise only at the next logon).
     if ($DistroName -ne 'ossbot') { Write-OssStep 'autostart' 'unchanged' "skipped for test distro $DistroName"; return }
-    $name = 'ossbot-autostart'
-    $exe = Join-Path $env:WINDIR 'System32\conhost.exe'
-    $argLine = '--headless wsl.exe -d ossbot -u ossnobody --exec /bin/true'
-    $existing = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
-    if ($existing) {
-        $a = $existing.Actions | Select-Object -First 1
-        $t = $existing.Triggers | Select-Object -First 1
-        if ($a.Execute -eq $exe -and $a.Arguments -eq $argLine -and $t.Delay -in @('PT60S', 'PT1M')) {
-            Write-OssStep 'autostart' 'unchanged' "$name ($($existing.State))"
-            return
-        }
-    }
-    $user = "$env:USERDOMAIN\$env:USERNAME"
-    $action = New-ScheduledTaskAction -Execute $exe -Argument $argLine
-    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
-    $trigger.Delay = 'PT60S'
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5) -Hidden
-    $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    try {
-        Register-ScheduledTask -TaskName $name -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Description 'ossbot: boot the ossbot WSL distro at logon (DESIGN 7.6)' -Force | Out-Null
-        Write-OssStep 'autostart' 'changed' "$name registered (at logon + 60 s)"
-    } catch {
-        Write-OssStep 'autostart' 'WARN' "could not register ${name}: $($_.Exception.Message)"
-    }
+    $r = Install-OssAutostartTask
+    if ($r -like 'WARN*') { Write-OssStep 'autostart' 'WARN' ($r -replace '^WARN: ', ''); return }
+    $task = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
+    $state = if ($task) { $task.State } else { 'missing' }
+    Write-OssStep 'autostart' $r "$($script:OssAutostartTask) ($state): at logon + 60 s boot the distro, then the shutdown blocker"
+    if (Test-OssBlockerRunning) { Write-OssStep 'shutdown-blocker' 'unchanged' 'running'; return }
+    if (Start-OssBlocker) { Write-OssStep 'shutdown-blocker' 'changed' 'started (scripts\windows\ossbot-shutdown-blocker.ps1)' }
+    else { Write-OssStep 'shutdown-blocker' 'WARN' 'did not start; see .ossbot-local\shutdown-blocker.log' }
 }
 
 Invoke-Preflight
