@@ -1387,7 +1387,8 @@ def lint_personal(
     root: Annotated[Path, typer.Option("--root", help="repository root")] = Path("."),
     staged: Annotated[bool, typer.Option("--staged", help="scan the index blobs (what will be committed)")] = False,
 ) -> None:
-    """No value of config/profile.yaml in a tracked file outside docs/ (AC 23). Prints keys, never values."""
+    """No value of config/profile.yaml in a tracked file outside docs/, and no strict value (forbidden_logins,
+    confidentiality_floor domains, the IdC host) in any tracked file (AC 23). Prints keys, never values."""
     from ossbot.ctl import lint_personal as lp  # noqa: PLC0415
 
     try:
