@@ -1,27 +1,36 @@
-# FEAT-010 build review, round 1
+# FEAT-010 build review, round 2
 
-Verdict: CHANGES_REQUESTED
+Reviewed at c6f4ee0 (main). Range: 680c97a..c6f4ee0 (after the FEAT-009 approval 883affb). Working tree clean before the review files were written.
 
-Scope: commits after the FEAT-009 approval (883affb): 680c97a (item 49 streaming assistant) and addfd90 (item 49 U12, feature cards, Hermes notices). HEAD = origin/main = addfd90, so nothing local is missing from the remote and history is linear. There was no prior review file. No suites were re-run.
+Verdict: APPROVED. No HIGH or MEDIUM findings open. One NIT carries to the Phase 2 gate.
 
-## Evidence checked
+## Prior findings (round 1)
 
-- `git status --porcelain` at review time: 16 modified tracked files and 11 untracked files. These include `migrations/0006_telegram_m2.sql`, `telegram/{digest,digest_cmd,reminders,status_card}.py`, `api/reminders.py`, and tests `test_digest.py`, `test_reminders.py`, `test_rich_fallback.py`, `test_status_card.py`, `test_outcomes_digest.py`. Together they make up uncommitted item 50 work, with no recorded test evidence.
-- `docs/plan/phase2-build-plan.md` lines 270-296: items 49-53 are all still `[ ]`. `FEAT-010.json` has `"status": "pending"`.
-- `docs/VERIFICATION.md` has no FEAT-010 entry. `docs/TRACEABILITY.md` rows for FEAT-010 (for example DES-FR-13 and DES-AC-36) still read `missing`.
-- Item 49 code was spot-read, with no defect found:
-  - `handlers.on_raw` (handlers.py:903-918) gates Stop with `authorized_chat_only` and stops only a `streaming` turn that has a live task and a stop event.
-  - `ALLOWED_UPDATES` includes `stopped_message_generation` (bot.py:54).
-  - `hermes_out.resolve`/`deliver` refuse without an active turn, keep Reviews, Control and Feed sessions out of those topics, and cap Hermes P1 at 5 per local day.
-  - `api/notify.py` rejects any priority other than P1/P2 and returns 409 without an active turn.
-  - `api/features.py` returns 404 for a feature that isn't enabled, validates with the feature's model, returns 422 without echoing the data, enforces the header rule and the 30/h limit.
-- Commit messages record targeted verification: 593 telegram/chat passed plus 197 U12 tests, ruff, mypy and lint-imports clean. That is acceptable per-item evidence under rule 9. The once-per-feature hermetic suite and the FEAT-010 verification list are not recorded.
+- F1 (HIGH, item 50 WIP left in the tree): resolved. The WIP was finished and committed in 387b562, with follow-ups in 3f7fc4d (status-card dedupe occurrence, migration 0006 count, dedupe-key list). VERIFICATION.md records how it was handled. `git status` is clean.
+- F2 (HIGH, items 50-53 missing): resolved. Item 50 is in 387b562 and 3f7fc4d. Items 51-52 are in 9b0dd50 and 19864e6. Item 53's close-out is in c6f4ee0: the VERIFICATION entry, 65 TRACEABILITY rows, the ADR-0019 implementation addendum, plan items 49-52 ticked, and FEAT-010.json `in_progress` with blocked_reason set to the owner-only live checks.
 
-## Blockers
+## Evidence read (not re-run)
 
-1. F1 (HIGH), uncommitted WIP in the working tree. Working rule 4 forbids approval while the tree is dirty. Rule 1 says the next coder step must finish, test and commit this item 50 work (or revert it with a note in VERIFICATION.md). Do not discard it.
-2. F2 (HIGH), FEAT-010 is incomplete. Items 50 (rich views, status card, reminders, digest, migration 0006), 51 (review mirror, off by default), 52 (Telegraph, off by default) and 53 (close-out) are not committed. Several FEAT-010 acceptance criteria have no implementation yet: AC 24, 27, 28, 42, 64, 65 and 68, plus mirror and Telegraph off by default. None of the following is recorded: the FEAT-010 verification list (`DEV pytest -m "unit or telegram or acp or e2e"`, the lint gate, provision twice with the second run `unchanged`, the egress surface test, doctor), the owner-only live checks, TRACEABILITY and VERIFICATION updates, or FEAT-010 `completed`. Implement items 50-53 and record that evidence.
+VERIFICATION.md FEAT-010 round 2 and the commit messages of 19864e6 and c6f4ee0 record the following:
+- targeted item 50 tests: 44 passed, plus tests/telegram 503 passed
+- items 51-52 targeted: 243 and 85 passed
+- one hermetic run of `unit or telegram or acp or e2e`: 3492 passed, 6 failed. The 6 failures were the migration count, the dedupe-key list and one fake_github regression. They were fixed in 3f7fc4d and 9b0dd50 and re-run targeted: 62 passed.
+- BA-19/BA-20/F6-4 at 19864e6: 46 passed
+- lint.ps1 clean (11 import contracts kept, including the review_mirror_writer and telegraph_writer contracts)
+- shellcheck and the setup-secrets selftest pass
+- redeploy at 9b0dd50 and at 19864e6, then an idempotency run where every step printed `unchanged` (doctor PASS 41)
+- test_egress_surface.sh passed: telegra.ph returns 403 for every caller, and cat_telegraph is absent while Telegraph is off
+- ossctl doctor PASS 45
 
-## NITs
+This matches the FEAT-010 verification list and the code-then-targeted-tests-then-one-full-run loop the owner asked for. Live checks that need the owner's hands are left open, as the plan allows.
 
-None.
+## Spot reads (safety-relevant paths)
+
+- `ctl/render.py` and `common/config.py`: the `telegraph` category can't be listed by any profile, caller or mode (config validator). The renderer emits it only for `gatekeeper`, only while `telegram.telegraph.enabled`, and as the one allowed pre-deny rule. Both `assert_context_invariants` checks reject anything else. The always_denied domains are unchanged.
+- `gitops.push_with_token`: a faithful extraction of the old `github_writer` askpass/memfd code. The token stays out of argv, the URL and env. `github_writer` still never forces a push.
+- `review_mirror_writer.py`: bound to one repo. API paths are confined to `/repos/<mirror>/` with `..` and `//` refused. Refspecs are validated by SHA and cid regexes. A force push happens only to `review/<cid>` and `review-base/<cid>`. Writes are reachable only through `active_repo()`, which needs the config setting, a confirmed reload and a passing `enable` probe. That matches ADR-0019 C and DESIGN §14.11.14, and it is off by default.
+- `telegraph.py`: one `check()` → `eligible()` path at render, tap, Confirm and right before createPage. A paused or killed system refuses the write before the API call.
+
+## NIT (non-blocking, carries to the Phase 2 gate)
+
+- N1: The closed-PR status card (DESIGN §14.11.11) lacks `[🔁 Re-attempt later] [🗑 Forget]`. The coder recorded this as an open question (it conflicts with AC 30). DESIGN already says "§5 AC 30 rules still apply", so the owner should decide one of two things: what Re-attempt later means for a CLOSED contribution, or whether to drop the button. `Forget` does not depend on AC 30. TRACEABILITY CR3-IH-2 is marked `done` but should note it is partial until this is decided.

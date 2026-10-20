@@ -1,21 +1,14 @@
 {
-  "verdict": "CHANGES_REQUESTED",
+  "verdict": "APPROVED",
   "feat": "FEAT-010",
-  "round": 1,
+  "round": 2,
   "findings": [
     {
-      "id": "F1",
-      "severity": "HIGH",
-      "title": "Finish the WIP: uncommitted item 50 work in the working tree",
-      "detail": "git status shows 16 modified and 11 untracked files with no recorded test evidence. Among them are migrations/0006_telegram_m2.sql, telegram/digest.py, digest_cmd.py, reminders.py, status_card.py, api/reminders.py and tests test_digest/test_reminders/test_rich_fallback/test_status_card/test_outcomes_digest. Working rule 4 forbids approval on a dirty tree. Per rule 1, finish, test and commit this work (or revert it deliberately with a note in VERIFICATION.md); never discard it silently.",
-      "files": ["src/ossbot/gatekeeper/migrations/0006_telegram_m2.sql", "src/ossbot/gatekeeper/telegram/digest.py", "src/ossbot/gatekeeper/telegram/status_card.py", "src/ossbot/gatekeeper/telegram/reminders.py", "src/ossbot/gatekeeper/api/reminders.py"]
-    },
-    {
-      "id": "F2",
-      "severity": "HIGH",
-      "title": "FEAT-010 incomplete: items 50-53 not delivered, no close-out evidence",
-      "detail": "Only item 49 is committed (680c97a, addfd90). Items 50 (rich views with classic fallback, status card, reminders, digest), 51 (review mirror, off by default), 52 (Telegraph, off by default) and 53 (close-out) are missing. As a result, ACs 24, 27, 28, 42, 64, 65 and 68 have no implementation. FEAT-010.json is still 'pending'. VERIFICATION.md has no FEAT-010 entry, and the TRACEABILITY rows are still 'missing'. None of the FEAT-010 verification list is recorded: the hermetic unit/telegram/acp/e2e suite, the lint gate, provision run twice with the second run printing only 'unchanged', test_egress_surface.sh, doctor, and the owner-only live checks. Implement items 50-53 and record that evidence.",
-      "files": ["docs/plan/task-ossbot-v1/features/FEAT-010.json", "docs/plan/phase2-build-plan.md", "docs/VERIFICATION.md", "docs/TRACEABILITY.md"]
+      "id": "N1",
+      "severity": "NIT",
+      "title": "Closed-PR status card lacks [Re-attempt later] [Forget] (DESIGN §14.11.11)",
+      "detail": "The coder left this as an open question because it conflicts with AC 30. DESIGN already says 'AC 30 rules still apply', so the owner should decide what Re-attempt later means for a CLOSED contribution, or drop the button. Forget does not depend on AC 30. TRACEABILITY CR3-IH-2 is marked 'done' but should note it is partial until then. Carries to the Phase 2 gate.",
+      "files": ["src/ossbot/gatekeeper/telegram/status_card.py", "docs/TRACEABILITY.md", "docs/VERIFICATION.md"]
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-010.md"
