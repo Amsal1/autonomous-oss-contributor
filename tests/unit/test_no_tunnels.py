@@ -20,6 +20,8 @@ SKIP_DIRS = {".git", "docs", ".ossbot-local", ".wsl", ".venv", "node_modules", "
 SELF = Path(__file__).resolve()
 # guards that name the forbidden tools on purpose (they check that none is installed or configured)
 GUARDS = {SELF, (ROOT / "tests/system/test_no_exposure.sh").resolve()}
+# the user and agent docs state the no-exposure rule and name the forbidden tools (like docs/, which is skipped)
+GUARDS |= {ROOT / "README.md", ROOT / "AGENTS.md", *(ROOT / ".kiro/steering").glob("*.md")}
 FORBIDDEN = {
     "cloudflared tunnel": re.compile(r"(?i)\bcloudflared\b|trycloudflare"),
     "ngrok": re.compile(r"(?i)\bngrok\b"),
