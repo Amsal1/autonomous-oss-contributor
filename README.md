@@ -134,7 +134,7 @@ and `request` never touch an approval or the ceiling. The command table below is
 | `/size` | Autonomous size preference (xs…xl; /work ignores it) | tune |
 | `/skills` | Staged and active Hermes skills | read |
 | `/start` | What ossbot is and where things are | read |
-| `/status` | Control state, dry-run, config and audit heads, queue counts | read |
+| `/status` | The dashboard card (state, dry-run, work, approvals, config and audit heads) | read |
 | `/title` | Rename this chat topic | personal |
 | `/undrain` | Stop draining and schedule work again (asks for confirmation) | go |
 | `/up` | Start the workers again (asks for confirmation) | go |

@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import socket
+from datetime import datetime
 from pathlib import Path
 
+from ossbot.common.clock import from_iso
 from ossbot.gatekeeper.audit import Anchor
 
 log = logging.getLogger(__name__)
@@ -37,6 +40,25 @@ def parse_anchors(path: Path) -> tuple[list[Anchor], list[str]]:
         except (ValueError, KeyError, TypeError) as exc:
             errors.append(f"anchors line {number}: {exc}")
     return anchors, errors
+
+
+def last_anchor_time(path: Path) -> datetime | None:
+    """The ``ts`` of the newest anchor line (reads only the file's tail); None when there is none."""
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - 2 * MAX_ANCHOR_LINE))
+            tail = fh.read().decode("utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(tail):
+        try:
+            doc = json.loads(line)
+            return from_iso(str(doc["ts"]))
+        except (ValueError, KeyError, TypeError):
+            continue
+    return None
 
 
 class AnchorClient:

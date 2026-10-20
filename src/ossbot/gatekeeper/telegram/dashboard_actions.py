@@ -39,9 +39,17 @@ async def _run(tap: Tap, name: str, args: list[str] | None = None) -> str:
     return ""
 
 
+def _refresh(tap: Tap) -> None:
+    """Refresh the pinned dashboard, and the /status copy the tap came from (same builder)."""
+    dashboard = ui_of(tap.app).dashboard
+    dashboard.tick(force=True)
+    if tap.message_id is not None and not dashboard.is_pinned(tap.message_id):
+        dashboard.refresh_copy(tap.message_id)
+
+
 @action("dash_refresh")
 async def refresh(tap: Tap) -> str:
-    ui_of(tap.app).dashboard.tick(force=True)
+    _refresh(tap)
     return "Refreshed."
 
 
@@ -54,7 +62,7 @@ async def queue(tap: Tap) -> str:
 async def pause(tap: Tap) -> str:
     tap.app.control.pause("telegram dashboard", tap.actor)
     tap.handlers.cancel(tap.handlers.KILL_CANCELS)
-    ui_of(tap.app).dashboard.tick(force=True)
+    _refresh(tap)
     return "⏸ Paused."
 
 
@@ -80,7 +88,7 @@ async def down(tap: Tap) -> str:
 
 @action("dash_kill")
 async def kill_first(tap: Tap) -> str:
-    ui_of(tap.app).dashboard.arm_kill()
+    ui_of(tap.app).dashboard.arm_kill(tap.message_id)
     return "Tap 🛑 again within 10 s to kill."
 
 
@@ -88,5 +96,5 @@ async def kill_first(tap: Tap) -> str:
 async def kill_second(tap: Tap) -> str:
     tap.app.control.kill("telegram dashboard", tap.actor, "soft")
     tap.handlers.cancel(tap.handlers.KILL_CANCELS)
-    ui_of(tap.app).dashboard.tick(force=True)
+    _refresh(tap)
     return "🛑 Killed. /resume to continue."

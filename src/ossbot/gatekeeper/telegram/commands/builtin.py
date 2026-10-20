@@ -7,7 +7,6 @@ re-runs an interrupted or executing outbound action.
 
 from __future__ import annotations
 
-from ossbot.gatekeeper import ratelimit
 from ossbot.gatekeeper.control import ControlConflict
 from ossbot.gatekeeper.telegram.commands.registry import (
     COMMANDS,
@@ -17,7 +16,7 @@ from ossbot.gatekeeper.telegram.commands.registry import (
     command,
     confirm_handler,
 )
-from ossbot.gatekeeper.telegram.escape import b, code, esc
+from ossbot.gatekeeper.telegram.escape import b, esc
 from ossbot.gatekeeper.telegram.runtime import ui_of
 
 REASON_MAX = 300
@@ -27,31 +26,12 @@ def _reason(args: list[str], default: str) -> str:
     return (" ".join(args).strip() or default)[:REASON_MAX]
 
 
-@command("status", help="Control state, dry-run, config and audit heads, queue counts", safety="read")
+@command("status", help="The dashboard card (state, dry-run, work, approvals, config and audit heads)",
+         safety="read")  # fmt: skip
 async def status(ctx: CommandContext, args: list[str]) -> Reply:
-    app = ctx.app
-    view = app.control.view()
-    counts = app.conn.execute("SELECT state, COUNT(*) AS n FROM contributions GROUP BY state ORDER BY state").fetchall()
-    limits = app.config.policy.limits
-    used = {kind: ratelimit.used_in_window(app.conn, app.clock, kind) for kind in ("open_pr", "comment", "issue_claim")}
-    lines = [
-        f"{b('ossbot')} · state {b(view.state.upper())}"
-        + (f" ({esc(view.kill_level)})" if view.kill_level else "")
-        + f" · {'<b>DRY RUN</b>' if view.dry_run else '<b>LIVE</b>'}",
-        f"Reason: {esc(view.reason or '-')} · since {esc(view.since)}",
-        f"Config {code(view.config_hash[:12])} · audit head {code(view.audit_head[:12])}",
-        f"Today: PRs {used['open_pr']}/{limits.prs_per_24h} · comments {used['comment']}/{limits.comments_per_24h}"
-        f" · claims {used['issue_claim']}/{limits.issue_claims_per_24h}",
-    ]
-    if counts:
-        lines.append("Contributions: " + ", ".join(f"{esc(r['state'])} {r['n']}" for r in counts))
-    poll = app.poll_stats.as_dict()
-    lines.append(
-        f"Lifecycle {b(view.lifecycle)} · Telegram last poll {esc(poll['last_ok_at'] or '-')}"
-        f" · reconnects {poll['reconnects']}"
-    )
-    lines.append(f"Egress mode {b(app.control.egress_mode(app.config.egress.mode_default))}")
-    return Reply("\n".join(lines))
+    """The same card as the pinned dashboard (one builder), sent into the topic it was asked from; its
+    buttons are its own tokens, so taps act on this copy (DESIGN §14.14.1)."""
+    return Reply("", view=ui_of(ctx.app).dashboard.view(None, kind="status"))
 
 
 @command("pause", help="Pause the pipeline (immediate)", safety="stop")
@@ -128,7 +108,7 @@ async def start(ctx: CommandContext, args: list[str]) -> Reply:
 @command("dashboard", help="Re-send and pin the live dashboard", safety="read")
 async def dashboard(ctx: CommandContext, args: list[str]) -> Reply:
     ui_of(ctx.app).dashboard.send_new()
-    return Reply("📌 Dashboard re-sent; it is pinned in 🚦 Control.")
+    return Reply("📌 Dashboard re-sent into 🚦 Control and pinned there.")
 
 
 @command("help", help="List commands", safety="read")

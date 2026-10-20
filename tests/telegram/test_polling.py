@@ -116,7 +116,7 @@ async def test_poller_reconnects_and_keeps_pending_updates(ctx: AppContext) -> N
         await app.shutdown()
     replies = [p["text"] for m, p in req.calls if m == "sendMessage"]
     assert replies, "the pending /status update was lost"
-    assert "reconnects 1" in replies[0]
+    assert "1 reconnect(s)" in replies[0]  # the /status card's Telegram line
     stats = ctx.poll_stats.as_dict()
     assert stats["reconnects"] == 1 and stats["total_failures"] == 2 and stats["consecutive_failures"] == 0
     assert stats["last_ok_at"] is not None and "NetworkError" in (stats["last_error"] or "")

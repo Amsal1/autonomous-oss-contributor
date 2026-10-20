@@ -3137,7 +3137,7 @@ Arguments are chosen with pickers (`Picker`, ≤ 8 options per page, ≤ 3 per r
 | `/start` | read | Welcome + `/dashboard` | Global command |
 | `/help` | read | Generated from the registry, grouped Control / Reviews / Assistant / Settings | Global command |
 | `/settings` | personal | `[🖼 Rich views: auto] [🔕 Notifications…] [🌙 Quiet hours…] [📰 Digest…] [🐙 Mirror: off ⓘ]` | Mirror enabling is config (U9); the button explains how |
-| `/status` | read | Full status text (existing) + `[📌 Dashboard]` | |
+| `/status` | read | The dashboard card (same builder as the pinned dashboard, incl. the config/audit heads with the last anchor and today's counters), sent into the topic it was asked from; its buttons are its own tokens and act on that copy (post-v1, owner request 2026-10-20) | |
 | `/dashboard` | read | Re-send and re-pin | |
 | `/queue` | read | Ranked pager, gate 2 then gate 1, `[📥 Open n]` keeps each item's expiry (§14.11.13, mockup 12) | |
 | `/work <url> [notes]` | request | Typed only (the URL is the argument); without an argument: "Send /work <GitHub issue, PR or repo URL> [notes], or just paste a link" | CR-004 Amendment B; §14.11.19 |

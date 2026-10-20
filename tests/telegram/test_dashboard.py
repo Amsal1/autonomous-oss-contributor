@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
@@ -60,8 +61,15 @@ async def test_dashboard_is_sent_pinned_and_golden(ctx: AppContext) -> None:
         pins = [p for m, p in rig.req.calls if m == "pinChatMessage"]
         assert pins and pins[-1]["message_id"] == _dashboard_id(ctx) and pins[-1]["disable_notification"] is True
         body = payload["text"].split("<i>Updated")[0]
-        # the model line follows config/models.yaml (switched live and committed): not part of the golden
-        golden.check("dashboard.html", "\n".join(ln for ln in body.splitlines() if not ln.startswith("Models: ")))
+        # the model line follows config/models.yaml (switched live and committed) and the config/audit heads
+        # follow the fixture config and audit rows: not part of the golden, their shape is checked instead
+        heads = [ln for ln in body.splitlines() if ln.startswith("Config ")]
+        assert len(heads) == 1 and re.fullmatch(
+            r"Config <code>[0-9a-f]{12}</code> · audit <code>[0-9a-f]{12}</code> · anchor none yet", heads[0]
+        ), heads
+        assert "Today: PRs 0/" in body and " · comments 0/" in body and " · claims 0/" in body
+        kept = [ln for ln in body.splitlines() if not ln.startswith(("Models: ", "Config "))]
+        golden.check("dashboard.html", "\n".join(kept))
 
 
 async def test_edits_are_throttled_and_skipped_when_unchanged(ctx: AppContext, rig: TgRig, clock: FakeClock) -> None:

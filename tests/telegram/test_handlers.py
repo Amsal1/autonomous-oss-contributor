@@ -380,7 +380,7 @@ async def test_help_and_status(ctx: AppContext, bot: Bot) -> None:
         assert f"/{name}" in text
     await bot.say("/status")
     status_text = bot.req.last("sendMessage")["text"]
-    assert "RUNNING" in status_text
+    assert "<b>ossbot</b> · UP · " in status_text  # the dashboard card (same builder as the pinned one)
     assert "DRY RUN" in status_text
     _, approval, _ = card(ctx)
     await bot.say("/approve everything")  # /approve only re-sends a card; it never approves (I1, delta 5)

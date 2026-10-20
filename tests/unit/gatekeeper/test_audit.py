@@ -12,7 +12,7 @@ import pytest
 
 from ossbot.common.clock import FakeClock
 from ossbot.gatekeeper import db
-from ossbot.gatekeeper.anchors import AnchorClient, parse_anchors
+from ossbot.gatekeeper.anchors import AnchorClient, last_anchor_time, parse_anchors
 from ossbot.gatekeeper.audit import GENESIS, AuditLog, row_hash, verify
 
 
@@ -107,6 +107,17 @@ def test_parse_anchors_reports_malformed(tmp_path: Path) -> None:
     anchors, errors = parse_anchors(path)
     assert len(anchors) == 1 and len(errors) == 1
     assert parse_anchors(tmp_path / "missing.log") == ([], [])
+
+
+def test_last_anchor_time_reads_the_newest_valid_line(tmp_path: Path) -> None:
+    path = tmp_path / "a.log"
+    old = '{"seq": 1, "row_hash": "x", "ts": "2026-10-20T10:00:00Z"}\n' * 500
+    path.write_text(old + '{"seq": 2, "row_hash": "y", "ts": "2026-10-20T10:05:00Z"}\nnot json\n')
+    when = last_anchor_time(path)
+    assert when is not None and when.isoformat() == "2026-10-20T10:05:00+00:00"
+    assert last_anchor_time(tmp_path / "missing.log") is None
+    (tmp_path / "empty.log").write_text("")
+    assert last_anchor_time(tmp_path / "empty.log") is None
 
 
 def test_anchor_client_trigger(tmp_path: Path) -> None:

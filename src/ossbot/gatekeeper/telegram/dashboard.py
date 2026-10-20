@@ -22,7 +22,8 @@ from ossbot.common import models as model_cfg
 from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.hashing import sha256_text
 from ossbot.common.ids import new_token
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import db, ratelimit
+from ossbot.gatekeeper.anchors import last_anchor_time
 from ossbot.gatekeeper.outbox import OutboxRow, SendError
 from ossbot.gatekeeper.telegram.prefs import UxPrefs
 from ossbot.gatekeeper.telegram.ui import classic, icons
@@ -43,6 +44,13 @@ RUNNING_LINES = 3
 
 def _unix(ts: datetime) -> int:
     return int(ts.timestamp())
+
+
+def _parse_ts(value: str | None) -> datetime | None:
+    try:
+        return from_iso(value) if value else None
+    except ValueError:
+        return None
 
 
 class Dashboard:
@@ -75,12 +83,20 @@ class Dashboard:
         conn = ctx.conn
         now = ctx.clock.now()
         prefs = UxPrefs(conn, ctx.clock)
+        control = ctx.control.view()
         egress = ctx.control.egress_mode(ctx.config.egress.mode_default)
         tier = ctx.control.hermes_tier(ctx.config.policy.hermes.capability_tier_default)
         rich_pref = prefs.get("rich_views", ctx.config.telegram.rich_views_default)
         size = ctx.discovery_prefs.effective(None).autonomous_max_class
         facts = f"Egress: {egress} · Hermes: {tier} · Rich views: {rich_pref} · Auto size ≤ {size}"
-        out: list[k.Line] = [k.line(facts)]
+        out: list[k.Line] = []
+        if control.state != "running":  # why it is paused or killed, and since when (old /status line)
+            reason: list[k.Span] = [k.Const("Reason: "), k.Text(control.reason or "-", 200)]
+            since = _parse_ts(control.since)
+            if since is not None:
+                reason += [k.Const(" · since "), k.Time(_unix(since), since.strftime("%d %b %H:%M"))]
+            out.append(tuple(reason))
+        out.append(k.line(facts))
         running = conn.execute(
             "SELECT cid, stage, started_at FROM stage_runs WHERE status = 'running' ORDER BY started_at"
         ).fetchall()
@@ -110,6 +126,11 @@ class Dashboard:
             " GROUP BY state")}  # fmt: skip
         out.append(k.line(f"Queue: {counts.get('VETTED', 0)} vetted · {counts.get('WATCHING', 0)} watching"
                           f" · {counts.get('PROPOSED', 0)} proposed"))  # fmt: skip
+        limits = ctx.config.policy.limits
+        used = {kind: ratelimit.used_in_window(conn, ctx.clock, kind) for kind in ("open_pr", "comment", "issue_claim")}
+        today = (f"Today: PRs {used['open_pr']}/{limits.prs_per_24h} · comments {used['comment']}/"
+                 f"{limits.comments_per_24h} · claims {used['issue_claim']}/{limits.issue_claims_per_24h}")  # fmt: skip
+        out.append(k.line(today))
         poll = ctx.poll_stats.as_dict()
         tg: list[k.Span] = [k.Const("Telegram: last poll ")]
         if poll.get("last_ok_at"):
@@ -120,6 +141,12 @@ class Dashboard:
         tg.append(k.Const(f" · {poll.get('reconnects', 0)} reconnect(s)"))
         out.append(tuple(tg))
         out.append(k.line(self._models()))
+        # DESIGN §12.7: the config and audit heads with the last root anchor time
+        audit: list[k.Span] = [k.Const("Config "), k.Code(k.Const(control.config_hash[:12])), k.Const(" · audit "),
+                               k.Code(k.Const(control.audit_head[:12])), k.Const(" · anchor ")]  # fmt: skip
+        anchored = last_anchor_time(ctx.paths.audit_anchors_log)
+        audit.append(k.Time(_unix(anchored), anchored.strftime("%H:%M")) if anchored else k.Const("none yet"))
+        out.append(tuple(audit))
         return out
 
     def _models(self) -> str:
@@ -131,6 +158,16 @@ class Dashboard:
         return f"Models: chat {names['chat']} · coder {names['coder']} · vision {names['vision']}"
 
     def render(self, tokens: dict[str, str], *, kill_armed: str | None = None) -> k.View:
+        """The pinned dashboard: rows bound to its message's reused token set."""
+        view = self.view(tokens, kill_armed=kill_armed)
+        view.state = {"tokens": tokens}
+        return view
+
+    def view(self, tokens: dict[str, str] | None = None, *, kill_armed: str | None = None,
+             kind: str = "dashboard") -> k.View:  # fmt: skip
+        """The one dashboard builder, for the pinned dashboard and for ``/status`` (kind ``status``).
+        ``tokens`` None = fresh buttons (same labels, purposes and order), minted and bound to the new
+        message when it is sent (``ui.send.deliver``), so a /status copy never shares the pinned tokens."""
         now = self.ctx.clock.now()
         blocks = [
             k.Block((k.Lines((self.header(),)),), name="header"),
@@ -138,28 +175,32 @@ class Dashboard:
         ]
         updated = k.FooterEl((k.Const("Updated "), k.Time(_unix(now), now.strftime("%H:%M"))))
         blocks.append(k.Block((updated,), name="footer"))
-        view = k.View(kind="dashboard", blocks=blocks, rows=self.rows(tokens, kill_armed=kill_armed))
-        view.state = {"tokens": tokens}
-        return view
+        return k.View(kind=kind, blocks=blocks, rows=self.rows(tokens, kill_armed=kill_armed))
 
-    def rows(self, tokens: dict[str, str], *, kill_armed: str | None = None) -> k.Rows:
+    def rows(self, tokens: dict[str, str] | None, *, kill_armed: str | None = None) -> k.Rows:
         ctx = self.ctx
         view = ctx.control.view()
         pending = int(ctx.conn.execute(
             "SELECT (SELECT COUNT(*) FROM approvals WHERE status IN ('pending','armed')) +"
             " (SELECT COUNT(*) FROM proposal_approvals WHERE status IN ('pending','armed'))"
         ).fetchone()[0])  # fmt: skip
+
+        def btn(label: str, purpose: str, *, style: k.Style | None = None) -> k.ButtonSpec:
+            if tokens is not None:
+                return k.bound(label, tokens[purpose], style=style)
+            return k.button(label, purpose, {"hours": 1} if purpose == "quiet_set" else {}, style=style, ttl=TOKEN_TTL)
+
         if view.state != "running":
-            pause = k.bound("▶️ Resume…", tokens["dash_resume"])
+            pause = btn("▶️ Resume…", "dash_resume")
         else:
-            pause = k.bound("⏸ Pause", tokens["dash_pause"])
+            pause = btn("⏸ Pause", "dash_pause")
         if kill_armed:
             last = [k.bound("🛑 Tap again to kill (10 s)", kill_armed, style="danger")]
         else:
-            last = [k.bound("⬇️ Down…", tokens["dash_down"]), k.bound("🛑 Kill", tokens["dash_kill"], style="danger")]
+            last = [btn("⬇️ Down…", "dash_down"), btn("🛑 Kill", "dash_kill", style="danger")]
         return [
-            [k.bound("🔄 Refresh", tokens["dash_refresh"]), k.bound(f"📥 Approvals ({pending})", tokens["dash_queue"])],
-            [pause, k.bound("🌙 Quiet 1h", tokens["quiet_set"])],
+            [btn("🔄 Refresh", "dash_refresh"), btn(f"📥 Approvals ({pending})", "dash_queue")],
+            [pause, btn("🌙 Quiet 1h", "quiet_set")],
             last,
         ]
 
@@ -253,16 +294,33 @@ class Dashboard:
         self._last_edit = now
         return True
 
-    def arm_kill(self) -> str:
-        """First Kill tap: a 10-s single-use second-tap token on the dashboard message (D14)."""
+    def is_pinned(self, message_id: int | None) -> bool:
+        """Whether ``message_id`` is the current pinned dashboard (not a /status copy)."""
         current = self.row()
-        if current is None:
-            raise LookupError("no dashboard")
+        return message_id is None or (current is not None and int(current["message_id"]) == message_id)
+
+    def refresh_copy(self, message_id: int, *, kill_armed: str | None = None) -> None:
+        """Re-render a /status copy in place (fresh tokens bound to that message)."""
+        ui_send.edit(self.ctx, self.view(None, kill_armed=kill_armed, kind="status"), message_id=message_id)
+
+    def arm_kill(self, message_id: int | None = None) -> str:
+        """First Kill tap: a 10-s single-use second-tap token on the tapped message (D14): the pinned
+        dashboard, or the /status copy the tap came from."""
+        pinned = self.is_pinned(message_id)
+        if pinned:
+            current = self.row()
+            if current is None:
+                raise LookupError("no dashboard")
+            message_id = int(current["message_id"])
+        assert message_id is not None
         token = self.ctx.approvals.mint_token(
-            "danger_second_tap", chat_id=self.ctx.telegram_chat_id, message_id=int(current["message_id"]),
+            "danger_second_tap", chat_id=self.ctx.telegram_chat_id, message_id=message_id,
             expires_at=self.ctx.clock.now() + KILL_SECOND_TAP, arg=json.dumps({"action": "kill"}),
         )  # fmt: skip
-        self.tick(force=True, kill_armed=token)
+        if pinned:
+            self.tick(force=True, kill_armed=token)
+        else:
+            self.refresh_copy(message_id, kill_armed=token)
         return token
 
     # ------------------------------------------------------------------ outbox hooks
