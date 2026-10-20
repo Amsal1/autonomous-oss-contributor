@@ -589,6 +589,25 @@ ran on the code deployed from 990e595 (the backend code; later commits change do
 | `backend: kiro` live | `config/models.yaml` uncommented after the redeploy; `scripts\ossctl.ps1 model list`; `scripts\ossctl.ps1 doctor --quick` | the gatekeeper reads the file (all roles resolved, catalog 20 models); doctor PASS 41 |
 | Services | `systemctl is-active` runner, sandboxd, gatekeeper, hermes; runner and sandboxd journal since the redeploy | all active; no error or traceback (one `chat_jobs_poll_failed` 503 while the gatekeeper restarted) |
 
+## Post-v1 close-out (2026-10-20)
+
+At 8179355 (Packages A, BACKEND and OSS; details: `.ossbot-local/postv1/verify-final.md`, not tracked).
+Dry-run stayed ON, no GitHub write, Windows not restarted, nothing pushed.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `.ossbot-local\lint.ps1` (ruff check, ruff format --check, mypy, lint-imports) | all clean; 515 files formatted, mypy 245 files, 12 contracts kept, 0 broken |
+| shellcheck | `git ls-files -z '*.sh' .githooks/pre-commit \| xargs -0 shellcheck -S warning` (the CI gate) | 41 files, clean |
+| Personal values | `ossctl lint personal` | 836 tracked files, 9 profile values and 3 strict values: 0 hits |
+| README table | `ossctl docs commands --check` | current |
+| Secrets | `gitleaks git --redact --no-banner --config .gitleaks.toml .` | 228 commits, no leaks (the pre-commit hook covers staged changes) |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120 -q` | 3647 passed |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | exit 0; doctor PASS 40, WARN 1 (hermes tool surface ConnectError while Hermes restarted); `doctor --quick` afterwards PASS 41 |
+| Item 2 Kiro cancel (O5) | `ROOT ossctl hermes probe --cancel-check` (roles.test) | pass: `stopReason cancelled` 0.01 s after `session/cancel`; owner Stop in the real chat as expected, Hermes log `Interrupted during API call`, no "in-flight request may keep running" |
+| Items 3/4 /status and pin (O1) | owner `/status` in Control and All; `scripts\ossctl.ps1 logs gatekeeper -Grep dashboard_` | `/status` is the same icon card everywhere; dashboard pinned in Control (`dashboard_pinned thread=125003`), edited in place. Open: `/status` in All creates a new empty topic named "/status" and the card lands in All (FINAL_REPORT "Known limitations") |
+| Simulated shutdown | `tests\system\test_shutdown_blocker.ps1` | 50 PASS, 0 FAIL: `channel: sent down 90 blocker`, `ack`, `drained exit=0 elapsed=10.1`; lifecycle.log `down kind=graceful caller=blocker …: start timeout=90 (channel)`, `end exit=0`; `up.ps1` brought the units back; `status.ps1` `last shutdown graceful (marker …)` |
+| Lifecycle and logs scripts | `tests\system\test_lifecycle_scripts.ps1`; `tests\system\test_ossctl_logs.ps1` | 62 PASS; 21 PASS |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
@@ -598,3 +617,5 @@ Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.m
 | 2026-10-20 | O3 | CR3-V-2, CR3-V-3 | draft streamed, Stop ended it with partial text, no Too Many Requests |
 | 2026-10-20 | O5 | CR3-V-7 | Stop interrupts the Hermes turn; Kiro ACP request not cancelled (no session/cancel), log: in-flight request may keep running |
 | 2026-10-20 | O1 | CR3-V-4 | Threaded mode on; topics created; dashboard pin shows in All, not Control (item 4 / A4) |
+| 2026-10-21 | O5 | CR3-V-7 | re-check after post-v1 item 2: live cancel-check on roles.test pass (stopReason cancelled 0.01 s after session/cancel); Stop in the real chat behaved as expected, Hermes log 'Interrupted during API call', no in-flight-request warning |
+| 2026-10-21 | O1 | CR3-V-4 | re-check after post-v1 items 3/4: dashboard pinned in Control and edited in place (journal dashboard_pinned thread=125003); /status replies with the same icon card everywhere; open: /status sent in All creates a new empty topic named /status and the card lands in All (follow-up) |

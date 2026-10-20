@@ -69,9 +69,10 @@ The 53 deferred rows each carry their reason in TRACEABILITY. Grouped:
 - **Owner-only live checks** (CR3-V-1…16 except V-10, DES-V-32, CR2-7l, CR3-IH-4, DES-V-17, DES-V-18).
   They need your Telegram clients, the real Bot API or a first live write. Steps are under "Owner live
   checks" (O1-O8).
-- **Real Windows restart** (CR1-6a, CR1-6b, DES-V-31, DES-AC-32). A restart would have stopped the
-  build, and an earlier real shutdown showed 6a does not drain yet (F011-N1). Steps are under "Restart
-  test" (R1). You decided on 2026-10-20 to defer it. The gate asks you to confirm that v1 ships with it
+- **Real Windows restart** (CR1-6a, CR1-6b, DES-V-31, DES-AC-32, PV1-A1). A restart would have stopped
+  the build, and an earlier real shutdown showed v1's 6a did not drain (F011-N1). Post-v1 the drain
+  goes through a channel opened at logon; the simulated test passes. Steps are under "Restart test"
+  (R1). You decided on 2026-10-20 to defer it. The gate asks you to confirm that v1 ships with it
   open.
 - **Your decisions**:
   - CR3-IH-2 / F010-N1: what Re-attempt later means on a closed-PR card.
@@ -88,7 +89,9 @@ Other decisions still open:
 - Reverse image search provider: the key hook and skill stub exist, DES-DEF-12.
 - Whether ossbot should come back up by itself after a cancelled Windows shutdown (ADR-0021: today it
   stays down until `scripts\up.ps1` or the next logon).
-- The license, before the repository goes public (README "License: TBD").
+
+The license is decided (post-v1): Apache-2.0 with a NOTICE file that keeps the credit (README
+"License").
 
 ## Day-to-day use
 
@@ -148,13 +151,18 @@ The first live PR candidate is the V3 ACP adapter for
 
 - **Shutdown drain (6a).** v1 did not drain on a real Windows shutdown: its `down.ps1` child exited
   `0xC0000142` and the next start reported `last shutdown unclean`. Crash safety held, with no lost or
-  duplicated work. Post-v1 the blocker drains through a channel opened at logon (ADR-0021 addendum);
-  the simulated test passes, and R1 has to confirm it on a real restart. 6b is retired.
+  duplicated work. Fixed in code post-v1: the blocker drains through a channel opened at logon
+  (ADR-0021 addendum), and the simulated test passes. A real restart is still unproven (R1 pending).
+  6b is retired.
 - **Threaded mode and the pin.** Telegram runs in flat mode until Threaded mode is on in @BotFather.
   `pinChatMessage` cannot name a thread: the dashboard is pinned only once it is in 🚦 Control, and a
-  client may still list that pin in "All" (O1, ADR-0020 addendum).
-- **Telegram on real clients.** Rich views, streaming rate, Stop through to Hermes, and photo albums
-  are covered by hermetic tests only (O2-O6). Voice notes answer "Voice isn't supported yet".
+  client may still list that pin in "All" (O1, ADR-0020 addendum). The pinned dashboard is edited in
+  place; `/status` replies are fresh copies and are not pinned.
+- **`/status` in All** (O1, PV1-A3, open). Sent in "All" with Threaded mode on, `/status` creates a
+  new empty topic named "/status", and the card lands in All. In 🚦 Control and the other threads it
+  answers in place. Use `/status` in Control until this is fixed.
+- **Telegram on real clients.** Rich views and photo albums are covered by hermetic tests only (O2, O4,
+  O6). Streaming and Stop were checked live (O3, O5). Voice notes answer "Voice isn't supported yet".
 - **Cancelled shutdown.** After a cancelled Windows shutdown ossbot stays down until `up`.
 - **CI** is `workflow_dispatch` only, so run it by hand from Actions.
 - **Redeploys** are fast (about 13 s) unless `sandbox/` changes and the images rebuild.
@@ -201,9 +209,13 @@ Commit `docs/TRACEABILITY.md` and `docs/VERIFICATION.md` afterwards.
 were created, but the dashboard pin showed in "All", not in Control. Fixed post-v1 (item 4): the
 dashboard is pinned only once its send result is in Control, and re-sent into Control once otherwise
 (ADR-0020 addendum). `pinChatMessage` cannot name a thread, so a client may still list the pin in "All".
-- Steps (re-check after the post-v1 redeploy): turn on Threaded mode in @BotFather (SETUP "Telegram
-  Threaded mode"), restart the gatekeeper, then send `/dashboard` in 🚦 Control and `/status` in All
-  and in Control.
+**Re-check 2026-10-20 (open):** the dashboard is pinned in Control and edited in place
+(`dashboard_pinned thread=125003`), and `/status` answers with the same icon card everywhere. One gap
+remains: `/status` sent in "All" creates a new empty topic named "/status", and the card lands in All
+("Known limitations"). The row stays `missing` until that is fixed.
+- Steps (re-check after that fix): turn on Threaded mode in @BotFather (SETUP "Telegram Threaded
+  mode"), restart the gatekeeper, then send `/dashboard` in 🚦 Control and `/status` in All and in
+  Control.
 - Expected: the dashboard is in Control and pinned in Control's pinned bar;
   `scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep dashboard_` shows `dashboard_pinned thread=<id>`.
   `/status` answers with the same icon card as the pinned dashboard, in the thread you asked from.
@@ -221,7 +233,8 @@ dashboard is pinned only once its send result is in Control, and re-sent into Co
   - Labels are cut with `…`, never wrapped into each other.
   - An answer that cannot nest a block falls back to classic.
 
-**O3 Streaming and Stop** (CR3-V-2, CR3-V-3).
+**O3 Streaming and Stop** (CR3-V-2, CR3-V-3). Done 2026-10-20: the draft streamed, Stop ended it with
+partial text, and no Too Many Requests was logged.
 - Steps: ask Hermes a long question in a thread. Then ask another and tap ⏹ Stop after a few lines.
 - Expected:
   - A draft appears within 1 s and updates at most once a second.
@@ -238,14 +251,18 @@ dashboard is pinned only once its send result is in Control, and re-sent into Co
   - The `.html` opens in a browser or viewer.
   - The command text is not a tappable link.
 
-**O5 Hermes API** (CR3-V-7). **Re-opened** (2026-10-20): Stop interrupted the Hermes turn, but the
-Kiro ACP request kept running ("no sockets found; in-flight request may keep running"). Post-v1 item 2
-adds `KiroV3Client.cancel()` (ACP `session/cancel`, ADR-0002 addendum). O5 stays open until the live
-`ossctl hermes probe --cancel-check` on roles.test passes and you re-check Stop.
-- Steps: during O3, tap ⏹ Stop, then run
+**O5 Hermes API** (CR3-V-7). Re-opened 2026-10-20: Stop interrupted the Hermes turn, but the Kiro ACP
+request kept running ("no sockets found; in-flight request may keep running"). Post-v1 item 2 adds
+`KiroV3Client.cancel()` (ACP `session/cancel`, ADR-0002 addendum). **Done 2026-10-20 (close-out):**
+`ossctl hermes probe --cancel-check` on roles.test passed (`stopReason cancelled` 0.01 s after the
+cancel), and your Stop in the real chat behaved as expected. The journal shows `Interrupted during API
+call` and no "in-flight request may keep running".
+- Steps (to re-check): ask a long question, tap ⏹ Stop, then run
   `scripts\ossctl.ps1 logs hermes -Since 15m -Grep "interrupt|cancel|kiro_acp turn"`.
-- Expected: `kiro_acp cancel: session/cancel sent` and `kiro_acp turn: … stop=cancelled` within a few
-  seconds of the Stop, and no "no sockets found; in-flight request may keep running".
+- Expected: an interrupt line within a few seconds of the Stop, and no "no sockets found; in-flight
+  request may keep running". The provider's `kiro_acp cancel: session/cancel sent` and
+  `kiro_acp turn: … stop=cancelled` are INFO lines; the journal shows them only when Hermes logs INFO
+  there. As root, `ossctl hermes probe --cancel-check` proves the cancel path directly.
 
 **O6 Photos** (CR2-7l, CR3-IH-4, CR3-V-8, CR3-V-13).
 - Steps: send a food photo (compressed), then an album of 2-3 photos, then a photo sent as a file.
@@ -305,7 +322,8 @@ Steps:
 
 Expected:
 
-- (a) yes, (b) yes, (c) up to about 90 s.
+- (a) yes, (b) yes, (c) usually 10-20 s; at most about 120 s (the 90 s drain plus the blocker's 30 s
+  slack, ADR-0021 addendum).
 - The blocker log shows `channel: sent down 90 blocker`, `channel: ack`, `channel: drained exit=0`
   and `drain exit=0; block reason destroyed=True`, with no `started pid` or `spawn refused` line.
 - `lifecycle.log` shows `down kind=graceful caller=blocker pid=…: start timeout=90 (channel)` and

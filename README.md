@@ -92,7 +92,9 @@ digest) and 💬 **Assistant** (Hermes). Every other thread you create is a sepa
 With Threaded mode off, everything works in one chat with section headers. `/status` answers with the
 same card as the pinned dashboard, in the thread you asked from. The Bot API cannot pin into a thread:
 the pin belongs to the message, so the dashboard is sent into Control and pinned there; some clients
-also list that pin in the "All" view, and tapping it jumps to Control.
+also list that pin in the "All" view, and tapping it jumps to Control. Known gap: `/status` sent in the
+"All" view creates a new empty thread named "/status" and the card lands in All; ask in 🚦 Control
+instead until it is fixed.
 
 Every non-command message (text, photos and albums, documents, voice notes, locations, replies) goes
 to Hermes, which streams answers with sources and a ⏹ Stop button. Hermes can never approve, resume,
