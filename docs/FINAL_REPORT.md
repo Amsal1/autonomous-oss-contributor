@@ -1,7 +1,7 @@
 # ossbot v1: final report
 
 Phase 2 is finished. The Phase 2 gate (round 1, `docs/final-gate.md` and `docs/final-gate.json`) is
-APPROVED at b21058b with no HIGH or MEDIUM findings. Evidence for every line here is in
+APPROVED at 6391fae with no HIGH or MEDIUM findings. Evidence for every line here is in
 `docs/VERIFICATION.md` (newest first) and requirement status in `docs/TRACEABILITY.md`. Dry-run stayed
 ON for the whole build and nothing was ever written to GitHub.
 
@@ -24,19 +24,19 @@ ossbot v1 is deployed on this laptop in the `ossbot` distro. Each feature passed
 
 | Check | SHA | Result |
 |---|---|---|
-| Hermetic suites (`unit or telegram or acp or e2e`, `-n auto`) | cdd6e39 | 3529 passed in 48 s |
-| Sandbox and Docker e2e (root) | cdd6e39 | 19 passed |
-| Lint gate (ruff, format, mypy, lint-imports) after the NIT fixes | 437c887 | clean; mypy 240 files; 11 contracts kept |
-| Tests affected by the NIT fixes (ctl, runner, CI workflow) | 437c887 | 257 passed (after fixing 22 test-side failures) |
-| shellcheck and PSScriptAnalyzer 1.25.0 | 437c887 | clean, 0 errors |
-| System: egress surface, crash safety, lifecycle, no exposure | 437c887 | PASS 241, 20, 47, 20 |
-| System: kill | 437c887, then c6e9937 | cases 1-5 PASS; case 6 found a real defect (resume did not re-enable autostart), fixed in c6e9937, re-run green |
-| Doctor `--probes` and Windows doctor | c6e9937 | PASS 46 and PASS 45, no FAIL, WARN or SKIP |
-| gitleaks over the history | c6e9937 | 209 commits, no leaks |
-| `ossctl lint personal --staged` | 437c887 | 804 files, 0 hits |
-| Traceability matrix | b21058b | 522 rows: 469 done, 53 deferred, 0 missing or rework |
+| Hermetic suites (`unit or telegram or acp or e2e`, `-n auto`) | 43dd6fb | 3529 passed in 48 s |
+| Sandbox and Docker e2e (root) | 43dd6fb | 19 passed |
+| Lint gate (ruff, format, mypy, lint-imports) after the NIT fixes | 7d6d7e3 | clean; mypy 240 files; 11 contracts kept |
+| Tests affected by the NIT fixes (ctl, runner, CI workflow) | 7d6d7e3 | 257 passed (after fixing 22 test-side failures) |
+| shellcheck and PSScriptAnalyzer 1.25.0 | 7d6d7e3 | clean, 0 errors |
+| System: egress surface, crash safety, lifecycle, no exposure | 7d6d7e3 | PASS 241, 20, 47, 20 |
+| System: kill | 7d6d7e3, then 557b9d1 | cases 1-5 PASS; case 6 found a real defect (resume did not re-enable autostart), fixed in 557b9d1, re-run green |
+| Doctor `--probes` and Windows doctor | 557b9d1 | PASS 46 and PASS 45, no FAIL, WARN or SKIP |
+| gitleaks over the history | 557b9d1 | 209 commits, no leaks |
+| `ossctl lint personal --staged` | 7d6d7e3 | 804 files, 0 hits |
+| Traceability matrix | 6391fae | 522 rows: 469 done, 53 deferred, 0 missing or rework |
 
-Only the tests affected by the NIT fixes re-ran after cdd6e39. The gate reviewer checked that no other
+Only the tests affected by the NIT fixes re-ran after 43dd6fb. The gate reviewer checked that no other
 test calls the changed functions and that the new parameters default to the old behaviour.
 
 ## Live checks
@@ -46,7 +46,7 @@ All of these ran against the real services, in dry-run, with no GitHub write:
 - Redeploy (`scripts\bootstrap.ps1 -Only provision`): 13 s end to end with `images: unchanged`. A
   redeploy that does not rebuild images is restarts only. The slow redeploys earlier in the build were
   the image rebuilds.
-- GitHub MCP in a container (GHMCP-2, 37f5d72): research-profile scout `scout-54e27f891fe8` made 9
+- GitHub MCP in a container (GHMCP-2, 29c305c): research-profile scout `scout-54e27f891fe8` made 9
   completed `@github/...` read calls through the Go binary with the configured read secret. At the
   gate, doctor ran the same binary and secret again (`get_me` returned the owner login, a public repo
   root listed). The server exposes no write tool.

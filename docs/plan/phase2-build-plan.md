@@ -2,7 +2,7 @@
 
 This is the build-ready sequence for Phase 2. It implements `docs/DESIGN.md` revision 5 (the only spec; CR-001…CR-004 are merged and historical) as sequenced by `docs/PLAN.md` items 22–57, and it closes every open row of `docs/TRACEABILITY.md`. Item numbers match PLAN.md so the FEAT files (`docs/plan/task-ossbot-v1/features/FEAT-005…011.json`) and the matrix stay in step; item 23a is new (planner decision B2). Every item names the rows it closes, the files and functions it touches, the tests it adds or updates, and how to verify it.
 
-Baseline, checked by the planner on 2026-10-18 at commit `e0ecf11`: `DEV pytest -m "unit or telegram or acp or e2e"` → 1557 passed, 11 deselected (no acp/e2e tests exist yet). The matrix has 508 rows (its "Totals" line says 507; `CR3-v1.x` was miscounted): 110 done, 26 deferred, 304 missing, 68 rework. Every open row is named by an item below (checked by script; `CR3-v1.x`, which PLAN.md missed because its cell contains an escaped `|`, is added to item 52). Each close-out commit updates the "Totals" line.
+Baseline, checked by the planner on 2026-10-18 at commit `9442f60`: `DEV pytest -m "unit or telegram or acp or e2e"` → 1557 passed, 11 deselected (no acp/e2e tests exist yet). The matrix has 508 rows (its "Totals" line says 507; `CR3-v1.x` was miscounted): 110 done, 26 deferred, 304 missing, 68 rework. Every open row is named by an item below (checked by script; `CR3-v1.x`, which PLAN.md missed because its cell contains an escaped `|`, is added to item 52). Each close-out commit updates the "Totals" line.
 
 ## Hard rules for every coder and reviewer
 
@@ -331,7 +331,7 @@ Depends on everything above.
 ## Workflow structure that runs this plan
 
 - Build loops, one per FEAT in order FEAT-005 → FEAT-011, each a `repeat` (max 10 iterations, `onMaxIterations: pause`) of a coder step then a reviewer step. The reviewer is last and writes `d:\Work\autonomous-oss-contributor\docs\review-build-FEAT-00N.json` last, every iteration, with `"verdict": "APPROVED"` or `"CHANGES_REQUESTED"`; the loop stops when that file's `verdict` is `APPROVED`. Iteration 1 implements the FEAT; later iterations fix every finding of `docs\review-build-FEAT-00N.md`/`.json`.
-- Phase 2 gate loop (max 4, `onMaxIterations: pause`): fixer then reviewer over the whole Phase 2 diff (`e0ecf11..HEAD`) and the evidence in the FEAT files, verdict `d:\Work\autonomous-oss-contributor\docs\review-phase2.json`.
+- Phase 2 gate loop (max 4, `onMaxIterations: pause`): fixer then reviewer over the whole Phase 2 diff (`9442f60..HEAD`) and the evidence in the FEAT files, verdict `d:\Work\autonomous-oss-contributor\docs\review-phase2.json`.
 - Finalize step: commits the remaining review files, confirms `git status --porcelain` is empty, and reports. Nothing is pushed.
 
 ## Working rules for every build step (orchestrator, added after code-feat-005 ran out of context)

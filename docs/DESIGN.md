@@ -5424,7 +5424,7 @@ All 34 findings were addressed in revision 1; none were backlogged or ignored. R
 
 ## Appendix A. Revision-4 Telegram baseline (historical, superseded)
 
-Kept so the revision-4 history stays readable next to the Phase 1 code. Nothing here is normative: §14.4, §14.4a and §14.5 keep what still applies, and §14.6–§14.25 replace the rest. Revision-4 text of §14.1–§14.3 is folded into those sections and is in git history (git show 77667ee:docs/DESIGN.md).
+Kept so the revision-4 history stays readable next to the Phase 1 code. Nothing here is normative: §14.4, §14.4a and §14.5 keep what still applies, and §14.6–§14.25 replace the rest. Revision-4 text of §14.1–§14.3 is folded into those sections and is in git history (git show 6ed5adb:docs/DESIGN.md).
 
 ### A.1 Revision-4 preview card layout, keyboard and flows (superseded by §14.11)
 

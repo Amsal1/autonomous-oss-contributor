@@ -1,6 +1,6 @@
 # Phase 1 review (round 6): egress and DNS surface
 
-Round 6 reviews commit 1db5c14, the fix for round 5's P1-14 (io_uring's `IORING_OP_SOCKET` bypassing `RestrictAddressFamilies`) and its two NITs. It also re-reads the 41-row threat table in `docs/VERIFICATION.md` against squid's ACL semantics, every DNS path, IPv6, ICMP, raw IP, the Hyper-V layer, the non-IP host channels and the ways a confined process could get out from under its unit's filters. Two independent layers close P1-14. One is `kernel.io_uring_disabled = 2` with a fail-closed drift check. The other is a per-unit `SystemCallFilter`. A control window in the evidence proves each layer works on its own. Both NITs are closed, and no HIGH or MEDIUM hole remains in any row.
+Round 6 reviews commit 7288d2d, the fix for round 5's P1-14 (io_uring's `IORING_OP_SOCKET` bypassing `RestrictAddressFamilies`) and its two NITs. It also re-reads the 41-row threat table in `docs/VERIFICATION.md` against squid's ACL semantics, every DNS path, IPv6, ICMP, raw IP, the Hyper-V layer, the non-IP host channels and the ways a confined process could get out from under its unit's filters. Two independent layers close P1-14. One is `kernel.io_uring_disabled = 2` with a fail-closed drift check. The other is a per-unit `SystemCallFilter`. A control window in the evidence proves each layer works on its own. Both NITs are closed, and no HIGH or MEDIUM hole remains in any row.
 
 Watch for: five hardening NITs, none blocking.
 - `denied_dst` lacks the IPv6 unspecified address `::/128` (confirmed omission; nothing reachable today, likely).
@@ -70,6 +70,6 @@ One command checked the empty abstract-socket allowlist (row 38) for a silent fa
 - `tests/unit/test_systemd_units.py`, `tests/unit/ctl/test_render.py`, `tests/unit/watchdog/test_tick_lifecycle.py`: filter lines, sysctl drift cases, manager deny order, watchdog reason
 - `docs/VERIFICATION.md`, `docs/adr/0005-…`, `docs/adr/0007-…`, `docs/DESIGN.md`, `docs/PLAN.md`, `docs/plan/CR-002-…`: rows 26, 31 and 32 corrected, rows 37-41 added, P1-14 addenda, round-5 bar, CR-002 tracking
 
-Full diff: `git -C d:\Work\autonomous-oss-contributor show 1db5c14`
+Full diff: `git -C d:\Work\autonomous-oss-contributor show 7288d2d`
 
 </details>

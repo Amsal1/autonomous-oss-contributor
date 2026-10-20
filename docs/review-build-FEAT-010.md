@@ -1,24 +1,24 @@
 # FEAT-010 build review, round 2
 
-Reviewed at c6f4ee0 (main). Range: 680c97a..c6f4ee0 (after the FEAT-009 approval 883affb). Working tree clean before the review files were written.
+Reviewed at 069be20 (main). Range: 433b55d..069be20 (after the FEAT-009 approval 939b689). Working tree clean before the review files were written.
 
 Verdict: APPROVED. No HIGH or MEDIUM findings open. One NIT carries to the Phase 2 gate.
 
 ## Prior findings (round 1)
 
-- F1 (HIGH, item 50 WIP left in the tree): resolved. The WIP was finished and committed in 387b562, with follow-ups in 3f7fc4d (status-card dedupe occurrence, migration 0006 count, dedupe-key list). VERIFICATION.md records how it was handled. `git status` is clean.
-- F2 (HIGH, items 50-53 missing): resolved. Item 50 is in 387b562 and 3f7fc4d. Items 51-52 are in 9b0dd50 and 19864e6. Item 53's close-out is in c6f4ee0: the VERIFICATION entry, 65 TRACEABILITY rows, the ADR-0019 implementation addendum, plan items 49-52 ticked, and FEAT-010.json `in_progress` with blocked_reason set to the owner-only live checks.
+- F1 (HIGH, item 50 WIP left in the tree): resolved. The WIP was finished and committed in 958bc6c, with follow-ups in 1d64cf0 (status-card dedupe occurrence, migration 0006 count, dedupe-key list). VERIFICATION.md records how it was handled. `git status` is clean.
+- F2 (HIGH, items 50-53 missing): resolved. Item 50 is in 958bc6c and 1d64cf0. Items 51-52 are in 4d9e575 and e84e401. Item 53's close-out is in 069be20: the VERIFICATION entry, 65 TRACEABILITY rows, the ADR-0019 implementation addendum, plan items 49-52 ticked, and FEAT-010.json `in_progress` with blocked_reason set to the owner-only live checks.
 
 ## Evidence read (not re-run)
 
-VERIFICATION.md FEAT-010 round 2 and the commit messages of 19864e6 and c6f4ee0 record the following:
+VERIFICATION.md FEAT-010 round 2 and the commit messages of e84e401 and 069be20 record the following:
 - targeted item 50 tests: 44 passed, plus tests/telegram 503 passed
 - items 51-52 targeted: 243 and 85 passed
-- one hermetic run of `unit or telegram or acp or e2e`: 3492 passed, 6 failed. The 6 failures were the migration count, the dedupe-key list and one fake_github regression. They were fixed in 3f7fc4d and 9b0dd50 and re-run targeted: 62 passed.
-- BA-19/BA-20/F6-4 at 19864e6: 46 passed
+- one hermetic run of `unit or telegram or acp or e2e`: 3492 passed, 6 failed. The 6 failures were the migration count, the dedupe-key list and one fake_github regression. They were fixed in 1d64cf0 and 4d9e575 and re-run targeted: 62 passed.
+- BA-19/BA-20/F6-4 at e84e401: 46 passed
 - lint.ps1 clean (11 import contracts kept, including the review_mirror_writer and telegraph_writer contracts)
 - shellcheck and the setup-secrets selftest pass
-- redeploy at 9b0dd50 and at 19864e6, then an idempotency run where every step printed `unchanged` (doctor PASS 41)
+- redeploy at 4d9e575 and at e84e401, then an idempotency run where every step printed `unchanged` (doctor PASS 41)
 - test_egress_surface.sh passed: telegra.ph returns 403 for every caller, and cat_telegraph is absent while Telegraph is off
 - ossctl doctor PASS 45
 

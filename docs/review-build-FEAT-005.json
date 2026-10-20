@@ -7,7 +7,7 @@
       "id": "F005-R2-1",
       "severity": "NIT",
       "title": "origin/main pushed by an actor outside the build steps",
-      "detail": "The reflog has a new 'update by push' to 32e0c9b at 22:39:15 +07. That was during this reviewer step (bootstrap -Only provision and a log grep), which did not push, and six minutes after the close-out commit. No git alias, hook path, non-sample hook or repo script pushes (the only push strings outside docs/ are github_writer.push_argv and a local fake-fork test). gitleaks is clean on all 61 commits. The owner should identify and stop the auto-push (IDE sync, orchestrator, scheduled task) before the next FEAT. History must not be rewritten.",
+      "detail": "The reflog has a new 'update by push' to 3c88549 at 22:39:15 +07. That was during this reviewer step (bootstrap -Only provision and a log grep), which did not push, and six minutes after the close-out commit. No git alias, hook path, non-sample hook or repo script pushes (the only push strings outside docs/ are github_writer.push_argv and a local fake-fork test). gitleaks is clean on all 61 commits. The owner should identify and stop the auto-push (IDE sync, orchestrator, scheduled task) before the next FEAT. History must not be rewritten.",
       "files": [".git/logs/refs/remotes/origin/main"]
     },
     {

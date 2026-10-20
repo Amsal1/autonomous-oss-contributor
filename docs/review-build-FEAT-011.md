@@ -2,11 +2,11 @@
 
 Verdict: APPROVED (no HIGH or MEDIUM findings; two NITs carried to the Phase 2 gate).
 
-Scope: `81b916e..cdd6e39` (a42a926, d9c204c, 73aeb2a, f753cb5, 352962b, 37f5d72, 84386d0, 4bac690, cdd6e39), checked against FEAT-011.json, build-plan items 54-57 and Working rules 1-9, DESIGN rev 5 and TRACEABILITY. This is the first round, so there were no prior findings to re-check. The working tree was clean at the start. origin/main equals HEAD, which is expected.
+Scope: `c3b8ebb..43dd6fb` (e93a473, 25bc861, 847af0b, 153513d, 6a4e276, 29c305c, fd42743, 5f1c1ed, 43dd6fb), checked against FEAT-011.json, build-plan items 54-57 and Working rules 1-9, DESIGN rev 5 and TRACEABILITY. This is the first round, so there were no prior findings to re-check. The working tree was clean at the start. origin/main equals HEAD, which is expected.
 
 ## Evidence checked (suites not re-run)
 
-- Item 54. a42a926 and VERIFICATION FEAT-011 record:
+- Item 54. e93a473 and VERIFICATION FEAT-011 record:
   - 17 passed for test_docs_commands, test_lint_personal and test_profile_example.
   - `ossctl docs commands --check` is current, and `lint personal` reports 0 hits.
   - The lint gate is clean (ruff, format, mypy over 240 files, 11 import contracts kept).
@@ -18,7 +18,7 @@ Scope: `81b916e..cdd6e39` (a42a926, d9c204c, 73aeb2a, f753cb5, 352962b, 37f5d72,
   - `ci.yml` has `contents: read` and `persist-credentials: false`. Every `uses:` is pinned by a 40-hex SHA, and those SHAs are recorded in versions.lock.
   - The gitleaks and PSScriptAnalyzer binaries are sha256-verified.
   - The workflow is `workflow_dispatch` only. That is a recorded owner decision.
-  - test_ci_workflow passed. The two failures in the owner's GitHub run were fixed in 84386d0 (47 passed). Those fixes only touch the tests, and the canaries are still asserted.
+  - test_ci_workflow passed. The two failures in the owner's GitHub run were fixed in fd42743 (47 passed). Those fixes only touch the tests, and the canaries are still asserted.
 - Item 57:
   - Doctor: `--probes` PASS 46 and `ossctl.ps1 doctor` PASS 45, both after the redeploy.
   - GHMCP-2 live: run `scout-54e27f891fe8` made 9 `@github/...` read calls, all completed.

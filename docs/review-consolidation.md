@@ -1,6 +1,6 @@
 # Consolidation fix pass: DESIGN revision 5, traceability matrix and Phase 2 plan (pass 2)
 
-This is the second review of the consolidation. Commit `e0ecf11` answers the eleven pass-1 findings (C-1…C-11, `b0402b4`). It rewrites the stale FEAT ids in §14 and ADR-0019 and splits the §14 data model over migrations 0002–0006, each with one owning PLAN item. It amends the threat model (§8.4 T1/T2 and T6, §8.5) and the §17.1 targets schema, adds the `CR3-IH-1…18` rows for the §14.19 integrations, aligns PLAN item row lists with the matrix phase column, and moves the revision-4 Telegram layouts into a historical Appendix A. All five blocking findings are resolved (confirmed against HEAD). DESIGN is one source of truth, the matrix has 508 fully populated rows, and PLAN keeps the safety-rework → backend → Telegram → docs order.
+This is the second review of the consolidation. Commit `9442f60` answers the eleven pass-1 findings (C-1…C-11, `ca959e2`). It rewrites the stale FEAT ids in §14 and ADR-0019 and splits the §14 data model over migrations 0002–0006, each with one owning PLAN item. It amends the threat model (§8.4 T1/T2 and T6, §8.5) and the §17.1 targets schema, adds the `CR3-IH-1…18` rows for the §14.19 integrations, aligns PLAN item row lists with the matrix phase column, and moves the revision-4 Telegram layouts into a historical Appendix A. All five blocking findings are resolved (confirmed against HEAD). DESIGN is one source of truth, the matrix has 508 fully populated rows, and PLAN keeps the safety-rework → backend → Telegram → docs order.
 
 Watch for: four bookkeeping NITs in TRACEABILITY.md. The totals line is off by one (confirmed). Row CR3-BA-13 still says "FEAT-005's `edit_comment`" (confirmed). Row `CR3-v1.x` duplicates `CR3-IH-18` and no PLAN item names it (confirmed). Two rows use a phase value outside the legend or are `done` while their tests point at open rows (confirmed). None of these blocks the Phase 2 build.
 
@@ -57,6 +57,6 @@ DES-TM-1 is a docs-text row and its text is amended, so marking it `done` can be
 - `docs/plan/task-ossbot-v1/features/FEAT-005…011.json`: regenerated item text; conflicting carried draft parts rewritten.
 - `docs/VERIFICATION.md`: consolidation fix-pass note.
 
-Full diff: `git show e0ecf11`.
+Full diff: `git show 9442f60`.
 
 </details>
