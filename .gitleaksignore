@@ -1,3 +1,3 @@
 # gitleaks findings that are known test fixtures, never real credentials (one fingerprint per line).
 # tests/unit/sandboxd/test_keyscan.py: the fake Kiro key the output scanner is tested against (FEAT-003).
-a434362375381c00bca1d86dd9eaf20eafe725ff:tests/unit/sandboxd/test_keyscan.py:generic-api-key:15
+a40eb2bfc72f5ee48363d5e678ef04f71057d33b:tests/unit/sandboxd/test_keyscan.py:generic-api-key:15
