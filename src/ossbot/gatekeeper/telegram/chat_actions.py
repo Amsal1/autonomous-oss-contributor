@@ -104,7 +104,7 @@ def clean_title(text: str) -> str | None:
 async def rename_topic(app: Any, handlers: Any, thread_id: int | None, text: str) -> str:
     topics = ui_of(app).topics
     if topics.mode == "flat" or thread_id is None or topics.name_of(thread_id) is not None:
-        return "✏️ Only a chat topic can be renamed (topic mode)."
+        return "✏️ Only a chat thread you created can be renamed (Threaded mode)."
     name = clean_title(text)
     if name is None:
         return f"✏️ A title is 1-{TOPIC_NAME_MAX} visible characters."
@@ -117,7 +117,7 @@ async def rename_topic(app: Any, handlers: Any, thread_id: int | None, text: str
     return f"✏️ Renamed to {esc(name)}"
 
 
-@command("title", help="Rename this chat topic", safety="personal", effect="io")
+@command("title", help="Rename this chat thread (Threaded mode)", safety="personal", effect="io")
 async def title(ctx: CommandContext, args: list[str]) -> Reply:
     if not args:
         return Reply("Usage: /title &lt;new name&gt;")

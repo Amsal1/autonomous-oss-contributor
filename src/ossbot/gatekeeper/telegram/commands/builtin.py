@@ -96,8 +96,8 @@ async def start(ctx: CommandContext, args: list[str]) -> Reply:
     mode = ui_of(ctx.app).topics.mode
     where = ("🚦 Control (dashboard, commands) · ✅ Reviews (every card) · 📈 OSS feed · 💬 Assistant"
              if mode == "topics" else
-             "one chat; each message starts with its section icon (🚦 ✅ 📈 💬). Turn topics on in @BotFather"
-             " for separate topics.")  # fmt: skip
+             "one chat; each message starts with its section icon (🚦 ✅ 📈 💬). Turn on Threaded mode in"
+             " @BotFather (Bot Settings → Threads Settings) for separate threads.")  # fmt: skip
     return Reply(
         f"{b('ossbot')}: open-source contributions you approve, plus your assistant.\n"
         f"Where things are: {esc(where)}\n"

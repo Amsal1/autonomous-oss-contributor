@@ -78,13 +78,19 @@ Also: verify the commit email on your GitHub account (Settings → Emails), and 
 identity with `age-keygen` (keep the `AGE-SECRET-KEY-…` line in your password manager; put the
 `age1…` public key into `profile.yaml`). Apply profile changes with `ossctl config reload`.
 
-### Telegram topics (recommended)
+### Telegram Threaded mode (recommended)
 
-In @BotFather, open the bot's settings (the Mini App bot settings) and turn **topics** on, and allow
-users to create topics. The gatekeeper then creates 🚦 Control, ✅ Reviews, 📈 OSS feed and
-💬 Assistant, pins the dashboard in Control, and treats every topic you create as a new Hermes
-conversation. With topics off everything still works in one chat with section headers. Topic routing
-never changes who may approve: only your user id in the private chat.
+In @BotFather open your bot → **Bot Settings** → **Threads Settings** and turn on **Threaded Mode**,
+and let users create threads. (The Bot API calls these forum topics: `getMe().has_topics_enabled` and
+`allows_users_to_create_topics`.) The gatekeeper then creates 🚦 Control, ✅ Reviews, 📈 OSS feed and
+💬 Assistant, pins the dashboard in Control, and treats every thread you create as a new Hermes
+conversation. With Threaded mode off everything still works in one chat with section headers. Thread
+routing never changes who may approve: only your user id in the private chat.
+
+The pin: `pinChatMessage` has no thread parameter, so a pin belongs to the message and its thread. The
+gatekeeper pins the dashboard only once it has landed in Control (a dashboard that landed elsewhere is
+re-sent into Control once). Some clients also show that pin in the "All" view; tapping it opens the
+dashboard in Control. The Bot API cannot change that (ADR-0020 addendum).
 
 ## 7. Or restore instead of steps 4 and 6
 

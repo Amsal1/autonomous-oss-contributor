@@ -1,7 +1,8 @@
 """System topics in the owner's private chat, with the flat fallback (DESIGN §14.10.1, D1, AC 12).
 
 At each start ``bootstrap`` reads ``getMe``: when ``has_topics_enabled`` (Bot API 9.3; the user turns
-topic mode on in @BotFather) and ``telegram.yaml topics: auto``, the four system topics are created
+on "Threaded mode" in @BotFather → Bot Settings → Threads Settings) and ``telegram.yaml topics: auto``,
+the four system topics are created
 once (``createForumTopic``) and their ids kept in ``tg_topics`` across restarts. Otherwise, or after a
 topic could not be re-created, ossbot runs in **flat mode**: no thread ids, and every message routed
 to a system topic starts with that topic's section icon.
@@ -54,7 +55,7 @@ class Topics:
             return self._flat(f"getMe failed: {type(exc).__name__}")
         self.allows_user_topics = me.allows_users_to_create_topics
         if not me.has_topics_enabled:
-            return self._flat("topic mode is off in @BotFather")
+            return self._flat("Threaded mode is off in @BotFather (has_topics_enabled false)")
         for name in SYSTEM_TOPICS:
             if self.thread_id_raw(name) is None and await self._create(name, call) is None:
                 return self._flat(f"createForumTopic failed for {name}")

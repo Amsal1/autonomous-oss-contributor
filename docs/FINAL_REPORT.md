@@ -113,7 +113,7 @@ Other decisions still open:
   `test` and `test_vision` change only in `config/models.yaml` or with `ossctl model set test …`.
   `ossctl model list` shows what each role resolves to.
 - Reviewing: proposal cards (gate 1, Start work) and preview cards (gate 2, Approve then Confirm) arrive
-  in ✅ Reviews, or in the one chat while topics are off. The mode label always says DRY RUN or LIVE.
+  in ✅ Reviews, or in the one chat while Threaded mode is off. The mode label always says DRY RUN or LIVE.
 
 ## Turning dry-run off
 
@@ -149,7 +149,9 @@ The first live PR candidate is the V3 ACP adapter for
 - **Shutdown drain (6a).** It does not drain on a real Windows shutdown: `down.ps1` exits
   `0xC0000142` and the next start reports `last shutdown unclean`. Crash safety held, with no lost or
   duplicated work. The fix belongs in FEAT-008's blocker and needs R1 to verify.
-- **Topics.** Telegram runs in flat mode until topics are on in @BotFather (O1).
+- **Threaded mode and the pin.** Telegram runs in flat mode until Threaded mode is on in @BotFather.
+  `pinChatMessage` cannot name a thread: the dashboard is pinned only once it is in 🚦 Control, and a
+  client may still list that pin in "All" (O1, ADR-0020 addendum).
 - **Telegram on real clients.** Rich views, streaming rate, Stop through to Hermes, and photo albums
   are covered by hermetic tests only (O2-O6). Voice notes answer "Voice isn't supported yet".
 - **Cancelled shutdown.** After a cancelled Windows shutdown ossbot stays down until `up`.
@@ -167,8 +169,8 @@ The first live PR candidate is the V3 ACP adapter for
 No credential problem was found. The bot token, both Kiro keys, the read token (also used by the GitHub
 MCP server) and the write token's identity check all pass doctor.
 
-- **Topics.** The gatekeeper logs `telegram flat mode: topic mode is off in @BotFather`. Turn topics on,
-  and allow users to create topics (SETUP.md "Telegram topics").
+- **Threaded mode.** Done (O1). If the gatekeeper logs `telegram flat mode: Threaded mode is off in
+  @BotFather`, turn it on again (SETUP.md "Telegram Threaded mode").
 - **Unknown Telegram user.** Updates from a user that is not you were rejected and logged as
   `telegram_unauthorized`. Nothing to do unless that was you on a second account.
 - **Before `/dryrun off`**, see above.
@@ -194,17 +196,23 @@ The script:
 
 Commit `docs/TRACEABILITY.md` and `docs/VERIFICATION.md` afterwards.
 
-**O1 Topics** (CR3-V-4, part of DES-V-32).
-- Steps: turn topics on in @BotFather (SETUP "Telegram topics"). Then run
-  `scripts\bootstrap.ps1 -Only provision` or restart the gatekeeper, then send `/start`.
-- Expected: 🚦 Control, ✅ Reviews, 📈 OSS feed and 💬 Assistant appear, and the dashboard is pinned in
-  Control. Note whether a "General" topic exists and whether the pin shows only in Control.
+**O1 Threaded mode** (CR3-V-4, part of DES-V-32). Done 2026-10-20: Threaded mode on, the four threads
+were created, but the dashboard pin showed in "All", not in Control. Fixed post-v1 (item 4): the
+dashboard is pinned only once its send result is in Control, and re-sent into Control once otherwise
+(ADR-0020 addendum). `pinChatMessage` cannot name a thread, so a client may still list the pin in "All".
+- Steps (re-check after the post-v1 redeploy): turn on Threaded mode in @BotFather (SETUP "Telegram
+  Threaded mode"), restart the gatekeeper, then send `/dashboard` in 🚦 Control and `/status` in All
+  and in Control.
+- Expected: the dashboard is in Control and pinned in Control's pinned bar;
+  `scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep dashboard_` shows `dashboard_pinned thread=<id>`.
+  `/status` answers with the same icon card as the pinned dashboard, in the thread you asked from.
+  If the pin also shows in "All", note the client: that is the client's view of a Control pin.
 
 **O2 Rich views on each client** (CR3-V-1, CR3-V-14, CR3-V-15, CR3-V-16).
 - Steps, on Android, iOS and desktop:
   1. Open a preview card's explorer and a file diff (`/review`).
   2. Quote-reply one line of a rich file view.
-  3. Ask Hermes for an answer with a table and a code block, once in a topic and once in flat mode.
+  3. Ask Hermes for an answer with a table and a code block, once in a thread and once in flat mode.
   4. Look at a 2-button row with long labels.
 - Expected:
   - `details`, tables, `pre language=diff` and anchors render.
@@ -213,7 +221,7 @@ Commit `docs/TRACEABILITY.md` and `docs/VERIFICATION.md` afterwards.
   - An answer that cannot nest a block falls back to classic.
 
 **O3 Streaming and Stop** (CR3-V-2, CR3-V-3).
-- Steps: ask Hermes a long question in a topic. Then ask another and tap ⏹ Stop after a few lines.
+- Steps: ask Hermes a long question in a thread. Then ask another and tap ⏹ Stop after a few lines.
 - Expected:
   - A draft appears within 1 s and updates at most once a second.
   - `journalctl -u ossbot-gatekeeper` shows no "Too Many Requests".

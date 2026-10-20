@@ -82,11 +82,14 @@ else, including restore from a backup, is in [`docs/SETUP.md`](docs/SETUP.md).
 
 ## Telegram tour
 
-With topics enabled in @BotFather (recommended, see SETUP.md), the bot creates four system topics:
-🚦 **Control** (pinned live dashboard, lifecycle and kill), ✅ **Reviews** (proposal, preview, skill and
-model cards), 📈 **OSS feed** (status updates, the PR status card, the digest) and 💬 **Assistant**
-(Hermes). Every other topic you create is a separate Hermes conversation. With topics off, everything
-works in one chat with section headers.
+With **Threaded mode** on in @BotFather (recommended, see SETUP.md), the bot creates four system threads
+(forum topics in the Bot API): 🚦 **Control** (pinned live dashboard, lifecycle and kill), ✅ **Reviews**
+(proposal, preview, skill and model cards), 📈 **OSS feed** (status updates, the PR status card, the
+digest) and 💬 **Assistant** (Hermes). Every other thread you create is a separate Hermes conversation.
+With Threaded mode off, everything works in one chat with section headers. `/status` answers with the
+same card as the pinned dashboard, in the thread you asked from. The Bot API cannot pin into a thread:
+the pin belongs to the message, so the dashboard is sent into Control and pinned there; some clients
+also list that pin in the "All" view, and tapping it jumps to Control.
 
 Every non-command message (text, photos and albums, documents, voice notes, locations, replies) goes
 to Hermes, which streams answers with sources and a ⏹ Stop button. Hermes can never approve, resume,
@@ -135,7 +138,7 @@ and `request` never touch an approval or the ceiling. The command table below is
 | `/skills` | Staged and active Hermes skills | read |
 | `/start` | What ossbot is and where things are | read |
 | `/status` | The dashboard card (state, dry-run, work, approvals, config and audit heads) | read |
-| `/title` | Rename this chat topic | personal |
+| `/title` | Rename this chat thread (Threaded mode) | personal |
 | `/undrain` | Stop draining and schedule work again (asks for confirmation) | go |
 | `/up` | Start the workers again (asks for confirmation) | go |
 | `/work` | Work on a GitHub issue, PR or repo you choose (👤; filters don't apply) | request |
