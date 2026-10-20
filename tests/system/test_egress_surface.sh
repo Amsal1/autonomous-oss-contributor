@@ -483,6 +483,9 @@ for u in ossrunner hermes gatekeeper ossbox; do
   expect "$u: loginctl Linger" no "$(loginctl show-user "$u" -p Linger --value 2>/dev/null || echo no)"
   refuse "$u: no /run/user/$uid" test -e "/run/user/$uid"
 done
+# ossnobody keeps its /run/user session dir, but it must not linger either
+refuse "ossnobody: no lingering (/var/lib/systemd/linger/ossnobody)" test -e /var/lib/systemd/linger/ossnobody
+expect "ossnobody: loginctl Linger" no "$(loginctl show-user ossnobody -p Linger --value 2>/dev/null || echo no)"
 # WSL interop sockets (/run/WSL/<pid>_interop, 0777): ossbot-nointerop makes /run/WSL root-only.
 check "/run/WSL is root-only (0700)" test "$(stat -c %a /run/WSL)" = 700
 isock=$(find /run/WSL -maxdepth 1 -type s -name '*_interop' -print -quit)

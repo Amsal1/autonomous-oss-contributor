@@ -297,6 +297,7 @@ RUN_USER = Path("/run/user")
 # The uids that run (or will run) ossbot units (DESIGN §7.3). ossnobody is left out: it is the default
 # WSL login, so WSL gives it a session and /run/user/1001 by design, and no unit runs as it.
 UNIT_UIDS = ("ossrunner", "hermes", "gatekeeper", "ossbox")
+LOGIN_UID = "ossnobody"
 
 
 def check_no_user_managers(linger_dir: Path = LINGER_DIR, run_user: Path = RUN_USER) -> Result:
@@ -314,8 +315,11 @@ def check_no_user_managers(linger_dir: Path = LINGER_DIR, run_user: Path = RUN_U
             problems.append(f"{user} lingers")
         if (run_user / str(uid)).exists():
             problems.append(f"/run/user/{uid} ({user}) exists")
+    # ossnobody keeps its /run/user session dir (default WSL login) but must not linger either
+    if (linger_dir / LOGIN_UID).exists():
+        problems.append(f"{LOGIN_UID} lingers")
     return Result(PASS if not problems else FAIL, "service uids: no user manager", "; ".join(problems)
-                  or "Linger=no and no /run/user/<uid> for the four unit uids",
+                  or f"Linger=no for the four unit uids and {LOGIN_UID}; no /run/user/<uid> for the unit uids",
                   "loginctl disable-linger <user>; loginctl terminate-user <user>")  # fmt: skip
 
 
