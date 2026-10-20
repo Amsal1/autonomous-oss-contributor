@@ -19,6 +19,7 @@ from ossbot.runner.errors import Deferred, StageFailed
 from ossbot.runner.github_read import GitHubRateLimited, GitHubRead, GitHubReadError
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.scheduler import DISCOVER_UNAVAILABLE_RETRY, Scheduler
+from ossbot.runner.stages import discover
 from tests.conftest import insert_contribution
 
 T0 = 1_790_000_000.0
@@ -207,6 +208,32 @@ def test_github_unavailable_ends_the_discovery_cycle_and_dispatch_goes_on(
     ctx.clock.advance(seconds=DISCOVER_UNAVAILABLE_RETRY.total_seconds())  # type: ignore[attr-defined]
     scheduler.tick()
     assert len(seen) > reads
+
+
+def test_a_cut_cycle_keeps_its_spent_budget_for_the_rerun(
+    sc: StageContext, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F006-R5-1: a full cycle that created one item and then hit github_unavailable re-runs with that
+    item (and its refusals) carried, so it creates at most budget - 1 more; the next cycle starts fresh."""
+    seen: list[tuple[list[str], set[str]]] = []
+
+    def fake_run(sc_: StageContext, *, repos: list[str] | None = None, refused: set[str],
+                 created: list[str] | None = None) -> list[str]:  # fmt: skip
+        assert created is not None
+        seen.append((list(created), set(refused)))
+        if len(seen) == 1:
+            created.append("c1")
+            refused.add("o/r#2")
+            raise discover.GitHubUnavailable("down")
+        return []
+
+    monkeypatch.setattr(discover, "run", fake_run)
+    scheduler = ready(sc, ctx)
+    assert scheduler.discover() == []  # cut
+    assert scheduler.discover() == []  # the re-run of the same cycle
+    assert seen[1] == (["c1"], {"o/r#2"})
+    assert scheduler.discover() == []  # finished: the next full cycle has a fresh budget
+    assert seen[2] == ([], set())
 
 
 def test_a_requested_discover_cut_by_github_unavailable_is_kept(sc: StageContext, ctx: AppContext) -> None:

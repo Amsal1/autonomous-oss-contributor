@@ -268,7 +268,9 @@ def test_ossctl_discover_request_runs_one_cycle(
     sc: StageContext, ctx: AppContext, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     seen: list[list[str] | None] = []
-    monkeypatch.setattr(scheduler_mod.discover, "run", lambda sc, repos=None, refused=None: seen.append(repos) or [])
+    monkeypatch.setattr(
+        scheduler_mod.discover, "run", lambda sc, repos=None, refused=None, created=None: seen.append(repos) or []
+    )
     scheduler = ready(sc, ctx)
     scheduler.first_start_done = True
     scheduler.tick()

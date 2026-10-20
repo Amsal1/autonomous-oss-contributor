@@ -91,6 +91,10 @@ class Scheduler:
         self.last_discovery: datetime | None = None
         self.last_catalog: datetime | None = None
         self.refused: set[str] = set()
+        # cids a full cycle created so far; a cycle cut short (stop, rate limit, GitHub outage) re-runs
+        # against what is left of discovery.proposals_per_cycle, not a fresh budget (DESIGN 9.5b)
+        self.cycle_created: list[str] = []
+        self.cycle_cut = False
         self.resumed = 0
         # cid -> (state, failures, next try): a stage error in a NO_FAIL state cannot fail the item,
         # so it is retried with backoff and the owner is told once instead of a silent retry every
@@ -255,12 +259,17 @@ class Scheduler:
     def discover(self, repos: list[str] | None = None) -> list[str]:
         if repos is None:
             self.last_discovery = self.now()
-            self.refused.clear()  # refusals are cached for one discovery cycle
+            if not self.cycle_cut:  # a cut cycle's re-run keeps its refusals and its spent budget
+                self.refused.clear()  # refusals are cached for one discovery cycle
+                self.cycle_created = []
+            self.cycle_cut = False
         try:
-            return discover.run(self.sc, repos=repos, refused=self.refused)
+            return discover.run(self.sc, repos=repos, refused=self.refused,
+                                created=self.cycle_created if repos is None else None)  # fmt: skip
         except (Interrupted, Deferred) as exc:  # stopped or rate limited mid-cycle: it runs again later
             if repos is None:
                 self.last_discovery = None  # the full cycle runs again once open
+                self.cycle_cut = True
             else:
                 self.pending_discover = repos  # the claimed ossctl discover request is not lost
             if isinstance(exc, GitHubRateLimited):

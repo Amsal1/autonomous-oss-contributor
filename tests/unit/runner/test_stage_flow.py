@@ -87,6 +87,19 @@ def test_discovery_honours_max_open_prs_by_me_per_repo(sc: StageContext, ctx: Ap
     assert len(discover.run(sc, repos=["langfuse/langfuse"], now=ctx.clock.now())) == 1
 
 
+def test_a_cut_cycle_rerun_spends_only_the_rest_of_the_budget(sc: StageContext, ctx: AppContext,
+                                                               github: FakeGitHub) -> None:  # fmt: skip
+    """F006-R5-1: the cids an earlier, cut-short attempt created count against proposals_per_cycle."""
+    budget = sc.config().policy.discovery.proposals_per_cycle
+    for n in range(601, 602 + budget):
+        github.add_issue("langfuse/langfuse", n, title=f"Crash when spans are empty in view {n}", body="steps",
+                         labels=[{"name": "bug"}], updated_at=to_iso(ctx.clock.now()),
+                         created_at=to_iso(ctx.clock.now()))  # fmt: skip
+    earlier = [f"earlier-{i}" for i in range(budget - 1)]
+    new = discover.run(sc, repos=["langfuse/langfuse"], now=ctx.clock.now(), created=earlier)
+    assert len(new) == 1 and len(earlier) == budget and earlier[-1] == new[0]
+
+
 def test_autonomous_too_big_is_skipped_user_directed_is_not(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
     big = sample(estimate={"files": 12, "code_lines": 450, "test_lines": 200, "class": "l"})
     sbx.kiro("scout", fenced(big))

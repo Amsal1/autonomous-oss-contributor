@@ -66,8 +66,10 @@ def _check(sc: StageContext) -> None:
 
 
 def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | None = None,
-        refused: set[str] | None = None) -> list[str]:  # fmt: skip
-    """One discovery cycle; returns the created cids. ``repos`` limits it (``ossctl discover``)."""
+        refused: set[str] | None = None, created: list[str] | None = None) -> list[str]:  # fmt: skip
+    """One discovery cycle; returns the cids created by this call. ``repos`` limits it (``ossctl
+    discover``). ``created`` carries the cids an earlier, cut-short attempt of the same cycle created:
+    they count against ``proposals_per_cycle`` and new ones are appended to it as they are made."""
     sc.gate.check(STAGE)
     now = now or datetime.now(UTC)
     bundle = sc.config()
@@ -111,7 +113,8 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
         except GitHubReadError as exc:
             log.warning("discovery read failed for %s: %s", entry.repo, exc, extra={"event": "discover_read_failed"})
             _end_if_unavailable(exc)
-    created: list[str] = []
+    created = created if created is not None else []
+    already = len(created)
     budget = bundle.policy.discovery.proposals_per_cycle
     by_repo: dict[str, list[scoring.Candidate]] = {}
     for cand in candidates:
@@ -144,4 +147,4 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
         except GitHubReadError as exc:
             _end_if_unavailable(exc)
             continue
-    return created
+    return created[already:]
