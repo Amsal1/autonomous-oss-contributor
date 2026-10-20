@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import re
 from collections.abc import AsyncIterator
 from datetime import timedelta
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -118,6 +122,52 @@ async def test_kill_needs_a_second_tap_within_10_seconds(ctx: AppContext, rig: T
     clock.advance(timedelta(seconds=5))
     await rig.tap(second, message=mid)
     assert ctx.control.view().state == "killed"
+
+
+def _pins(rig: TgRig) -> list[int]:
+    return [int(p["message_id"]) for m, p in rig.req.calls if m == "pinChatMessage"]
+
+
+async def test_threaded_mode_pins_only_a_dashboard_in_control(ctx: AppContext, caplog: pytest.LogCaptureFixture
+                                                              ) -> None:  # fmt: skip
+    """pinChatMessage names no thread (Bot API 10.3): the pin follows the message's topic (item 4)."""
+    caplog.set_level(logging.INFO)
+    async for rig in make_rig(ctx, topics=True):
+        control = int(db.one(ctx.conn, "SELECT thread_id FROM tg_topics WHERE name = 'control'")[0])
+        dash = ui_of(ctx).dashboard
+        dash.send_new()
+        await rig.flush()
+        sent = [p for m, p in rig.req.calls if m == "sendMessage" and "Updated" in str(p.get("text"))][-1]
+        assert sent["message_thread_id"] == control
+        mid = _dashboard_id(ctx)
+        assert _pins(rig)[-1] == mid
+        state = json.loads(db.one(ctx.conn, "SELECT state_json FROM tg_views WHERE message_id = ?", (mid,))[0])
+        assert state["sent_thread"] == control
+        assert any(getattr(r, "event", None) == "dashboard_pinned" and f"thread={control}" in r.getMessage()
+                   for r in caplog.records)  # fmt: skip
+        # a dashboard whose send result is outside Control: not pinned, retired, re-sent once into Control
+        rig.req.calls.clear()
+        dash.on_sent(cast(Any, SimpleNamespace(method="sendMessage")), {"message_id": mid})
+        stale = db.one(ctx.conn, "SELECT stale FROM tg_views WHERE message_id = ?", (mid,))[0]
+        assert stale == 1 and _pins(rig) == []
+        await rig.flush()
+        resent = [p for m, p in rig.req.calls if m == "sendMessage" and "Updated" in str(p.get("text"))]
+        assert len(resent) == 1 and resent[0]["message_thread_id"] == control
+        new = _dashboard_id(ctx)
+        assert new != mid and _pins(rig) == [new]
+        assert any(getattr(r, "event", None) == "dashboard_resent_to_control" for r in caplog.records)
+        # only once per start: a second miss is pinned where it is (documented fallback)
+        rig.req.calls.clear()
+        dash.on_sent(cast(Any, SimpleNamespace(method="sendMessage")), {"message_id": new})
+        await rig.flush()
+        assert _pins(rig) == [new]
+
+
+async def test_pin_failure_is_logged(ctx: AppContext, rig: TgRig, caplog: pytest.LogCaptureFixture) -> None:
+    rig.req.fail("pinChatMessage", "Bad Request: not enough rights to manage pinned messages in the chat")
+    ui_of(ctx).dashboard.send_new()
+    await rig.flush()
+    assert any(getattr(r, "event", None) == "dashboard_pin_failed" for r in caplog.records)
 
 
 async def test_pause_and_quiet_buttons(ctx: AppContext, rig: TgRig) -> None:

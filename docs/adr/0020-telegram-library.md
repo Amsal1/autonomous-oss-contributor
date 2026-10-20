@@ -124,3 +124,19 @@ Checked against the live Bot API reference (https://core.telegram.org/bots/api; 
 - **getMe**: `has_topics_enabled` and `allows_users_to_create_topics` are returned only by `getMe`. PTB 22.8 types both (checked in the installed `telegram/_user.py`), but ossbot reads them through `rawapi.MeResult` (`extra="ignore"`) so the topic decision has one code path.
 - **Classic `<tg-time unix format>`** is a documented parse-mode-HTML tag; the dashboard footer uses the relative format `r`.
 - PTB warns "Please use 'Bot.<method>'" for raw calls of methods it knows. `TelegramSender` silences only that warning: one raw code path for every outbox method is deliberate.
+
+## Implementation addendum (post-v1, 2026-10-20): where the dashboard pin lands (owner check O1)
+
+Owner check O1: Threaded mode on, the system topics were created, but the pinned dashboard showed in "All", not in 🚦 Control.
+
+Research (2026-10-20):
+- Bot API reference, `pinChatMessage` (https://core.telegram.org/bots/api#pinchatmessage, re-read 2026-10-20): the parameters are `business_connection_id`, `chat_id`, `message_id` and `disable_notification`. There is **no `message_thread_id`**; in private chats every non-service message can be pinned and notifications are always off.
+- `unpinAllForumTopicMessages` (https://core.telegram.org/bots/api#unpinallforumtopicmessages) clears the pinned messages of one topic "in a forum supergroup chat or a private chat with a user", so a private chat's topics keep their own pinned lists.
+- Bot API changelog (https://core.telegram.org/bots/api-changelog): 9.4 added topics in private chats; up to 10.3 no version added a thread parameter to `pinChatMessage`.
+- Secondary reports (hermes-agent issue 22022, openclaw issue 79455, 2026-05) say Bot API 10.0 sometimes rejected `message_thread_id` in private topics ("message thread not found"), so replies fell back to the main view. Treated as a hint only.
+
+Decision:
+- The pin follows the message: a dashboard is pinned only when its `sendMessage` result carries Control's `message_thread_id`. The result's `message_thread_id` and `is_topic_message` are recorded in the dashboard's `tg_views.state_json` (`sent_thread`), and the pin is logged `dashboard_pinned thread=<id>`.
+- With Threaded mode on, a dashboard whose result is outside Control (the thread was not resolved) is retired, not pinned, and re-sent into Control once per gatekeeper start (`dashboard_resent_to_control`). A second miss in the same start is pinned where it landed, and in flat mode the dashboard is pinned in the one chat as before. A pin failure is still logged `dashboard_pin_failed`.
+- If the pinned message is in Control and a client still shows the pin in "All" only, that is how the client displays topic pins; the Bot API offers no way to change it. The pin is kept (tapping it jumps to the dashboard in Control) and no second copy is pinned. This is documented in README, SETUP "Threaded mode" and FINAL_REPORT O1. Which of the two causes the owner saw is visible after a redeploy in the gatekeeper journal (`scripts\ossctl.ps1 logs gatekeeper -Grep dashboard_`).
+- Tests: `tests/telegram/test_dashboard.py` (`test_threaded_mode_pins_only_a_dashboard_in_control`, `test_pin_failure_is_logged`; flat mode in `test_dashboard_is_sent_pinned_and_golden`).

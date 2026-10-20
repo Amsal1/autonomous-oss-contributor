@@ -57,6 +57,7 @@ class Dashboard:
     def __init__(self, ctx: AppContext) -> None:
         self.ctx = ctx
         self._last_edit: datetime | None = None
+        self._resent_to_control = False  # once per start (on_sent)
 
     # ------------------------------------------------------------------ content
     def state_label(self) -> tuple[str, str]:
@@ -332,17 +333,44 @@ class Dashboard:
 
     def on_sent(self, row: OutboxRow, result: dict[str, Any]) -> None:
         """A new dashboard landed (its tg_views row was written by mark_sent): pin it silently and
-        retire the older ones."""
+        retire the older ones.
+
+        ``pinChatMessage`` has no thread parameter (Bot API 10.3): the pin belongs to the topic the
+        message is in (ADR-0020 addendum post-v1). So with Threaded mode on, only a dashboard whose
+        send result is in 🚦 Control is pinned. One that landed elsewhere (the thread was not resolved)
+        is retired and re-sent into Control, once per start; after that, or in flat mode, it is pinned
+        where it is."""
         message_id = result.get("message_id")
         if row.method != "sendMessage" or not self._is_dashboard(message_id):
             return
         assert isinstance(message_id, int)
+        raw_thread = result.get("message_thread_id")
+        sent_thread = raw_thread if isinstance(raw_thread, int) else None
+        from ossbot.gatekeeper.telegram.runtime import ui_of  # noqa: PLC0415 - runtime imports this module
+
+        control = ui_of(self.ctx).topics.thread_id("control")  # None in flat mode
+        if control is not None and sent_thread != control and not self._resent_to_control:
+            self._resent_to_control = True
+            with db.transaction(self.ctx.conn):
+                self.ctx.conn.execute("UPDATE tg_views SET stale = 1 WHERE message_id = ?", (message_id,))
+            log.warning("dashboard_resent_to_control: it landed in thread %s, not Control (%s)", sent_thread,
+                        control, extra={"event": "dashboard_resent_to_control"})  # fmt: skip
+            self.send_new()
+            return
         with db.transaction(self.ctx.conn):
             self.ctx.conn.execute("UPDATE tg_views SET stale = 1 WHERE kind = 'dashboard' AND message_id != ?",
                                   (message_id,))  # fmt: skip
+            view = db.one(self.ctx.conn, "SELECT state_json FROM tg_views WHERE message_id = ?", (message_id,))
+            state = json.loads(view["state_json"] or "{}") if view is not None else {}
+            state["sent_thread"] = sent_thread
+            state["is_topic_message"] = result.get("is_topic_message") is True
+            self.ctx.conn.execute("UPDATE tg_views SET state_json = ? WHERE message_id = ?",
+                                  (json.dumps(state, sort_keys=True), message_id))  # fmt: skip
             self.ctx.outbox.enqueue("pinChatMessage", {"chat_id": self.ctx.telegram_chat_id, "message_id": message_id,
                                                        "disable_notification": True},
                                     dedupe_key=f"view:{new_token()}", priority=3)  # fmt: skip
+        log.info("dashboard_pinned thread=%s", sent_thread if sent_thread is not None else "none",
+                 extra={"event": "dashboard_pinned", "message_thread_id": sent_thread})  # fmt: skip
 
     def on_failed(self, row: OutboxRow, error: SendError) -> bool:
         mid = row.payload.get("message_id")
