@@ -4,6 +4,25 @@ Results of the phase verification bars (docs/PLAN.md) and of the live checks of 
 
 ## Phase 2 live checks
 
+### FEAT-009 (Telegram workspace M1; build round 3, 2026-10-20 about 10:00-11:30 +07)
+
+Product code only (the deployed gatekeeper, `ossctl` as root, a read-only `mode=ro` peek at the outbox). Dry-run stayed ON, no GitHub write, Telegram only to the owner through the outbox, no secret value read or printed. Test cadence per the build plan: code first, targeted tests while iterating, one hermetic run, one redeploy.
+
+| Step | Command (SHA) | Result |
+|---|---|---|
+| Leftover WIP (interrupted coder) | `git status --porcelain` at cd46f63 | context.py, outbox.py, ui/send.py modified, telegram/notify.py new (the §14.13 notification work). Finished, wired (Outbox.hold_policy, prepare before send, release per tick), tested and committed in c5ce99c; nothing reverted |
+| Slow `test_no_tunnels` (user's run: 9 passed in 299 s, KeyboardInterrupt in pathlib.py:842) | fixed in c5ce99c | `Path.resolve()` per walked file did an lstat per path component on drvfs; the guard paths now compare directly. Re-run with the new notification tests: 38 tests in 3.5 s |
+| Targeted tests while iterating | `dev.ps1 pytest -n auto tests/telegram tests/unit/gatekeeper` (c5ce99c + item 47 code) | 1937 passed in 18.7 s; the 7 new item-47 files: 39 passed |
+| Hermetic bar (once) | `dev.ps1 pytest -q -n auto -m "unit or telegram or e2e"` (2d30db7 tree) | 3248 passed, 31 warnings in 51.6 s (log `.ossbot-local/logs/feat009-r3-hermetic.log`) |
+| Lint gate | `lint.ps1` (ruff check, ruff format --check, mypy, lint-imports) | All checks passed; 452 files formatted; mypy 217 files clean; 8 contracts kept |
+| Redeploy (once) | `bootstrap.ps1 -Only provision` (2d30db7) | `app-deploy: changed`, `enable-start: changed`, every other step `unchanged`; doctor in the run PASS 40, WARN 1 (Hermes surface ConnectError right after the restart). Log `.ossbot-local/logs/feat009-r3-redeploy.log` |
+| Doctor | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor` | PASS 45, gatekeeper running, dry_run True |
+| Live workspace at start | gatekeeper journal since the restart | `telegram_flat_mode` (topic mode is off in @BotFather: the flat fallback with section icons), `setMyCommands` default (empty) + owner scope, `setChatMenuButton`, `setMyShortDescription` (🟢 Online), dashboard sent and pinned, polling 200 OK through the proxy; updates from a non-owner user were rejected (`telegram_unauthorized`) |
+| Finding from the live check | `.ossbot-local/outbox_peek.py` (read-only) | The start queued and pinned three dashboards (workspace tick + the first two on_ticks before the first one was delivered; item 44 code). Fixed: `Dashboard.tick` sends no second dashboard while one is still queued; regression test `test_start_sends_one_dashboard_while_the_first_is_queued`. Verified hermetically; it reaches the live system with the next redeploy (one redeploy per round) |
+| Owner-only checks still open | – | Need the owner's hands in the real chat, so an agent cannot run them: typed `/kill` then `/resume` (the hermetic `test_handlers*`/`test_lifecycle_cmds` cover the paths), a dry-run proposal and preview card from the fake upstream in the real chat, and the client-rendering probes DES-V-32 / CR3-V-1/4/5/6/12/14/15 (rich blocks, .html documents, effects, topics "General") |
+
+Item 47 delivered in 2d30db7: `/drain /undrain /down /up`, `/egress`, `/hermes tier`, `/skills` + the §14.15 skill card, `/model` + the §16.3 new-model card, `/reload`, `/repos` (incl. the "Never this repo" undo), `/review`, `/limits` (`/budget`), `/logs`, `/settings`, `/quiet`, `/notify`, `/new` (`/newchat`); P0-P3, quiet hours, coalescing and batching that never hold rows with buttons (c5ce99c); the §14.16 killed reply and "⏰ Back online"; the short description persisted across starts. TRACEABILITY: 28 FEAT-009 rows updated (27 done; CR2-7k keeps its FEAT-010 part open) (Totals: done 386, missing 107, deferred 28, rework 1; 522 rows).
+
 ### FEAT-008 live checks (lifecycle remainder, crash safety, backup and restore; 2026-10-19 from about 20:30 +07)
 
 Product code only (the Windows scripts, `ossctl` as root, the gatekeeper API). Dry-run stayed ON, no GitHub write, Telegram only to the owner through the outbox ("Going down" / "Back up" summaries), no secret value read or printed by hand. Windows was not restarted or shut down (the real restart test is FEAT-011 item 57); every shutdown below is simulated.
