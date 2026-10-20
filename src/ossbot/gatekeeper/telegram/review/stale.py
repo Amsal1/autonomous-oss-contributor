@@ -46,6 +46,13 @@ REASON_LABELS: dict[str, tuple[str, Second]] = {
 S5_REASONS = frozenset({"entered_implementing", "changes_requested"})
 STALE_BODY_MAX = 3600  # the old card's text kept under the stale header (≤ 3,900 in total)
 PART_STUB = "⚪ part of superseded {cid}{rev}"
+PROPOSAL_EXPIRED_LABEL = "re-scouting if still relevant"
+NOT_APPROVABLE = "⛔ Not approvable"
+NOT_DECIDABLE = "⛔ Not decidable"  # gate 1 (proposal) cards, §14.11.15-§14.11.16
+
+
+def disabled_label(approval_id: str) -> str:
+    return NOT_DECIDABLE if approval_id.startswith("p_") else NOT_APPROVABLE
 
 
 def label_for(status: str, reason: str | None) -> tuple[str, Second]:
@@ -67,8 +74,10 @@ class StaleRender:
     buttons: list[tuple[str, str, dict[str, Any]]]  # (label, purpose, arg) after the disabled one
 
 
-def header_for(status: str, reason: str | None, *, rev: int | None = None) -> str:
+def header_for(status: str, reason: str | None, *, rev: int | None = None, gate: int | None = None) -> str:
     label, _ = label_for(status, reason)
+    if status == "expired" and gate == 1:
+        return f"⌛ <b>Expired</b> · {PROPOSAL_EXPIRED_LABEL}"  # §14.11.15 Expiry
     if status == "expired":
         return f"⌛ <b>Expired</b> · {esc(label.split(' · ', 1)[-1])}"
     if reason in {"new_package_rev"}:
@@ -89,9 +98,11 @@ def render(conn: sqlite3.Connection, *, card_html: str, status: str, reason: str
     if reason in S5_REASONS:
         head = f"✏️ <b>Changes requested</b> · {esc(cid or '')}" + (f" · r{rev} → r{rev + 1} in progress" if rev else "")
         return StaleRender("\n".join([head, f"<s>{first}</s>", *rest]), [])
-    head = header_for(status, reason, rev=rev)
+    head = header_for(status, reason, rev=rev, gate=gate)
     _, second = label_for(status, reason)
     buttons: list[tuple[str, str, dict[str, Any]]] = []
+    if status == "expired" and gate == 1:  # re-scouted when still relevant: nothing to tap (§14.11.15)
+        return StaleRender("\n".join([head, f"<s>{first}</s>", *rest]), [])
     show_arg: dict[str, Any] = {"skill": skill} if skill else ({"cid": cid, "gate": 1} if gate == 1 else {"cid": cid})
     can_show = (skill or cid) is not None and open_card_exists(conn, StaleShowCurrentArg.model_validate(show_arg))
     retry_arg = {"cid": cid, "rev": rev, "action_id": action_id}

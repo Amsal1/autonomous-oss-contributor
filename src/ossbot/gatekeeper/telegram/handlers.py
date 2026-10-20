@@ -191,6 +191,9 @@ class Handlers:
         return db.one(self.ctx.conn, "SELECT * FROM ui_tokens WHERE token = ?", (token,))
 
     def _rejection_text(self, exc: ApprovalError, row: Any) -> str:
+        if row is not None and str(row["approval_id"] or "").startswith("p_") and self._approval_status(row) == (
+                "expired"):  # fmt: skip
+            return proposal_cards.EXPIRED  # §14.11.15 Expiry
         if exc.code == "superseded" or (row is not None and self._approval_status(row) == "invalidated"):
             return "Superseded: content or mode changed since this card; review the new card."
         if exc.code in {"token_expired", "approval_expired"}:

@@ -11,7 +11,7 @@ import pytest
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram import proposal_cards
-from tests.telegram.proposalkit import proposal_card, revise
+from tests.telegram.proposalkit import proposal_card, revise, tick
 from tests.telegram.reviewkit import labels, last_sent_id, latest, latest_send, text, toast, token
 from tests.telegram.tgharness import TgRig, make_rig
 
@@ -40,6 +40,24 @@ def test_version_diff_is_deterministic() -> None:
     assert proposal_cards.version_diff(old, new) == diff
 
 
+async def test_expired_proposal_card_copy(rig: TgRig) -> None:
+    """§14.11.15 Expiry: '⌛ Expired · re-scouting if still relevant', [⛔ Not decidable], and every tap
+    answers the expiry sentence (F009-R2-6)."""
+    v1 = await proposal_card(rig)
+    skip = token(rig, v1.message_id, "⏭ Skip")
+    start = token(rig, v1.message_id, "✅ Start work")
+    with db.transaction(rig.ctx.conn):
+        rig.ctx.conn.execute("UPDATE proposal_approvals SET status = 'expired' WHERE id = ?", (v1.approval,))
+    await tick(rig)
+    old = text(rig, v1.message_id)
+    assert old.split("\n")[0].endswith("⌛ <b>Expired</b> · re-scouting if still relevant")
+    assert labels(rig, v1.message_id) == ["⛔ Not decidable"]
+    await rig.tap(skip, message=v1.message_id)
+    assert toast(rig) == proposal_cards.EXPIRED
+    await rig.tap(start, message=v1.message_id)
+    assert toast(rig) == proposal_cards.EXPIRED
+
+
 async def test_adjust_plan_prompt_then_v2_replies_with_the_diff(rig: TgRig) -> None:
     v1 = await proposal_card(rig, approach=["one", "two", "Remove the debug log"])
     await rig.tap(token(rig, v1.message_id, "✏️ Adjust plan"), message=v1.message_id)
@@ -60,8 +78,7 @@ async def test_adjust_plan_prompt_then_v2_replies_with_the_diff(rig: TgRig) -> N
     # the old card: S12 superseded, Not decidable + Show current
     old = text(rig, v1.message_id)
     assert "⚪ <b>Superseded</b> · v2 is newer" in old
-    assert labels(rig, v1.message_id)[0].startswith("⛔")
-    assert "⬇️ Show current" in labels(rig, v1.message_id)
+    assert labels(rig, v1.message_id) == ["⛔ Not decidable", "⬇️ Show current"]  # §14.11.16
 
 
 async def test_reply_to_the_card_is_adjust_plan(rig: TgRig) -> None:

@@ -43,6 +43,7 @@ FILES_MAX = 4
 DIFF_LINES, DIFF_LINE_MAX = 6, 100
 KIT_TTL = timedelta(hours=72)
 SUPERSEDED = "Superseded: this proposal changed; review the new version."
+EXPIRED = "This proposal expired; a fresh one will arrive if the issue is still open."
 PROPOSAL_PURPOSES = ("proposal_skip", "proposal_adjust", "proposal_smaller", "proposal_never", "proposal_later",
                      "proposal_details", "proposal_ask_first")  # fmt: skip
 
@@ -159,14 +160,15 @@ def card_view(ctx: AppContext, row: sqlite3.Row) -> k.View | None:
         if len(areas) > FILES_MAX:
             shown.append(k.Const(f" +{len(areas) - FILES_MAX} more"))
         blocks.append(k.Block((k.Lines((tuple(shown),)),), required=False, priority=4, name="files"))
-    blocks.append(k.Block((k.Lines((_size_line(ctx, contrib, prop, user), _validate_line(prop))),), name="size"))
+    validate = _validate_line(ctx, str(contrib["upstream"]), vet, prop)
+    blocks.append(k.Block((k.Lines((_size_line(ctx, contrib, prop, user), validate)),), name="size"))
     facts = _signals(vet)
     if facts:
         blocks.append(k.Block((k.Lines(((k.Const("✅ Signals: "), k.Text(" · ".join(facts), 200)),)),),
                               required=False, priority=1, name="signals"))  # fmt: skip
     warnings = _warnings(ctx, contrib, vet, areas, user)
     if warnings:
-        blocks.append(k.Block((k.Lines(tuple(k.line(w) for w in warnings)),), name="warnings"))
+        blocks.append(k.Block((k.Lines(tuple(warnings)),), name="warnings"))
     if prop.get("rationale"):
         blocks.append(k.Block((k.claim("Why it fits", str(prop["rationale"]), max_len=160),), required=False,
                               priority=2, name="rationale"))  # fmt: skip
@@ -212,10 +214,18 @@ def _size_line(ctx: AppContext, contrib: sqlite3.Row, prop: dict[str, Any], user
     return (k.Const(f"Size {icons.MODEL} est "), k.Bold(k.Const(cls)), k.Const(numbers))
 
 
-def _validate_line(prop: dict[str, Any]) -> k.Line:
+def _validate_line(ctx: AppContext, upstream: str, vet: dict[str, Any], prop: dict[str, Any]) -> k.Line:
+    """✅ the gatekeeper's facts (the vet's test runner when it found one, the validation tier cap),
+    then 🤖 the scout's test count and plan (§14.11.15 field rules)."""
+    facts: list[k.Span] = [k.Const("Validate ✅ ")]
+    runner = vet.get("test_runner")
+    if isinstance(runner, str) and runner:
+        facts += [k.Const("repo has tests ("), k.Text(runner, 30), k.Const(") · ")]
+    tier = ctx.discovery_prefs.effective(upstream).filters.validation_tier_max
+    facts.append(k.Const(f"tiers ≤ {tier} · "))
     tests = prop.get("tests") or []
     what = f"{len(tests)} test(s) to add/update" if tests else "no suite"
-    return (k.Const(f"Validate {icons.MODEL} {what} · "), k.Text(str(prop.get("validation_plan") or "—"), 120))
+    return (*facts, k.Const(f"{icons.MODEL} {what} · "), k.Text(str(prop.get("validation_plan") or "—"), 120))
 
 
 def _signals(vet: dict[str, Any]) -> list[str]:
@@ -234,16 +244,21 @@ def _signals(vet: dict[str, Any]) -> list[str]:
     return out[:3]
 
 
-def _warnings(ctx: AppContext, contrib: sqlite3.Row, vet: dict[str, Any], areas: list[str], user: bool) -> list[str]:
-    out: list[str] = []
+def _warnings(ctx: AppContext, contrib: sqlite3.Row, vet: dict[str, Any], areas: list[str],
+              user: bool) -> list[k.Line]:  # fmt: skip
+    out: list[k.Line] = []
     hits = forbidden_hits(ctx, areas)
     if hits:
-        out.append("⛔ Touches forbidden paths: " + ", ".join(middle_cut(h, 40) for h in hits[:3]))
+        # the paths are scout text (🤖): made visible and defused, in code style (U6, U8)
+        hit: list[k.Span] = [k.Const(f"⛔ Touches forbidden paths {icons.MODEL} ")]
+        for i, h in enumerate(hits[:3]):
+            hit += [k.Const(", ") if i else k.Const(""), k.Code(k.Text(middle_cut(h, 40), 40))]
+        out.append(tuple(hit))
     if vet.get("cla_required"):
-        out.append("⚠️ CLA required")
+        out.append(k.line("⚠️ CLA required"))
     pr = open_pr_here(ctx.conn, str(contrib["id"]), str(contrib["upstream"])) if user else None
     if pr is not None:
-        out.append(f"⚠️ You already have PR #{pr} open here")
+        out.append(k.line(f"⚠️ You already have PR #{pr} open here"))
     return out
 
 

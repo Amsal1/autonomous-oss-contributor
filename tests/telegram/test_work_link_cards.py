@@ -15,8 +15,9 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram import work_links
 from ossbot.gatekeeper.telegram.ui import classic
-from tests.telegram.reviewkit import labels, sent_with, text, toast, token
+from tests.telegram.reviewkit import labels, latest_send, sent_with, text, toast, token
 from tests.telegram.tgharness import TgRig, make_rig
+from tests.unit.gatekeeper.test_proposals import submit
 
 URL = "https://github.com/langfuse/langfuse/issues/1234"
 
@@ -71,6 +72,20 @@ async def test_work_queues_and_replies_with_the_facts(rig: TgRig) -> None:
     assert "Size preference and filters don't apply; safety checks do." in body
     assert labels(rig, mid) == ["✖️ Cancel request"]
     assert rig.handlers.reader.calls == [("issue", "langfuse/langfuse", 1234)]
+
+
+async def test_user_v1_proposal_card_replies_to_working_on_it(rig: TgRig) -> None:
+    """§14.11.15 Delivery: a 👤 v1 card replies to the Working on it message (flat mode: one chat)."""
+    await rig.say(f"/work {URL}")
+    working = sent_with(rig, "Working on it")
+    cid = str(user_items(rig.ctx)[0]["id"])
+    with db.transaction(rig.ctx.conn):
+        rig.ctx.conn.execute("UPDATE contributions SET state = 'SCOUTING' WHERE id = ?", (cid,))
+    out = submit(rig.ctx, cid)
+    await rig.flush()
+    card = db.one(rig.ctx.conn, "SELECT tg_message_id FROM proposal_approvals WHERE id = ?", (out["approval_id"],))
+    assert card is not None
+    assert latest_send(rig, int(card[0]))["reply_parameters"]["message_id"] == working
 
 
 async def test_read_failure_still_queues(rig: TgRig) -> None:

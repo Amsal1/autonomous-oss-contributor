@@ -9,15 +9,16 @@ through ``ProposalService`` (``decline``/``undo``/``request_revision``), which g
 
 from __future__ import annotations
 
-import json
 from datetime import timedelta
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ossbot.common.clock import from_iso, to_iso
-from ossbot.common.ids import new_action_id, new_token
+from ossbot.common.clock import from_iso
+from ossbot.common.control_flags import Blocked
+from ossbot.common.ids import new_token
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper.action_requests import ActionRefused, claim_body, request_action
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import SNOOZE_DAYS_MAX, ProposalRefused, ProposalService
@@ -33,10 +34,6 @@ from ossbot.gatekeeper.telegram.ui import send as ui_send
 UNDO_TTL = timedelta(minutes=10)
 TOO_LATE = "Too late to undo; re-request with /work <issue url>"
 ADJUST_PLACEHOLDER = "What should change in the plan? (≤ 2000)"
-CLAIM_BODY = (
-    "Hi! I'd like to work on this issue and open a pull request with a fix and tests. "
-    "Please let me know if someone else is already on it or if you'd prefer a different approach."
-)
 LATER_DAYS = (1, 3, 7, 14)
 
 
@@ -69,6 +66,10 @@ def _current(ctx: AppContext, a: ProposalArg) -> tuple[Any, str | None]:
         return None, proposal_cards.SUPERSEDED
     approval = open_approval(ctx, a.cid, a.version)
     if approval is None:
+        last = db.one(ctx.conn, "SELECT status FROM proposal_approvals WHERE cid = ? AND version = ?"
+                      " ORDER BY created_at DESC LIMIT 1", (a.cid, a.version))  # fmt: skip
+        if last is not None and last["status"] == "expired":
+            return None, proposal_cards.EXPIRED  # §14.11.15 Expiry
         return None, "This proposal is no longer open."
     return approval, None
 
@@ -388,18 +389,17 @@ async def ask_first(tap: Tap) -> str:
     c = db.one(ctx.conn, "SELECT issue_number FROM contributions WHERE id = ?", (a.cid,))
     if c is None or not c["issue_number"]:
         return "No issue to ask on."
-    if db.one(ctx.conn, "SELECT 1 FROM outbound_actions WHERE cid = ? AND kind = 'issue_claim' AND status ="
-              " 'pending_approval'", (a.cid,)):  # fmt: skip
+    body = claim_body(ctx.config.profile.github_login)
+    try:  # the same path as POST /v1/actions: marker, normalization, policy check, running check
+        done = request_action(ctx, a.cid, "issue_claim", int(c["issue_number"]), body, tap.actor)
+    except Blocked:
+        return "Paused or killed: nothing was requested. /resume first."
+    except ActionRefused as exc:
+        return f"Not requested: {exc.code}"
+    if done.reused:
         return "A claim card is already waiting."
-    action_id = new_action_id()
+    assert done.approval_id is not None
     with db.transaction(ctx.conn):
-        ctx.conn.execute(
-            "INSERT INTO outbound_actions (id, cid, kind, payload_json, status, created_at) VALUES"
-            " (?, ?, 'issue_claim', ?, 'pending_approval', ?)",
-            (action_id, a.cid, json.dumps({"target_number": int(c["issue_number"]), "body": CLAIM_BODY}),
-             to_iso(ctx.clock.now())),
-        )  # fmt: skip
-        approval_id = ctx.create_approval(action_id, tap.actor)
-        ctx.audit.append(tap.actor, "claim_requested", {"action_id": action_id}, a.cid)
-    ctx.on_approval_created(approval_id)
+        ctx.audit.append(tap.actor, "claim_requested", {"action_id": done.action_id}, a.cid)
+    ctx.on_approval_created(done.approval_id)
     return "🙋 The claim card follows (approve it to post)."

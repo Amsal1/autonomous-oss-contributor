@@ -225,8 +225,13 @@ class ProposalService:
                 text = text.strip()
                 if not text or len(text) > 2000:
                     raise ProposalRefused(400, "bad_feedback", "1-2000 characters")
+            elif kind == "smaller" and state is S.RESCOPE_REQUIRED:
+                # §14.11.17: back to the class the user approved (xs included), not one below it
+                if row["approved_class"] is None:
+                    raise ProposalRefused(409, "no_approved_class")
+                text = SMALLER_TEXT.format(cls=row["approved_class"])
             elif kind == "smaller":
-                current = row["approved_class"] if state is S.RESCOPE_REQUIRED else row["est_class"]
+                current = row["est_class"]
                 if current is None or class_index(current) == 0:
                     raise ProposalRefused(409, "already_smallest")
                 text = SMALLER_TEXT.format(cls=SIZE_CLASSES[class_index(current) - 1])
@@ -283,17 +288,32 @@ class ProposalService:
             self.ctx.state_machine.transition(cid, state, S.PROPOSED, Actor.HUMAN, {"undo": approval_id}, actor)
         return self.ctx.reissue_proposal(cid, actor, keep_expiry=True)
 
-    def continue_rescope(self, cid: str, actor: str, *, at_measured: bool) -> dict[str, Any]:
+    def continue_rescope(self, cid: str, actor: str, *, at_measured: bool,
+                         expect: dict[str, Any] | None = None) -> dict[str, Any]:  # fmt: skip
         """RESCOPE_REQUIRED -> PACKAGING (✅ Continue at <class> or 🔁 Re-check, FEAT-009 buttons);
-        the runner re-sends /package for the same rev and the size check runs again."""
+        the runner re-sends /package for the same rev and the size check runs again.
+
+        Continue (``at_measured``) is a proposal Start work (§14.11.17): refused while paused, killed,
+        draining or down (§14.11.15); Re-check only re-runs the size check. ``expect`` (the binding the
+        Confirm panel showed, ``rescope_binding``) must still match the stored report. The edge is G
+        (the gatekeeper moves the item); the human who decided is recorded in the evidence."""
+        refusal = self.ctx.decisions.proposals.refusal() if at_measured else None
+        if refusal is not None:
+            raise ProposalRefused(409, "refused", refusal)
         with db.transaction(self.conn):
             row = self._contribution(cid)
+            if State(row["state"]) is not S.RESCOPE_REQUIRED:
+                raise ProposalRefused(409, "not_open", str(row["state"]))
             report = json.loads(row["size_report_json"] or "{}")
+            if expect is not None and rescope_binding(row["size_report_json"]) != expect:
+                raise ProposalRefused(409, "superseded")
             if at_measured and report.get("measured_class"):
                 self.conn.execute("UPDATE contributions SET approved_class = ? WHERE id = ?",
                                   (report["measured_class"], cid))  # fmt: skip
-            self.ctx.state_machine.transition(cid, S.RESCOPE_REQUIRED, S.PACKAGING, Actor.GATEKEEPER,
-                                              {"continue": at_measured}, actor)  # fmt: skip
+            evidence = {"continue": at_measured, "decided_by": "human",
+                        "measured_class": report.get("measured_class")}  # fmt: skip
+            self.ctx.state_machine.transition(cid, S.RESCOPE_REQUIRED, S.PACKAGING, Actor.GATEKEEPER, evidence,
+                                              actor)  # fmt: skip
         return {"cid": cid, "state": S.PACKAGING.value}
 
     # ------------------------------------------------------------------- sweep
@@ -317,6 +337,20 @@ class ProposalService:
             )
             moved.append(str(row["id"]))
         return moved
+
+
+def rescope_binding(size_report_json: str | None) -> dict[str, Any]:
+    """What a rescope Confirm panel binds (§14.11.17): the rev, the measured class and the report hash."""
+    raw = size_report_json or "{}"
+    try:
+        report = json.loads(raw)
+    except ValueError:
+        report = {}
+    if not isinstance(report, dict):
+        report = {}
+    rev = report.get("rev")
+    return {"report_rev": rev if isinstance(rev, int) else None, "measured_class": report.get("measured_class"),
+            "report_sha256": sha256_hex(raw.encode())}  # fmt: skip
 
 
 def snooze_due(row: sqlite3.Row, now: Any) -> bool:

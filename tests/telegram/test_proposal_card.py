@@ -4,13 +4,15 @@ version and hash, the budget rule, Details (no decision buttons) and Ask maintai
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 
 import pytest
 
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import action_requests, db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram import proposal_cards
+from ossbot.runner.stages import fetch
 from tests.telegram.proposalkit import proposal_card, state
 from tests.telegram.reviewkit import labels, latest, text, toast, token, view_message
 from tests.telegram.tgharness import TgRig, make_rig
@@ -36,6 +38,7 @@ async def test_card_fields_badge_and_keyboard(rig: TgRig) -> None:
     assert "  1. Guard empty span lists in toOtel()" in body
     assert "🤖 <b>Likely files</b> <code>web/src/export/</code>" in body
     assert "Size 🤖 est <b>s</b> · ~30 code · ~40 test · 2 files · ✅ fits your auto size ≤" in body
+    assert "Validate ✅ tiers ≤ T1 · 🤖 " in body  # repo facts ✅, the scout's plan 🤖 (§14.11.15)
     assert "✅ Signals: no competing claim · assignment not required" in body
     assert "🤖 <b>Why it fits</b>" in body
     assert "Confidence 🤖 0.78 · Risks 🤖 0 · Alternatives 🤖 0 → 🧭 Details" in body
@@ -83,9 +86,19 @@ async def test_budget_rule_keeps_the_required_lines(rig: TgRig) -> None:
 async def test_forbidden_paths_disable_start_work(rig: TgRig) -> None:
     card = await proposal_card(rig, areas=[".github/workflows/ci.yml"])
     body = text(rig, card.message_id)
-    assert "⛔ Touches forbidden paths: .github/workflows/ci.yml" in body
+    assert "⛔ Touches forbidden paths 🤖 <code>.github/workflows/ci.yml</code>" in body
     start = rig.buttons(latest(rig, card.message_id))[0][0]
     assert start == {"text": "⛔ Not startable", "disabled": {}}
+
+
+async def test_forbidden_path_warning_defuses_scout_text(rig: TgRig) -> None:
+    """U6/U8: '*' in a forbidden glob matches spaces, so scout text reaches this line; it is made
+    visible and defused like every other scout field (F009-R2-5)."""
+    card = await proposal_card(rig, areas=[".github/workflows/x /kill \u202eevil"])
+    sent = latest(rig, card.message_id)["text"]
+    line = next(ln for ln in sent.split("\n") if ln.startswith("⛔ Touches forbidden paths"))
+    assert "/\u2060kill" in line and "/kill" not in line
+    assert "\u202e" not in line and "⟦U+202E⟧" in line
 
 
 async def test_start_work_is_two_taps_and_binds_the_version(rig: TgRig) -> None:
@@ -130,12 +143,38 @@ async def test_ask_maintainers_first_creates_a_claim_card(rig: TgRig) -> None:
     card = await proposal_card(rig, vetting=ASSIGN)
     await rig.tap(token(rig, card.message_id, "🙋 Ask maintainers first"), message=card.message_id)
     assert "claim card follows" in toast(rig)
-    claim = db.one(rig.ctx.conn, "SELECT id FROM outbound_actions WHERE cid = ? AND kind = 'issue_claim'", (card.cid,))
+    claim = db.one(rig.ctx.conn, "SELECT id, payload_json FROM outbound_actions WHERE cid = ? AND kind ="
+                   " 'issue_claim'", (card.cid,))  # fmt: skip
     assert claim is not None
     assert db.one(rig.ctx.conn, "SELECT 1 FROM approvals WHERE action_id = ?", (claim["id"],)) is not None
+    stored = json.loads(claim["payload_json"])["body"]
+    login = rig.ctx.config.profile.github_login
+    # the bytes of the actions path: the AI-assistance line and the reconciliation marker (§12)
+    assert stored == action_requests.claim_body(login) + f"\n\n<!-- ossbot:action={claim['id']} -->"
+    assert f"— drafted with AI assistance, reviewed by @{login}" in stored
     assert state(rig.ctx, card.cid) == "PROPOSED"  # the proposal stays open
     await rig.tap(token(rig, card.message_id, "🙋 Ask maintainers first"), message=card.message_id)
     assert toast(rig) == "A claim card is already waiting."
+    # the runner's fetch stage asks again after Start work: it gets this claim back, not a second one
+    issue = db.one(rig.ctx.conn, "SELECT issue_number FROM contributions WHERE id = ?", (card.cid,))
+    assert issue is not None
+    again = action_requests.request_action(rig.ctx, card.cid, "issue_claim", int(issue[0]), "x", "uid:1/worker")
+    assert again.reused and again.action_id == claim["id"]
+    n = db.one(rig.ctx.conn, "SELECT COUNT(*) FROM outbound_actions WHERE cid = ? AND kind = 'issue_claim'",
+               (card.cid,))  # fmt: skip
+    assert n is not None and n[0] == 1
+
+
+async def test_ask_maintainers_first_refused_while_paused(rig: TgRig) -> None:
+    card = await proposal_card(rig, vetting=ASSIGN)
+    rig.ctx.control.pause("test", "uid:1000/operator")
+    await rig.tap(token(rig, card.message_id, "🙋 Ask maintainers first"), message=card.message_id)
+    assert toast(rig).startswith("Paused or killed: nothing was requested")
+    assert db.one(rig.ctx.conn, "SELECT 1 FROM outbound_actions WHERE cid = ?", (card.cid,)) is None
+
+
+def test_claim_template_matches_the_runner() -> None:
+    assert action_requests.CLAIM_TEMPLATE == fetch.CLAIM_BODY
 
 
 def test_kind_labels_fit() -> None:

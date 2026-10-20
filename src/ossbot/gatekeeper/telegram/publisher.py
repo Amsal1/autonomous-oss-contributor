@@ -32,6 +32,7 @@ from ossbot.gatekeeper.outbox import OutboxRow
 from ossbot.gatekeeper.telegram import keyboards
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.review import stale
+from ossbot.gatekeeper.telegram.runtime import ui_of
 
 log = logging.getLogger(__name__)
 RETRY_TOKEN_TTL = timedelta(hours=24)
@@ -111,7 +112,23 @@ class CardPublisher:
         row = db.one(self.ctx.conn, "SELECT tg_message_id FROM proposal_approvals WHERE cid = ? AND id != ? AND"
                      " tg_message_id IS NOT NULL ORDER BY version DESC, created_at DESC LIMIT 1",
                      (cid, approval_id))  # fmt: skip
-        return int(row["tg_message_id"]) if row is not None else None
+        if row is not None:
+            return int(row["tg_message_id"])
+        if approval_id.startswith("p_"):
+            return self._working_on_it(str(cid))
+        return None
+
+    def _working_on_it(self, cid: str) -> int | None:
+        """A 👤 v1 card replies to the ``Working on it`` message when that is in ✅ Reviews (replies can't
+        cross topics; in flat mode everything is one chat) (§14.11.15 Delivery)."""
+        view = db.one(self.ctx.conn, "SELECT message_id, thread_id FROM tg_views WHERE cid = ? AND kind ="
+                      " 'work_request' ORDER BY message_id DESC LIMIT 1", (cid,))  # fmt: skip
+        if view is None:
+            return None
+        topics = ui_of(self.ctx).topics
+        if topics.mode == "flat" or view["thread_id"] == topics.thread_id("reviews"):
+            return int(view["message_id"])
+        return None
 
     def _invalidate_render_failed(self, approval_id: str) -> None:
         svc: Any = self.ctx.decisions.for_id(approval_id)
@@ -293,7 +310,7 @@ class CardPublisher:
             gate=1 if approval_id.startswith("p_") else None, eligible=self._eligible(meta),
         )  # fmt: skip
         chat, mid = int(row["tg_chat_id"]), int(row["tg_message_id"])
-        disabled = {"text": "⛔ Not approvable", "disabled": {}}
+        disabled = {"text": stale.disabled_label(approval_id), "disabled": {}}
         buttons = [disabled]
         with db.transaction(self.ctx.conn):
             for label, purpose, arg in rendered.buttons:

@@ -21,7 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
+from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService, rescope_binding
 from ossbot.gatekeeper.state_machine import Actor, TransitionError
 from ossbot.gatekeeper.telegram import proposal_actions
 from ossbot.gatekeeper.telegram.actions import Tap, action
@@ -123,18 +123,35 @@ def _done(tap: Tap, note: str) -> None:
 GONE = "This item is no longer waiting for a size decision."
 
 
+def refusal_toast(ctx: AppContext) -> str | None:
+    """Continue is a proposal Start work (§14.11.17): the gate-1 refusals and their toasts (§14.11.15)."""
+    why = ctx.decisions.proposals.refusal()
+    if why is None:
+        return None
+    if why == "paused or killed":
+        return "Paused or killed: nothing was approved. /resume first."
+    what = "down (workers)" if why == "down" else why
+    return f"ossbot is {what}: nothing was approved. The card stays valid; retry after up."
+
+
 @action("rescope_continue", arg=RescopeArg)
 async def continue_first(tap: Tap) -> str:
     a: RescopeArg = tap.arg
     if not _open(tap.app, a.cid):
         return GONE
+    refused = refusal_toast(tap.app)
+    if refused:
+        return refused
+    row = db.one(tap.app.conn, "SELECT size_report_json FROM contributions WHERE id = ?", (a.cid,))
+    raw = row["size_report_json"] if row else None
     report = _report(tap.app, a.cid)
     measured, approved = report.get("measured_class", "?"), report.get("approved_class", "?")
     text = (f"Confirm: continue {a.cid} at size {measured} (was {approved}). Local work only — dry-run does not"
             " apply. Expires in 5 min.")  # fmt: skip
     ttl = timedelta(seconds=tap.app.config.policy.limits.confirm_ttl_seconds)
     arg = tap.arg.model_dump()
-    confirm = k.button("🛠 Confirm continue", "rescope_continue_confirm", arg, style="primary", single_use=True,
+    bound = {**arg, **rescope_binding(raw)}  # the report this panel shows (F009-R2-3)
+    confirm = k.button("🛠 Confirm continue", "rescope_continue_confirm", bound, style="primary", single_use=True,
                        ttl=ttl)  # fmt: skip
     rows: k.Rows = [[confirm, k.button("↩️ Cancel", "rescope_cancel", arg, single_use=True, ttl=ttl)]]
     ui_send.edit(tap.app, k.View(kind="rescope", blocks=[k.Block((k.Lines((k.line(text),)),))], rows=rows,
@@ -142,16 +159,31 @@ async def continue_first(tap: Tap) -> str:
     return ""
 
 
-@action("rescope_continue_confirm", arg=RescopeArg)
+class ContinueArg(RescopeArg):
+    model_config = ConfigDict(extra="forbid")
+    measured_class: str | None = Field(default=None, max_length=8)
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    report_rev: int | None = Field(default=None, ge=1, le=10_000)
+
+
+@action("rescope_continue_confirm", arg=ContinueArg)
 async def continue_confirm(tap: Tap) -> str:
-    a: RescopeArg = tap.arg
+    a: ContinueArg = tap.arg
     if not _open(tap.app, a.cid):
         return GONE
-    if not tap.app.approvals.system_running():
-        return "Paused or killed: nothing was approved. /resume first."
+    refused = refusal_toast(tap.app)
+    if refused:
+        return refused
+    expect = {"report_rev": a.report_rev, "measured_class": a.measured_class, "report_sha256": a.report_sha256}
     try:
-        out = ProposalService(tap.app).continue_rescope(a.cid, tap.actor, at_measured=True)
-    except (ProposalRefused, TransitionError) as exc:
+        out = ProposalService(tap.app).continue_rescope(a.cid, tap.actor, at_measured=True, expect=expect)
+    except ProposalRefused as exc:
+        if exc.code == "superseded":
+            return "Superseded: the size report changed since this panel; review the new card."
+        if exc.code == "refused":
+            return refusal_toast(tap.app) or f"Refused: {exc.code}"
+        return f"Refused: {str(exc)[:150]}"
+    except TransitionError as exc:
         return f"Refused: {str(exc)[:150]}"
     _done(tap, f"✅ Continuing {a.cid} at the measured size · {out['state']} · the preview card follows")
     return "Continuing."
@@ -195,7 +227,9 @@ async def recheck(tap: Tap) -> str:
         return f"Still over the ceiling ({over})"
     try:
         ProposalService(tap.app).continue_rescope(a.cid, tap.actor, at_measured=False)
-    except (ProposalRefused, TransitionError) as exc:
+    except ProposalRefused as exc:
+        return (refusal_toast(tap.app) if exc.code == "refused" else None) or f"Refused: {str(exc)[:150]}"
+    except TransitionError as exc:
         return f"Refused: {str(exc)[:150]}"
     _done(tap, f"🔁 {a.cid} fits the ceiling now · the preview card follows")
     return "Within the ceiling now."
