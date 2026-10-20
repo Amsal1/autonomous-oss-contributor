@@ -42,6 +42,18 @@ async def test_role_catalog_effort_confirm(rig: TgRig) -> None:
     assert "coder → model-09" in text(rig, mid)
 
 
+async def test_picker_never_offers_the_test_roles(rig: TgRig) -> None:
+    """MDL-4: ``test`` and ``test_vision`` change only in models.yaml or with ``ossctl model set``."""
+    await rig.say("/model")
+    mid = sent_with(rig, "Which role?")
+    assert not {"test", "test_vision"} & set(labels(rig, mid))
+    before = rig.ctx.models.read()
+    await rig.say("/model test")  # a typed test role gets no catalog pager either
+    pagers = rig.ctx.conn.execute("SELECT COUNT(*) FROM tg_outbox WHERE payload_json LIKE '%model-00%'").fetchone()[0]
+    assert pagers == 0
+    assert rig.ctx.models.read() == before
+
+
 async def test_current_model_is_marked(rig: TgRig) -> None:
     rig.ctx.models.set_model("chat", "model-01", None, False, "uid:1000/operator")
     await rig.say("/model chat")

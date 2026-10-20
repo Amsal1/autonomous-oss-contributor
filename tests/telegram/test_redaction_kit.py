@@ -73,3 +73,22 @@ def test_both_renderers_go_through_the_one_redactor(module: str) -> None:
     assert {"ui_redact.redact", "ui_redact.scan"} <= calls
     source = (UI / module).read_text(encoding="utf-8")
     assert "from ossbot.common.redact" not in source and "Redactor(" not in source
+
+
+CHAT = UI.parent.parent / "chat"
+
+
+def _names_called(path: Path) -> set[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {n.func.id for n in ast.walk(tree) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+
+
+@pytest.mark.parametrize(("module", "needed"), [("drafts.py", {"draft_visible", "redact"}), ("turns.py", {"redact"})])
+def test_streaming_paths_go_through_the_one_redactor(module: str, needed: set[str]) -> None:
+    """BA-16 (streaming part): every draft is built with ``draft_visible`` (status lines with ``redact``), and
+    the stored answer (``chat_turns.answer_text``, the source of answer.md, Stop partials and Telegraph) is
+    redacted before it is written; both import only ``telegram/ui/redact.py``."""
+    source = (CHAT / module).read_text(encoding="utf-8")
+    assert "from ossbot.gatekeeper.telegram.ui.redact import" in source
+    assert "from ossbot.common.redact import Redactor" not in source and "Redactor(" not in source
+    assert needed <= _names_called(CHAT / module)

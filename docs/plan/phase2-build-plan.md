@@ -301,25 +301,25 @@ Depends on FEAT-009.
 
 Depends on everything above.
 
-- [ ] 54. README, AGENTS.md, SETUP.md (with backup/restore), ARCHITECTURE.md, steering, `profile.example.yaml`.
+- [x] 54. README, AGENTS.md, SETUP.md (with backup/restore), ARCHITECTURE.md, steering, `profile.example.yaml`.
       Rows: DES-FR-10, DES-FR-15, DES-FR-16, DES-NFR-10, ADR-0015, CR1-8, CR2-5, CR4-6, CR3-docs, CHAT-15, CHAT-16, CHAT-17.
       What: `README.md` (what it is, safety model with both gates, mermaid architecture, quickstart, daily use, Telegram tour, egress modes and tiers, how the bot picks work and the size preference vs the hard ceiling, user-directed work, AI disclosure, license TBD); `AGENTS.md` (architecture map, invariants incl. lifecycle, two gates, ceiling not Telegram-raisable, no exposure; how to add a command, feature, target, stage, model role and Telegram view per §14.18.3); `docs/SETUP.md` (fresh-install DR runbook, credentials, BotFather topics, `ossctl backup`/`restore` and `backup.ps1`/`restore.ps1`, doctor); `docs/ARCHITECTURE.md`; `.kiro/steering/{product,tech,structure,safety-invariants,web-research}.md`; `.kiro/agents/harness-dev.json`; `ossctl docs commands [--check]` generating the README command table. Decision B7: `config/profile.example.yaml` gains every Phase 2 profile key with generic placeholders.
       Tests: new `tests/unit/ctl/test_docs_commands.py` (`--check` fails on drift), `tests/unit/common/test_profile_example.py` (the example loads with `ProfileConfig` and holds no owner value).
       Verify: `DEV pytest -m unit` green; `DEV ossctl docs commands --check` exits 0.
 
-- [ ] 55. Secret hygiene.
+- [x] 55. Secret hygiene.
       Rows: DES-NFR-11, DES-AC-17, DES-AC-23, DES-V-23, CHAT-20.
       What: `.gitleaks.toml` (extends defaults, the §12.6 patterns, allowlist only for test fixtures), `.githooks/pre-commit` (gitleaks protect + `ossctl lint personal`), `scripts/install-hooks.ps1`, `src/ossbot/ctl/lint_personal.py`; AC 17 proven in a throwaway clone under `.ossbot-local/hooktest/`.
       Tests: new `tests/unit/ctl/test_lint_personal.py`.
       Verify: `DEV pytest -m unit` green; `ROOT gitleaks git --redact --config .gitleaks.toml .` exits 0; `DEV ossctl lint personal` exits 0.
 
-- [ ] 56. CI workflow (optional to run, required to exist and be tested locally).
+- [x] 56. CI workflow (optional to run, required to exist and be tested locally).
       Rows: DES-AC-24, DES-V-27, CHAT-21.
       What: `.github/workflows/ci.yml` (`permissions: contents: read`, SHA-pinned actions, lint, hermetic tests, gitleaks, PSScriptAnalyzer, docs check, profile example check). Nothing is pushed, so it does not run on GitHub during the build.
       Tests: new `tests/unit/test_ci_workflow.py` (permissions, every `uses:` pinned by 40-hex SHA, no secrets in `pull_request_target`).
       Verify: `DEV pytest -m unit tests/unit/test_ci_workflow.py` green.
 
-- [ ] 57. Final verification and report.
+- [x] 57. Final verification and report.
       Rows: DES-FR-11, DES-AC-3, NOTE-2, NOTE-9, CHAT-34, CHAT-37, GHMCP-2 (live part), CR1-6a, CR1-6b, DES-V-31, DES-AC-32 (the real-restart parts; FEAT-008 built and tested 6a/6b with simulated shutdowns, ADR-0021).
       What: run "Required overall verification" and the "Phase 2 verification" block of PLAN.md; full `ossctl doctor --probes` and `scripts\ossctl.ps1 doctor`; one research-profile scout or reviewer job (dry-run, read-only) whose events show a successful `@github/...` read tool call, the in-container GitHub MCP path of GHMCP-2; the real Windows restart test of 6a/6b (ask the user to restart the laptop with `send_message` severity `warning`, then record the observed shutdown types); every matrix row `done` or `deferred`; write `docs/FINAL_REPORT.md` (summary, doctor results, live checks, user actions needed); FEAT-011 `completed`; commit.
       Verify: every command of both blocks passes; the matrix check with `$f='.'` lists no row; `git status --porcelain` empty.
