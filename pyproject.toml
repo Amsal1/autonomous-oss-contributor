@@ -186,6 +186,14 @@ source_modules = ["ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools"]
 forbidden_modules = ["ossbot.gatekeeper"]
 
 [[tool.importlinter.contracts]]
+# ADR-0022: a pipeline model backend runs inside the sandbox/probe boundary through the sandboxd client;
+# it never reaches the gatekeeper (its write paths included), sandboxd internals or the Docker filter.
+name = "Model backends never import the gatekeeper, sandboxd or the Docker filter"
+type = "forbidden"
+source_modules = ["ossbot.runner.backends"]
+forbidden_modules = ["ossbot.gatekeeper", "ossbot.sandboxd", "ossbot.dockerfilter", "ossbot.ctl"]
+
+[[tool.importlinter.contracts]]
 name = "Sandbox tools are stdlib-only (copied into the images as single files)"
 type = "forbidden"
 source_modules = ["ossbot.sandbox_tools"]

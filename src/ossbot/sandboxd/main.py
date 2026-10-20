@@ -15,12 +15,14 @@ import pwd
 import socket
 import stat
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 import httpx
 import uvicorn
 
+from ossbot.common.backends import pipeline_credential_env
 from ossbot.common.clock import SystemClock
 from ossbot.common.config import ConfigError, parse_bundle
 from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S
@@ -132,13 +134,20 @@ def _proxy_log() -> str:
         return "unreadable proxy log: canary.invalid cannot be ruled out"  # fail closed for 'workspace'
 
 
+def scan_secrets(environ: Mapping[str, str]) -> list[str]:
+    """The values the key scanner and the log redactor look for: every registered pipeline backend's
+    credentials (``common.backends``, ADR-0022; kiro: ``KIRO_API_KEY``) plus the GitHub read token
+    (scout/reviewer MCP jobs only, GHMCP-2). Unset or empty ones are left out."""
+    names = (*pipeline_credential_env(), "GITHUB_READ_TOKEN")
+    return [v for v in (environ.get(n) or "" for n in names) if v]
+
+
 def main() -> int:
     key = os.environ.get("KIRO_API_KEY") or ""
-    read_token = os.environ.get("GITHUB_READ_TOKEN") or ""  # scout/reviewer MCP jobs only (GHMCP-2)
+    scanned = scan_secrets(os.environ)
     redactor = Redactor()
-    for value in (key, read_token):
-        if value:
-            redactor.add_secret(value)
+    for value in scanned:
+        redactor.add_secret(value)
     setup_logging("sandboxd", redactor)
     if not key:
         log.warning("no KIRO_API_KEY: Kiro and catalog jobs will fail (awaiting secret)")
@@ -150,7 +159,7 @@ def main() -> int:
     jobs = JobService(
         store=store, runtime=runtime, pins=lambda: load_image_pins(DEFAULT_LOCK_COPY),
         catalog=CatalogCache(gatekeeper.catalog, clock), gatekeeper=gatekeeper,
-        scanner=KeyScanner([k for k in (key, read_token) if k]), clock=clock,  # MCP outputs too (GHMCP-2)
+        scanner=KeyScanner(scanned), clock=clock,  # MCP outputs too (GHMCP-2)
         settings=Settings(
             artifacts_dir=paths.artifacts_dir, logs_dir=paths.logs_dir, staging_dir=paths.srv / "sandboxd" / "staging",
             control_dir=paths.control_dir, input_roots=(paths.srv / "runner", paths.artifacts_dir),

@@ -564,8 +564,13 @@ class CatalogConfig(Strict):
     notify_new_models: bool = True
 
 
+# Pipeline model backends (ADR-0022, ``common.backends``): only registered names validate.
+PipelineBackendName = Literal["kiro"]
+
+
 class ModelsConfig(Strict):
     version: Literal[1]
+    backend: PipelineBackendName = "kiro"  # omitted = kiro (today's behaviour)
     default: DefaultModel
     roles: RolesConfig
     fallbacks: list[ModelRef] = Field(default_factory=list)

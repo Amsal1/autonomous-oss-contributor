@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 
+from ossbot.common.backends import KIRO_HEADLESS
 from ossbot.common.images import load_image_pins
 from ossbot.common.paths import Paths
 from ossbot.common.uds import uds_client
@@ -40,7 +41,7 @@ FORMATS: dict[str, str] = {
     "TELEGRAM_BOT_TOKEN": r"^\d{6,12}:[A-Za-z0-9_-]{30,}$",
     "GITHUB_WRITE_TOKEN": r"^ghp_[A-Za-z0-9]{20,}$",
     "GITHUB_READ_TOKEN": r"^github_pat_[A-Za-z0-9_]{20,}$",
-    "KIRO_API_KEY": r"^ksk_[A-Za-z0-9_\-]{16,}$",
+    "KIRO_API_KEY": KIRO_HEADLESS.credential_patterns[0],  # per-backend format (ADR-0022)
 }
 DAEMON_JSON_KEYS = {
     "data-root": "/srv/ossbot/docker", "iptables": True, "ip6tables": False, "userland-proxy": False,

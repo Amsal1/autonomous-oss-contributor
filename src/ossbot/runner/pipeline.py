@@ -25,8 +25,9 @@ from typing import Any
 
 from ossbot.common.config import ConfigBundle
 from ossbot.common.control_flags import Blocked, NotUp, require_running, require_up
-from ossbot.common.models import ModelsFile
+from ossbot.common.models import ModelsFile, ModelUnavailable
 from ossbot.common.schemas import STAGE_ENTRYPOINTS
+from ossbot.runner.backends import select_backend
 from ossbot.runner.errors import Deferred, Interrupted, StageFailed
 from ossbot.runner.github_read import GitHubRead
 from ossbot.runner.gk_client import Gatekeeper, GkError
@@ -135,7 +136,14 @@ class StageContext:
             log.warning("notify failed: %s", exc.code, extra={"event": "notify_failed"})
 
     def kiro(self) -> Kiro:
-        return Kiro(self.gk, self.sbx, self.models, self.inputs_root, tick=self.tick, on_job=self.note_sandbox)
+        """The pipeline backend ``config/models.yaml`` selects (ADR-0022), read live like the models.
+        An unreadable file with no last good copy keeps the default, whose ``resolve`` then fails the
+        stage with ``model_unavailable`` as before."""
+        try:
+            backend = select_backend(self.models.get())
+        except ModelUnavailable:
+            backend = Kiro
+        return backend(self.gk, self.sbx, self.models, self.inputs_root, tick=self.tick, on_job=self.note_sandbox)
 
     def tick(self) -> None:
         if self.run is not None:

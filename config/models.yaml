@@ -6,6 +6,7 @@
 # Owner rule (2026-10-18): claude-opus-5.5 wherever deep reasoning is needed (planner, scout,
 # coder), claude-sonnet-5.5 everywhere else; the reviewer stays a different model from the coder.
 version: 1
+# backend: kiro                 # pipeline model backend (ADR-0022); omitted = kiro, the only registered one
 default:
   model: claude-opus-5.5
   effort: high                  # low | medium | high | xhigh | max (model-dependent)

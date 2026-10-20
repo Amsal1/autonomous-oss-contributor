@@ -1,4 +1,8 @@
-"""Kiro key output scanning (DESIGN §10.6).
+"""Credential output scanning (DESIGN §10.6), per backend (ADR-0022).
+
+The scanned values are every registered pipeline backend's ``credential_env`` (``common.backends``;
+kiro: ``KIRO_API_KEY``) plus the GitHub read token, collected by ``sandboxd.main.scan_secrets``; the
+scanner itself is backend-neutral.
 
 sandboxd is the only distro process that knows the sandbox key's value. Every file collected
 from ``/io/output`` and every container log is searched for the literal key and its encodings
