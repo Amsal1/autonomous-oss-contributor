@@ -20,7 +20,7 @@ $ErrorActionPreference = 'Continue'
 $state = Start-OssDistro
 Write-Host "distro $($script:OssDistro) started (systemd: $state)"
 $task = Get-ScheduledTask -TaskName 'ossbot-autostart' -ErrorAction SilentlyContinue
-if ($task -and $task.State -eq 'Disabled') {
+if (Test-OssTaskDisabled -Task $task) {
     Enable-ScheduledTask -TaskName 'ossbot-autostart' | Out-Null
     Write-Host 'Scheduled Task ossbot-autostart re-enabled'
 }

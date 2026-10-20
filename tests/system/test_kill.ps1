@@ -188,10 +188,10 @@ if ($Selected -contains 6) {
     Start-Sleep -Seconds 3
     Ok 'case6 WSL stopped (no running distro)' (@(Get-OssDistros -Running).Count -eq 0)
     $task = Get-ScheduledTask -TaskName 'ossbot-autostart' -ErrorAction SilentlyContinue
-    if ($task) { Ok 'case6 autostart task disabled' ($task.State -eq 'Disabled') }
+    if ($task) { Ok 'case6 autostart task disabled' (Test-OssTaskDisabled -Task $task) }
     Resume-All 'case6'
     $task = Get-ScheduledTask -TaskName 'ossbot-autostart' -ErrorAction SilentlyContinue
-    if ($task) { Ok 'case6 autostart task re-enabled' ($task.State -ne 'Disabled') }
+    if ($task) { Ok 'case6 autostart task re-enabled' (-not (Test-OssTaskDisabled -Task $task)) }
 }
 
 if ($script:Fail) { Write-Host "test_kill: $($script:Fail) check(s) FAILED" -ForegroundColor Red; exit 1 }

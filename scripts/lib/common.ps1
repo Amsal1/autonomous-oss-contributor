@@ -293,6 +293,14 @@ function Get-OssBlockerState {
     try { return ([IO.File]::ReadAllText($file) | ConvertFrom-Json) } catch { return $null }
 }
 
+function Test-OssTaskDisabled {
+    # A disabled task reports State 'Running' while an instance still runs (the autostart task's shutdown
+    # blocker keeps running after kill.ps1 -Hard), so Settings.Enabled is the truth, not State.
+    param([object]$Task)
+    if (-not $Task) { return $false }
+    return ($Task.State -eq 'Disabled') -or ($Task.Settings -and $Task.Settings.Enabled -eq $false)
+}
+
 $script:OssAutostartTask = 'ossbot-autostart'
 $script:OssHookTask = 'ossbot-shutdown-hook'
 $script:OssBlockerTitle = 'ossbot shutdown blocker'   # ShutdownBlockerWindow.WindowTitle
@@ -386,7 +394,7 @@ function Install-OssAutostartTask {
     $limit = if ($WithoutBlocker) { New-TimeSpan -Minutes 5 } else { [TimeSpan]::Zero }
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit $limit -Hidden
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
-    $enabled = -not ($existing -and $existing.State -eq 'Disabled')   # kill.ps1 -Hard keeps it disabled
+    $enabled = -not (Test-OssTaskDisabled -Task $existing)   # kill.ps1 -Hard keeps it disabled
     try {
         Register-ScheduledTask -TaskName $script:OssAutostartTask -Action $actions -Trigger $trigger -Settings $settings -Principal $principal -Description 'ossbot: boot the ossbot WSL distro at logon and start the shutdown blocker (DESIGN 7.6, 13.5)' -Force | Out-Null
         if (-not $enabled) { Disable-ScheduledTask -TaskName $script:OssAutostartTask | Out-Null }

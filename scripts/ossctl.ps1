@@ -85,7 +85,7 @@ else { Add-Check 'FAIL' 'localhost forwarding' 'distro listener reachable from W
 $task = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
 $autoProblems = @(Get-OssAutostartProblems -Task $task)
 if (-not $task) { Add-Check 'FAIL' 'autostart task' 'ossbot-autostart missing' 'powershell -File scripts\bootstrap.ps1 -Only autostart' }
-elseif ($task.State -eq 'Disabled') { Add-Check 'WARN' 'autostart task' 'disabled (kill.ps1 -Hard?)' 'powershell -File scripts\resume.ps1' }
+elseif (Test-OssTaskDisabled -Task $task) { Add-Check 'WARN' 'autostart task' 'disabled (kill.ps1 -Hard?)' 'powershell -File scripts\resume.ps1' }
 elseif ($autoProblems.Count) { Add-Check 'WARN' 'autostart task' ('drift: ' + ($autoProblems -join '; ')) 'powershell -File scripts\bootstrap.ps1 -Only autostart' }
 else { Add-Check 'PASS' 'autostart task' "ossbot-autostart ($($task.State)): distro boot + shutdown blocker actions, no time limit" }
 if (Test-OssBlockerRunning) {
@@ -100,7 +100,7 @@ if (Test-OssBlockerRunning) {
 $hook = Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue
 $hookProblems = @(Get-OssHookProblems -Task $hook)
 if (-not $hook) { Add-Check 'FAIL' 'shutdown hook task' "$($script:OssHookTask) missing" 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
-elseif ($hook.State -eq 'Disabled') { Add-Check 'WARN' 'shutdown hook task' 'disabled' 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
+elseif (Test-OssTaskDisabled -Task $hook) { Add-Check 'WARN' 'shutdown hook task' 'disabled' 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
 elseif ($hookProblems.Count) { Add-Check 'WARN' 'shutdown hook task' ('drift: ' + ($hookProblems -join '; ')) 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
 else { Add-Check 'PASS' 'shutdown hook task' "$($script:OssHookTask) ($($hook.State)): System User32 1074 only, non-elevated, PT2M (6b)" }
 $hiber = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction SilentlyContinue)
