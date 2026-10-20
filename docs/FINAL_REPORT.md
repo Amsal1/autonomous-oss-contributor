@@ -158,9 +158,12 @@ The first live PR candidate is the V3 ACP adapter for
   `pinChatMessage` cannot name a thread: the dashboard is pinned only once it is in 🚦 Control, and a
   client may still list that pin in "All" (O1, ADR-0020 addendum). The pinned dashboard is edited in
   place; `/status` replies are fresh copies and are not pinned.
-- **`/status` in All** (O1, PV1-A3, open). Sent in "All" with Threaded mode on, `/status` creates a
-  new empty topic named "/status", and the card lands in All. In 🚦 Control and the other threads it
-  answers in place. Use `/status` in Control until this is fixed.
+- **Commands in All** (O1, PV1-A3, fix deployed, owner re-check pending). Typed in "All" with
+  Threaded mode on, a command is answered in All and the topic Telegram creates for it (named from the
+  text, `is_name_implicit`) is deleted (4724ac7, ADR-0020 addendum post-v1 2026-10-21). In 🚦 Control,
+  the other system topics and topics you named it answers in place. Limit: if a client omits the new
+  topic's `message_thread_id` (reported for some mobile clients), the bot cannot learn the topic and an
+  empty one stays; send commands in 🚦 Control then.
 - **Telegram on real clients.** Rich views and photo albums are covered by hermetic tests only (O2, O4,
   O6). Streaming and Stop were checked live (O3, O5). Voice notes answer "Voice isn't supported yet".
 - **Cancelled shutdown.** After a cancelled Windows shutdown ossbot stays down until `up`.
@@ -212,14 +215,34 @@ dashboard is pinned only once its send result is in Control, and re-sent into Co
 **Re-check 2026-10-20 (open):** the dashboard is pinned in Control and edited in place
 (`dashboard_pinned thread=125003`), and `/status` answers with the same icon card everywhere. One gap
 remains: `/status` sent in "All" creates a new empty topic named "/status", and the card lands in All
-("Known limitations"). The row stays `missing` until that is fixed.
-- Steps (re-check after that fix): turn on Threaded mode in @BotFather (SETUP "Telegram Threaded
-  mode"), restart the gatekeeper, then send `/dashboard` in 🚦 Control and `/status` in All and in
-  Control.
-- Expected: the dashboard is in Control and pinned in Control's pinned bar;
-  `scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep dashboard_` shows `dashboard_pinned thread=<id>`.
-  `/status` answers with the same icon card as the pinned dashboard, in the thread you asked from.
-  If the pin also shows in "All", note the client: that is the client's view of a Control pin.
+("Known limitations").
+**Fix deployed 2026-10-21 (re-check pending):** commit 4724ac7 answers a command typed in All in All
+and deletes the topic Telegram named implicitly for it, and logs the update's thread fields
+(`tg_thread_fields`, ids and flags only) and the reply target (`command_reply_target`). Deployed with
+`scripts\bootstrap.ps1 -Only provision` (exit 0, doctor PASS 45, gatekeeper `started`, no flat-mode
+warning). Not checked live bot-side: a bot cannot send as you, and only your client's message makes
+Telegram create the topic. CR3-V-4 and PV1-A3 stay `missing` until this re-check is recorded.
+- Steps, on the phone first, then on desktop:
+  1. Threaded mode is on in @BotFather.
+  2. Open "All" and send `/status`.
+  3. Open 🚦 Control and send `/status`.
+  4. Create a topic yourself, give it a name, and send `/status` in it.
+  5. Open "All" and send `/help`.
+  6. Read the log: `scripts\ossctl.ps1 logs gatekeeper -Since 30m -Grep "tg_thread_fields|command_reply_target|stray_topic"`.
+- Expected:
+  - Steps 2 and 5: the card appears in All, and no topic named "/status" or "/help" stays (it may
+    flash and disappear). Not expected: a leftover empty topic, or the card inside a new topic.
+  - Step 3: the card appears in Control, and the pinned dashboard is unchanged.
+  - Step 4: the card appears in your topic, and the topic stays.
+  - Log, for steps 2 and 5: `command_reply_target where=stray thread=none delete=<id>` means the fix
+    worked (shape S1). `where=all thread=none delete=none` with a leftover topic means
+    the client sent no thread id (S3, the documented limit). `where=thread` means the card went into
+    the new topic (S2). The `tg_thread_fields` line before it shows `message_thread_id`,
+    `is_topic_message` and `is_name_implicit` for that message. `stray_topic_delete_failed` means
+    Telegram refused the delete (error class only).
+- Record: `powershell -NoProfile -File scripts\dev\record-owner-check.ps1 -Check O1 -Rows CR3-V-4,PV1-A3 -Result "<what you saw, shape S1/S2/S3>"`
+  (add `-Status missing` if a topic stayed).
+- If the pin also shows in "All", note the client: that is the client's view of a Control pin.
 
 **O2 Rich views on each client** (CR3-V-1, CR3-V-14, CR3-V-15, CR3-V-16).
 - Steps, on Android, iOS and desktop:
