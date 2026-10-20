@@ -1,0 +1,48 @@
+# gitleaks config (DESIGN §18.5, §12.6; gitleaks 8.30.1 pinned in config/versions.lock.yaml).
+# Used by .githooks/pre-commit (gitleaks git --staged), CI and the Phase 2 gate
+# (gitleaks git --redact --config .gitleaks.toml .). Known test-fixture findings that are not
+# matched below are listed by fingerprint in .gitleaksignore.
+title = "ossbot"
+
+[extend]
+useDefault = true
+
+# The policy token patterns (common/redact.py DEFAULT_SECRET_PATTERNS, DESIGN §12.6) that the
+# default rules do not already cover.
+[[rules]]
+id = "kiro-api-key"
+description = "Kiro API key"
+regex = '''ksk_[A-Za-z0-9_\-]{16,}'''
+keywords = ["ksk_"]
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram bot token"
+regex = '''\b\d{6,12}:[A-Za-z0-9_-]{30,}\b'''
+keywords = [":"]
+
+[[rules]]
+id = "github-pat-ossbot"
+description = "GitHub token (classic ghp_/gho_/ghu_/ghs_/ghr_ or fine-grained github_pat_)"
+regex = '''(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})'''
+keywords = ["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"]
+
+# Test fixtures only: fake Kiro keys in the sandbox/filter test corpus. Named files, our rules only.
+[[allowlists]]
+description = "fake keys in test fixtures"
+targetRules = ["kiro-api-key", "telegram-bot-token", "github-pat-ossbot"]
+paths = [
+  '''^tests/sandboxharness\.py$''',
+  '''^tests/unit/dockerfilter/corpus/(deny|recorded)\.json$''',
+  '''^tests/unit/sandbox_tools/test_execd\.py$''',
+  '''^tests/unit/sandboxd/(conftest|test_keyscan)\.py$''',
+  '''^tests/acp/test_hermes_probe_eval\.py$''',
+]
+
+# setup-secrets.sh --selftest feeds fake, well-formed values; only those marked fake are allowed.
+[[allowlists]]
+description = "setup-secrets.sh selftest fixtures"
+targetRules = ["kiro-api-key", "telegram-bot-token", "github-pat-ossbot"]
+condition = "AND"
+paths = ['''^scripts/setup-secrets\.sh$''']
+regexes = ['''(?i)(fake|same_key)''']

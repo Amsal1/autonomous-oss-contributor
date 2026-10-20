@@ -1,0 +1,71 @@
+#!/bin/sh
+# ossbot pre-commit hook (DESIGN §18.5, AC 17, AC 23). Installed by scripts/install-hooks.ps1
+# (core.hooksPath=.githooks). Runs under Git for Windows' sh or a Linux git.
+#   1. gitleaks on the staged changes: tools/bin/gitleaks.exe (sha256-verified by install-hooks.ps1),
+#      else a gitleaks on PATH, else the distro's gitleaks. No gitleaks at all fails the commit.
+#   2. ossctl lint personal (no config/profile.yaml value in a tracked file outside docs/), through the
+#      distro's dev venv on Windows or ossctl on PATH; skipped with a warning when ossctl is not
+#      installed yet (fresh clone before bootstrap).
+set -u
+export MSYS_NO_PATHCONV=1 # keep /mnt/... arguments to wsl.exe as they are
+
+top=$(git rev-parse --show-toplevel) || exit 1
+cd "$top" || exit 1
+DISTRO=ossbot
+DEV_VENV=/home/ossadmin/.venvs/ossbot
+
+on_windows=0
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) on_windows=1 ;; esac
+
+distro_path() { # D:/Work/x -> /mnt/d/Work/x
+  drive=$(printf '%s' "$1" | cut -c1 | tr '[:upper:]' '[:lower:]')
+  printf '/mnt/%s%s' "$drive" "${1#?:}"
+}
+
+in_distro() { # run argv in the distro as ossadmin from the repo root
+  wsl.exe -d "$DISTRO" -u ossadmin --cd "$(distro_path "$top")" --exec "$@"
+}
+
+have_distro() {
+  [ "$on_windows" = 1 ] && command -v wsl.exe >/dev/null 2>&1 && in_distro /bin/true >/dev/null 2>&1
+}
+
+# ---- 1. secrets
+leaks_args="git --staged --redact --no-banner --config .gitleaks.toml"
+if [ "$on_windows" = 1 ] && [ -x tools/bin/gitleaks.exe ]; then
+  # shellcheck disable=SC2086 # fixed word list
+  tools/bin/gitleaks.exe $leaks_args
+  rc=$?
+elif command -v gitleaks >/dev/null 2>&1; then
+  # shellcheck disable=SC2086
+  gitleaks $leaks_args
+  rc=$?
+elif have_distro; then
+  # shellcheck disable=SC2086
+  in_distro gitleaks $leaks_args
+  rc=$?
+else
+  echo "pre-commit: gitleaks not found (run scripts/install-hooks.ps1); commit refused" >&2
+  exit 1
+fi
+if [ "$rc" -ne 0 ]; then
+  echo "pre-commit: gitleaks found a secret in the staged changes; commit refused" >&2
+  exit 1
+fi
+
+# ---- 2. personal values
+if [ "$on_windows" = 1 ] && have_distro && in_distro test -x "$DEV_VENV/bin/ossctl"; then
+  in_distro "$DEV_VENV/bin/ossctl" lint personal --root .
+  rc=$?
+elif command -v ossctl >/dev/null 2>&1; then
+  ossctl lint personal --root .
+  rc=$?
+else
+  echo "pre-commit: ossctl not installed yet; personal-value lint skipped" >&2
+  rc=0
+fi
+if [ "$rc" -ne 0 ]; then
+  echo "pre-commit: personal values in tracked files (see above); commit refused" >&2
+  exit 1
+fi
+exit 0
