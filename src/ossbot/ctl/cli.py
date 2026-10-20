@@ -559,10 +559,11 @@ def hermes_tier(tier: Annotated[str | None, typer.Argument(help="locked | resear
     _show(data)
 
 
-def _hermes_probe(*, force: bool = True, handshake_only: bool = False) -> dict[str, Any]:
+def _hermes_probe(*, force: bool = True, handshake_only: bool = False, cancel_check: bool = False) -> dict[str, Any]:
     argv = ["/opt/ossbot/app/.venv/bin/python", "-I", "-m", "ossbot.ctl.hermes_probe"]
     argv += ["--force"] if force else []
     argv += ["--handshake-only"] if handshake_only else []
+    argv += ["--cancel-check"] if cancel_check else []
     proc = subprocess.run(argv, capture_output=True, text=True, timeout=900, check=False, cwd="/")
     try:
         doc: dict[str, Any] = json.loads(proc.stdout.strip().splitlines()[-1])
@@ -582,10 +583,14 @@ def _provision(steps: str) -> None:
 @hermes_app.command("probe")
 def hermes_probe(
     handshake_only: Annotated[bool, typer.Option("--handshake-only", help="initialize + session/new only")] = False,
+    cancel_check: Annotated[
+        bool, typer.Option("--cancel-check", help="diagnostic: session/cancel ends a roles.test turn within 10 s")
+    ] = False,
 ) -> None:
-    """Run the Hermes-side Kiro probe now (root; DESIGN §15.2 M9): the chat relay opens only on a pass."""
+    """Run the Hermes-side Kiro probe now (root; DESIGN §15.2 M9): the chat relay opens only on a pass.
+    ``--cancel-check`` is a diagnostic only (O5): it writes no probe result."""
     _require_root("hermes probe")
-    doc = _hermes_probe(handshake_only=handshake_only)
+    doc = _hermes_probe(handshake_only=handshake_only, cancel_check=cancel_check)
     _show(doc)
     raise typer.Exit(0 if doc.get("verdict") == "pass" else 1)
 

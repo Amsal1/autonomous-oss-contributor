@@ -16,7 +16,9 @@ ACP client to CLI V3" guide:
   anything else is a surface violation: the session is not prompted and the violation hook runs;
 * every permission request is answered with the first ``reject_once`` option, else ``reject_always``,
   else ``cancelled``; options are never synthesized and consent metadata is never returned;
-* a turn completes only on the ``session/prompt`` response;
+* a turn completes only on the ``session/prompt`` response; after ``session/cancel`` (ACP prompt-turn
+  cancellation) updates are still read, permission requests are answered ``cancelled``, and the wait
+  for the response can be bounded (``CancelTimeout``);
 * the access token answered to ``_kiro/auth/getAccessToken`` never reaches a log record.
 """
 
@@ -25,6 +27,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import math
 import os
 import queue
 import subprocess
@@ -60,6 +63,10 @@ class AcpError(RuntimeError):
 
 class TransportClosed(AcpError):
     """The agent process went away (EOF, malformed stream or close)."""
+
+
+class CancelTimeout(AcpError):
+    """A cancelled turn's ``session/prompt`` response did not arrive within the grace period."""
 
 
 class JsonRpcError(AcpError):
@@ -341,7 +348,11 @@ class Connection:
     def notify(self, method: str, params: dict[str, Any]) -> None:
         self._send({"jsonrpc": "2.0", "method": method, "params": params})
 
-    def request(self, method: str, params: dict[str, Any], *, timeout: float) -> Any:
+    def request(
+        self, method: str, params: dict[str, Any], *, timeout: float, abort: Callable[[], bool] | None = None
+    ) -> Any:
+        """Send a request and wait for its response. ``abort`` is polled while waiting; when it returns
+        True the wait ends with ``CancelTimeout`` (the response, if it still comes, is dropped)."""
         with self._lock:
             req_id = next(self._ids)
             box: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
@@ -356,6 +367,8 @@ class Connection:
                 except queue.Empty:
                     if self.closed.is_set():
                         raise TransportClosed(self.close_reason or "closed") from None
+                    if abort is not None and abort():
+                        raise CancelTimeout(f"{method}: no response after session/cancel") from None
                     if time.monotonic() >= deadline:
                         raise TimeoutError(f"timed out waiting for {method}") from None
         finally:
@@ -549,6 +562,8 @@ class KiroV3Agent:
         self.init_result: dict[str, Any] = {}
         self._sinks: dict[str, _Sink] = {}
         self._sessions: dict[str, Session] = {}
+        # session id -> monotonic deadline for the prompt response after session/cancel (inf: no bound)
+        self._cancelled: dict[str, float] = {}
         self._lock = threading.RLock()
 
     # -------------------------------------------------------------- lifecycle
@@ -586,6 +601,7 @@ class KiroV3Agent:
             proc, self.proc, self.conn = self.proc, None, None
             self._sinks.clear()
             self._sessions.clear()
+            self._cancelled.clear()
         if proc is not None:
             stdin = getattr(proc, "stdin", None)
             with contextlib.suppress(OSError):
@@ -613,7 +629,12 @@ class KiroV3Agent:
 
     # -------------------------------------------------------------- agent -> client
     def _permission(self, params: dict[str, Any]) -> dict[str, Any]:
-        response = permission_response(params)
+        sid = params.get("sessionId")
+        if isinstance(sid, str) and sid in self._cancelled:
+            # ACP prompt-turn cancellation: pending permission requests MUST be answered ``cancelled``.
+            response: dict[str, Any] = {"outcome": {"outcome": "cancelled"}}
+        else:
+            response = permission_response(params)
         call = _dict(params.get("toolCall"))
         consent = _dict(_dict(_dict(params.get("_meta")).get("kiro")).get("consent"))
         self._log.info(
@@ -746,8 +767,14 @@ class KiroV3Agent:
         conn = self._conn()
         sink = _Sink(on_update)
         self._sinks[session.id] = sink
+
+        def overdue() -> bool:  # a cancel was sent and its grace period ran out
+            return time.monotonic() >= self._cancelled.get(session.id, math.inf)
+
         try:
-            result = conn.request("session/prompt", {"sessionId": session.id, "prompt": blocks}, timeout=timeout)
+            result = conn.request(
+                "session/prompt", {"sessionId": session.id, "prompt": blocks}, timeout=timeout, abort=overdue
+            )
         except TimeoutError:
             self.cancel(session)
             raise
@@ -760,13 +787,21 @@ class KiroV3Agent:
             "".join(sink.text), "".join(sink.reasoning), stop if isinstance(stop, str) else None, sink.tool_calls
         )
 
-    def cancel(self, session: Session) -> None:
+    def cancel(self, session: Session, *, grace_s: float | None = None) -> None:
+        """Send ``session/cancel`` (a notification; safe from any thread). Updates keep being read and the
+        turn still ends on the ``session/prompt`` response (``stopReason: "cancelled"``); later permission
+        requests of the session are answered ``cancelled``. With ``grace_s`` the waiting ``prompt`` gives
+        up after that many seconds with ``CancelTimeout``."""
+        deadline = math.inf if grace_s is None else time.monotonic() + grace_s
+        with self._lock:
+            self._cancelled[session.id] = min(deadline, self._cancelled.get(session.id, math.inf))
         with contextlib.suppress(TransportClosed):
             self._conn().notify("session/cancel", {"sessionId": session.id})
 
     def forget(self, session: Session) -> None:
         self._sessions.pop(session.id, None)
         self._sinks.pop(session.id, None)
+        self._cancelled.pop(session.id, None)
 
 
 def popen_spawn(spec: LaunchSpec, *, user: str | None = None) -> Callable[[], Any]:

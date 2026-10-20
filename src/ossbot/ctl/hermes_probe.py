@@ -35,6 +35,8 @@ import re
 import stat
 import subprocess
 import sys
+import threading
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -461,6 +463,96 @@ def _digest(lines: Sequence[bytes]) -> str:
     return hashlib.sha256(b"\n".join(lines)).hexdigest()
 
 
+CANCEL_PROMPT = "Count from 1 to 2000, one number per line, with no other text."
+
+
+def cancel_check(
+    core: ModuleType,
+    *,
+    auth_method: str,
+    api_key: str | None,
+    model: str,
+    effort: str,
+    fallbacks: Sequence[str],
+    spawn: Any = None,
+    after_s: float = 3.0,
+    grace_s: float = 10.0,
+    timeout: float = SESSION_TIMEOUT_S,
+) -> dict[str, Any]:
+    """Diagnostic (O5, ADR-0002 addendum post-v1): start a long turn, send ``session/cancel`` after
+    ``after_s`` and record the ``stopReason`` and how long the ``session/prompt`` response took. PASS =
+    ``cancelled`` within ``grace_s``. Writes no probe-result file; the relay gate is unaffected."""
+    spec = core.launch_spec(auth_method=auth_method, api_key=api_key, kiro_cli=str(KIRO_CLI), cwd=str(KIRO_CWD),
+                            home=str(HERMES_HOME), proxy=PROXY)  # fmt: skip
+    agent = core.KiroV3Agent(
+        spawn or core.popen_spawn(spec, user="hermes"),
+        auth_method=auth_method,
+        token=(lambda: api_key or "") if auth_method == "client" else None,
+        expected_mode=EXPECTED_MODE,
+        cwd=str(WORKSPACE),
+    )
+    doc: dict[str, Any] = {"check": "cancel", "checked_at": now_iso(), "auth_method": auth_method, "model": model}
+    box: dict[str, Any] = {}
+    try:
+        agent.start(timeout=timeout)
+        session = agent.new_session(model_id=model, effort=effort, fallbacks=fallbacks, timeout=timeout)
+
+        def turn() -> None:
+            try:
+                box["turn"] = agent.prompt(session, [{"type": "text", "text": CANCEL_PROMPT}], timeout=timeout)
+            except Exception as exc:  # noqa: BLE001 - recorded in the result
+                box["error"] = exc
+            box["ended"] = time.monotonic()
+
+        worker = threading.Thread(target=turn, name="cancel-check", daemon=True)
+        worker.start()
+        worker.join(after_s)
+        if not worker.is_alive():
+            doc.update(verdict="inconclusive", reason="the turn ended before the cancel")
+        else:
+            sent = time.monotonic()
+            agent.cancel(session, grace_s=grace_s)
+            worker.join(grace_s + 5)
+            took = box.get("ended", time.monotonic()) - sent
+            doc["cancel_to_response_s"] = round(took, 2)
+            result = box.get("turn")
+            err = box.get("error")
+            if result is not None:
+                doc["stop_reason"], doc["text_chars"] = result.stop_reason, len(result.text)
+                ok = result.stop_reason == "cancelled" and took <= grace_s
+                verdict = "pass" if ok else "fail"
+                doc.update(verdict=verdict, reason=f"stopReason {result.stop_reason} after {took:.1f} s")
+            elif isinstance(err, core.CancelTimeout):
+                doc.update(verdict="fail", reason=f"no session/prompt response within {grace_s:g} s of the cancel")
+            else:
+                doc.update(verdict="inconclusive", reason=f"turn: {type(err).__name__ if err else 'still running'}")
+    except (core.AcpError, TimeoutError, OSError) as exc:
+        doc.update(verdict="inconclusive", reason=f"setup: {type(exc).__name__}")
+    finally:
+        agent.close()
+    return doc
+
+
+def cancel_probe() -> dict[str, Any]:
+    """``ossctl hermes probe --cancel-check`` as root: the root-owned core, roles.test (MDL-3)."""
+    with upgrade_lock() as free:
+        if not free:
+            return {"check": "cancel", "verdict": "inconclusive", "reason": "Hermes is upgrading"}
+        try:
+            core = load_core()
+            model, effort, fallbacks = _model(MODELS_FILE)
+        except (Drift, OSError, ValueError, RuntimeError) as exc:
+            return {"check": "cancel", "verdict": "inconclusive", "reason": f"setup: {type(exc).__name__}"}
+        api_key = read_env_key()
+        doc: dict[str, Any] = {}
+        for method in ("default", "client") if api_key else ("default",):
+            doc = cancel_check(core, auth_method=method, api_key=api_key, model=model, effort=effort,
+                               fallbacks=fallbacks)  # fmt: skip
+            if not (doc.get("verdict") == "inconclusive" and str(doc.get("reason", "")).startswith("setup")):
+                break
+        return doc
+
+
 def kill(reason: str = "hermes_kiro_surface") -> None:
     from ossbot.common.paths import Paths  # noqa: PLC0415
     from ossbot.common.uds import uds_client  # noqa: PLC0415
@@ -599,6 +691,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--selftest", action="store_true", help="run the evaluator against built-in fixtures")
     parser.add_argument("--force", action="store_true", help="run even when the key is unchanged and passed")
     parser.add_argument("--socket", action="store_true", help="socket-activated: one JSON line to stdout")
+    parser.add_argument("--cancel-check", action="store_true", help="diagnostic: does session/cancel end a turn")
     args = parser.parse_args(argv)
     if args.selftest:
         return selftest()
@@ -606,6 +699,10 @@ def main(argv: list[str] | None = None) -> int:
         print("hermes_probe must run as root", file=sys.stderr)
         return 2
     os.chdir("/")
+    if args.cancel_check:
+        doc = cancel_probe()
+        print(json.dumps(doc, sort_keys=True))
+        return 0 if doc.get("verdict") == "pass" else (1 if doc.get("verdict") == "fail" else 3)
     doc = probe(handshake_only=args.handshake_only, force=args.force)
     shown = {k: v for k, v in doc.items() if k not in ("details",)} if args.socket else doc
     print(json.dumps(shown, sort_keys=True))

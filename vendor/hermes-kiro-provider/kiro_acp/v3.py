@@ -41,6 +41,7 @@ from . import v3_core as core
 log = logging.getLogger("kiro_acp.v3")
 
 DEFAULT_TIMEOUT_S = 900.0
+CANCEL_GRACE_S = 10.0  # how long a cancelled turn waits for Kiro's stopReason "cancelled"
 MAX_IMAGE_BYTES = 20 * 1024 * 1024
 _DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|jpg|webp|gif));base64,([A-Za-z0-9+/=\s]+)$", re.DOTALL)
 _PREAMBLE = ("You are the language model behind the Hermes assistant, reached over ACP.",)
@@ -512,16 +513,30 @@ class KiroV3Client:
                 self._agent = agent
         return agent
 
+    def cancel(self) -> None:
+        """Interrupt the running turn, if any; non-blocking and safe from any thread.
+
+        Hermes calls ``client.cancel()`` on Stop/interrupt when the client class defines it (instead of
+        shutting down HTTP sockets, which an ACP client does not have). This sends ``session/cancel`` for
+        the active session; the turn's own thread keeps reading updates until the ``session/prompt``
+        response (``stopReason: "cancelled"``) and returns the partial text. If Kiro does not confirm
+        within ``CANCEL_GRACE_S`` the process is closed and the turn fails with a clear error; the next
+        turn starts a new process. Without an active turn this is a no-op."""
+        with self._state:
+            agent, active = self._agent, self._active
+        if agent is None or active is None:
+            return
+        log.info("kiro_acp cancel: session/cancel sent (grace %.0fs)", CANCEL_GRACE_S)
+        agent.cancel(active, grace_s=CANCEL_GRACE_S)
+
     def close(self, *, grace_s: float = 2.0) -> None:
         """Cancel a running turn (``session/cancel``), give it ``grace_s`` to settle, then stop the process."""
         with self._state:
             self.is_closed = True
-            agent, active = self._agent, self._active
-        if agent is not None and active is not None:
-            agent.cancel(active)
-            deadline = time.monotonic() + grace_s
-            while self._active is not None and time.monotonic() < deadline:
-                time.sleep(0.05)
+        self.cancel()
+        deadline = time.monotonic() + grace_s
+        while self._active is not None and time.monotonic() < deadline:
+            time.sleep(0.05)
         with self._state:
             agent, self._agent = self._agent, None
         if agent is not None:
@@ -559,6 +574,16 @@ class KiroV3Client:
                 self._active = session
             try:
                 result = agent.prompt(session, blocks, timeout=timeout)
+            except core.CancelTimeout as exc:
+                # Kiro did not answer the cancelled prompt: drop the process; the next turn respawns.
+                agent.close()
+                with self._state:
+                    if self._agent is agent:
+                        self._agent = None
+                log.warning("kiro_acp turn: role=%s stop=cancel-timeout after %.0fs", role, CANCEL_GRACE_S)
+                raise core.AcpError(
+                    f"the turn was cancelled; Kiro did not confirm within {CANCEL_GRACE_S:g} s"
+                ) from exc
             except core.TransportClosed as exc:
                 if self.is_closed:
                     raise core.AcpError("the turn was cancelled") from exc

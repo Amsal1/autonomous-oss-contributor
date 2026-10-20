@@ -94,6 +94,16 @@ agent-to-client requests. Optional settings:
 `kiro_acp/v3_core.py` is stdlib-only and imports nothing from Hermes, so other tools (for example
 a probe that checks the session surface) can reuse the launch and session logic.
 
+**Stop / interrupt.** `KiroV3Client.cancel()` is Hermes' cancel hook: Hermes calls `client.cancel()`
+on an interrupt when the client class defines it (otherwise it shuts down HTTP sockets, which an ACP
+client does not have, and the turn runs to the end). It sends ACP `session/cancel` for the active
+session, is non-blocking and safe from any thread, and does nothing between turns. The turn's own
+thread keeps reading updates until the `session/prompt` response (`stopReason: "cancelled"`) and
+returns the partial text; permission requests that arrive after the cancel are answered
+`cancelled` (ACP prompt-turn cancellation). If the agent does not answer within
+`kiro_acp.v3.CANCEL_GRACE_S` (10 s), the process is closed, the turn fails with "the turn was
+cancelled; Kiro did not confirm within 10 s", and the next turn starts a new process.
+
 ## Development
 
 ```bash
