@@ -133,6 +133,19 @@ fixture under `tests/e2e/`.
 `sandboxd/profiles.py` (`tests/unit/sandboxd/test_kiro_settings.py`). Never name a model id outside
 `config/models.yaml` (`tests/unit/test_no_hardcoded_models.py`).
 
+**Add a model backend** ([ADR-0022](docs/adr/0022-model-backend-interface.md); official CLI or API
+only, never a ToS-violating proxy). Pipeline: a `BackendSpec` in `common/backends.py` (entrypoints,
+`key_profiles`, `credential_env`, `credential_patterns`, `required_probes = PROBES`), the name in
+`ModelsConfig.backend` (`common/config.py`) and `IMPLEMENTATIONS` (`runner/backends/__init__.py`), an
+implementation of `runner/backends/base.py ModelBackend`, an image entrypoint that feeds the same
+probe prompts, a reviewed Docker-filter `KEY_PAIRS` and env-name change plus `sandboxd/argv.py`, an
+egress category in `config/egress.yaml`, and an optional key in `scripts/setup-secrets.ps1`. Assistant:
+a Hermes provider plugin under `vendor/`, `model.provider` in `hermes/config/config.yaml.j2`, an
+`assistant` spec and a root probe like `ctl/hermes_probe.py`. Tests: `tests/unit/common/test_backends.py`,
+`tests/unit/runner/test_backends.py`, `tests/unit/sandboxd/test_backend_surface.py`,
+`tests/unit/gatekeeper/test_models_admin_backend.py`, `tests/acp/` for an assistant, then
+`ossctl doctor --probes`. Never touch the gatekeeper, approvals, probes list or key-scan needles.
+
 **Add an egress host.** A category in `config/egress.yaml` (or a host in an existing one), evidence
 from learn mode or the proxy log, then `/reload`. Never give `fetch` or `validate` `web_public`.
 

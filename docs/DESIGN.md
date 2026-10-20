@@ -4591,6 +4591,8 @@ Resolution (`ossbot.common.models.resolve(role) -> ResolvedModel(model, effort, 
 
 Validation: pydantic; unknown roles/keys rejected; a broken file keeps the last good version in effect and alerts (runner) / returns 400 (writer).
 
+Model backend (post-v1, [ADR-0022](adr/0022-model-backend-interface.md)): an optional top-level `backend` names the pipeline backend; `kiro` (Kiro CLI headless in sandboxd) is the only registered one and the default when the key is omitted, and any other value fails validation. Backends are described in `ossbot.common.backends` and implemented behind `ossbot.runner.backends.ModelBackend`; every backend runs inside the unchanged sandbox, probe gate, Docker filter, egress and key-scan boundary. The assistant backend is the Hermes provider plugin `kiro-acp` (§15.2).
+
 ### 16.2 Writers
 
 `ossctl model set <role|default> <id> [--effort e] [--force]` and Telegram `/model` both call `PUT /v1/models/{role}`; the gatekeeper rewrites the file atomically (temp file in the same dir, `os.replace`) with `ruamel.yaml` round-trip to keep comments, records an audit event, queues one owner FYI (`🧠 Model: <role> <old> → <new> (by <actor>)`, also for `--force`) in the same transaction, and replies with the diff. The Telegram picker never lists `test` or `test_vision`. Id validation (N2): the id must exactly equal a `model_id` in the current catalog. `--force` (ossctl only) accepts an id that matches `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$` and records it as `model_catalog.forced = 1` (audit `model_forced`), which is what makes sandboxd accept it. `ossctl model set --commit` runs `git commit config/models.yaml -m "chore(models): ..."` as ossadmin with the repo-local identity.

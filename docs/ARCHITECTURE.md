@@ -95,6 +95,13 @@ untrusted text passes one redactor before it is sent.
 `config/models.yaml` maps each role to a catalog model; the gatekeeper is its only writer
 (`/model`, `ossctl model set`), validated against the Kiro catalog. Live checks use the `test` role.
 
+Model backends ([ADR-0022](adr/0022-model-backend-interface.md)): `common/backends.py` describes each
+backend (`BackendSpec`: entrypoints, credential names and formats, required probes) and
+`runner/backends/` holds the pipeline implementations behind the `ModelBackend` interface. `kiro`
+(Kiro CLI headless in sandboxd) is the only pipeline backend, selected by `models.yaml backend`
+(default `kiro`); the assistant reaches Kiro V3 ACP through the Hermes provider plugin `kiro-acp`.
+Every backend runs inside the unchanged sandbox, probe, filter and key-scan boundary.
+
 ## Data and recovery (§18.8)
 
 State outside git (profile, secrets, the gatekeeper DB, anchors, snapshots, open bundles, Hermes state)
