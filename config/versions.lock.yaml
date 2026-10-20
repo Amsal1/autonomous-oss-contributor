@@ -20,6 +20,21 @@ gitleaks:
   windows_sha256: "d29144deff3a68aa93ced33dddf84b7fdc26070add4aa0f4513094c8332afc4e"
   windows_source: "GitHub releases API v8.30.1 asset digest (checked 2026-10-20); 'gitleaks git --staged' is the pre-commit form (gitleaks git --help)"
 
+psscriptanalyzer:
+  # CI job psscriptanalyzer and scripts/dev/psscriptanalyzer.ps1 (DESIGN §23 item 27)
+  version: "1.25.0"
+  url: "https://github.com/PowerShell/PSScriptAnalyzer/releases/download/1.25.0/PSScriptAnalyzer.1.25.0.nupkg"
+  sha256: "14e634c828eb98efb9f40b2918ba90f139ed5eccdf663a2a747736d996995d60"
+  source: "GitHub releases API latest = 1.25.0 (2026-03-20); sha256 = release asset digest (checked 2026-10-20)"
+
+github_actions:
+  # .github/workflows/ci.yml pins every action by full commit SHA (DESIGN §23 item 27, AC 24)
+  checkout: "3d3c42e5aac5ba805825da76410c181273ba90b1"
+  checkout_tag: "v7.0.1"
+  setup_uv: "1c37ad07a6a961277cf70c0d37d6f313000f5884"
+  setup_uv_tag: "v10.3.0"
+  source: "GitHub API git/ref/tags (checked 2026-10-20): actions/checkout v7.0.1 = 3d3c42e5, astral-sh/setup-uv v10.3.0 = 1c37ad07 (immutable release)"
+
 docker:
   # DESIGN §0 pinned 5:29.8.2; the newest in download.docker.com noble/stable on 2026-10-17 is 29.9.1.
   docker_ce: "5:29.9.1-1~ubuntu.24.04~noble"
