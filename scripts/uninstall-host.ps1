@@ -6,7 +6,7 @@
     shortcuts      the Start-menu shortcuts 'ossbot Up/Down/Status/Kill' (bootstrap -Shortcuts)
     shutdownhooks  the shutdown blocker process (6a, closed through its window), its action in
                    'ossbot-autostart' (the task is kept with its first action unless 'autostart' is
-                   removed too) and the 'ossbot-shutdown-hook' task (6b)
+                   removed too) and the retired 'ossbot-shutdown-hook' task (6b) if still registered
     autostart      the 'ossbot-autostart' task (and the blocker it starts)
     hyperv         the Hyper-V firewall rules (elevated sessions only; otherwise a hint)
     wsl            %USERPROFILE%\.wslconfig restored from the newest backup in .ossbot-local\ (or deleted
@@ -43,10 +43,10 @@ if ($selected -contains 'shutdownhooks' -or $selected -contains 'autostart') {
 }
 
 if ($selected -contains 'shutdownhooks') {
-    if (Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue) {
-        Unregister-ScheduledTask -TaskName $script:OssHookTask -Confirm:$false
-        Write-OssStep 'uninstall-hook' 'changed' "removed Scheduled Task $($script:OssHookTask)"
-    } else { Write-OssStep 'uninstall-hook' 'unchanged' "$($script:OssHookTask) not registered" }
+    $r = Remove-OssHookTask
+    if ($r -like 'WARN*') { Write-OssStep 'uninstall-hook' 'WARN' ($r -replace '^WARN: ', ''); $exit = 1 }
+    elseif ($r -eq 'changed') { Write-OssStep 'uninstall-hook' 'changed' "removed Scheduled Task $($script:OssHookTask) (retired 6b)" }
+    else { Write-OssStep 'uninstall-hook' 'unchanged' "$($script:OssHookTask) not registered" }
     $auto = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
     if ($auto -and $selected -notcontains 'autostart') {
         $r = Install-OssAutostartTask -WithoutBlocker

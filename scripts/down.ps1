@@ -11,12 +11,15 @@
   The autostart task stays enabled and armed approvals stay valid; scripts\up.ps1 (or the next
   logon) brings it back. A wedged in-distro step is cut off after Timeout + 90 s and the distro
   is terminated anyway (crash safety covers the rest).
-  down.ps1 and up.ps1 serialise on the per-user mutex Local\ossbot-lifecycle (DESIGN 13.5): a second
-  down (the shutdown blocker and the shutdown-hook task fire during the same shutdown) waits up to
-  its own Timeout + 90 s, then exits 0 when the distro is already stopped. Every run is logged to
-  .ossbot-local\lifecycle.log.
+  down.ps1, up.ps1 and the shutdown blocker's channel drain serialise on the per-user mutex
+  Local\ossbot-lifecycle (DESIGN 13.5): a second down waits up to its own Timeout + 90 s, then exits 0
+  when the distro is already stopped. Every run is logged to .ossbot-local\lifecycle.log.
+  At a Windows shutdown the blocker does not run this script (no new process can start in an ending
+  session); it drains through its channel instead (ADR-0021 addendum post-v1). This script is for
+  manual, Start-menu and test use.
 .PARAMETER Kind
-  graceful (default) or hook (the shutdown-event task, CR-001 6b): only changes the marker type.
+  graceful (default) or hook (the retired 6b task's marker type; kept for manual tests): only changes
+  the marker type.
 .PARAMETER Caller
   Who asked (manual, blocker, hook, a test name); logged only.
 #>

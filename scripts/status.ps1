@@ -7,17 +7,24 @@
   Never starts the distro: when it is stopped, the in-distro fields say so and only the Windows-side
   facts are filled in (kill marker, tasks, last lifecycle log line). Otherwise runs `ossctl status` as
   root and prints its JSON as one screen. -Json prints the raw ossctl JSON instead.
+.PARAMETER StatusJsonFile
+  Tests only: render this file as the `ossctl status` JSON instead of asking the distro.
 #>
 [CmdletBinding()]
-param([switch]$Json)
+param([switch]$Json, [string]$StatusJsonFile = '')
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 
 $repo = Get-OssRepoRoot
-$running = Test-OssDistroRunning
 $data = $null
 $raw = @()
-if ($running) {
+if ($StatusJsonFile) {
+    $running = $true
+    $data = [IO.File]::ReadAllText($StatusJsonFile) | ConvertFrom-Json
+} else {
+    $running = Test-OssDistroRunning
+}
+if ($running -and -not $StatusJsonFile) {
     $r = Invoke-OssWsl -User root -Command @('/opt/ossbot/app/.venv/bin/ossctl', 'status')
     $raw = $r.Out
     if ($Json) { $raw | ForEach-Object { Write-Host $_ }; exit $r.Code }
@@ -80,8 +87,7 @@ Show 'telegram poll' $(if ($null -eq $tg) { $na } else {
     $ok = Field $tg 'last_ok_at'; if (-not $ok) { $ok = 'none yet since the gatekeeper started' }
     "last ok $ok, $(Field $tg 'reconnects') reconnect(s), $(Field $tg 'consecutive_failures') consecutive failure(s)" })
 $ls = Field $data 'last_shutdown'
-Show 'last shutdown' $(if ($null -eq $ls) { $na } else {
-    "$(Field $ls 'type') (marker $(Or (Field $ls 'marker_ts')), detected $(Or (Field $ls 'detected_at')))" })
+Show 'last shutdown' (Format-OssLastShutdown -Record $ls -Missing $na)
 
 # Windows side: tasks, blocker, kill marker, last lifecycle line
 $t = Get-OssHostTaskStates

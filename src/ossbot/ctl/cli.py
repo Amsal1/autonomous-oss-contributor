@@ -259,6 +259,14 @@ def down(
     _require_root("down")
     if scope not in {"distro", "workers"} or kind not in {"graceful", "hook"}:
         _fail("usage: ossctl down [--timeout S] [--scope distro|workers] [--kind graceful|hook]", 2)
+    code, report = run_down(timeout, kind, scope)
+    _show(report)
+    raise typer.Exit(code)
+
+
+def run_down(timeout: int | None, kind: str, scope: str) -> tuple[int, dict[str, Any]]:
+    """The work of ``ossctl down`` (also called in-process by ``drain-listen``, ADR-0021 addendum).
+    Returns the exit code (1 when a unit did not stop) and the report; prints nothing itself."""
     paths = Paths.default()
     drain_s = timeout if timeout is not None else _lifecycle_policy().drain_timeout_s
     drain_s = max(0, min(drain_s, 3600))
@@ -301,8 +309,16 @@ def down(
         failed = _systemctl("stop", WORKER_UNITS)
     report["stop_failed"] = failed
     report["elapsed_s"] = round(time.monotonic() - started, 1)
-    _show(report)
-    raise typer.Exit(1 if failed else 0)
+    return (1 if failed else 0), report
+
+
+@app.command("drain-listen", hidden=True)
+def drain_listen() -> None:
+    """Root drain channel for the Windows shutdown blocker (ADR-0021 addendum post-v1): reads
+    ``ping`` / ``down <s> <caller>`` lines on stdin, nothing else (stop-only, I8/I9)."""
+    from ossbot.ctl import drain_listener  # noqa: PLC0415
+
+    raise typer.Exit(drain_listener.main())
 
 
 @app.command()

@@ -9,10 +9,13 @@
   3 status.ps1 with the distro stopped still prints every field (the in-distro ones say so).
   4 up.ps1 exits 0; status.ps1 then shows lifecycle up and last shutdown graceful.
   5 up.ps1 while another holder keeps the lock gives up after -LockTimeout (exit 1), logged.
+  0 (first, no distro needed) status.ps1 -StatusJsonFile renders unclean / graceful / none / missing
+    last-shutdown records from their own fields (an unclean record is not "ossctl status gave no data").
+    -StatusOnly stops after it.
   The "Going down" / "Back up" summaries go to the configured Telegram owner only (product code).
 #>
 [CmdletBinding()]
-param()
+param([switch]$StatusOnly)
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot '..\..\scripts\lib\common.ps1')
 $repo = Get-OssRepoRoot
@@ -43,12 +46,39 @@ function Start-Ps([string[]]$ArgList) {
     return $p
 }
 
+Write-Host '== 0: status.ps1 renders the last-shutdown record from its own fields (-StatusJsonFile)'
+$tmp = New-OssLocalDir 'tmp'
+$cases = @(
+    @{ Json = '{"state": "running", "last_shutdown": {"type": "unclean", "marker_ts": "", "detected_at": "2026-10-20T14:48:03Z"}}'
+       Want = '^unclean \(no shutdown marker: ossctl down did not run; detected 2026-10-20T14:48:03Z\)$' },
+    @{ Json = '{"state": "running", "last_shutdown": {"type": "graceful", "marker_ts": "2026-10-20T14:46:30Z", "detected_at": "2026-10-20T14:48:03Z"}}'
+       Want = '^graceful \(marker 2026-10-20T14:46:30Z, detected 2026-10-20T14:48:03Z\)$' },
+    @{ Json = '{"state": "running", "last_shutdown": {"type": "none", "marker_ts": "", "detected_at": "2026-10-20T14:48:03Z"}}'
+       Want = '^none recorded \(first start\)$' },
+    @{ Json = '{"state": "running", "last_shutdown": null}'; Want = '^unknown \(ossctl status gave no data\)$' }
+)
+$n = 0
+foreach ($c in $cases) {
+    $n++
+    $f = Join-Path $tmp "status-case-$n.json"
+    [IO.File]::WriteAllText($f, $c.Json, (New-Object System.Text.UTF8Encoding $false))
+    $lines0 = @(& powershell -NoProfile -File (Join-Path $scripts 'status.ps1') -StatusJsonFile $f 2>&1 | ForEach-Object { "$_" })
+    $v = Value $lines0 'last shutdown'
+    Ok "case ${n}: last shutdown rendered" ($v -match $c.Want) "($v)"
+    Remove-Item -LiteralPath $f -Force
+}
+if ($StatusOnly) {
+    if ($script:Fail) { Write-Host "test_lifecycle_scripts (-StatusOnly): $($script:Fail) check(s) FAILED" -ForegroundColor Red; exit 1 }
+    Write-Host 'test_lifecycle_scripts (-StatusOnly): all checks passed' -ForegroundColor Green
+    exit 0
+}
+
 if ((Test-Path (Join-Path $repo '.ossbot-local\KILL')) -or -not (Test-OssDistroRunning)) {
     Write-Host 'precondition: the distro must run and not be killed (scripts\up.ps1 / resume.ps1 first)'
     exit 2
 }
 
-Write-Host '== 1: status.ps1 on the running system'
+Write-Host '== 1: status.ps1 on the running system (after the -StatusJsonFile cases above)'
 $st = Status-Lines
 $st | ForEach-Object { Write-Host "  $_" }
 foreach ($l in $Labels) { Ok "status shows '$l'" ($null -ne (Value $st $l)) }

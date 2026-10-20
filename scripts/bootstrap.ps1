@@ -11,8 +11,9 @@
     provision  streams scripts/provision.sh over stdin as root (never runs it from the mount, N4).
     autostart  per-user Scheduled Task 'ossbot-autostart' (7.6): boots the distro at logon, then starts
                the shutdown blocker (CR-001 6a, ADR-0021), which is also started now if it does not run.
-    shutdownhooks  the autostart blocker action as above plus the per-user, non-elevated Scheduled Task
-               'ossbot-shutdown-hook' (System User32 1074 -> down.ps1 -Timeout 20 -Kind hook, CR-001 6b).
+    shutdownhooks  the autostart blocker action as above (the blocker keeps a drain channel into the
+               distro); removes the retired 6b task 'ossbot-shutdown-hook' when it is still registered
+               (ADR-0021 addendum post-v1).
     shortcuts  Start-menu shortcuts 'ossbot Up/Down/Status/Kill' (only with -Shortcuts; off by default).
   Never unregisters, deletes or overwrites a distro or VHD.
 .PARAMETER Only
@@ -245,12 +246,14 @@ function Invoke-AutostartPhase {
 
 # ---------------------------------------------------------------------- 7. shutdown hooks
 function Invoke-ShutdownHooksPhase {
-    # CR-001 6a (the blocker, through the autostart task) and 6b (the User32 1074 task), ADR-0021.
+    # CR-001 6a (the blocker with its drain channel, through the autostart task), ADR-0021. 6b (the
+    # User32 1074 task) is retired (ADR-0021 addendum post-v1): a registered one is removed.
     if ($DistroName -ne 'ossbot') { Write-OssStep 'shutdownhooks' 'unchanged' "skipped for test distro $DistroName"; return }
     if ($selected -notcontains 'autostart') { Invoke-AutostartPhase }
-    $r = Install-OssHookTask
+    $r = Remove-OssHookTask
     if ($r -like 'WARN*') { Write-OssStep 'shutdown-hook' 'WARN' ($r -replace '^WARN: ', ''); return }
-    Write-OssStep 'shutdown-hook' $r "$($script:OssHookTask): System User32 1074 -> down.ps1 -Timeout 20 -Kind hook (non-elevated, PT2M, best effort)"
+    $detail = if ($r -eq 'changed') { "$($script:OssHookTask) removed (retired, ADR-0021 addendum)" } else { "$($script:OssHookTask) retired (control channel), not registered" }
+    Write-OssStep 'shutdown-hook' $r $detail
 }
 
 # --------------------------------------------------------------------------- 8. shortcuts

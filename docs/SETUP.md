@@ -118,8 +118,9 @@ Only when you trust the previews: `/dryrun off` and confirm. Every toggle invali
 ## 10. Daily use
 
 - **Lifecycle.** ossbot starts with Windows (Scheduled Task `ossbot-autostart`, which also starts the
-  per-user shutdown blocker) and goes down gracefully on Windows shutdown or restart (the blocker plus
-  the event-triggered task `ossbot-shutdown-hook`). By hand: `scripts\up.ps1`, `scripts\down.ps1
+  per-user shutdown blocker) and goes down gracefully on Windows shutdown or restart (the blocker
+  drains through a channel into the distro it opened at logon; the earlier event-triggered task
+  `ossbot-shutdown-hook` is retired, see ADR-0021). By hand: `scripts\up.ps1`, `scripts\down.ps1
   [-Timeout S]`, `scripts\status.ps1`; in the distro `ossctl up|down|status`; on Telegram `/up`,
   `/down`, `/drain`, `/undrain`. `down` drains running work (120 s by default), re-queues the rest,
   sends a summary and stops the units in order; it never invalidates approvals.

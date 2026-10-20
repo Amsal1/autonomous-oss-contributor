@@ -239,9 +239,9 @@ function Restart-OssWsl {
 }
 
 # ------------------------------------------------------------------ lifecycle (CR-001 5/6, DESIGN 13.5)
-# down.ps1 and up.ps1 serialise on a per-user named mutex, so the shutdown blocker (6a) and the
-# shutdown-hook task (6b) firing during the same shutdown never run two downs at once. 'Local\' is the
-# session namespace: the blocker, the hook task (InteractiveToken) and a console run in the same session.
+# down.ps1, up.ps1 and the shutdown blocker's channel drain (6a) serialise on a per-user named mutex,
+# so two downs never run at once. 'Local\' is the session namespace: the blocker and a console run in
+# the same session.
 $script:OssLifecycleMutex = 'Local\ossbot-lifecycle'
 $script:OssBlockerMutex = 'Local\ossbot-shutdown-blocker'
 
@@ -405,8 +405,8 @@ function Install-OssAutostartTask {
 }
 
 function Get-OssHostTaskStates {
-    # status.ps1: the autostart task (with the blocker action, 6a), the blocker process and the
-    # shutdown-hook task (6b), one line each.
+    # status.ps1: the autostart task (with the blocker action, 6a), the blocker process with its drain
+    # channel, and the retired shutdown-hook task (6b), one line each.
     $a = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
     $auto = 'missing (scripts\bootstrap.ps1 -Only autostart)'
     if ($a) {
@@ -414,108 +414,62 @@ function Get-OssHostTaskStates {
         $auto = "$($a.State)" + $(if ($hasBlocker) { ', also starts the shutdown blocker at logon' } else { ', no blocker action' })
     }
     $h = Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue
-    $hook = if ($h) { "$($h.State) (System User32 1074 -> down.ps1 -Timeout 20 -Kind hook)" } else { 'missing (scripts\bootstrap.ps1 -Only shutdownhooks)' }
+    $hook = if ($h) { "retired (control channel), but still registered: scripts\bootstrap.ps1 -Only shutdownhooks removes it" } else { 'retired (control channel)' }
     $blk = 'not running (starts at logon; now: scripts\bootstrap.ps1 -Only shutdownhooks)'
     if (Test-OssBlockerRunning) {
         $blk = 'running'
         $st = Get-OssBlockerState
         if ($null -ne $st) {
             $bp = $st.PSObject.Properties['pid']; $ph = $st.PSObject.Properties['phase']
-            if ($bp -and $ph) { $blk += " (pid $($bp.Value), $($ph.Value))" }
+            if ($bp -and $ph) { $blk += " (pid $($bp.Value), $($ph.Value), $(Get-OssBlockerChannelText -State $st))" }
         }
     }
     return [pscustomobject]@{ Autostart = $auto; Blocker = $blk; Hook = $hook }
 }
 
-# ---------------------------------------------------- 6b: the shutdown-hook task (CR-001 6b, ADR-0021)
-# System log, provider User32, Event ID 1074 (shutdown/restart initiated, incl. Windows Update restarts)
-# only: never a sleep event (Kernel-Power 42). Per-user, non-elevated, InteractiveToken (same session
-# as the blocker, so the lifecycle mutex is shared). Windows does not wait for it: best effort.
-$script:OssHookQuery = "<QueryList><Query Id=`"0`" Path=`"System`"><Select Path=`"System`">*[System[Provider[@Name='User32'] and EventID=1074]]</Select></Query></QueryList>"
-
-function Get-OssHookArguments {
-    $down = Join-Path $script:OssRepo 'scripts\down.ps1'
-    return "--headless powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$down`" -Timeout 20 -Kind hook -Caller hook"
+function Format-OssLastShutdown {
+    # status.ps1 'last shutdown' from the boot gate's record {type, marker_ts, detected_at}. An unclean
+    # record has no marker by definition; only a missing record gets the -Missing text.
+    param([object]$Record, [string]$Missing)
+    if ($null -eq $Record) { return $Missing }
+    $get = { param($n) $p = $Record.PSObject.Properties[$n]; if ($p -and "$($p.Value)" -ne '') { "$($p.Value)" } else { $null } }
+    $type = & $get 'type'; $ts = & $get 'marker_ts'; $det = & $get 'detected_at'
+    $detText = if ($det) { "detected $det" } else { 'detection time not recorded' }
+    switch ($type) {
+        { $_ -in 'graceful', 'hook' } { return "$type (marker $(if ($ts) { $ts } else { 'time not recorded' }), $detText)" }
+        'unclean' { return "unclean (no shutdown marker: ossctl down did not run; $detText)" }
+        'none' { return 'none recorded (first start)' }
+        $null { return $Missing }
+        default { return "$type ($detText)" }
+    }
 }
 
-function Get-OssHookTaskXml {
-    $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    $esc = { param($s) [Security.SecurityElement]::Escape($s) }
-    $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
-    return @"
-<?xml version="1.0" encoding="UTF-16"?>
-<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
-  <RegistrationInfo>
-    <Description>ossbot: best-effort graceful down when Windows logs a shutdown or restart (System, User32 1074), CR-001 6b, ADR-0021. The event-task idea is credited to SpiralPool's wsl2-shutdown-hook.ps1 (BSD-3-Clause); no code adapted.</Description>
-  </RegistrationInfo>
-  <Triggers>
-    <EventTrigger>
-      <Enabled>true</Enabled>
-      <Subscription>$(& $esc $script:OssHookQuery)</Subscription>
-    </EventTrigger>
-  </Triggers>
-  <Principals>
-    <Principal id="Author">
-      <UserId>$sid</UserId>
-      <LogonType>InteractiveToken</LogonType>
-      <RunLevel>LeastPrivilege</RunLevel>
-    </Principal>
-  </Principals>
-  <Settings>
-    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
-    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
-    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
-    <AllowHardTerminate>true</AllowHardTerminate>
-    <StartWhenAvailable>false</StartWhenAvailable>
-    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
-    <IdleSettings>
-      <StopOnIdleEnd>false</StopOnIdleEnd>
-      <RestartOnIdle>false</RestartOnIdle>
-    </IdleSettings>
-    <AllowStartOnDemand>true</AllowStartOnDemand>
-    <Enabled>true</Enabled>
-    <Hidden>true</Hidden>
-    <RunOnlyIfIdle>false</RunOnlyIfIdle>
-    <WakeToRun>false</WakeToRun>
-    <ExecutionTimeLimit>PT2M</ExecutionTimeLimit>
-    <Priority>7</Priority>
-  </Settings>
-  <Actions Context="Author">
-    <Exec>
-      <Command>$(& $esc $conhost)</Command>
-      <Arguments>$(& $esc (Get-OssHookArguments))</Arguments>
-    </Exec>
-  </Actions>
-</Task>
-"@
+function Get-OssBlockerChannelText {
+    # The drain channel from the blocker's state file: 'channel up pid N', 'channel down', ...
+    param([object]$State)
+    $c = $State.PSObject.Properties['channel']
+    if (-not $c) { return 'no channel (old blocker; restart it: scripts\bootstrap.ps1 -Uninstall -Only shutdownhooks, then -Only shutdownhooks)' }
+    $cp = $State.PSObject.Properties['channel_pid']
+    switch ([string]$c.Value) {
+        'up' { if ($cp -and [int]$cp.Value -gt 0) { return "channel up pid $($cp.Value)" }; return 'channel up' }
+        'skipped' { return 'channel skipped (distro stopped)' }
+        default { return "channel $($c.Value)" }
+    }
 }
 
-function Get-OssHookProblems {
-    # How the registered ossbot-shutdown-hook differs from its spec (empty = as required).
-    param([object]$Task)
-    $p = New-Object System.Collections.Generic.List[string]
-    if ($null -eq $Task) { $p.Add('missing'); return $p.ToArray() }
-    $triggers = @($Task.Triggers)
-    $sub = if ($triggers.Count -eq 1 -and $triggers[0].PSObject.Properties['Subscription']) { [string]$triggers[0].Subscription } else { '' }
-    if ($triggers.Count -ne 1) { $p.Add("$($triggers.Count) trigger(s), want 1") }
-    elseif (($sub -replace '\s', '') -ne ($script:OssHookQuery -replace '\s', '')) { $p.Add('trigger is not the System User32 1074 subscription') }
-    $actions = @($Task.Actions)
-    $conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
-    if ($actions.Count -ne 1 -or $actions[0].Execute -ne $conhost -or $actions[0].Arguments -ne (Get-OssHookArguments)) { $p.Add('action differs') }
-    if ([string]$Task.Principal.RunLevel -ne 'Limited') { $p.Add("run level $($Task.Principal.RunLevel)") }
-    if ([string]$Task.Settings.ExecutionTimeLimit -ne 'PT2M') { $p.Add("time limit $($Task.Settings.ExecutionTimeLimit)") }
-    return $p.ToArray()
-}
-
-function Install-OssHookTask {
-    # Register (or re-register on drift) ossbot-shutdown-hook. Returns 'unchanged', 'changed' or 'WARN: ...'.
+# ------------------------------------------- 6b: the retired shutdown-hook task (ADR-0021 addendum)
+# The User32 1074 task started a new process in the ending session, which Windows refuses
+# (0xC000026B, STATUS_DLL_INIT_FAILED_LOGOFF). It is retired in favour of the blocker's drain
+# channel; bootstrap removes a registered one and status/doctor report "retired".
+function Remove-OssHookTask {
+    # Remove ossbot-shutdown-hook when registered. Returns 'unchanged', 'changed' or 'WARN: ...'.
     $existing = Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue
-    if ($existing -and @(Get-OssHookProblems -Task $existing).Count -eq 0) { return 'unchanged' }
+    if (-not $existing) { return 'unchanged' }
     try {
-        Register-ScheduledTask -TaskName $script:OssHookTask -Xml (Get-OssHookTaskXml) -Force -ErrorAction Stop | Out-Null
+        Unregister-ScheduledTask -TaskName $script:OssHookTask -Confirm:$false -ErrorAction Stop
         return 'changed'
     } catch {
-        return "WARN: could not register $($script:OssHookTask) (non-elevated event trigger refused?): $($_.Exception.Message)"
+        return "WARN: could not remove $($script:OssHookTask): $($_.Exception.Message)"
     }
 }
 

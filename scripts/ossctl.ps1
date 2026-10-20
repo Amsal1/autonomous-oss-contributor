@@ -80,8 +80,8 @@ if ($inside -and -not $reached) { Add-Check 'PASS' 'localhost forwarding' 'distr
 elseif (-not $inside) { Add-Check 'FAIL' 'localhost forwarding' 'probe listener did not start in the distro' }
 else { Add-Check 'FAIL' 'localhost forwarding' 'distro listener reachable from Windows localhost' 'check localhostForwarding=false in .wslconfig' }
 
-# Autostart task (7.6) with the shutdown blocker action (CR-001 6a), the blocker process, the
-# shutdown-hook task (6b) and Fast Startup (ADR-0021), then the kill marker.
+# Autostart task (7.6) with the shutdown blocker action (CR-001 6a), the blocker process and its drain
+# channel, the retired shutdown-hook task (6b) and Fast Startup (ADR-0021), then the kill marker.
 $task = Get-ScheduledTask -TaskName $script:OssAutostartTask -ErrorAction SilentlyContinue
 $autoProblems = @(Get-OssAutostartProblems -Task $task)
 if (-not $task) { Add-Check 'FAIL' 'autostart task' 'ossbot-autostart missing' 'powershell -File scripts\bootstrap.ps1 -Only autostart' }
@@ -92,17 +92,21 @@ if (Test-OssBlockerRunning) {
     $bst = Get-OssBlockerState
     $bpid = if ($bst -and $bst.PSObject.Properties['pid']) { " pid $($bst.pid)" } else { '' }
     $win = Find-OssBlockerWindow
+    $restartHint = 'powershell -File scripts\bootstrap.ps1 -Uninstall -Only shutdownhooks, then -Only shutdownhooks'
     if ($win -ne [IntPtr]::Zero -and [OssbotWin32.Native]::IsWindowVisible($win)) { Add-Check 'PASS' 'shutdown blocker' "running$bpid, window visible off-screen (6a)" }
-    else { Add-Check 'WARN' 'shutdown blocker' "running$bpid but its window is missing or hidden (cannot block)" 'powershell -File scripts\bootstrap.ps1 -Uninstall -Only shutdownhooks, then -Only shutdownhooks' }
+    else { Add-Check 'WARN' 'shutdown blocker' "running$bpid but its window is missing or hidden (cannot block)" $restartHint }
+    # The drain channel (ADR-0021 addendum post-v1): without it a shutdown drains nothing.
+    $chan = if ($bst) { Get-OssBlockerChannelText -State $bst } else { 'no state file' }
+    if ($chan -like 'channel up*') { Add-Check 'PASS' 'blocker channel' "$chan (wsl.exe -u root --exec ossctl drain-listen)" }
+    elseif ($chan -like 'channel skipped*' -and -not (Test-OssDistroRunning)) { Add-Check 'PASS' 'blocker channel' "$chan; reopens within 60 s of scripts\up.ps1" }
+    else { Add-Check 'WARN' 'blocker channel' "$chan (a shutdown now drains nothing; it retries every 60 s)" $restartHint }
 } else {
     Add-Check 'WARN' 'shutdown blocker' 'not running (starts at logon)' 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks'
 }
-$hook = Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue
-$hookProblems = @(Get-OssHookProblems -Task $hook)
-if (-not $hook) { Add-Check 'FAIL' 'shutdown hook task' "$($script:OssHookTask) missing" 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
-elseif (Test-OssTaskDisabled -Task $hook) { Add-Check 'WARN' 'shutdown hook task' 'disabled' 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
-elseif ($hookProblems.Count) { Add-Check 'WARN' 'shutdown hook task' ('drift: ' + ($hookProblems -join '; ')) 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks' }
-else { Add-Check 'PASS' 'shutdown hook task' "$($script:OssHookTask) ($($hook.State)): System User32 1074 only, non-elevated, PT2M (6b)" }
+# 6b is retired (ADR-0021 addendum post-v1): Windows refuses its new process in the ending session.
+if (Get-ScheduledTask -TaskName $script:OssHookTask -ErrorAction SilentlyContinue) {
+    Add-Check 'WARN' 'shutdown hook task' "$($script:OssHookTask) retired but still registered" 'powershell -File scripts\bootstrap.ps1 -Only shutdownhooks (removes it)'
+} else { Add-Check 'PASS' 'shutdown hook task' 'retired (control channel; ADR-0021 addendum)' }
 $hiber = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power' -Name HiberbootEnabled -ErrorAction SilentlyContinue)
 $fast = if ($hiber) { [int]$hiber.HiberbootEnabled } else { -1 }
 Add-Check 'PASS' 'fast startup' $(if ($fast -eq 1) { 'on: Shut down logs the session off first, so the blocker is still asked (ADR-0021)' } elseif ($fast -eq 0) { 'off' } else { 'unknown (registry value absent)' })
