@@ -19,6 +19,7 @@ import subprocess
 import sys
 import warnings
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -391,8 +392,15 @@ def handlers(h: E2E) -> dict[str, Callable[[FakeRuntime, FakeContainer], int]]:
 # ------------------------------------------------------------------ fixtures
 @pytest.fixture
 def e2e(gctx: AppContext, world: GitWorld, tmp_path: Path) -> Iterator[E2E]:
+    with build_e2e(gctx, world, tmp_path) as h:
+        yield h
+
+
+@contextmanager
+def build_e2e(gctx: AppContext, world: GitWorld, tmp_path: Path, *, repo: str = upstream_fixture.REPO) -> Iterator[E2E]:
+    """The ``e2e`` harness as a context manager (``repo``: the upstream the fake GitHub serves)."""
     gh = FakeGitHub()
-    upstream = upstream_fixture.seed(world, gh)
+    upstream = upstream_fixture.seed(world, gh, repo=repo)
     gctx.models.upsert_catalog([CatalogEntry(model_id=m) for m in MODELS], "uid:2001/worker")
     gk_app = create_gatekeeper(gctx, housekeeping=False)
     store = Store(tmp_path / "sandboxd.db")

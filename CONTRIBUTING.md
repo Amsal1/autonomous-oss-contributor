@@ -33,6 +33,13 @@ read [AGENTS.md](AGENTS.md) (invariants I1-I13 and the recipes) before you chang
 | Sandbox and Docker e2e | `ROOTDEV pytest -m "sandbox or e2e_docker"` |
 | System tests | `ROOT bash tests/system/test_<name>.sh` |
 | Hygiene | `DEV ossctl lint personal ; DEV ossctl docs commands --check ; ROOT gitleaks git --redact --config .gitleaks.toml .` |
+| Demo media | `powershell -NoProfile -File scripts\dev\make-demo.ps1` (`-Check`: are `docs/media` current?) |
+
+Regenerate demo media with scripts/dev/make-demo.ps1 when the cards change. It renders `docs/media`
+(the README GIF, MP4 and stills) from the Telegram payloads the hermetic e2e capture
+(`tests/e2e/test_demo_capture.py`) records, so the pictures never drift from the real renderers. It
+needs Windows Chrome 132 or newer; the pinned ffmpeg is downloaded into `tools\bin\ffmpeg` and
+sha256-checked (`config/versions.lock.yaml`).
 
 Tests mirror the source tree (`tests/unit/<package>/test_<module>.py`). Every test has a 120 s timeout.
 Tests never talk to the real GitHub write API: use `tests/fakes/fake_github.py`.

@@ -1,11 +1,87 @@
-# ossbot
+<p align="center">
+  <img src="docs/media/banner.svg" width="900" alt="ossbot banner: finds and fixes open-source issues and publishes only after you approve twice on Telegram; a diagram from Discover to Gate 1 (approve the plan), sandboxed implement and test, Gate 2 (approve the exact PR), then DRY RUN by default or publish">
+</p>
 
-ossbot is a self-hosted bot that finds open-source issues worth fixing, proposes a plan, implements
-and validates the change in throwaway sandboxes, and publishes it (a PR, a push to a PR, a comment or
-an issue claim) only after you approve the exact content on Telegram. It runs entirely inside one
-dedicated WSL distro on a Windows laptop, uses the Kiro CLI for every model call, and doubles as a
-general multimodal assistant (Hermes) in the same Telegram bot. The full specification is
-[`docs/DESIGN.md`](docs/DESIGN.md); the rebuild runbook is [`docs/SETUP.md`](docs/SETUP.md).
+<p align="center">
+  <a href="LICENSE"><img src="docs/media/badges/license.svg" alt="License: Apache-2.0"></a>
+  <a href="pyproject.toml"><img src="docs/media/badges/python.svg" alt="Python version: 3.12"></a>
+  <a href=".github/workflows/ci.yml"><img src="docs/media/badges/ci.svg" alt="CI: manual run workflow"></a>
+  <a href="#safety-model"><img src="docs/media/badges/dry-run.svg" alt="Dry-run: on by default"></a>
+</p>
+
+**A self-hosted bot that turns open-source issues into pull requests, and asks you on Telegram before
+it spends effort and before it publishes anything.**
+
+<p align="center">
+  <img src="docs/media/demo.gif" width="720" alt="Animated walkthrough of ossbot in Telegram: a proposal card, Start work and Confirm, the PR preview with size estimate versus actual and code/test split, the diff explorer, Approve and Confirm labelled DRY RUN, a submitted PR with its live status card, the pinned dashboard and /status, a streamed assistant answer, and /kill">
+</p>
+
+<p align="center"><sub>Every frame is rendered from the Telegram payloads the gatekeeper sent during the
+hermetic end-to-end test (fictional repo <code>acme/widgets</code>, fake GitHub, test profile), not drawn by hand.
+Also as <a href="docs/media/demo.mp4">MP4</a> and <a href="docs/media/stills/">PNG stills</a> (light and dark);
+regenerate with <code>scripts/dev/make-demo.ps1</code>.</sub></p>
+
+## Why
+
+- **Contributing takes time you may not have.** ossbot finds issues worth fixing in the projects you
+  pick, proposes a plan, implements and validates the change in throwaway sandboxes and prepares the PR.
+- **You stay the author.** Nothing is public until you approve the exact content (a PR, a push to a PR,
+  a comment or an issue claim), and the bot never approves anything itself.
+- **It is yours.** It runs entirely inside one dedicated WSL distro on a Windows laptop, uses the Kiro
+  CLI for every model call and has no inbound port, webhook or tunnel.
+- **One bot for both.** The same Telegram bot is also a general multimodal assistant (Hermes), kept
+  apart from the approval path.
+
+The full specification is [`docs/DESIGN.md`](docs/DESIGN.md); the rebuild runbook is
+[`docs/SETUP.md`](docs/SETUP.md).
+
+## How it works
+
+```mermaid
+flowchart LR
+  D["Discover, vet, scout"] --> G1{{"Gate 1: you approve the plan"}}
+  G1 --> W["Sandboxes: plan, implement, validate, self-review"]
+  W --> G2{{"Gate 2: you approve the exact PR"}}
+  G2 --> M{"Mode"}
+  M -->|"default"| DR["DRY RUN: nothing published"]
+  M -->|"after you turn dry-run off"| PUB["Publish, then watch the PR"]
+```
+
+Pipeline: `discover → vet → scout → PROPOSAL (gate 1) → fetch → plan → implement → validate →
+self-review → PREVIEW (gate 2) → submit → watch`.
+
+### What you approve
+
+<table>
+  <tr>
+    <td align="center" width="33%"><img src="docs/media/stills/01-proposal-card-light.png" width="240" alt="Gate 1 proposal card for acme/widgets issue 1234 with the problem, approach, likely files, size estimate, signals and the Start work, Skip, Adjust plan, Never, Later and Details buttons"></td>
+    <td align="center" width="33%"><img src="docs/media/stills/03-pr-preview-light.png" width="240" alt="Gate 2 PR preview card labelled DRY RUN with the change summary, the size estimate versus the actual diff split into code and test lines, the commit and branch, and the Approve and Submit, Reject, Explore, Files, Request changes and Edit text buttons"></td>
+    <td align="center" width="33%"><img src="docs/media/stills/05-approve-dry-run-light.png" width="240" alt="PR preview card after Approve: a DRY RUN confirm panel stating that nothing will be published, with Confirm dry run and Cancel buttons"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>1. The plan</b><br>Start work, then Confirm: the bot may now spend compute.</td>
+    <td align="center"><b>2. The exact PR</b><br>Built by the gatekeeper from the commit it would push.</td>
+    <td align="center"><b>3. The mode</b><br>The confirm button says DRY RUN or LIVE.</td>
+  </tr>
+</table>
+
+### Architecture
+
+```mermaid
+flowchart LR
+  U[You on Telegram] <-->|commands, cards, 2-tap approve| GK[Gatekeeper<br/>policy · approvals · audit<br/>only GitHub write token]
+  GK <-->|chat relay| H[Hermes<br/>V3 ACP → kiro-cli]
+  R[Runner<br/>pipeline stages] -->|requests, evidence| GK
+  R -->|job specs| SD[sandboxd]
+  SD -->|filtered Docker API| D[(Docker)]
+  D --> S1[research / agent-llm<br/>Kiro key, no code exec]
+  D --> S2[fetch / agent-exec / validate / package<br/>no secrets]
+  S1 & S2 -->|allowlisted hosts only| P[squid proxy] --> I((Internet))
+  GK -->|approved push + PR| GH[(GitHub)]
+  K[kill.ps1 / /kill] -.->|root enforcer| D
+```
+
+Component details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Safety model
 
@@ -25,25 +101,6 @@ general multimodal assistant (Hermes) in the same Telegram bot. The full specifi
 - **A hard size ceiling** (`config/policy.yaml` `diff.max_files: 80`, `max_changed_lines: 3000`,
   `max_test_lines: 3000`) refuses runaway diffs. It cannot be raised from Telegram.
 - **No exposure.** No webhook, tunnel, Mini App or inbound port; Telegram uses long polling.
-
-## Architecture
-
-```mermaid
-flowchart LR
-  U[You on Telegram] <-->|commands, cards, 2-tap approve| GK[Gatekeeper<br/>policy · approvals · audit<br/>only GitHub write token]
-  GK <-->|chat relay| H[Hermes<br/>V3 ACP → kiro-cli]
-  R[Runner<br/>pipeline stages] -->|requests, evidence| GK
-  R -->|job specs| SD[sandboxd]
-  SD -->|filtered Docker API| D[(Docker)]
-  D --> S1[research / agent-llm<br/>Kiro key, no code exec]
-  D --> S2[fetch / agent-exec / validate / package<br/>no secrets]
-  S1 & S2 -->|allowlisted hosts only| P[squid proxy] --> I((Internet))
-  GK -->|approved push + PR| GH[(GitHub)]
-  K[kill.ps1 / /kill] -.->|root enforcer| D
-```
-
-Pipeline: `discover → vet → scout → PROPOSAL (gate 1) → fetch → plan → implement → validate →
-self-review → PREVIEW (gate 2) → submit → watch`. Component details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ## Quickstart
 

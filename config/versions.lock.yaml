@@ -130,3 +130,17 @@ apache_license_2_0:
   sha256: "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
   license_file_sha256: "ed81f0187ee2405242e87d71997fcae808e93e6198ddcef11ef33ce44cfd03d3"
   source: "fetched 2026-10-20 with scripts/dev/fetch-license.ps1; sha256 of the served bytes"
+ffmpeg_windows:
+  # dev-only: scripts/dev/make-demo.ps1 (README demo media). Never installed in the distro or an image.
+  version: "9.0.2"
+  url: "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip"
+  sha256: "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba"
+  size_bytes: "114768076"
+  source: "GitHub releases API GyanD/codexffmpeg tag 9.0.2 (published 2026-09-20), asset digest; equals https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip.sha256 (both checked 2026-10-21). Release not marked immutable: the sha256 check is the pin."
+chrome_headless:
+  # dev-only screenshots with the system Chrome (auto-updating, so not pinnable): make-demo.ps1 refuses
+  # major < min_major and records the exact version in docs/media/demo.manifest.json.
+  min_major: "132"
+  verified_version: "155.0.8059.85"
+  path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+  source: "developer.chrome.com/docs/chromium/headless (new headless since 132.0.6793.0) and /docs/automation-and-testing/headless-cli (--screenshot, --window-size, --dump-dom), checked 2026-10-21; version probed from chrome.exe VersionInfo 2026-10-21"

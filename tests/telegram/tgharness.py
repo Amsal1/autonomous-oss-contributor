@@ -94,8 +94,10 @@ class TgRig:
 
 
 async def make_rig(ctx: AppContext, *, topics: bool = False, user_topics: bool = False,
-                   submit: Any = None, preflight: Any = None) -> AsyncIterator[TgRig]:  # fmt: skip
-    req = FakeBotRequest(topics=topics, user_topics=user_topics)
+                   submit: Any = None, preflight: Any = None,
+                   req: FakeBotRequest | None = None) -> AsyncIterator[TgRig]:  # fmt: skip
+    """``req``: a prepared fake Bot API (e.g. a recording subclass); default a fresh ``FakeBotRequest``."""
+    req = req or FakeBotRequest(topics=topics, user_topics=user_topics)
     holder: dict[str, TgRig] = {}
 
     async def default_submit(approval_id: str) -> str:

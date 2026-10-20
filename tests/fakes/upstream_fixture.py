@@ -40,16 +40,17 @@ class Upstream:
     issue: int
 
 
-def seed(world: GitWorld, gh: FakeGitHub, *, issue: int = 1234, hostile_issue: bool = False) -> Upstream:
+def seed(world: GitWorld, gh: FakeGitHub, *, issue: int = 1234, hostile_issue: bool = False,
+         repo: str = REPO) -> Upstream:  # fmt: skip
     world.write(world.upstream, HOSTILE_FILES)
     os.symlink("/etc/passwd", world.upstream / "leak")
     base = world.commit(world.upstream, "add tests and hostile extras")
     tgit(world.upstream, "branch", "-M", "main")
-    gh.add_repo(REPO, default_branch="main", language="Python", pushed_at="2026-10-17T00:00:00Z",
+    gh.add_repo(repo, default_branch="main", language="Python", pushed_at="2026-10-17T00:00:00Z",
                 stargazers_count=1000)  # fmt: skip
     body = INJECTION if hostile_issue else "Export throws when a trace has no spans."
-    gh.add_issue(REPO, issue, title="Fix trace export when spans are empty", body=body,
+    gh.add_issue(repo, issue, title="Fix trace export when spans are empty", body=body,
                  labels=[{"name": "bug"}], created_at="2026-10-10T00:00:00Z", updated_at="2026-10-17T00:00:00Z",
                  comments=0, user={"login": "reporter"})  # fmt: skip
-    gh.files[(REPO, "CONTRIBUTING.md")] = HOSTILE_FILES["CONTRIBUTING.md"]
+    gh.files[(repo.lower(), "CONTRIBUTING.md")] = HOSTILE_FILES["CONTRIBUTING.md"]
     return Upstream(world, gh, base, issue)

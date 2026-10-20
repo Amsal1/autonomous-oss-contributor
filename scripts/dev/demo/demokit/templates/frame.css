@@ -1,0 +1,135 @@
+/* Telegram-like phone frame for the README demo. Light reuses the docs/ux mockup palette. */
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { overflow: hidden; }
+body {
+  --page: #eef1ea; --bg: #d9e4c8; --bar: #ffffff; --bar-line: #d0d6cc; --in: #ffffff; --out: #effdde;
+  --ink: #111111; --muted: #6f7f6f; --accent: #2f7fe0; --link: #1a6fd1; --quote: #2f7fe0;
+  --quote-bg: rgba(47, 127, 224, .08); --code: #1b1b1b; --code-bg: rgba(0, 0, 0, .05);
+  --btn: #5f7d64; --btn-ink: #ffffff; --success: #2e9d4f; --danger: #d64541; --primary: #2f7fe0;
+  --pressed: #23402a; --disabled: #a7b3a8; --frame: #1d1d1f; --cap-ink: #1d2a1f; --cap-muted: #55655a;
+  --pin: #ffffff; --react: #ffffff;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Noto Color Emoji", "Segoe UI Emoji", sans-serif;
+  font-size: 12.5px; line-height: 1.38; color: var(--ink); background: var(--page);
+  -webkit-font-smoothing: antialiased;
+}
+body.dark {
+  --page: #0b1118; --bg: #0e1621; --bar: #17212b; --bar-line: #101921; --in: #182533; --out: #2b5278;
+  --ink: #f5f5f5; --muted: #8b9aa7; --accent: #6ab2f2; --link: #6ab3f3; --quote: #6ab2f2;
+  --quote-bg: rgba(106, 178, 242, .1); --code: #e6edf3; --code-bg: rgba(255, 255, 255, .07);
+  --btn: #2b3b4c; --btn-ink: #ffffff; --success: #2e8b57; --danger: #c0392b; --primary: #2f6ea5;
+  --pressed: #5288c1; --disabled: #3a4652; --frame: #000000; --cap-ink: #e8eef3; --cap-muted: #9fb0bf;
+  --pin: #17212b; --react: #2b5278;
+}
+body.still { width: 384px; height: 804px; }
+body.gif { width: 720px; height: 820px; }
+.stage { position: relative; width: 100%; height: 100%; }
+.phone {
+  position: absolute; left: 12px; top: 12px; width: 360px; height: 780px; border-radius: 40px;
+  background: var(--bg); border: 8px solid var(--frame); overflow: hidden; display: flex; flex-direction: column;
+}
+.gif .phone { left: 16px; top: 20px; }
+.statusbar {
+  height: 26px; flex: none; display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 24px 0; background: var(--bar); font-weight: 600; font-size: 12px;
+}
+.bars { width: 34px; height: 9px; border-radius: 2px; background: linear-gradient(90deg, var(--ink) 70%, transparent 70%);
+  opacity: .75; }
+.header {
+  height: 50px; flex: none; display: flex; align-items: center; gap: 9px; padding: 0 12px;
+  background: var(--bar); border-bottom: 1px solid var(--bar-line);
+}
+.back { width: 9px; height: 9px; border-left: 2px solid var(--accent); border-bottom: 2px solid var(--accent);
+  transform: rotate(45deg); margin: 0 4px 0 4px; }
+.avatar {
+  width: 34px; height: 34px; border-radius: 50%; background: var(--accent); color: #fff; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; font-size: 13px; flex: none;
+}
+.who { display: flex; flex-direction: column; min-width: 0; }
+.name { font-weight: 700; font-size: 14px; }
+.topic { color: var(--muted); font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pinned {
+  flex: none; display: flex; gap: 8px; align-items: center; padding: 5px 12px; background: var(--pin);
+  border-bottom: 1px solid var(--bar-line); font-size: 11.5px; min-height: 34px;
+}
+.pinned::before { content: ""; width: 2px; align-self: stretch; background: var(--accent); border-radius: 2px; }
+.pin-body { display: flex; flex-direction: column; min-width: 0; }
+.pin-title { color: var(--accent); font-weight: 600; }
+.pin-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 300px; }
+.chat {
+  flex: 1; display: flex; flex-direction: column; justify-content: flex-end; gap: 6px; padding: 8px 8px 6px;
+  overflow: hidden; min-height: 0;
+}
+.msg { display: flex; flex-direction: column; max-width: 94%; flex: none; }
+.msg.in { align-self: flex-start; }
+.msg.out { align-self: flex-end; max-width: 78%; }
+.bubble {
+  background: var(--in); border-radius: 14px 14px 14px 4px; padding: 6px 9px 4px; position: relative;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, .12);
+}
+.out .bubble { background: var(--out); border-radius: 14px 14px 4px 14px; }
+.draft .bubble { outline: 1px dashed var(--accent); }
+.reply {
+  border-left: 2px solid var(--accent); background: var(--quote-bg); border-radius: 4px; padding: 2px 6px;
+  margin-bottom: 4px; color: var(--accent); font-size: 11.5px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; max-width: 300px;
+}
+.msg-text { overflow-wrap: anywhere; }
+.msg-text.classic, .msg-text.user { white-space: pre-wrap; }
+.msg-text.rich { white-space: normal; }
+.meta { text-align: right; color: var(--muted); font-size: 10px; margin-top: 1px; }
+.reactions { align-self: flex-start; margin-top: 3px; background: var(--react); border-radius: 12px;
+  padding: 1px 7px; font-size: 12px; }
+.tg-link { color: var(--link); }
+.tg-code { font-family: Consolas, "SF Mono", "Roboto Mono", monospace; font-size: 11.5px; color: var(--code);
+  background: var(--code-bg); border-radius: 3px; padding: 0 2px; }
+.tg-pre { display: inline-block; width: 100%; font-family: Consolas, "SF Mono", "Roboto Mono", monospace;
+  font-size: 11px; background: var(--code-bg); border-radius: 6px; padding: 4px 6px; white-space: pre-wrap; }
+.tg-pre .tg-code { background: none; padding: 0; }
+.tg-quote { display: inline-block; width: 100%; border-left: 3px solid var(--quote); background: var(--quote-bg);
+  border-radius: 4px; padding: 2px 6px; }
+.tg-time { text-decoration: underline dotted; text-underline-offset: 2px; }
+.rb { white-space: pre-wrap; margin: 2px 0; }
+.rb-h { font-weight: 700; font-size: 13.5px; }
+.rb-f { color: var(--muted); font-size: 11px; }
+.rb-think { color: var(--muted); font-style: italic; }
+.rb-pre { font-family: Consolas, "SF Mono", "Roboto Mono", monospace; font-size: 11px; background: var(--code-bg);
+  border-radius: 6px; padding: 4px 6px; }
+.rb-hr { border-top: 1px solid var(--bar-line); }
+.rb-q { border-left: 3px solid var(--quote); background: var(--quote-bg); border-radius: 4px; padding: 2px 6px;
+  white-space: normal; }
+.rb-q.tg-exp, .rb-q > .rb { white-space: pre-wrap; }
+.rb-list { white-space: normal; }
+.rb-li { padding-left: 14px; position: relative; }
+.rb-li::before { content: "•"; position: absolute; left: 3px; }
+.rb-li[data-n]::before { content: attr(data-n) "."; left: 0; }
+.rb-details { white-space: normal; }
+.rb-sum { font-weight: 600; white-space: pre-wrap; }
+.rb-table { display: grid; gap: 1px 10px; white-space: normal; }
+.rb-tr { display: contents; }
+.rb-td { white-space: pre-wrap; }
+.rb-th { font-weight: 700; }
+.kb { display: flex; flex-direction: column; gap: 3px; margin-top: 3px; }
+.kb-row { display: flex; gap: 3px; }
+.btn {
+  flex: 1 1 0; min-width: 0; text-align: center; padding: 7px 4px; border-radius: 9px; background: var(--btn);
+  color: var(--btn-ink); font-weight: 600; font-size: 11.5px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; opacity: .92;
+}
+.btn.success { background: var(--success); }
+.btn.danger { background: var(--danger); }
+.btn.primary { background: var(--primary); }
+.btn.disabled { background: var(--disabled); }
+.btn.pressed { background: var(--pressed); box-shadow: inset 0 0 0 2px var(--btn-ink); opacity: 1; }
+.inputbar { height: 46px; flex: none; background: var(--bar); border-top: 1px solid var(--bar-line); padding: 8px 12px; }
+.field { display: block; height: 30px; border-radius: 15px; background: var(--bg); color: var(--muted);
+  padding: 6px 14px; font-size: 12px; }
+.caption {
+  position: absolute; left: 404px; top: 64px; width: 296px; color: var(--cap-ink);
+}
+.cap-step { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: .04em; }
+.cap-title { font-size: 25px; font-weight: 700; line-height: 1.2; margin: 8px 0 12px; }
+.cap-sub { font-size: 15px; line-height: 1.45; color: var(--cap-muted); }
+.cap-brand { position: absolute; left: 404px; bottom: 36px; width: 296px; font-size: 11.5px; color: var(--cap-muted); }
+.cap-dots { display: flex; gap: 6px; margin-top: 22px; }
+.cap-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bar-line); }
+.cap-dot.on { background: var(--accent); }

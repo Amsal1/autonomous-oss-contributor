@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="360" viewBox="0 0 1280 360" role="img" aria-labelledby="banner-title banner-desc">
+  <title id="banner-title">ossbot</title>
+  <desc id="banner-desc">ossbot finds and fixes open-source issues and publishes only after you approve twice on Telegram. Diagram: Discover, then Gate 1 where you approve the plan, then sandboxed implement and test, then Gate 2 where you approve the exact PR, then DRY RUN by default or publish.</desc>
+  <style>
+    .bg { fill: #eef1ea; }
+    .ink { fill: #1d2a1f; }
+    .muted { fill: #55655a; }
+    .box { fill: #ffffff; stroke: #c8d3c2; stroke-width: 2; }
+    .gate { fill: #2f7fe0; }
+    .gate-ink { fill: #ffffff; }
+    .arrow { stroke: #5f7d64; stroke-width: 3; fill: none; }
+    .head { fill: #5f7d64; }
+    .dry { fill: #2e9d4f; }
+    text { font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Noto Color Emoji", sans-serif; }
+    .title { font-size: 64px; font-weight: 700; }
+    .tag { font-size: 24px; }
+    .label { font-size: 19px; font-weight: 600; }
+    .small { font-size: 15px; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0e1621; }
+      .ink { fill: #f0f4f7; }
+      .muted { fill: #9fb0bf; }
+      .box { fill: #182533; stroke: #2b3b4c; }
+      .gate { fill: #2f6ea5; }
+      .arrow { stroke: #6ab2f2; }
+      .head { fill: #6ab2f2; }
+      .dry { fill: #2e8b57; }
+    }
+  </style>
+  <rect class="bg" width="1280" height="360" rx="18"/>
+  <text class="ink title" x="64" y="104">ossbot</text>
+  <text class="muted tag" x="64" y="148">Finds and fixes open-source issues; publishes only after you approve twice on Telegram</text>
+
+  <!-- Discover -->
+  <rect class="box" x="64" y="200" width="170" height="96" rx="14"/>
+  <text class="ink label" x="149" y="242" text-anchor="middle">🔎 Discover</text>
+  <text class="muted small" x="149" y="268" text-anchor="middle">vet · scout</text>
+  <path class="arrow" d="M234 248 H268"/><path class="head" d="M278 248 l-12 -7 v14 z"/>
+
+  <!-- Gate 1 -->
+  <rect class="gate" x="280" y="200" width="200" height="96" rx="14"/>
+  <text class="gate-ink label" x="380" y="242" text-anchor="middle">👤 Gate 1</text>
+  <text class="gate-ink small" x="380" y="268" text-anchor="middle">approve the plan</text>
+  <path class="arrow" d="M480 248 H514"/><path class="head" d="M524 248 l-12 -7 v14 z"/>
+
+  <!-- Sandboxes -->
+  <rect class="box" x="526" y="200" width="220" height="96" rx="14"/>
+  <text class="ink label" x="636" y="242" text-anchor="middle">📦 Sandboxed</text>
+  <text class="muted small" x="636" y="268" text-anchor="middle">implement · test · self-review</text>
+  <path class="arrow" d="M746 248 H780"/><path class="head" d="M790 248 l-12 -7 v14 z"/>
+
+  <!-- Gate 2 -->
+  <rect class="gate" x="792" y="200" width="200" height="96" rx="14"/>
+  <text class="gate-ink label" x="892" y="242" text-anchor="middle">👤 Gate 2</text>
+  <text class="gate-ink small" x="892" y="268" text-anchor="middle">approve the exact PR</text>
+  <path class="arrow" d="M992 248 H1026"/><path class="head" d="M1036 248 l-12 -7 v14 z"/>
+
+  <!-- Outcome -->
+  <rect class="dry" x="1038" y="200" width="178" height="44" rx="12"/>
+  <text class="gate-ink label" x="1127" y="229" text-anchor="middle">🧪 DRY RUN</text>
+  <rect class="box" x="1038" y="252" width="178" height="44" rx="12"/>
+  <text class="ink label" x="1127" y="281" text-anchor="middle">🚀 publish</text>
+  <text class="muted small" x="1127" y="322" text-anchor="middle">dry-run is the default</text>
+</svg>

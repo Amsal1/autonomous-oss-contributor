@@ -76,7 +76,7 @@ markers = [
 [tool.ruff]
 line-length = 120
 target-version = "py312"
-src = ["src", "tests", "vendor/hermes-kiro-provider"]
+src = ["src", "tests", "vendor/hermes-kiro-provider", "scripts/dev/demo"]
 cache-dir = "/tmp/ossbot-ruff-cache"
 # the upstream V2 files of the vendored fork stay byte-identical (only kiro_acp/ is ours)
 extend-exclude = ["vendor/hermes-kiro-provider/__init__.py", "vendor/hermes-kiro-provider/kiro_acp_*.py",
