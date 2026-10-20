@@ -1,35 +1,14 @@
 {
-  "verdict": "CHANGES_REQUESTED",
+  "verdict": "APPROVED",
   "feat": "FEAT-009",
-  "round": 3,
+  "round": 4,
   "findings": [
     {
-      "id": "F009-R3-1",
-      "severity": "MEDIUM",
-      "title": "An anomaly that pauses is sent as a P2 FYI and is held during quiet hours (U7)",
-      "detail": "DESIGN 14.13.1 lists 'anomaly -> pause/kill' as P0: always rings, ignores quiet hours, never batched (U7). anomaly.py:87-90 calls control.pause(reason, 'anomaly'), and control.py:161 sends '⏸ Paused by anomaly: ...'. notify.classify gives P0 only to texts starting with 🛑 or 🚨, so this text is (2, True). Notifier.decide then holds it silently until quiet hours end, or merges it into '📈 N updates' when the batch window closes. The same applies to every pause rule in 13.4 (secret escalation, gatekeeper unhealthy, kiro rate). Fix: send the anomaly pause as P0 (a priority on Control.pause for actor 'anomaly', or a 🚨 alert from anomaly.py with priority=0). Test: with quiet hours on, a pause-level anomaly leaves a pending, ringing P0 row in Control.",
-      "files": ["src/ossbot/gatekeeper/anomaly.py", "src/ossbot/gatekeeper/control.py", "src/ossbot/gatekeeper/telegram/notify.py", "tests/telegram/test_priorities.py"]
-    },
-    {
-      "id": "F009-R3-2",
-      "severity": "MEDIUM",
-      "title": "/reject is not implemented",
-      "detail": "Item 47's carried detail and DESIGN 14.14.1 require '/reject [cid] [reason]' (config: picker -> reasons [Not valuable] [Wrong approach] [Repo unsuitable (7d)] [Other…] -> confirm). The AC says every 14.14.1 command exists. src has no @command('reject'), and test_commands_full's M1 set leaves it out. TRACEABILITY DES-FR-6 is still marked done and defers only /digest /memory /title /remind /articles. A typed /reject answers 'Unknown command'. Fix: add it in commands/review.py, reusing the card's reject-reason flow and the 7-day cooldown behind a config confirm. Add it to M1, with a test that nothing is rejected without the confirm tap.",
-      "files": ["src/ossbot/gatekeeper/telegram/commands/review.py", "src/ossbot/gatekeeper/telegram/handlers.py", "tests/telegram/test_commands_full.py", "docs/TRACEABILITY.md"]
-    },
-    {
-      "id": "F009-R3-3",
-      "severity": "MEDIUM",
-      "title": "Item 48 live check incomplete while FEAT-009 is marked completed",
-      "detail": "The AC requires a dry-run proposal card and a preview card from the fake upstream rendered in the real chat, recorded in VERIFICATION.md; the verification list requires bootstrap twice, the second run only 'unchanged'. VERIFICATION.md records the live start only. Three dashboards were pinned and the fix b85e4c3 is not deployed. The proposal and preview cards and the second redeploy are listed as open, yet FEAT-009.json is 'completed'. Delivering those cards goes through product code plus the read-only outbox peek, so an agent can do it; only the visual confirmation and typed /kill and /resume need the owner. Fix: redeploy at HEAD, then a second redeploy (only 'unchanged'). Confirm a single dashboard. Deliver one dry-run proposal card and one preview card and record their sent outbox rows and message ids. Then get the owner's confirmation (workflow warning), or set FEAT-009 back to not completed with the owner items named as blocked.",
-      "files": ["docs/VERIFICATION.md", "docs/plan/task-ossbot-v1/features/FEAT-009.json"]
-    },
-    {
-      "id": "F009-R3-4",
+      "id": "F009-R4-1",
       "severity": "NIT",
-      "title": "Command confirms minted before a kill still act after it",
-      "detail": "handlers.py routes CONFIRMS taps (egress_confirm, hermes_tier_confirm, model_confirm, reload_confirm, repo_confirm) with only use_token and no killed check. An /egress open panel opened before /kill still widens egress when tapped within 5 min. 14.16 says only /status /resume /logs /help /start work while killed. Refuse go/config confirm effects while killed.",
-      "files": ["src/ossbot/gatekeeper/telegram/handlers.py"]
+      "title": "Owner-only item 48 live checks still open (FEAT-009 in_progress)",
+      "detail": "FEAT-009.json is in_progress. blocked_reason names the owner-only checks: typed /kill then /resume in the real chat, a dry-run proposal card and a PR preview card in the real chat, a visual check of one pinned dashboard (unpin stale 505/506), and the client-rendering probes DES-V-32 and CR3-V-1/4/5/6/12/14/15. These carry to the Phase 2 gate and must be done before FEAT-009 is marked completed.",
+      "files": ["docs/plan/task-ossbot-v1/features/FEAT-009.json", "docs/VERIFICATION.md"]
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-009.md"
