@@ -10,7 +10,8 @@
 // with 0xC0000142 or 0xC000026B), so nothing is started at shutdown time. At start the blocker opens
 // a long-lived drain channel instead: `wsl.exe -d <distro> -u root --exec <ossctl> drain-listen`,
 // hidden, with its stdin/stdout kept as pipes. A 60 s timer restarts the channel when it died while
-// the distro runs (it never starts the distro itself). On WM_QUERYENDSESSION (shutdown, restart,
+// the distro runs (it never starts the distro itself); a channel that lived under 10 s is restarted no
+// sooner than 60 s after its exit, and the repeats are logged once. On WM_QUERYENDSESSION (shutdown, restart,
 // sign-out) it registers the block reason with ShutdownBlockReasonCreate (Windows shows it in the
 // "apps preventing shutdown" screen, where the user can still pick "Shut down anyway"), writes
 // "down <timeout> blocker" to the channel, pumps messages until the listener answers "drained", then
@@ -81,6 +82,16 @@ namespace Ossbot
         int pingsUnanswered;
         int ticks;
         bool checkRunning;
+        // Back-off for a channel that dies at once (the listener fails at start): a channel that lived
+        // under QuickExitSeconds is not restarted sooner than BackoffSeconds after its exit. The first
+        // quick exit is logged with one line; the repeats stay quiet until a channel lives
+        // QuickExitSeconds again ("channel stable again").
+        const int QuickExitSeconds = 10;
+        const int BackoffSeconds = 60;
+        DateTime channelStarted = DateTime.MinValue;
+        DateTime restartNotBefore = DateTime.MinValue;
+        bool restartPending;
+        int quickExits;
 
         public ShutdownBlockerWindow(string distro, string listener, int downTimeout, string logPath,
             string statePath, string lifecycleLogPath)
@@ -192,6 +203,19 @@ namespace Ossbot
                 CheckChannel();
                 return;
             }
+            if (restartPending && channel == null && DateTime.UtcNow >= restartNotBefore)
+            {
+                restartPending = false;
+                ticks = 0;
+                CheckChannel();
+                return;
+            }
+            if (quickExits > 0 && ChannelAlive() && (DateTime.UtcNow - channelStarted).TotalSeconds >= QuickExitSeconds)
+            {
+                Log("channel stable again pid=" + channel.Id + " pong=" + lastPong + " after " + quickExits
+                    + " quick exit(s)");
+                quickExits = 0;
+            }
             if (++ticks < ChannelCheckTicks) return;
             ticks = 0;
             CheckChannel();
@@ -218,7 +242,23 @@ namespace Ossbot
             {
                 int code = -1;
                 try { code = channel.ExitCode; } catch (Exception) { }
-                Log("channel died exit=" + code);
+                double lived = (DateTime.UtcNow - channelStarted).TotalSeconds;
+                if (quickExits == 0) Log("channel died exit=" + code);
+                if (lived < QuickExitSeconds)
+                {
+                    restartNotBefore = DateTime.UtcNow.AddSeconds(BackoffSeconds);
+                    if (quickExits == 0)
+                    {
+                        Log("channel lived " + lived.ToString("0.0") + " s (under " + QuickExitSeconds
+                            + " s): restarting no sooner than " + BackoffSeconds + " s after each quick exit;"
+                            + " repeats are not logged until a channel stays up " + QuickExitSeconds + " s");
+                    }
+                    quickExits++;
+                }
+                else
+                {
+                    restartNotBefore = DateTime.MinValue;
+                }
                 DisposeChannel();
                 SetChannelState("down");
             }
@@ -268,6 +308,12 @@ namespace Ossbot
                 SetChannelState("skipped");
                 return;
             }
+            if (DateTime.UtcNow < restartNotBefore)
+            {
+                // Back-off after a quick exit; Tick restarts it when restartNotBefore has passed.
+                restartPending = true;
+                return;
+            }
             StartChannel();
         }
 
@@ -300,7 +346,8 @@ namespace Ossbot
             channelIn.AutoFlush = true;
             pingsUnanswered = 0;
             lastPong = "";
-            Log("channel " + (restart ? "restarted" : "started") + " pid=" + p.Id);
+            channelStarted = DateTime.UtcNow;
+            if (quickExits == 0) Log("channel " + (restart ? "restarted" : "started") + " pid=" + p.Id);
             SetChannelState("up");
             pingsUnanswered = 1;
             Send("ping");
@@ -331,7 +378,7 @@ namespace Ossbot
                 {
                     pingsUnanswered = 0;
                     string pong = l.Substring(5);
-                    if (lastPong == "") Log("channel up pid=" + (ChannelAlive() ? channel.Id : 0) + " pong=" + pong);
+                    if (lastPong == "" && quickExits == 0) Log("channel up pid=" + (ChannelAlive() ? channel.Id : 0) + " pong=" + pong);
                     changed = changed || pong != lastPong;
                     lastPong = pong;
                 }

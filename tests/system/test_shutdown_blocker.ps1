@@ -21,10 +21,12 @@
   5 the channel's wsl.exe is killed: the blocker logs "channel died" and "channel restarted" within 70 s.
   6 the distro is stopped (wsl --terminate): "channel skipped: distro stopped"; WM_QUERYENDSESSION
     then returns TRUE at once with "no channel"; up.ps1 and the channel reopens within 70 s.
+  8 back-off: channels killed 2 s after their start are restarted no sooner than 60 s later; one
+    "died" line and one back-off line for the series, no "restarted" lines, then "channel stable again".
   Telegram: the "Going down" / "Back up" summaries to the owner only (product code).
 #>
 [CmdletBinding()]
-param([int]$DownTimeoutSec = 400, [string]$Only = '1,2,3,4,5,6,7')
+param([int]$DownTimeoutSec = 400, [string]$Only = '1,2,3,4,5,6,7,8')
 $ErrorActionPreference = 'Continue'
 $sections = @($Only -split '[,\s]+' | Where-Object { $_ } | ForEach-Object { [int]$_ })  # -File may join "2,3" as "2 3"
 . (Join-Path $PSScriptRoot '..\..\scripts\lib\common.ps1')
@@ -169,6 +171,7 @@ if ($sections -contains 4) {
 
 if ($sections -contains 5) {
     Write-Host '== 5: the channel dies and is restarted'
+    Start-Sleep -Seconds 11   # a channel that lived 10 s or more: the plain restart, no back-off
     $cpid = [int](Prop (State) 'channel_pid')
     Ok 'channel pid known' ($cpid -gt 0) "($cpid)"
     $blkBefore = (Lines $blkLog).Count
@@ -236,6 +239,43 @@ if ($sections -contains 7) {
     $out = @(& powershell -NoProfile -File (Join-Path $scripts 'status.ps1') 2>&1 | ForEach-Object { "$_" })
     $ls = @($out | Where-Object { $_ -match '^last shutdown\s+' }) | Select-Object -First 1
     Ok 'the marker was written: last shutdown graceful' ($ls -match '^last shutdown\s+graceful ') "($ls)"
+}
+
+if ($sections -contains 8) {
+    Write-Host '== 8: a channel that dies at once is restarted with a 60 s back-off, logged once'
+    $null = Wait-Log 0 'channel up pid=\d+ pong=' 75
+    Start-Sleep -Seconds 11
+    $blkBefore = (Lines $blkLog).Count
+    $restarts = @()
+    for ($round = 1; $round -le 3; $round++) {
+        # Kill the channel within a few seconds of its start (round 1: right after the plain restart).
+        $old = [int](Prop (State) 'channel_pid')
+        if ($round -eq 1) {
+            Stop-Process -Id $old -Force -ErrorAction SilentlyContinue
+            $null = Wait-Log $blkBefore 'channel restarted pid=\d+' 70
+            $old = 0
+        }
+        $sw = [Diagnostics.Stopwatch]::StartNew(); $cpid = 0
+        while ($sw.Elapsed.TotalSeconds -lt 80) {
+            $st = State
+            if ((Prop $st 'channel') -eq 'up' -and [int](Prop $st 'channel_pid') -gt 0 -and [int](Prop $st 'channel_pid') -ne $old) { $cpid = [int](Prop $st 'channel_pid'); break }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($round -gt 1) { $restarts += $sw.Elapsed.TotalSeconds }
+        Ok "round ${round}: a new channel runs" ($cpid -gt 0) "($cpid)"
+        if ($cpid -le 0) { break }
+        Start-Sleep -Seconds 2
+        Stop-Process -Id $cpid -Force -ErrorAction SilentlyContinue
+    }
+    $restarts | ForEach-Object { Ok 'quick exit: restarted no sooner than 60 s' ($_ -ge 58) ('({0:N1} s)' -f $_) }
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $t = Wait-Log $blkBefore 'channel stable again pid=\d+ pong=\S+ after 3 quick exit' 90
+    Ok 'channel stable again after the back-off (logged once)' ($t -ge 0) ('({0:N1} s)' -f $sw.Elapsed.TotalSeconds)
+    $new = @(Lines $blkLog | Select-Object -Skip $blkBefore)
+    $new | ForEach-Object { Write-Host "  blocker: $_" }
+    Ok 'log: the back-off line once' (@($new | Where-Object { $_ -match 'channel lived [\d.]+ s \(under 10 s\): restarting no sooner than 60 s' }).Count -eq 1)
+    Ok 'log: one died line for the quick exits (plus the plain one)' (@($new | Where-Object { $_ -match 'channel died exit=' }).Count -eq 2)
+    Ok 'log: no restarted line during the back-off (only the plain one)' (@($new | Where-Object { $_ -match 'channel restarted pid=' }).Count -eq 1)
 }
 
 if ($script:Fail) { Write-Host "test_shutdown_blocker: $($script:Fail) check(s) FAILED" -ForegroundColor Red; exit 1 }
