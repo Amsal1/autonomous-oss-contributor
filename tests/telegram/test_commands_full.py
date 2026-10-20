@@ -22,7 +22,7 @@ from tests.telegram.tgharness import TgRig, make_rig
 
 M1 = {"start", "help", "settings", "status", "dashboard", "queue", "work", "size", "filters", "approve", "review",
       "pause", "resume", "kill", "dryrun", "drain", "undrain", "down", "up", "reload", "egress", "hermes", "model",
-      "repos", "limits", "budget", "logs", "skills", "new", "newchat", "quiet", "notify"}  # fmt: skip
+      "repos", "limits", "budget", "logs", "skills", "new", "newchat", "quiet", "notify", "reject"}  # fmt: skip
 
 
 @pytest.fixture
@@ -187,6 +187,66 @@ async def test_review_opens_the_explorer_of_an_open_card(rig: TgRig) -> None:
     mid = sent_with(rig, "Review which card?")
     await rig.tap(token(rig, mid, f"🧭 {cid}"), message=mid)
     assert sent_with(rig, f"🧭 <b>{cid} r")
+
+
+async def _open_card(rig: TgRig) -> str:
+    from tests.conftest import packaged_contribution
+
+    cid, action = packaged_contribution(rig.ctx)
+    approval = rig.ctx.create_approval(action, "test")
+    rig.ctx.on_approval_created(approval)
+    await rig.flush()
+    return cid
+
+
+def _approval_status(rig: TgRig, cid: str) -> str:
+    row = db.one(rig.ctx.conn, "SELECT a.status FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+                 " WHERE o.cid = ? ORDER BY a.created_at DESC LIMIT 1", (cid,))  # fmt: skip
+    return str(row["status"])
+
+
+async def test_reject_picker_reasons_then_confirm(rig: TgRig) -> None:
+    """F009-R3-2: /reject -> card picker -> reasons -> confirm; nothing is rejected before the confirm."""
+    cid = await _open_card(rig)
+    await rig.say("/reject")
+    mid = sent_with(rig, "Reject which card?")
+    await rig.tap(token(rig, mid, f"❌ {cid}"), message=mid)
+    assert labels(rig, mid) == ["Not valuable", "Wrong approach", "Repo unsuitable (7d)", "Other…", "↩️ Cancel"]
+    await rig.tap(token(rig, mid, "Repo unsuitable (7d)"), message=mid)
+    assert labels(rig, mid) == ["❌ Reject", "↩️ Cancel"] and "7 days" in text(rig, mid)
+    assert _approval_status(rig, cid) == "pending"
+    await rig.tap(token(rig, mid, "❌ Reject"), message=mid)
+    assert _approval_status(rig, cid) == "rejected" and "Rejected" in text(rig, mid)
+    upstream = db.one(rig.ctx.conn, "SELECT upstream FROM contributions WHERE id = ?", (cid,))["upstream"]
+    cool = db.one(rig.ctx.conn, "SELECT cooldown_until FROM repo_overrides WHERE upstream = ?", (upstream,))
+    assert cool is not None and cool["cooldown_until"]
+    state = db.one(rig.ctx.conn, "SELECT state FROM contributions WHERE id = ?", (cid,))["state"]
+    assert state == "REJECTED"
+
+
+async def test_reject_with_typed_reason_cancel_rejects_nothing(rig: TgRig) -> None:
+    cid = await _open_card(rig)
+    await rig.say(f"/reject {cid} wrong approach")
+    mid = sent_with(rig, "Wrong approach")
+    assert labels(rig, mid) == ["❌ Reject", "↩️ Cancel"]
+    await rig.tap(token(rig, mid, "↩️ Cancel"), message=mid)
+    assert _approval_status(rig, cid) == "pending"
+    await rig.say("/reject c_nope")
+    assert "Usage: /reject" in rig.last_text()
+
+
+async def test_a_confirm_minted_before_kill_does_nothing_after_it(rig: TgRig) -> None:
+    """F009-R3-4: §14.16, only /resume acts while killed; an older go/config confirm is refused."""
+    default = rig.ctx.config.egress.mode_default
+    before = rig.ctx.control.egress_mode(default)
+    target = "allowlist" if before != "allowlist" else "research"
+    await rig.say(f"/egress {target}")
+    mid = sent_with(rig, "Egress mode")
+    assert labels(rig, mid) == [f"✅ Switch to {target}", "↩️ Cancel"]
+    rig.ctx.control.kill("test", "tg:4242")
+    await rig.tap(token(rig, mid, f"✅ Switch to {target}"), message=mid)
+    assert rig.ctx.control.egress_mode(default) == before
+    assert "Killed (soft)" in text(rig, mid)
 
 
 async def test_skills_lists_nothing_yet(rig: TgRig) -> None:

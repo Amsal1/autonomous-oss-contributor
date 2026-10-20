@@ -1,63 +1,35 @@
 {
   "verdict": "CHANGES_REQUESTED",
   "feat": "FEAT-009",
-  "round": 2,
+  "round": 3,
   "findings": [
     {
-      "id": "F009-R2-1",
-      "severity": "HIGH",
-      "title": "Items 47 and 48 are not delivered",
-      "detail": "Carried from F009-R1-1 (item 46 is now in 94f3f43). No item 47 code or tests exist: no telegram/commands/{admin,lifecycle}.py, no telegram/notify.py, none of test_commands_full/test_egress_cmd/test_hermes_tier_cmd/test_skill_card/test_model_cmd/test_lifecycle_cmds/test_priorities/test_quiet_hours/test_coalesce/test_offline_states. Missing: /drain /undrain /down /up, /egress, /hermes tier, /skills + skill card, /model + new-model card, /reload, /repos (the Never-this-repo confirm promises 'Undo in /repos'), /limits, /logs, /settings, /quiet, /notify, /new; P0-P3 priorities, quiet hours, coalescing that never holds rows with buttons (AC 49), the 14.16 offline and killed states, short descriptions. Item 48 not started: no redeploy, no live owner-only checks, no FEAT-009 entry in docs/VERIFICATION.md, FEAT-009.json still pending. Matrix: 37 missing + 2 rework FEAT-009 rows (item 47 rows plus DES-V-20, DES-V-32, CR3-V-1/4/5/6/12/14/15, CR3-D12/D13). Build item 47, then item 48, per phase2-build-plan.md.",
-      "files": ["src/ossbot/gatekeeper/telegram/commands/", "src/ossbot/gatekeeper/telegram/notify.py", "tests/telegram/", "tests/system/test_lifecycle.sh", "docs/VERIFICATION.md", "docs/TRACEABILITY.md", "docs/plan/task-ossbot-v1/features/FEAT-009.json"]
-    },
-    {
-      "id": "F009-R2-2",
-      "severity": "HIGH",
-      "title": "Ask maintainers first writes an issue_claim outside the actions path (no action marker, no AI-assistance line)",
-      "detail": "proposal_actions.ask_first INSERTs the outbound_actions row directly with body CLAIM_BODY. Unlike api/actions.create_action it doesn't append '<!-- ossbot:action=<id> -->', run normalize_text, run policy.check_text with the secret values, or call control.require_running. DESIGN 12 says every comment and issue_claim body ends with that marker and that restart reconciliation (reconcile.py) finds a posted comment by it. A claim posted just before a crash is therefore not recognised, and a retry can post a second public comment. The Telegram CLAIM_BODY also drops the runner's '— drafted with AI assistance, reviewed by @{login}' line, and the button works while paused. The test checks only that a row and an approval exist. Likely also: the runner fetch stage requests a second claim after Start work, because claim_requested is never set on this path. Fix: one gatekeeper function shared by the API and the button, one claim template; test the stored bytes (marker, disclosure line) and the paused refusal.",
-      "files": ["src/ossbot/gatekeeper/telegram/proposal_actions.py", "src/ossbot/gatekeeper/api/actions.py", "src/ossbot/runner/stages/fetch.py", "tests/telegram/test_proposal_card.py"]
-    },
-    {
-      "id": "F009-R2-3",
+      "id": "F009-R3-1",
       "severity": "MEDIUM",
-      "title": "Rescope 'Continue at m' doesn't follow the proposal Start-work refusals and binding",
-      "detail": "14.11.17 makes Continue a proposal Start work. 14.11.15 refuses Start work at Start, at Confirm and before the effect while paused, killed, draining or DOWN (workers), with the binding recomputed each time. rescope_cards.continue_first checks only the state, continue_confirm checks only approvals.system_running() (paused or killed), and continue_rescope checks nothing, so Continue goes through while draining or with the workers down. The Confirm token arg is {cid, rev}. The measured class is re-read at the second tap and rev is never compared, so a re-entered RESCOPE_REQUIRED continues on a report the panel didn't show. The transition is recorded as Actor.GATEKEEPER for a human decision. Fix: gate1_refusal at both taps and in continue_rescope; bind {rev, measured_class, sha256(size_report_json)} and refuse a mismatch; record the human actor; add draining and workers-down tests.",
-      "files": ["src/ossbot/gatekeeper/telegram/rescope_cards.py", "src/ossbot/gatekeeper/proposals.py", "src/ossbot/gatekeeper/state_machine.py", "tests/telegram/test_rescope_card.py"]
+      "title": "An anomaly that pauses is sent as a P2 FYI and is held during quiet hours (U7)",
+      "detail": "DESIGN 14.13.1 lists 'anomaly -> pause/kill' as P0: always rings, ignores quiet hours, never batched (U7). anomaly.py:87-90 calls control.pause(reason, 'anomaly'), and control.py:161 sends '⏸ Paused by anomaly: ...'. notify.classify gives P0 only to texts starting with 🛑 or 🚨, so this text is (2, True). Notifier.decide then holds it silently until quiet hours end, or merges it into '📈 N updates' when the batch window closes. The same applies to every pause rule in 13.4 (secret escalation, gatekeeper unhealthy, kiro rate). Fix: send the anomaly pause as P0 (a priority on Control.pause for actor 'anomaly', or a 🚨 alert from anomaly.py with priority=0). Test: with quiet hours on, a pause-level anomaly leaves a pending, ringing P0 row in Control.",
+      "files": ["src/ossbot/gatekeeper/anomaly.py", "src/ossbot/gatekeeper/control.py", "src/ossbot/gatekeeper/telegram/notify.py", "tests/telegram/test_priorities.py"]
     },
     {
-      "id": "F009-R2-4",
+      "id": "F009-R3-2",
       "severity": "MEDIUM",
-      "title": "Rescope 'Make it smaller' targets one class below the approved class",
-      "detail": "14.11.17 (approved s, measured m) sends 'fit class s', the approved class. request_revision(kind='smaller') in RESCOPE_REQUIRED takes approved_class and steps one class down, so it asks for xs (test_rescope_card asserts 'fit class xs'). With approved xs it answers 'Already the smallest class.', leaving only Continue or Drop. Fix: in RESCOPE_REQUIRED use approved_class as the target (xs allowed); keep 'next smaller than the estimate' for the gate-1 card; update the test.",
-      "files": ["src/ossbot/gatekeeper/proposals.py", "tests/telegram/test_rescope_card.py"]
+      "title": "/reject is not implemented",
+      "detail": "Item 47's carried detail and DESIGN 14.14.1 require '/reject [cid] [reason]' (config: picker -> reasons [Not valuable] [Wrong approach] [Repo unsuitable (7d)] [Other…] -> confirm). The AC says every 14.14.1 command exists. src has no @command('reject'), and test_commands_full's M1 set leaves it out. TRACEABILITY DES-FR-6 is still marked done and defers only /digest /memory /title /remind /articles. A typed /reject answers 'Unknown command'. Fix: add it in commands/review.py, reusing the card's reject-reason flow and the 7-day cooldown behind a config confirm. Add it to M1, with a test that nothing is rejected without the confirm tap.",
+      "files": ["src/ossbot/gatekeeper/telegram/commands/review.py", "src/ossbot/gatekeeper/telegram/handlers.py", "tests/telegram/test_commands_full.py", "docs/TRACEABILITY.md"]
     },
     {
-      "id": "F009-R2-5",
+      "id": "F009-R3-3",
       "severity": "MEDIUM",
-      "title": "Forbidden-paths warning on the proposal card renders scout paths without make_visible/defuse",
-      "detail": "proposal_cards._warnings joins scout 'areas' (free text, up to 200 chars) that match a forbidden glob, and renders them with k.line (a Const span). The text is escaped but not made visible, not defused and not labelled 🤖 (U6/U8). Because '*' matches spaces, an area like '.github/workflows/x /kill' or one with bidi controls reaches the decision card as a clickable command or disguised text. test_kit_builders never reaches this line. Fix: render the paths as k.Code(k.Text(...)) spans; add a hazard test (/kill, U+202E).",
-      "files": ["src/ossbot/gatekeeper/telegram/proposal_cards.py", "tests/telegram/test_proposal_card.py"]
+      "title": "Item 48 live check incomplete while FEAT-009 is marked completed",
+      "detail": "The AC requires a dry-run proposal card and a preview card from the fake upstream rendered in the real chat, recorded in VERIFICATION.md; the verification list requires bootstrap twice, the second run only 'unchanged'. VERIFICATION.md records the live start only. Three dashboards were pinned and the fix b85e4c3 is not deployed. The proposal and preview cards and the second redeploy are listed as open, yet FEAT-009.json is 'completed'. Delivering those cards goes through product code plus the read-only outbox peek, so an agent can do it; only the visual confirmation and typed /kill and /resume need the owner. Fix: redeploy at HEAD, then a second redeploy (only 'unchanged'). Confirm a single dashboard. Deliver one dry-run proposal card and one preview card and record their sent outbox rows and message ids. Then get the owner's confirmation (workflow warning), or set FEAT-009 back to not completed with the owner items named as blocked.",
+      "files": ["docs/VERIFICATION.md", "docs/plan/task-ossbot-v1/features/FEAT-009.json"]
     },
     {
-      "id": "F009-R2-6",
+      "id": "F009-R3-4",
       "severity": "NIT",
-      "title": "Expired and superseded proposal cards use the PR-card copy",
-      "detail": "14.11.15 asks for '⌛ Expired · re-scouting if still relevant' with [⛔ Not decidable] and the toast 'This proposal expired; a fresh one will arrive if the issue is still open.'; 14.11.16 gives superseded cards [⛔ Not decidable]. stale.render/CardPublisher.render_stale give '⌛ Expired · approval was valid 72 h' and '⛔ Not approvable', and a kit tap answers 'This proposal is no longer open.'. Branch on gate == 1.",
-      "files": ["src/ossbot/gatekeeper/telegram/review/stale.py", "src/ossbot/gatekeeper/telegram/publisher.py", "src/ossbot/gatekeeper/telegram/proposal_actions.py"]
-    },
-    {
-      "id": "F009-R2-7",
-      "severity": "NIT",
-      "title": "A 👤 v1 proposal card doesn't reply to the 'Working on it' message",
-      "detail": "14.11.15 Delivery: a 👤 v1 card replies to the 'Working on it' message when that is in ✅ Reviews. CardPublisher._chain_to chains only to an earlier proposal card.",
-      "files": ["src/ossbot/gatekeeper/telegram/publisher.py"]
-    },
-    {
-      "id": "F009-R2-8",
-      "severity": "NIT",
-      "title": "The proposal card's Validate line labels repo facts as 🤖",
-      "detail": "14.11.15 shows 'Validate ✅ repo has tests (vitest) · T0 unit · T1 n/a · 🤖 easy'. _validate_line renders 'Validate 🤖 <n> test(s) to add/update · <plan>'. Show the vet's test-runner fact and the tier with ✅.",
-      "files": ["src/ossbot/gatekeeper/telegram/proposal_cards.py"]
+      "title": "Command confirms minted before a kill still act after it",
+      "detail": "handlers.py routes CONFIRMS taps (egress_confirm, hermes_tier_confirm, model_confirm, reload_confirm, repo_confirm) with only use_token and no killed check. An /egress open panel opened before /kill still widens egress when tapped within 5 min. 14.16 says only /status /resume /logs /help /start work while killed. Refuse go/config confirm effects while killed.",
+      "files": ["src/ossbot/gatekeeper/telegram/handlers.py"]
     }
   ],
   "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-009.md"

@@ -73,7 +73,7 @@ async def test_up_confirms_and_is_refused_while_killed(rig: TgRig) -> None:
     up = token(rig, mid, "✅ Up")
     ctx.control.kill("test", "tg:4242")
     await rig.tap(up, message=mid)
-    assert "/up is refused" in text(rig, mid) and _request(ctx) is None
+    assert "Killed" in text(rig, mid) and _request(ctx) is None  # §14.16: older confirms refused while killed
     await rig.say("/up")  # killed: the command itself refuses (killed mode lets only five commands through)
     assert "Killed" in rig.last_text()
 

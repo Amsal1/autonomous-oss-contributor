@@ -9,6 +9,7 @@ from datetime import timedelta
 import pytest
 
 from ossbot.common.clock import to_iso
+from ossbot.gatekeeper.anomaly import Signal
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.notify import THREAD_OF, Notifier, classify
 
@@ -33,6 +34,11 @@ def _rows(ctx: AppContext) -> list[dict[str, object]]:
         ("🚨 P1 probe pending", (1, False)),
         ("⚠️ Local operator action: RESUME by uid 1000", (2, False)),
         ("🌐 Egress mode allowlist → research", (2, True)),
+        ("⏸ Paused by anomaly: secret_in_text: x", (0, False)),
+        ("⏸ Paused by uid:1001/sandbox: secret in output", (0, False)),
+        ("⏸ Paused by uid:1002/worker: model_collision:reviewer", (0, False)),
+        ("⏸ Paused by uid:0/operator: maintenance", (2, True)),
+        ("⏸ Paused by tg:1: telegram /pause", (2, True)),
     ],
 )
 def test_classify_by_the_fixed_leading_icon(text: str, expected: tuple[int, bool]) -> None:
@@ -47,6 +53,18 @@ def test_p0_rings_in_control_even_in_quiet_hours(ctx: AppContext, notifier: Noti
     notifier.prefs.set("quiet_until", to_iso(ctx.clock.now() + timedelta(hours=3)))
     ctx.notify("🛑 Killed (soft) by tg:1: test")
     [row] = _rows(ctx)
+    assert row["priority"] == 0 and row["thread_key"] == "control" and row["status"] == "pending"
+    assert row["payload"]["disable_notification"] is False  # type: ignore[index]
+
+
+def test_an_anomaly_pause_rings_in_control_during_quiet_hours(ctx: AppContext, notifier: Notifier) -> None:
+    """F009-R3-1: the 2nd secret hit in 24 h pauses; that pause is P0, never held (U7)."""
+    notifier.prefs.set("quiet_until", to_iso(ctx.clock.now() + timedelta(hours=3)))
+    ctx.anomaly.report(Signal.SECRET_IN_TEXT, "first")
+    assert ctx.anomaly.report(Signal.SECRET_IN_TEXT, "second") == "pause"
+    paused = [r for r in _rows(ctx) if str(r["payload"]["text"]).startswith("⏸ Paused by anomaly")]  # type: ignore[index]
+    assert len(paused) == 1
+    [row] = paused
     assert row["priority"] == 0 and row["thread_key"] == "control" and row["status"] == "pending"
     assert row["payload"]["disable_notification"] is False  # type: ignore[index]
 

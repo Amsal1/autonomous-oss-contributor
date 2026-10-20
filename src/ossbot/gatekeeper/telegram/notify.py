@@ -51,15 +51,18 @@ CATEGORIES: dict[str, str] = {
 # System topic per priority: alerts and actions in 🚦 Control, FYIs in 📈 OSS feed (§14.10.1).
 THREAD_OF: dict[int, str] = {0: "control", 1: "control", 2: "feed", 3: "feed"}
 TAG_RE = re.compile(r"<[^>]+>")
+# "anomaly → pause/kill" is P0 (§14.13.1): a pause by the anomaly handler, or one requested by a
+# service account (runner, sandboxd, Hermes) rather than a human, is an automatic stop.
+AUTO_PAUSE_RE = re.compile(r"⏸ Paused by (anomaly|uid:\d+/(worker|sandbox|requester))\b")
 
 
 def classify(text: str) -> tuple[int, bool]:
     """(priority, holdable) of a gatekeeper FYI from its fixed leading icon (the alert texts are
-    gatekeeper templates). 🛑 kill and 🚨 alerts are P0, except the explicitly P1 probe notice; the
-    local-operator-action FYI is a P2 that is never held (§14.13.1)."""
+    gatekeeper templates). 🛑 kill, 🚨 alerts and automatic pauses are P0, except the explicitly P1
+    probe notice; the local-operator-action FYI is a P2 that is never held (§14.13.1)."""
     if text.startswith("🚨 P1"):
         return 1, False
-    if text.startswith(("🛑", "🚨")):
+    if text.startswith(("🛑", "🚨")) or AUTO_PAUSE_RE.match(text):
         return 0, False
     if text.startswith("⚠️ Local operator action"):
         return 2, False

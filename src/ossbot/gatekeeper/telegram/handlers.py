@@ -79,6 +79,7 @@ HANDLER_SLOW_S = 1.0
 STOP_COMMANDS = frozenset({"kill", "pause"})
 # AC 22: with a kill active, only these commands run; the rest get the killed message (§14.16).
 KILLED_ALLOWED = frozenset({"status", "resume", "logs", "help", "start", "kill", "pause", "dryrun"})
+KILLED_CONFIRMS = frozenset({"resume_confirm"})  # the only command confirm that acts while killed
 KILLED_TEXT = "🛑 ossbot is killed: only /status /resume /logs /help work now. /resume to continue."
 REJECT_REASONS = {"not_valuable": "Not valuable", "wrong_approach": "Wrong approach",
                   "repo_unsuitable": "Repo unsuitable (7d)", "other": "Other…", "back": "↩️ Back"}  # fmt: skip
@@ -326,6 +327,11 @@ class Handlers:
             elif purpose in CONFIRMS:
                 with db.transaction(self.ctx.conn):
                     self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
+                if purpose not in KILLED_CONFIRMS and self.ctx.control.view().state == "killed":
+                    # §14.16: a confirm minted before /kill does nothing after it (token spent)
+                    self._edit_reply(message_id, Reply(KILLED_TEXT, view=killed_view(self.ctx)))
+                    await query.answer("Killed: nothing changed. /resume first.")
+                    return
                 thread = getattr(message, "message_thread_id", None)
                 cctx = CommandContext(self.ctx, user_id, thread_id=thread, message_id=message_id, handlers=self)
                 effect = CONFIRMS[purpose](cctx, row["arg"])
@@ -595,36 +601,71 @@ class Handlers:
 
     async def _reject(self, query: Any, token: str, user_id: int, chat_id: int, message_id: int, *,
                       reason: str | None = None) -> None:  # fmt: skip
-        ctx = self.ctx
-        actor = f"tg:{user_id}"
-        with db.transaction(ctx.conn):
-            action_id = ctx.approvals.reject(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id,
-                                             reason=reason)  # fmt: skip
-            action = db.one(ctx.conn, "SELECT * FROM outbound_actions WHERE id = ?", (action_id,))
-            assert action is not None
-            contrib = db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (action["cid"],))
-            assert contrib is not None
-            ctx.conn.execute("UPDATE outbound_actions SET status = 'cancelled' WHERE id = ?", (action_id,))
-            state = State(contrib["state"])
-            kind = action["kind"]
-            if kind == "open_pr" and state is State.AWAITING_APPROVAL:
-                ctx.state_machine.transition(
-                    contrib["id"], state, State.REJECTED, Actor.HUMAN, {"reason": "rejected"}, actor
-                )
-            elif kind == "push_update" and state is State.AWAITING_APPROVAL:
-                ctx.state_machine.transition(
-                    contrib["id"], state, State.WATCHING, Actor.HUMAN, {"reason": "fix_rejected"}, actor
-                )
-            elif kind == "issue_claim" and state is State.VETTED:
-                ctx.state_machine.transition(
-                    contrib["id"], state, State.SKIPPED, Actor.GATEKEEPER, {"reason": "claim_rejected"}, actor
-                )
-            elif kind == "issue_claim" and state is State.PACKAGING:
-                ctx.state_machine.transition(
-                    contrib["id"], state, State.FAILED, Actor.GATEKEEPER, {"error_class": "claim_rejected"}, actor
-                )
+        with db.transaction(self.ctx.conn):
+            action_id = self.ctx.approvals.reject(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id,
+                                                  reason=reason)  # fmt: skip
+            self.rejected(action_id, f"tg:{user_id}")
         await self._edit(query, f"{self._card_text_safe(action_id)}\n\n❌ {b('Rejected')}; nothing was published.")
         await query.answer("Rejected.")
+
+    def rejected(self, action_id: str, actor: str) -> None:
+        """The effects of a rejected approval (card ❌ or ``/reject``); caller holds the transaction."""
+        ctx = self.ctx
+        action = db.one(ctx.conn, "SELECT * FROM outbound_actions WHERE id = ?", (action_id,))
+        assert action is not None
+        contrib = db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (action["cid"],))
+        assert contrib is not None
+        ctx.conn.execute("UPDATE outbound_actions SET status = 'cancelled' WHERE id = ?", (action_id,))
+        state = State(contrib["state"])
+        kind = action["kind"]
+        if kind == "open_pr" and state is State.AWAITING_APPROVAL:
+            ctx.state_machine.transition(
+                contrib["id"], state, State.REJECTED, Actor.HUMAN, {"reason": "rejected"}, actor
+            )
+        elif kind == "push_update" and state is State.AWAITING_APPROVAL:
+            ctx.state_machine.transition(
+                contrib["id"], state, State.WATCHING, Actor.HUMAN, {"reason": "fix_rejected"}, actor
+            )
+        elif kind == "issue_claim" and state is State.VETTED:
+            ctx.state_machine.transition(
+                contrib["id"], state, State.SKIPPED, Actor.GATEKEEPER, {"reason": "claim_rejected"}, actor
+            )
+        elif kind == "issue_claim" and state is State.PACKAGING:
+            ctx.state_machine.transition(
+                contrib["id"], state, State.FAILED, Actor.GATEKEEPER, {"error_class": "claim_rejected"}, actor
+            )
+
+    def rejected_stub(self, approval_id: str, action_id: str) -> None:
+        """``/reject``: the card on screen becomes ``❌ Rejected`` without buttons (its tokens are dead)."""
+        row = db.one(self.ctx.conn, "SELECT tg_chat_id, tg_message_id FROM approvals WHERE id = ?", (approval_id,))
+        if row is None or row["tg_message_id"] is None:
+            return
+        text = f"{self._card_text_safe(action_id)}\n\n❌ {b('Rejected')}; nothing was published."
+        payload: dict[str, Any] = {"chat_id": row["tg_chat_id"], "message_id": row["tg_message_id"], "text": text,
+                                   "parse_mode": "HTML", "link_preview_options": {"is_disabled": True}}  # fmt: skip
+        self.ctx.outbox.enqueue("editMessageText", payload, dedupe_key=f"stub:{row['tg_message_id']}:rejected",
+                                thread_key="reviews")  # fmt: skip
+
+    def repo_cooldown(self, cid: str, actor: str) -> None:
+        """``Repo unsuitable (7d)``: no new proposals for the contribution's repo for 7 days."""
+        contrib = db.one(self.ctx.conn, "SELECT upstream FROM contributions WHERE id = ?", (cid,))
+        if contrib is None:
+            return
+        until = to_iso(self.ctx.clock.now() + REPO_UNSUITABLE_COOLDOWN)
+        with db.transaction(self.ctx.conn):
+            self.ctx.conn.execute(
+                "INSERT INTO repo_overrides (upstream, cooldown_until, updated_by, updated_at) VALUES (?,?,?,?)"
+                " ON CONFLICT(upstream) DO UPDATE SET cooldown_until = excluded.cooldown_until,"
+                " updated_by = excluded.updated_by, updated_at = excluded.updated_at",
+                (contrib["upstream"], until, actor, to_iso(self.ctx.clock.now())),
+            )  # fmt: skip
+
+    def ask_reject_reason(self, cid: str, approval_id: str, reply_to: int | None) -> None:
+        """``Other…``: a force-reply prompt for the free-text reason (optional, ≤ 500 chars)."""
+        view = k.plain("confirm_prompt", k.line("Why? Reply with the reason (≤ 500 chars, optional)."))
+        view.placeholder = "Why was it rejected? (optional)"
+        view.state = {"prompt": {"kind": "reject_other", "cid": cid, "approval_id": approval_id}}
+        ui_send.deliver(self.ctx, view, thread="reviews", reply_to=reply_to)
 
     async def _reject_reasons(self, query: Any, token: str, row: Any, chat_id: int, message_id: int) -> None:
         """❌ Reject: the card's keyboard becomes the reason row (FEAT-009 item 45); each reason is a
@@ -660,21 +701,9 @@ class Handlers:
             return
         await self._reject(query, token, user_id, chat_id, message_id, reason=reason)
         if reason == "repo_unsuitable":
-            contrib = db.one(self.ctx.conn, "SELECT upstream FROM contributions WHERE id = ?", (row["cid"],))
-            if contrib is not None:
-                until = to_iso(self.ctx.clock.now() + REPO_UNSUITABLE_COOLDOWN)
-                with db.transaction(self.ctx.conn):
-                    self.ctx.conn.execute(
-                        "INSERT INTO repo_overrides (upstream, cooldown_until, updated_by, updated_at) VALUES (?,?,?,?)"
-                        " ON CONFLICT(upstream) DO UPDATE SET cooldown_until = excluded.cooldown_until,"
-                        " updated_by = excluded.updated_by, updated_at = excluded.updated_at",
-                        (contrib["upstream"], until, f"tg:{user_id}", to_iso(self.ctx.clock.now())),
-                    )  # fmt: skip
+            self.repo_cooldown(str(row["cid"]), f"tg:{user_id}")
         elif reason == "other":
-            view = k.plain("confirm_prompt", k.line("Why? Reply with the reason (≤ 500 chars, optional)."))
-            view.placeholder = "Why was it rejected? (optional)"
-            view.state = {"prompt": {"kind": "reject_other", "cid": row["cid"], "approval_id": approval_id}}
-            ui_send.deliver(self.ctx, view, thread="reviews", reply_to=message_id)
+            self.ask_reject_reason(str(row["cid"]), approval_id, message_id)
 
     def _card_text_safe(self, action_id: str) -> str:
         try:

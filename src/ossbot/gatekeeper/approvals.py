@@ -634,7 +634,13 @@ class ApprovalService:
     def reject(self, token: str, *, tg_user_id: int, chat_id: int, message_id: int, reason: str | None = None) -> str:
         with db.transaction(self.conn):
             tok = self.use_token(token, ("reject", "reject_reason"), chat_id=chat_id, message_id=message_id)
-            row = self._approval(tok["approval_id"])
+            return self.reject_open(str(tok["approval_id"]), tg_user_id=tg_user_id, reason=reason)
+
+    def reject_open(self, approval_id: str, *, tg_user_id: int, reason: str | None = None) -> str:
+        """Reject an open approval by id: the card's ❌ path after its token, or ``/reject`` after its
+        own message-bound confirm token (§14.14.1). Returns the action id."""
+        with db.transaction(self.conn):
+            row = self._approval(approval_id)
             if row["status"] not in OPEN_STATUSES:
                 raise ApprovalError("wrong_status", row["status"])
             self.conn.execute(

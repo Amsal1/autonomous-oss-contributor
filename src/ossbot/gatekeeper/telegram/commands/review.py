@@ -1,4 +1,5 @@
-"""Review commands (DESIGN §14.14.1): ``/queue`` and ``/approve [cid]``.
+"""Review commands (DESIGN §14.14.1): ``/queue``, ``/approve [cid]``, ``/review [cid]`` and
+``/reject [cid] [reason]`` (picker -> reasons -> confirm; the card's ❌ effects and 7-day repo cooldown).
 
 ``/approve <cid>`` never approves anything: it re-sends the contribution's open cards through
 ``AppContext.reissue(cid, actor, keep_expiry=True)`` (§14.18.4 deltas 5 and 7), with the eligibility
@@ -18,7 +19,8 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.actions import Tap, action
-from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Reply, command
+from ossbot.gatekeeper.telegram.commands.common import cancel_button, confirm_button, confirm_panel
+from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Reply, command, confirm_handler
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.review import queue, resolve
 from ossbot.gatekeeper.telegram.review.resolve import SKILL_PATTERN
@@ -148,6 +150,115 @@ async def review_cmd(ctx: CommandContext, args: list[str]) -> Reply:
     btns = [k.button(f"🧭 {r['cid']}", "review_open", {"approval_id": r["id"]}) for r in rows]
     return Reply("", view=k.plain("picker", k.line("🧭 Review which card?"),
                                   rows=[btns[i : i + 2] for i in range(0, len(btns), 2)]))  # fmt: skip
+
+
+# ----------------------------------------------------------------------------- /reject (§14.14.1)
+RejectReason = Literal["not_valuable", "wrong_approach", "repo_unsuitable", "other"]
+REJECT_LABELS: dict[str, str] = {"not_valuable": "Not valuable", "wrong_approach": "Wrong approach",
+                                 "repo_unsuitable": "Repo unsuitable (7d)", "other": "Other…"}  # fmt: skip
+OPEN_CARDS_SQL = ("SELECT a.id, o.cid, o.kind FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+                  " WHERE a.status IN ('pending','armed')")  # fmt: skip
+
+
+class RejectArg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval_id: str = Field(pattern=r"^a_[0-9A-Za-z]{10}$")
+    reason: RejectReason | None = None
+
+
+def _reason_of(words: list[str]) -> tuple[RejectReason, str]:
+    """A typed reason: a key or label (``wrong_approach``, ``Wrong approach``), else free text = Other."""
+    typed = " ".join(words).strip()
+    norm = typed.lower().replace(" ", "_").rstrip("…")
+    for key, label in REJECT_LABELS.items():
+        if norm in {key, label.lower().replace(" ", "_").rstrip("…"), key.split("_", 1)[0]}:
+            return key, ""  # type: ignore[return-value]
+    return "other", typed[:500]
+
+
+def _reject_reasons_view(app: AppContext, approval_id: str) -> k.View:
+    row = db.one(app.conn, OPEN_CARDS_SQL + " AND a.id = ?", (approval_id,))
+    if row is None:
+        return k.plain("fyi", k.line("That card is no longer open."))
+    btns = [k.button(label, "reject_cmd", {"approval_id": approval_id, "reason": key})
+            for key, label in REJECT_LABELS.items()]  # fmt: skip
+    return k.plain("picker", (k.Const("❌ "), k.Bold(k.Const("Reject ")), k.Code(k.Text(str(row["cid"]), 40)),
+                              k.Const(f" ({row['kind']}): why?")),
+                   rows=[btns[:2], btns[2:], [cancel_button()]])  # fmt: skip
+
+
+def _reject_confirm_view(app: AppContext, approval_id: str, reason: RejectReason, text: str = "") -> k.View:
+    row = db.one(app.conn, OPEN_CARDS_SQL + " AND a.id = ?", (approval_id,))
+    if row is None:
+        return k.plain("fyi", k.line("That card is no longer open."))
+    lines: list[k.Line] = [(k.Const("❌ Reject "), k.Code(k.Text(str(row["cid"]), 40)),
+                            k.Const(f" ({row['kind']}): {REJECT_LABELS[reason]}. Nothing is published;"
+                                    " the card's buttons stop working."))]  # fmt: skip
+    if reason == "repo_unsuitable":
+        lines.append(k.line("No new proposals for this repo for 7 days."))
+    if text:
+        lines.append((k.Const("Reason: "), k.Text(text, 500)))
+    arg = json.dumps({"approval_id": approval_id, "reason": reason, "text": text}, sort_keys=True)
+    return confirm_panel(lines, confirm_button("❌ Reject", "reject_confirm", arg))
+
+
+@command("reject", help="Reject an open card: /reject [cid] [reason]", safety="config")
+async def reject_cmd(ctx: CommandContext, args: list[str]) -> Reply:
+    """Picker -> reasons -> confirm (§14.14.1); nothing is rejected without the confirm tap."""
+    app = ctx.app
+    if not args:
+        rows = app.conn.execute(OPEN_CARDS_SQL + " ORDER BY a.created_at LIMIT 8").fetchall()
+        if not rows:
+            return Reply("No open cards to reject. /queue shows everything waiting.")
+        btns = [k.button(f"❌ {r['cid']} · {r['kind']}", "reject_cmd", {"approval_id": r["id"]}) for r in rows]
+        return Reply("", view=k.plain("picker", k.line("❌ Reject which card?"),
+                                      rows=[btns[i : i + 2] for i in range(0, len(btns), 2)]))  # fmt: skip
+    cid = args[0].strip()
+    if not ID_RE.match(cid) or not cid.startswith("c_"):
+        return Reply("Usage: /reject [c_0123456789] [reason]")
+    row = db.one(app.conn, OPEN_CARDS_SQL + " AND o.cid = ? ORDER BY a.created_at DESC LIMIT 1", (cid,))
+    if row is None:
+        return Reply(esc(resolve.nothing_text(resolve.state_of(app.conn, cid))))
+    if len(args) == 1:
+        return Reply("", view=_reject_reasons_view(app, str(row["id"])))
+    reason, text = _reason_of(args[1:])
+    return Reply("", view=_reject_confirm_view(app, str(row["id"]), reason, text))
+
+
+@action("reject_cmd", arg=RejectArg)
+async def reject_pick(tap: Tap) -> str:
+    a: RejectArg = tap.arg
+    view = (_reject_reasons_view(tap.app, a.approval_id) if a.reason is None
+            else _reject_confirm_view(tap.app, a.approval_id, a.reason))  # fmt: skip
+    ui_send.edit(tap.app, view, message_id=tap.message_id)
+    return ""
+
+
+@confirm_handler("reject_confirm")
+async def reject_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
+    app = ctx.app
+    try:
+        req = json.loads(arg or "")
+        approval_id, reason, text = str(req["approval_id"]), str(req["reason"]), str(req.get("text") or "")
+    except (ValueError, KeyError, TypeError):
+        return Reply("This button is no longer valid.")
+    if reason not in REJECT_LABELS:
+        return Reply("This button is no longer valid.")
+    row = db.one(app.conn, OPEN_CARDS_SQL + " AND a.id = ?", (approval_id,))
+    if row is None:
+        return Reply("That card is no longer open; nothing was rejected.")
+    cid = str(row["cid"])
+    with db.transaction(app.conn):
+        action_id = app.approvals.reject_open(approval_id, tg_user_id=ctx.tg_user_id, reason=reason)
+        ctx.handlers.rejected(action_id, ctx.actor)
+        if text:
+            app.audit.append(ctx.actor, "rejection_reason", {"approval_id": approval_id, "reason": text}, cid)
+    ctx.handlers.rejected_stub(approval_id, action_id)
+    if reason == "repo_unsuitable":
+        ctx.handlers.repo_cooldown(cid, ctx.actor)
+    elif reason == "other" and not text:
+        ctx.handlers.ask_reject_reason(cid, approval_id, ctx.message_id)
+    return Reply(f"❌ Rejected {esc(cid)} ({esc(REJECT_LABELS[reason])}); nothing was published.")
 
 
 @action("review_open", arg=ReviewOpenArg)
