@@ -158,12 +158,13 @@ The first live PR candidate is the V3 ACP adapter for
   `pinChatMessage` cannot name a thread: the dashboard is pinned only once it is in 🚦 Control, and a
   client may still list that pin in "All" (O1, ADR-0020 addendum). The pinned dashboard is edited in
   place; `/status` replies are fresh copies and are not pinned.
-- **Commands in All** (O1, PV1-A3, fix deployed, owner re-check pending). Typed in "All" with
-  Threaded mode on, a command is answered in All and the topic Telegram creates for it (named from the
-  text, `is_name_implicit`) is deleted (4724ac7, ADR-0020 addendum post-v1 2026-10-21). In 🚦 Control,
-  the other system topics and topics you named it answers in place. Limit: if a client omits the new
-  topic's `message_thread_id` (reported for some mobile clients), the bot cannot learn the topic and an
-  empty one stays; send commands in 🚦 Control then.
+- **Commands in All** (O1, PV1-A3, fixed and re-checked 2026-10-21). Typed in "All" with Threaded
+  mode on, a command makes Telegram create a topic named from the text. The bot answers in All and
+  deletes that topic within about 2 s (9884df9, ADR-0020 addendum post-v1 2026-10-21). In 🚦 Control,
+  the other system topics and topics you named it answers in place. Client cache: the Telegram client
+  may keep showing the deleted topic until you leave and reopen the chat; it is gone on the server.
+  If a topic ever stays (no pair within 2 s, or Telegram refuses the delete), send commands in
+  🚦 Control.
 - **Telegram on real clients.** Rich views and photo albums are covered by hermetic tests only (O2, O4,
   O6). Streaming and Stop were checked live (O3, O5). Voice notes answer "Voice isn't supported yet".
 - **Cancelled shutdown.** After a cancelled Windows shutdown ossbot stays down until `up`.
@@ -216,32 +217,19 @@ dashboard is pinned only once its send result is in Control, and re-sent into Co
 (`dashboard_pinned thread=125003`), and `/status` answers with the same icon card everywhere. One gap
 remains: `/status` sent in "All" creates a new empty topic named "/status", and the card lands in All
 ("Known limitations").
-**Fix deployed 2026-10-21 (re-check pending):** commit 4724ac7 answers a command typed in All in All
-and deletes the topic Telegram named implicitly for it, and logs the update's thread fields
-(`tg_thread_fields`, ids and flags only) and the reply target (`command_reply_target`). Deployed with
-`scripts\bootstrap.ps1 -Only provision` (exit 0, doctor PASS 45, gatekeeper `started`, no flat-mode
-warning). Not checked live bot-side: a bot cannot send as you, and only your client's message makes
-Telegram create the topic. CR3-V-4 and PV1-A3 stay `missing` until this re-check is recorded.
-- Steps, on the phone first, then on desktop:
-  1. Threaded mode is on in @BotFather.
-  2. Open "All" and send `/status`.
-  3. Open 🚦 Control and send `/status`.
-  4. Create a topic yourself, give it a name, and send `/status` in it.
-  5. Open "All" and send `/help`.
-  6. Read the log: `scripts\ossctl.ps1 logs gatekeeper -Since 30m -Grep "tg_thread_fields|command_reply_target|stray_topic"`.
-- Expected:
-  - Steps 2 and 5: the card appears in All, and no topic named "/status" or "/help" stays (it may
-    flash and disappear). Not expected: a leftover empty topic, or the card inside a new topic.
-  - Step 3: the card appears in Control, and the pinned dashboard is unchanged.
-  - Step 4: the card appears in your topic, and the topic stays.
-  - Log, for steps 2 and 5: `command_reply_target where=stray thread=none delete=<id>` means the fix
-    worked (shape S1). `where=all thread=none delete=none` with a leftover topic means
-    the client sent no thread id (S3, the documented limit). `where=thread` means the card went into
-    the new topic (S2). The `tg_thread_fields` line before it shows `message_thread_id`,
-    `is_topic_message` and `is_name_implicit` for that message. `stray_topic_delete_failed` means
-    Telegram refused the delete (error class only).
-- Record: `powershell -NoProfile -File scripts\dev\record-owner-check.ps1 -Check O1 -Rows CR3-V-4,PV1-A3 -Result "<what you saw, shape S1/S2/S3>"`
-  (add `-Status missing` if a topic stayed).
+**First fix 2026-10-21 (did not work):** commit 4724ac7 looked for the implicit-topic flag on the
+command itself. The live log showed that a command typed in All arrives as two updates instead: the
+`forum_topic_created` service message of a new thread (message N), then the command with no thread
+(message N+1, about 300 ms later). So nothing was deleted.
+**Fixed and re-checked 2026-10-21 (done):** commit 9884df9 pairs the two updates (same chat and sender,
+N+1, within 2 s, topic name equals the command or `is_name_implicit`) and deletes only that thread
+after the reply in All (ADR-0020 addendum). Live: `/status` in All, several times. Each time the card
+landed in All and the "/status" topic was deleted within about 2 s (`implicit_topic_match ...
+action=delete`, then `stray_topic_deleted`, no `stray_topic_delete_failed`). The client may keep
+showing the deleted topic until the chat is reopened ("Known limitations").
+- If a "/status" topic stays, read `scripts\ossctl.ps1 logs gatekeeper -Since 30m -Grep "tg_thread_fields|implicit_topic|stray_topic"`:
+  `implicit_topic_pending` with no `implicit_topic_match` means the pair did not complete (no partner
+  within 2 s); `stray_topic_delete_failed` gives Telegram's reason. Send commands in 🚦 Control then.
 - If the pin also shows in "All", note the client: that is the client's view of a Control pin.
 
 **O2 Rich views on each client** (CR3-V-1, CR3-V-14, CR3-V-15, CR3-V-16).

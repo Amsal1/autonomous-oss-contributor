@@ -159,3 +159,24 @@ Decision:
 - Every owner message logs `tg_thread_fields` (message id, `message_thread_id`, `is_topic_message`, `reply_topic_created`, `is_name_implicit`, `has_direct_messages_topic`, `is_command`, the key names of unknown fields; never the text, chat id or user id) and every command logs `command_reply_target` (`where=all|thread|system|stray|flat`, `reply_thread`, `delete_thread`), so the next owner check shows the real update shape.
 - Limit: if a client omits `message_thread_id` (bug 58238), the bot cannot learn the new topic and the empty topic stays; send commands in 🚦 Control. The log shows this as `thread=none`.
 - Tests: `tests/telegram/test_status_is_dashboard.py` (All, All with an implicit topic with and without `is_topic_message`, Control, Reviews, a user topic, `is_topic_message` absent, a second message in an implicit topic, `/help` and `/title` from All, flat mode, delete failure, the log without text) and `tests/telegram/test_topics_fallback.py` (`test_command_target*`).
+
+### Second fix (2026-10-21): the real update shape and the correlation
+
+The first fix (4724ac7) did not work live. The owner's re-check and the journal (`tg_thread_fields`, 2026-10-20T19:03-19:16Z, five attempts) show that a command typed in All arrives as **two updates**, about 300 ms apart:
+- Update A, message N: `message_thread_id` = a new thread id, `is_topic_message` true, no text. After the second fix, the log identifies it as the `forum_topic_created` service message (`content_keys=["forum_topic_created"]`, `from_is_owner` true, `from_is_bot` false, `topic_created={name_len: 6 or 7, name_is_command: true, icon_color: 7322096, has_icon_custom_emoji: false, is_name_implicit: true}`).
+- Update B, message N+1: the command, with no `message_thread_id` and `is_topic_message` false. It has no `reply_to_message`, so the flag the first fix read is never present.
+
+Bot API (re-read 2026-10-21, https://core.telegram.org/bots/api and https://core.telegram.org/bots/api-changelog):
+- `deleteForumTopic` (https://core.telegram.org/bots/api#deleteforumtopic) works in "a private chat with a user" (9.3). Rights are needed only in supergroups.
+- `closeForumTopic` (https://core.telegram.org/bots/api#closeforumtopic) and `hideGeneralForumTopic` are supergroup-only. A private chat has no close or hide fallback, so a refused delete is logged and left alone.
+- 9.4 added bot-side `createForumTopic` and a @BotFather setting that stops users creating and deleting topics (`User.allows_users_to_create_topics`). 10.1-10.3 changed nothing about topics.
+
+Decision:
+- `telegram/implicit_topics.py` correlates the pair in either order. A pair needs the same chat and sender, B's message id == A's + 1, a gap of at most 2 s, and A's topic name equal to B's command (`/cmd@botname` allowed) or `is_name_implicit`.
+- The pending side lives in memory only: at most 64 entries per side, a 2 s TTL, and replay and done guards. The reply is never held: B is answered first, and the delete is queued when the pair completes.
+- Update A is offered only for a thread the gatekeeper had never counted (`tg_thread_seq`), never a system topic, and only in topics mode. Before the delete, the code re-checks that the thread is not a system topic and holds no bot send (`tg_outbox`).
+- The delete goes through `rawapi.DeleteForumTopic` and the outbox (dedupe `topic_delete:<thread>`, so at most once). A failure logs `stray_topic_delete_failed` with the thread, the error class and Telegram's reason, and is never retried.
+- Logs carry no text or topic name: `implicit_topic_pending|ignored|expired|match` (order, `gap_ms`, `name_matches_command`, `is_name_implicit`, action) and `stray_topic_deleted`.
+- Tests: `tests/telegram/test_implicit_topics.py`.
+
+Live result (2026-10-21, after `bootstrap.ps1 -Only provision`): the owner sent `/status` in All several times. All three journal pairs matched (`order=topic_first`, `gap_ms` 314, 1255 and 317, `name_matches_command=True`, `implicit=True`, `action=delete`) and each was followed by `stray_topic_deleted`, with no failure. The card landed in All, and the topic disappeared within about 2 s. Client cache: the Telegram client may keep showing a deleted topic until the chat is left and reopened. That is client rendering, not server state, and the bot cannot affect it.
