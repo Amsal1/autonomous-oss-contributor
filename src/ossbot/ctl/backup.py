@@ -282,25 +282,68 @@ def _open_exact(path: Path) -> int:
     return fd
 
 
-def _is_sqlite(path: Path) -> bool:
-    with os.fdopen(_open_exact(path), "rb") as fh:
-        return fh.read(len(SQLITE_MAGIC)) == SQLITE_MAGIC
-
-
-def _copy_file(src: Path, dst: Path) -> None:
-    dst.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if _is_sqlite(src):
-        source = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30.0)
-        target = sqlite3.connect(dst)
+def _open_fds() -> set[int]:
+    """The descriptors open now; the listing's own (closed again when listdir returns) is left out, so
+    sqlite reusing its number does not hide the file it opened."""
+    out: set[int] = set()
+    for name in os.listdir("/proc/self/fd"):
         try:
-            source.backup(target)  # consistent copy of a live WAL database
-        finally:
-            target.close()
-            source.close()
-        _refuse_moved(src)  # sqlite opens by path: the path must still be real after the copy
-        return
-    with os.fdopen(_open_exact(src), "rb") as fin, dst.open("wb") as fout:
-        shutil.copyfileobj(fin, fout, 1 << 20)
+            os.fstat(int(name))
+        except OSError:
+            continue
+        out.add(int(name))
+    return out
+
+
+def _verify_sqlite_fds(src: Path, exact: os.stat_result, before: set[int]) -> None:
+    """sqlite opens ``src`` (and its ``-wal``/``-shm``) by path: every file it opened must be that path,
+    and its main database must be the very inode ``_open_exact`` checked (F008-R2-1: a directory above
+    swapped for a symlink and back during the copy must not make root copy another database)."""
+    main = False
+    after = _open_fds()
+    for fd in after - before:
+        try:
+            real = os.readlink(f"/proc/self/fd/{fd}")
+            st = os.fstat(fd)
+        except OSError:
+            continue  # the listing's own fd, already closed
+        if not stat.S_ISREG(st.st_mode):
+            continue
+        if real not in {str(src), *(f"{src}{s}" for s in SQLITE_SIBLINGS)}:
+            raise BackupError(f"refused: copying {src} opened {real[:160]} (a symlink above it?)")
+        if real == str(src):
+            if (st.st_dev, st.st_ino) != (exact.st_dev, exact.st_ino):
+                raise BackupError(f"refused: {src} was replaced during the backup")
+            main = True
+    if not main:
+        raise BackupError(f"refused: cannot verify the file sqlite opened for {src}")
+
+
+def _copy_file(src: Path, dst: Path) -> os.stat_result:
+    """Copy ``src`` to ``dst``; returns the ``fstat`` of the verified source file (the manifest's owner
+    and mode come from it, never from a second lookup by path)."""
+    dst.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with os.fdopen(_open_exact(src), "rb") as fin:
+        exact = os.fstat(fin.fileno())
+        if fin.read(len(SQLITE_MAGIC)) == SQLITE_MAGIC:
+            before = _open_fds()
+            source = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30.0)
+            target = None
+            try:
+                source.execute("SELECT count(*) FROM sqlite_master").fetchone()  # the files are open now
+                _verify_sqlite_fds(src, exact, before)
+                target = sqlite3.connect(dst)
+                source.backup(target)  # consistent copy of a live WAL database
+            finally:
+                if target is not None:
+                    target.close()
+                source.close()
+            _refuse_moved(src)  # sqlite opens by path: the path must still be real after the copy
+            return exact
+        fin.seek(0)
+        with dst.open("wb") as fout:
+            shutil.copyfileobj(fin, fout, 1 << 20)
+        return exact
 
 
 class Collector:
@@ -339,8 +382,7 @@ class Collector:
         if path.name.endswith(SQLITE_SIBLINGS):
             return  # captured by the online backup of the database itself
         dst = self.staged(path)
-        _copy_file(path, dst)
-        entry = _meta(path, os.lstat(path), item)
+        entry = _meta(path, _copy_file(path, dst), item)
         entry.update(sha256=sha256_file(dst), size=dst.stat().st_size)
         self.files.append(entry)
 

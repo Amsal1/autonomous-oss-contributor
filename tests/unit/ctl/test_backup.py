@@ -7,6 +7,7 @@ import dataclasses
 import hashlib
 import os
 import sqlite3
+import stat
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -188,6 +189,44 @@ def test_a_file_opened_through_a_swapped_directory_is_refused(tmp_path: Path) ->
     sqlite_wal(real / "s.db", 1).close()
     with pytest.raises(bk.BackupError, match="a symlink above it"):
         bk._copy_file(tmp_path / "swapped" / "s.db", tmp_path / "out" / "s.db")
+
+
+def test_a_directory_swapped_and_back_during_the_sqlite_copy_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F008-R2-1: sqlite reopens by path, so the owner swaps a directory above the DB for a symlink to
+    another DB just for sqlite's open and back before the post-copy check; the copy is still refused."""
+    home, other = tmp_path / "home", tmp_path / "other"
+    home.mkdir()
+    other.mkdir()
+    sqlite_wal(home / "s.db", 1).close()
+    sqlite_wal(other / "s.db", 2).close()  # "another root-readable database"
+    real_connect = sqlite3.connect
+
+    def swapping_connect(database: str, *args: object, **kwargs: object) -> sqlite3.Connection:
+        if not str(database).startswith(f"file:{home}/"):
+            return real_connect(database, *args, **kwargs)  # type: ignore[arg-type]
+        home.rename(tmp_path / "home.real")
+        os.symlink(other, home)
+        try:
+            conn = real_connect(database, *args, **kwargs)  # type: ignore[arg-type]
+            conn.execute("SELECT 1 FROM sqlite_master").fetchall()  # the open happens inside the window
+        finally:
+            home.unlink()
+            (tmp_path / "home.real").rename(home)
+        return conn
+
+    monkeypatch.setattr(sqlite3, "connect", swapping_connect)
+    with pytest.raises(bk.BackupError, match="refused"):
+        bk._copy_file(home / "s.db", tmp_path / "out" / "s.db")
+    assert not (tmp_path / "out" / "s.db").exists()
+
+
+def test_the_manifest_mode_comes_from_the_copied_file(tmp_path: Path) -> None:
+    (tmp_path / "f").write_text("x")
+    (tmp_path / "f").chmod(0o640)
+    st = bk._copy_file(tmp_path / "f", tmp_path / "out" / "f")
+    assert stat.S_IMODE(st.st_mode) == 0o640 and (tmp_path / "out" / "f").read_text() == "x"
 
 
 def test_a_missing_gatekeeper_db_or_anchors_is_an_error(layout: bk.Layout, tmp_path: Path) -> None:
