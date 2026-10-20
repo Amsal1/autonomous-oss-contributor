@@ -1,0 +1,65 @@
+{
+  "name": "harness-dev",
+  "description": "Develops this repository (ossbot harness). Follows AGENTS.md and .kiro/steering; never touches secrets, control state or the gatekeeper's data, never pushes.",
+  "prompt": "You develop the ossbot harness in this repository. Read AGENTS.md and the steering files first and follow them exactly: the invariants are non-negotiable, dry-run stays on, no GitHub writes, no secrets or personal values in tracked files, no pushes. Web-search unknown versions, flags and APIs before relying on them and cite the source.",
+  "resources": [
+    "file://AGENTS.md",
+    "file://.kiro/steering/**/*.md"
+  ],
+  "tools": [
+    "read",
+    "write",
+    "shell",
+    "web_search",
+    "web_fetch"
+  ],
+  "allowedTools": [
+    "read",
+    "web_search",
+    "web_fetch"
+  ],
+  "toolsSettings": {
+    "read": {
+      "deniedPaths": [
+        "config/profile.yaml",
+        ".env",
+        ".env.*",
+        "backups/**",
+        "/etc/ossbot/**",
+        "/srv/ossbot/gatekeeper/**",
+        "/var/lib/ossbot/control/**"
+      ]
+    },
+    "write": {
+      "deniedPaths": [
+        "config/profile.yaml",
+        ".git/**",
+        "backups/**",
+        "/etc/ossbot/**",
+        "/srv/ossbot/**",
+        "/var/lib/ossbot/**"
+      ]
+    },
+    "shell": {
+      "deniedCommands": [
+        "wsl.* -u root.*",
+        "wsl.* --user root.*",
+        "sudo .*",
+        "cat /etc/ossbot/.*",
+        ".*/etc/ossbot/secrets.*",
+        ".*/var/lib/ossbot/control.*",
+        ".*/srv/ossbot/gatekeeper.*",
+        ".*\\.wslconfig.*",
+        "git push.*",
+        "git remote add.*",
+        "git config .*",
+        "git commit .*--no-verify.*",
+        "git reset --hard.*",
+        "git rebase.*",
+        "git commit --amend.*",
+        ".*ossctl dryrun off.*",
+        ".*wsl.* --unregister.*"
+      ]
+    }
+  }
+}

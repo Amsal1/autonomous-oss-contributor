@@ -1329,6 +1329,50 @@ def restore(
     typer.echo("Restored. Run ossctl doctor, then /resume on Telegram.")
 
 
+docs_app = typer.Typer(no_args_is_help=True, help="generated documentation (README command table)")
+app.add_typer(docs_app, name="docs")
+lint_app = typer.Typer(no_args_is_help=True, help="repository lints (personal values)")
+app.add_typer(lint_app, name="lint")
+
+
+@docs_app.command("commands")
+def docs_commands(
+    check: Annotated[bool, typer.Option("--check", help="exit 1 if README.md differs from the registry")] = False,
+    readme: Annotated[Path, typer.Option("--readme", help="README to update")] = Path("README.md"),
+) -> None:
+    """Regenerate the Telegram command table in README.md from the command registry (FR-16)."""
+    from ossbot.ctl import docs_commands as dc  # noqa: PLC0415 - imports the gatekeeper registry lazily
+
+    try:
+        current = dc.run(readme, check=check)
+    except (dc.DocsError, OSError) as exc:
+        _fail(f"docs commands: {exc}")
+    if current:
+        typer.echo(f"{readme}: command table is current")
+    elif check:
+        _fail(f"{readme}: command table is out of date; run ossctl docs commands")
+    else:
+        typer.echo(f"{readme}: command table updated")
+
+
+@lint_app.command("personal")
+def lint_personal(
+    root: Annotated[Path, typer.Option("--root", help="repository root")] = Path("."),
+) -> None:
+    """No value of config/profile.yaml in a tracked file outside docs/ (AC 23). Prints keys, never values."""
+    from ossbot.ctl import lint_personal as lp  # noqa: PLC0415
+
+    try:
+        hits, summary = lp.run(root)
+    except lp.LintError as exc:
+        _fail(f"lint personal: {exc}")
+    for hit in hits:
+        typer.echo(str(hit), err=True)
+    typer.echo(summary)
+    if hits:
+        _fail("lint personal: personal values found in tracked files (move them to config/profile.yaml)")
+
+
 def main() -> None:
     app()
 

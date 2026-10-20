@@ -9,6 +9,8 @@ forbidden_logins: [your-work-account]    # merged into the monotonic policy floo
 confidentiality_floor: [your-work-account, "@your-employer.example"]
 telegram:
   user_id: 0                             # numeric; the only allowlisted Telegram user (0 = not configured)
+  timezone: UTC                          # IANA zone for quiet hours and digests, e.g. Europe/Berlin
+  quiet_hours: null                      # HH:MM-HH:MM (may wrap midnight), e.g. "23:00-07:00"; null = none
 kiro:
   idc_start_url: https://example.awsapps.com/start   # only for Hermes device-flow login (option c)
   idc_region: us-east-1

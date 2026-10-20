@@ -1,6 +1,6 @@
 """AC 5 end to end against the fake upstream (dry-run OFF only inside this test's own database):
 fork, push of the approved SHA, PR whose title/body hash to the approved values, commit identity
-Amsal Khan; then watch: a maintainer question -> a pending ``comment`` card (WATCHING -> WATCHING),
+from the test profile; then watch: a maintainer question -> a pending ``comment`` card (WATCHING -> WATCHING),
 a "please fix" comment -> fix round (unbundle of the approved bundle) -> ``push_update`` card."""
 
 from __future__ import annotations

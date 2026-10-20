@@ -65,7 +65,7 @@ def card_view(text: str, kind: str = "open_pr", **over: Any) -> CardView:
         "kind": kind, "cid": "c_0123456789", "upstream": "langfuse/langfuse", "dry_run": True,
         "title": one_line(text, 256), "body": text or "b", "commit_message": text or "m",
         "numstat": tuple(NumstatEntry(3, 1, f"src/{one_line(text, 900)}{i}.py") for i in range(40)),
-        "head_sha": "3" * 40, "round_base": "1" * 40, "base_ref": "main", "identity": "Amsal Khan <a@b.c>",
+        "head_sha": "3" * 40, "round_base": "1" * 40, "base_ref": "main", "identity": "Test Owner <a@b.c>",
         "branch": "ossbot/1-x", "fork_owner": "test-bot-login", "pr_number": 7 if kind != "open_pr" else None,
         "target_number": 7, "rev": 1, "issue_number": 1234, "issue_title": text[:300],
         "issue_url": "https://github.com/langfuse/langfuse/issues/1234", "user_directed": True, "notes": text[:1000],

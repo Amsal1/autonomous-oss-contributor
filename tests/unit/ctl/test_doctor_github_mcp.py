@@ -24,7 +24,7 @@ def rig(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
     monkeypatch.setattr(
         doctor, "env_value", lambda f, k: TOKEN if (f, k) == ("hermes.env", "GITHUB_READ_TOKEN") else None
     )
-    monkeypatch.setattr(doctor, "_top_profile_value", lambda key: "Amsal1" if key == "github_login" else None)
+    monkeypatch.setattr(doctor, "_top_profile_value", lambda key: "Owner-Login" if key == "github_login" else None)
     state: dict[str, Any] = {"stdout": "", "rc": 0, "calls": []}
 
     def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
@@ -36,9 +36,9 @@ def rig(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Any]:
 
 
 def test_live_check_passes_on_the_owner_login(rig: dict[str, Any]) -> None:
-    rig["stdout"] = json.dumps({"ok": True, "login": "amsal1", "entries": 12})
+    rig["stdout"] = json.dumps({"ok": True, "login": "owner-login", "entries": 12})
     res = doctor.check_github_mcp(quick=False)
-    assert res.status == doctor.PASS and "get_me amsal1" in res.detail
+    assert res.status == doctor.PASS and "get_me owner-login" in res.detail
     ((argv, env),) = rig["calls"]
     assert argv[:4] == ["/usr/sbin/runuser", "-u", "hermes", "--"] and argv[-2:] == [
         "--doctor",

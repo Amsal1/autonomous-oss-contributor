@@ -478,7 +478,8 @@ def eval_workspace(ev: ProbeEvidence, scanner: KeyScanner) -> bool:
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     if len(args) == 3 and args[0] == "hash-agents":
-        agents = {p.name: p.read_bytes() for p in sorted(Path(args[1]).glob("*.json"))}
+        # the baked role agents only (what kiro.sh installs); harness-dev.json is excluded from the image
+        agents = {p.name: p.read_bytes() for p in sorted(Path(args[1]).glob("ossbot-*.json"))}
         print(agent_configs_hash(agents, Path(args[2]).read_bytes()))
         return 0
     if len(args) == 2 and args[0] == "hash-settings":

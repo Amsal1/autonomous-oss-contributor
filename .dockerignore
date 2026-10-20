@@ -8,4 +8,6 @@
 !sandbox/probes/
 !src/ossbot/sandbox_tools/
 !.kiro/agents/
+# the repo-development agent is not a sandbox role and never enters an image
+.kiro/agents/harness-dev.json
 !prompts/
