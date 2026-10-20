@@ -105,4 +105,21 @@ else
 fi
 # restore a real result (the next gatekeeper trigger would do the same)
 (cd / && /opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.hermes_probe --force >/dev/null 2>&1) || true
+
+# 6. post-v1 item 7: a planned stop exits 0 (Hermes' stop marker), and provisioning owns the checkout
+check "the unit stops through gateway.systemd_stop_mark" bash -c \
+  "systemctl cat ossbot-hermes.service | grep -qx 'ExecStop=/home/hermes/.hermes/hermes-agent/.venv/bin/python -m gateway.systemd_stop_mark \$MAINPID'"
+refuse "the unit does not hide failures with SuccessExitStatus" bash -c "systemctl cat ossbot-hermes.service | grep -q '^SuccessExitStatus'"
+stamp=/home/hermes/.hermes/hermes-agent/install-stamp.json
+if [[ -f $stamp ]]; then
+  check "install-stamp.json says updateMechanism external" grep -q '"updateMechanism": "external"' "$stamp"
+else
+  pass "no install-stamp.json: Hermes' runtime check skips the git checkout"
+fi
+systemctl start ossbot-hermes.service >/dev/null 2>&1 || true
+for _ in $(seq 1 60); do systemctl is-active --quiet ossbot-hermes.service && break; sleep 1; done
+sleep 10  # let the gateway finish starting before the planned stop
+systemctl stop ossbot-hermes.service
+check "a planned stop ends with Result=success" test "$(systemctl show -p Result --value ossbot-hermes.service)" = success
+systemctl start ossbot-hermes.service >/dev/null 2>&1 || true
 finish

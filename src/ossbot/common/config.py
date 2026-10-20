@@ -201,6 +201,9 @@ class HermesPolicy(Strict):
     """§15.5: the default tier; the active one is the ``hermes-tier`` control flag (fail closed ``locked``)."""
 
     capability_tier_default: HermesTier = "self_improve"
+    # Rendered as Hermes' ``model.context_length``: Hermes cannot look up the window of the provider
+    # model "kiro-acp" (the real model is chosen per turn from models.yaml), so it is set here.
+    context_length: int = Field(default=200_000, ge=8192, le=2_000_000)
 
 
 AttachmentKind = Literal["image", "pdf", "text", "audio"]

@@ -5,8 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from ruamel.yaml import YAML
 
+from ossbot.common.config import HermesPolicy
 from ossbot.common.control_flags import HERMES_TIERS, HermesTier
 from ossbot.common.github_mcp_tools import READ_TOOLS
 from ossbot.ctl import hermes_render as hr
@@ -56,6 +58,25 @@ def test_gates_and_defence_in_depth(tier: HermesTier) -> None:
     # images reach the provider as parts (vision role), never Hermes' lossy auxiliary pre-description
     assert doc["model"]["supports_vision"] is True and doc["agent"]["image_input_mode"] == "native"
     assert doc["gateway"]["api_server"]["host"] == "127.0.0.1"
+
+
+def test_context_length_and_title_generation() -> None:
+    """Post-v1 item 7: Hermes gets the context window from policy and never upgrades titles with a model."""
+    doc = YAML(typ="safe").load(hr.render("research", TEMPLATE, context_length=123456))
+    assert doc["model"]["context_length"] == 123456
+    assert doc["auxiliary"]["title_generation"] == {"enabled": True, "model_upgrade_enabled": False}
+    assert _doc("locked")["model"]["context_length"] == HermesPolicy().context_length  # no snapshot: default
+
+
+def test_policy_context_length_comes_from_the_snapshot(tmp_path: Path) -> None:
+    assert hr.policy_context_length(tmp_path / "no-snapshot") == 200_000
+    with pytest.raises(ValidationError):
+        HermesPolicy(context_length=4096)
+    with pytest.raises(ValidationError):
+        HermesPolicy(context_length=3_000_000)
+    assert HermesPolicy(context_length=8192).context_length == 8192
+    repo_policy = (Path(__file__).resolve().parents[3] / "config" / "policy.yaml").read_text(encoding="utf-8")
+    assert "context_length: 200000" in repo_policy
 
 
 def test_write_is_atomic_and_refuses_links(tmp_path: Path) -> None:

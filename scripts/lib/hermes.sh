@@ -218,6 +218,23 @@ _hermes_install() {
   mark_changed "Hermes $tag ($commit)"
 }
 
+# _hermes_stamp_external: ossbot provisioning, not Hermes' package manager, owns this checkout. At its
+# first launch Hermes adopts the checkout as updateMechanism "self" (install-stamp.json), and its
+# startup check then warns "install out of sync (node, npm, ripgrep)" about managed runtimes ossbot
+# never installs (they serve the terminal, file, browser and TUI tools ADR-0018 disables). "external"
+# is one of hermes_cli/steward.py UPDATE_MECHANISMS at the pinned tag, and venv_sync.check_runtime
+# skips a git checkout whose stamp is not "self" (ADR-0002 addendum post-v1).
+_hermes_stamp_external() {
+  local stamp=$HERMES_CODE/install-stamp.json
+  [[ -f $stamp ]] || return 0  # no stamp: check_runtime already skips the git checkout
+  refuse_link "$stamp"
+  grep -q '"updateMechanism": "self"' "$stamp" || return 0
+  hermes_quiesce
+  as_hermes sed -i 's/"updateMechanism": "self"/"updateMechanism": "external"/' "$stamp"
+  grep -q '"updateMechanism": "external"' "$stamp" || die "could not mark $stamp external"
+  mark_changed "file $stamp (updateMechanism external)"
+}
+
 # _hermes_sync DIR: uv sync --frozen as hermes, with the pinned uv and a managed CPython.
 _hermes_sync() {
   local dir=$1 e line
@@ -281,6 +298,7 @@ step_hermes() {
   if ! _hermes_installed "$commit"; then
     _hermes_install "$tag" "$tag_object" "$commit" "$repo"
   fi
+  _hermes_stamp_external
   # setup-hermes.sh step 4 (ADR-0002 addendum): the launcher in ~/.local/bin
   hermes_dir "$HERMES_USER_HOME/.local" 0700
   hermes_dir "$HERMES_USER_HOME/.local/bin" 0700

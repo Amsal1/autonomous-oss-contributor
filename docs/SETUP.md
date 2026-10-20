@@ -187,6 +187,11 @@ restores `.wslconfig` and removes the Scheduled Tasks and Hyper-V rules. Deletin
 - **Kill or resume from Windows.** `scripts\kill.ps1` works even with a broken venv (the kill script is
   streamed over stdin); `scripts\resume.ps1` asks for `Type RESUME`.
 - **Doctor FAIL on a token.** Re-enter it with `setup-secrets.ps1`, then `ossctl config reload`.
+- **Hermes runtimes.** Hermes' package manager can install node, npm and ripgrep for its terminal,
+  file, browser and TUI tools. ossbot disables those tools and does not install the runtimes;
+  provisioning marks the checkout `updateMechanism: "external"` so Hermes no longer warns "install out
+  of sync (node, npm, ripgrep)". If the warning comes back after a Hermes upgrade, re-run
+  `scripts\bootstrap.ps1 -Only provision`; it is harmless either way (ADR-0002 addendum post-v1).
 - **Service logs from Windows.** `scripts\ossctl.ps1 logs <gatekeeper|hermes|runner|sandboxd>
   [-Since 15m] [-Grep <regex>] [-Lines 200]`, for example
   `scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep "Too Many Requests|429"`. It runs `journalctl`

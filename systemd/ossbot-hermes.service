@@ -34,6 +34,10 @@ Environment=HERMES_KIRO_ACP_REQUEST_ROLES=test,test_vision
 Environment=HERMES_KIRO_ACP_VIOLATION_UDS=/run/ossbot/gatekeeper.sock OSSBOT_GATEKEEPER_SOCK=/run/ossbot/gatekeeper.sock
 ExecStartPre=+/opt/ossbot/bin/ossbot-firewall --check
 ExecStart=/home/hermes/.hermes/hermes-agent/.venv/bin/hermes gateway
+# Hermes' own helper (gateway/systemd_stop_mark.py at the pinned tag): it marks this stop as planned
+# before the SIGTERM, so the gateway exits 0 instead of "Failed with result exit-code". No
+# SuccessExitStatus=1: that would also hide real crashes (ADR-0002 addendum post-v1).
+ExecStop=/home/hermes/.hermes/hermes-agent/.venv/bin/python -m gateway.systemd_stop_mark $MAINPID
 Restart=on-failure
 RestartSec=15
 UMask=0077

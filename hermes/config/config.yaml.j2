@@ -9,6 +9,15 @@ model:
   # Without this Hermes knows no "kiro-acp" vision capability and pre-describes every image through
   # its auxiliary vision call instead (FEAT-007 review round 2, F007-R2-1).
   supports_vision: true
+  # Hermes cannot look up the window of "kiro-acp" (it warned "Could not determine context length");
+  # policy.yaml hermes.context_length (ADR-0002 addendum post-v1).
+  context_length: {{ context_length }}
+auxiliary:
+  title_generation:
+    enabled: true
+    # Keep the instant derived title; never a second Kiro turn or the background "auto-title" thread
+    # whose lazy openai import deadlocked (_ModuleLock('openai.types')) (ADR-0002 addendum post-v1).
+    model_upgrade_enabled: false
 platform_toolsets:
   api_server: [{{ toolsets | join(", ") }}]
 agent:

@@ -83,6 +83,11 @@ def test_hermes_units_are_wired_everywhere() -> None:
     assert service["ExecStartPre"] == "+/opt/ossbot/bin/ossbot-firewall --check"
     assert "HERMES_DISABLE_LAZY_INSTALLS=1" in text and "HTTPS_PROXY=http://10.212.0.2:3141" in text
     assert "API_SERVER_HOST=127.0.0.1 API_SERVER_PORT=8642" in text
+    # post-v1 item 7: a planned stop exits 0 (Hermes' own stop marker), and real crashes stay visible
+    assert service["ExecStop"] == (
+        "/home/hermes/.hermes/hermes-agent/.venv/bin/python -m gateway.systemd_stop_mark $MAINPID"
+    )
+    assert "SuccessExitStatus" not in service
     sock = _unit(UNITS / "ossbot-hermes-probe.socket")["Socket"]
     assert sock["ListenStream"] == "/run/ossbot/hermes-probe.sock" and sock["SocketGroup"] == "gatekeeper"
     assert sock["SocketMode"] == "0660" and sock["Accept"] == "yes" and sock["MaxConnections"] == "1"

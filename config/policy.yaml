@@ -83,6 +83,7 @@ telegram:
   mode: single
 hermes:                            # §15.5; switch with ossctl hermes tier <tier> (TTY confirm) or /hermes tier
   capability_tier_default: self_improve   # locked | research | self_improve; unparseable flag = locked
+  context_length: 200000             # Hermes model.context_length (8192..2000000): the chat model's window
 chat:                               # §15.6: files the owner sends the assistant
   attachments:
     max_mb: 20                      # Bot API getFile limit; bigger files are refused with a reply
