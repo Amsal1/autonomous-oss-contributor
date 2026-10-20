@@ -53,6 +53,12 @@ asyncio_default_fixture_loop_scope = "function"
 # a hanging test fails with a stack dump naming it (build-plan rule 8); slow suites override per test
 timeout = 120
 timeout_method = "thread"
+# Starlette's TestClient (the e2e fakes) deprecates httpx (it wants the httpx2 fork) and the per-request
+# timeout argument the shared sbx_client passes; both are test-harness noise, not product behaviour.
+filterwarnings = [
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    "ignore:You should not use the 'timeout' argument with the TestClient",
+]
 markers = [
     "unit: hermetic unit tests (default; no Docker, no network)",
     "telegram: Telegram rendering/handler tests with a mocked Bot API",

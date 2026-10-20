@@ -42,8 +42,9 @@ def test_permissions_are_contents_read_only() -> None:
         assert job.get("permissions", {"contents": "read"}) == {"contents": "read"}, name
 
 
-def test_triggers_are_push_and_pull_request_only() -> None:
-    assert set(_ci()["on"]) == {"push", "pull_request"}
+def test_trigger_is_manual_only() -> None:
+    """Owner decision 2026-10-20: CI runs on demand (workflow_dispatch), never on push or PR."""
+    assert set(_ci()["on"]) == {"workflow_dispatch"}
     assert "pull_request_target" not in CI.read_text(encoding="utf-8")
 
 

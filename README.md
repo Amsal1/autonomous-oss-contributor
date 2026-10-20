@@ -239,6 +239,14 @@ preview card shows code and test lines separately.
 | `tests/` | unit, telegram, acp, e2e, sandbox, system and isolation suites |
 | `docs/` | design, plan, ADRs, setup, architecture, verification |
 
+## CI
+
+`.github/workflows/ci.yml` is manual: Actions → ci → Run workflow. It runs the lint gate (ruff,
+mypy, import-linter, shellcheck, PSScriptAnalyzer), the hermetic suites
+(`pytest -m "unit or telegram or acp or e2e"`), gitleaks over the full history, the README command
+table check and the profile example check, with `contents: read`, SHA-pinned actions and no secrets.
+The sandbox, Docker and system suites need the provisioned distro and run only on the laptop.
+
 ## Status and limitations
 
 v1 is feature-complete for a single owner on one Windows laptop and still runs in dry-run until the

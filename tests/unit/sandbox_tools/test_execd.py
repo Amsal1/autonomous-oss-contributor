@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import socket
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -46,12 +47,18 @@ def test_env_is_exactly_the_fixed_set(ex: Executor, monkeypatch: pytest.MonkeyPa
     monkeypatch.setenv("OSSBOT_PARENT_CANARY", "1")
     result, _ = ex.run({"cmd": "env -0", "timeout_s": 10})
     names = {item.split("=", 1)[0] for item in result["stdout"].split("\0") if item}
-    # The process starts with exactly ex.env (env -i semantics); bash itself and the login
-    # profile (bash -l) add only these. Nothing from execd's own environment leaks through.
+    # The process starts with exactly ex.env (env -i semantics); bash itself and this host's login
+    # profile (DESIGN §10.4: bash -lc) may add variables. The baseline is what the same bash -lc adds
+    # to the same fixed env here: CI runner images add their own (e.g. SGX_AESM_ADDR from a profile
+    # script), the sandbox image adds none of its own. Nothing from execd's own environment leaks.
+    base = subprocess.run(["/bin/bash", "-lc", "env -0"], env=dict(ex.env), capture_output=True, text=True,
+                          check=True, cwd=ex.repo).stdout  # fmt: skip
+    login_adds = {item.split("=", 1)[0] for item in base.split("\0") if item} - set(ex.env)
     assert set(ex.env) <= names
-    assert names - set(ex.env) <= {"PWD", "SHLVL", "_", "OLDPWD", "XDG_DATA_DIRS"}
+    assert names - set(ex.env) <= {"PWD", "SHLVL", "_", "OLDPWD", "XDG_DATA_DIRS"} | login_adds
     assert ex.env["GOPROXY"] == "off" and ex.env["UV_OFFLINE"] == "1" and ex.env["PIP_NO_INDEX"] == "1"
-    assert "KIRO_API_KEY" not in names
+    assert "KIRO_API_KEY" not in names and "OSSBOT_PARENT_CANARY" not in names
+    assert not {"KIRO_API_KEY", "OSSBOT_PARENT_CANARY"} & login_adds  # the baseline itself starts from env -i
 
 
 def test_read_file_ok(ex: Executor) -> None:

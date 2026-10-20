@@ -143,6 +143,7 @@ Only when you trust the previews: `/dryrun off` and confirm. Every toggle invali
   disabled; writes without secrets).
 - Upgrades: bump `config/versions.lock.yaml`, then `ossctl kiro upgrade` and `ossctl hermes upgrade`.
   Kiro jobs stay blocked until the safety probes pass for the new tuple.
+- CI is manual: on GitHub, Actions → ci → Run workflow (hermetic checks only; see README "CI").
 
 ## State outside git
 

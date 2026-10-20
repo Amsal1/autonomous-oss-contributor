@@ -3,9 +3,9 @@
 # gitleaks and PSScriptAnalyzer binaries are fetched from their pinned releases and sha256-verified.
 name: ci
 
+# Manual only (owner decision 2026-10-20): Actions -> ci -> Run workflow.
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read

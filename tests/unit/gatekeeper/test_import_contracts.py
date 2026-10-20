@@ -4,6 +4,8 @@ untrusted-side components never import the gatekeeper."""
 from __future__ import annotations
 
 import ast
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -61,9 +63,15 @@ def test_untrusted_side_never_imports_gatekeeper() -> None:
 
 def test_lint_imports_contracts_kept() -> None:
     exe = Path(sys.executable).parent / "lint-imports"
-    proc = subprocess.run([str(exe), "--no-cache"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+    # Without a TTY (CI) import-linter's rich output wraps at 80 columns and splits long contract
+    # lines; ask for a wide plain console and also match on whitespace-normalised text.
+    env = {**os.environ, "COLUMNS": "250", "TERM": "dumb", "NO_COLOR": "1"}
+    proc = subprocess.run([str(exe), "--no-cache"], cwd=REPO_ROOT, capture_output=True, text=True, check=False, env=env)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "Only ossbot.gatekeeper.submit imports ossbot.gatekeeper.github_writer KEPT" in proc.stdout
-    assert "Only ossbot.gatekeeper.review_mirror imports ossbot.gatekeeper.review_mirror_writer KEPT" in proc.stdout
-    assert "Only ossbot.gatekeeper.telegraph imports ossbot.gatekeeper.telegraph_writer KEPT" in proc.stdout
-    assert "0 broken" in proc.stdout
+    out = " ".join(proc.stdout.split())
+    linter = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8").split("[tool.importlinter]", 1)[1]
+    names = re.findall(r'^name = "([^"]+)"', linter, re.M)
+    assert "Only ossbot.gatekeeper.review_mirror imports ossbot.gatekeeper.review_mirror_writer" in names
+    for name in names:  # every contract of pyproject, each reported KEPT
+        assert f"{name} KEPT" in out, name
+    assert f"Contracts: {len(names)} kept, 0 broken" in out
