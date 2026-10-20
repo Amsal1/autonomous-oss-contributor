@@ -163,6 +163,18 @@ def message_update(from_id: int, chat_id: int, text: str, chat_type: str = "priv
     return {"update_id": next(_update_ids), "message": message}
 
 
+def topic_created_update(from_id: int, chat_id: int, *, thread_id: int, message_id: int, name: str,
+                         implicit: bool | None = None, icon_color: int = 7322096) -> dict[str, Any]:  # fmt: skip
+    """Update A of a command typed in "All" (journal shape, 2026-10-20): the ``forum_topic_created``
+    service message of a new thread, ``is_topic_message`` true, no text."""
+    created: dict[str, Any] = {"name": name, "icon_color": icon_color}
+    if implicit is not None:
+        created["is_name_implicit"] = implicit
+    message = {"message_id": message_id, "date": FAKE_NOW, "chat": chat(chat_id), "from": user(from_id),
+               "message_thread_id": thread_id, "is_topic_message": True, "forum_topic_created": created}  # fmt: skip
+    return {"update_id": next(_update_ids), "message": message}
+
+
 def media_update(from_id: int, chat_id: int, *, photo: str | None = None, document: dict[str, Any] | None = None,
                  voice: bool = False, location: tuple[float, float] | None = None, caption: str = "",
                  media_group_id: str | None = None, thread_id: int | None = None,

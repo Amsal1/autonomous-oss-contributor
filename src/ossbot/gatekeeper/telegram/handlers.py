@@ -18,6 +18,7 @@ and the update routing table (§14.10.4, ``telegram/routing.py``).
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
 import time
@@ -43,6 +44,7 @@ from ossbot.gatekeeper.telegram import (
     cards,
     chat_media,
     chat_relay,
+    implicit_topics,
     inputs,
     keyboards,
     proposal_cards,
@@ -66,9 +68,11 @@ from ossbot.gatekeeper.telegram.commands.registry import (
 from ossbot.gatekeeper.telegram.escape import b, esc
 from ossbot.gatekeeper.telegram.review import confirm as review_confirm
 from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.topics import CommandTarget
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui import send as ui_send
+from ossbot.gatekeeper.telegram.ui.icons import SYSTEM_TOPICS
 from ossbot.gatekeeper.telegram.ui.sanitize import undefuse as sanitize_undefuse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 
@@ -86,6 +90,13 @@ TaskKind = Literal["chat_turn", "media", "telegraph", "github_read", "render", "
 KILL_CANCELS: frozenset[TaskKind] = frozenset({"chat_turn", "media", "telegraph", "github_read", "render"})
 PREFLIGHT_TIMEOUT_S = 8.0  # the one inline await: the Confirm live preflight (timeout = live_check:timeout)
 HANDLER_SLOW_S = 1.0
+# Message keys that are not its content type: ``tg_thread_fields.content_keys`` lists the rest by name.
+ENVELOPE_KEYS = frozenset({"message_id", "date", "chat", "from", "sender_chat", "message_thread_id",
+                           "is_topic_message", "reply_to_message", "quote", "forward_origin", "edit_date",
+                           "entities", "caption_entities", "link_preview_options", "has_protected_content",
+                           "is_from_offline", "author_signature", "via_bot", "reply_markup", "media_group_id",
+                           "sender_boost_count", "sender_business_bot", "business_connection_id",
+                           "external_reply", "is_automatic_forward", "show_caption_above_media"})  # fmt: skip
 STOP_COMMANDS = frozenset({"kill", "pause"})
 # AC 22: with a kill active, only these commands run; the rest get the killed message (§14.16).
 KILLED_ALLOWED = frozenset({"status", "resume", "logs", "help", "start", "kill", "pause", "dryrun"})
@@ -128,6 +139,7 @@ class Handlers:
         self.application: Application[Any, Any, Any, Any, Any, Any] | None = None
         # the gatekeeper's GitHub reader (GET only): /work and link-card facts, always in a github_read task
         self.reader: Any = None
+        self.implicit = implicit_topics.ImplicitTopics()  # topic created for a command typed in All
 
     def register(self, application: Application[Any, Any, Any, Any, Any, Any]) -> None:
         self.application = application
@@ -801,6 +813,8 @@ class Handlers:
         flags only: never the text, the chat id or the user id."""
         reply_to = message.reply_to_message
         created = reply_to.forum_topic_created if reply_to is not None else None
+        own = message.forum_topic_created  # update A of a command typed in All (ADR-0020 addendum)
+        sender = message.from_user
         fields: dict[str, Any] = {
             "message_id": message.message_id, "message_thread_id": inc.raw_thread_id,
             "is_topic_message": inc.is_topic_message, "reply_topic_created": created is not None,
@@ -808,10 +822,21 @@ class Handlers:
             "has_direct_messages_topic": getattr(message, "direct_messages_topic", None) is not None,
             "is_command": inc.text.lstrip().startswith("/"),
             "unknown_keys": sorted(str(key) for key in (message.api_kwargs or {})),
+            # which content or service field is set: key names only, never a value
+            "content_keys": sorted(str(key) for key, value in message.to_dict().items()
+                                   if key not in ENVELOPE_KEYS and value not in (None, False)),
+            "from_is_bot": bool(sender is not None and sender.is_bot),
+            "from_is_owner": bool(sender is not None and sender.id == message.chat.id),
+            "topic_created": None if own is None else {
+                "name_len": len(own.name or ""), "name_is_command": (own.name or "").lstrip().startswith("/"),
+                "icon_color": own.icon_color, "has_icon_custom_emoji": own.icon_custom_emoji_id is not None,
+                "is_name_implicit": own.is_name_implicit,
+            },
         }  # fmt: skip
-        log.info("tg_thread_fields message=%s thread=%s topic_message=%s implicit=%s", fields["message_id"],
-                 inc.raw_thread_id if inc.raw_thread_id is not None else "none", inc.is_topic_message,
-                 fields["is_name_implicit"], extra={"event": "tg_thread_fields", **fields})  # fmt: skip
+        log.info("tg_thread_fields message=%s thread=%s topic_message=%s implicit=%s content=%s",
+                 fields["message_id"], inc.raw_thread_id if inc.raw_thread_id is not None else "none",
+                 inc.is_topic_message, fields["is_name_implicit"], ",".join(fields["content_keys"]) or "none",
+                 extra={"event": "tg_thread_fields", **fields})  # fmt: skip
 
     def _count_message(self, inc: routing.Incoming) -> None:
         """§14.11.3: owner messages count toward the thread's message counter (file-view reuse). A thread
@@ -862,7 +887,10 @@ class Handlers:
             quote_manual=bool(message.quote is not None and message.quote.is_manual),
             document=(doc.file_id, doc.mime_type, doc.file_size or 0, doc.file_name) if doc is not None else None,
         )
+        thread_seen = self._thread_seq(inc.chat_id, inc.raw_thread_id)  # 0 = a thread never seen before
         self._count_message(inc)
+        if message.forum_topic_created is not None:
+            self._on_topic_created(message, inc, user_id, thread_seen)
         if route.kind == "pending_input":
             prompt = ui.pending.consume(inc.chat_id, inc.reply_to_message_id)
             handler = inputs.INPUTS.get(prompt.kind) if prompt is not None else None
@@ -922,8 +950,8 @@ class Handlers:
         elif self.ctx.control.view().state == "killed" and name not in KILLED_ALLOWED:
             reply = Reply(KILLED_TEXT, view=killed_view(self.ctx))  # §14.16: reason, since, Resume and Logs
         elif spec.effect == "io":  # BA-18: never hold the update slot on I/O
-            self.spawn(self._run_command(spec.func(cctx, words[1:]), thread_id, stale_s, target.delete_thread),
-                       "command")  # fmt: skip
+            after = functools.partial(self._after_command_reply, inc, user_id, message_id, target)
+            self.spawn(self._run_command(spec.func(cctx, words[1:]), thread_id, stale_s, after), "command")
             return
         else:
             try:
@@ -935,26 +963,94 @@ class Handlers:
                 # the cancellable work stops; submit and command tasks keep their Phase 1 rules.
                 self.cancel(KILL_CANCELS)
         self._send_reply(reply, thread_id=thread_id, stale_s=stale_s)
-        self._delete_stray_topic(target.delete_thread)
+        self._after_command_reply(inc, user_id, message_id, target)
 
     async def _run_command(self, effect: Awaitable[Reply], thread_id: int | None, stale_s: int,
-                           delete_thread: int | None = None) -> None:  # fmt: skip
+                           after: Callable[[], None] | None = None) -> None:  # fmt: skip
         try:
             reply = await effect
         except (Blocked, ApprovalError, TransitionError) as exc:
             reply = Reply(f"Refused: {esc(str(exc)[:300])}")
         self._send_reply(reply, thread_id=thread_id, stale_s=stale_s)
-        self._delete_stray_topic(delete_thread)
+        if after is not None:
+            after()
+
+    def _after_command_reply(self, inc: routing.Incoming, user_id: int, message_id: int,
+                             target: CommandTarget) -> None:  # fmt: skip
+        """Runs once the reply is queued: the S1 implicit topic (flag on the command itself), or the
+        update-A correlation of a command typed in All (``implicit_topics``)."""
+        self._delete_stray_topic(target.delete_thread)
+        if target.where != "all" or inc.raw_thread_id is not None or inc.is_topic_message:
+            return
+        match = self.implicit.on_command(implicit_topics.CommandSeen(inc.chat_id, user_id, message_id, inc.text,
+                                                                     self._now_s()))  # fmt: skip
+        if match is None:
+            log.info("implicit_topic_pending side=command message=%s", message_id,
+                     extra={"event": "implicit_topic_pending", "side": "command",
+                            "message_id": message_id})  # fmt: skip
+            return
+        self._delete_implicit(match, inc.chat_id)
+
+    def _on_topic_created(self, message: Any, inc: routing.Incoming, user_id: int, thread_seen: int) -> None:
+        """Update A: a ``forum_topic_created`` service message. Only a thread the gatekeeper had never
+        seen (no owner message, no bot message), and never a system topic, may pair with a command."""
+        created = message.forum_topic_created
+        thread = inc.raw_thread_id
+        topics = ui_of(self.ctx).topics
+        if thread is None or topics.mode == "flat":
+            return
+        reason = "system_topic" if self._is_system_thread(thread) else "known_thread" if thread_seen else None
+        if reason is not None:
+            log.info("implicit_topic_ignored thread=%s reason=%s", thread, reason,
+                     extra={"event": "implicit_topic_ignored", "thread_id": thread, "reason": reason})  # fmt: skip
+            return
+        seen = implicit_topics.TopicSeen(inc.chat_id, user_id, message.message_id, thread, created.name or "",
+                                         bool(created.is_name_implicit), self._now_s())  # fmt: skip
+        match = self.implicit.on_topic(seen)
+        if match is None:
+            log.info("implicit_topic_pending side=topic message=%s thread=%s", message.message_id, thread,
+                     extra={"event": "implicit_topic_pending", "side": "topic", "message_id": message.message_id,
+                            "thread_id": thread})  # fmt: skip
+            return
+        self._delete_implicit(match, inc.chat_id)
+
+    def _now_s(self) -> float:
+        return self.ctx.clock.now().timestamp()
+
+    def _is_system_thread(self, thread_id: int) -> bool:
+        topics = ui_of(self.ctx).topics
+        return thread_id in {topics.thread_id_raw(name) for name in SYSTEM_TOPICS}
+
+    def _bot_posted_in(self, chat_id: int, thread_id: int) -> bool:
+        row = db.one(self.ctx.conn, "SELECT 1 FROM tg_outbox WHERE method LIKE 'send%' AND"
+                                    " json_extract(payload_json, '$.message_thread_id') = ? AND"
+                                    " json_extract(payload_json, '$.chat_id') = ? LIMIT 1",
+                     (thread_id, chat_id))  # fmt: skip
+        return row is not None
+
+    def _delete_implicit(self, match: implicit_topics.Match, chat_id: int) -> None:
+        """A proven pair: delete the auto-created thread, re-checking it is no system topic and holds
+        nothing the bot sent. The log carries ids and flags only (never the name or the text)."""
+        thread = match.thread_id
+        action = ("refused_system" if self._is_system_thread(thread)
+                  else "refused_bot_posted" if self._bot_posted_in(chat_id, thread) else "delete")  # fmt: skip
+        log.info("implicit_topic_match thread=%s order=%s gap_ms=%s name_matches_command=%s implicit=%s action=%s",
+                 thread, match.order, match.gap_ms, match.name_matches_command, match.is_name_implicit, action,
+                 extra={"event": "implicit_topic_match", "thread_id": thread, "order": match.order,
+                        "gap_ms": match.gap_ms, "name_matches_command": match.name_matches_command,
+                        "is_name_implicit": match.is_name_implicit, "action": action})  # fmt: skip
+        if action == "delete":
+            self._delete_stray_topic(thread)
 
     def _delete_stray_topic(self, thread_id: int | None) -> None:
         """Remove the topic Telegram created implicitly for a command typed in All (``deleteForumTopic``
-        works in a private chat with a user, Bot API 9.3); queued after the reply, never retried on a
-        permanent error (``TelegramFrontend._on_failed`` logs ``stray_topic_delete_failed``)."""
+        works in a private chat with a user, Bot API 9.3); queued after the reply, at most once per thread
+        (outbox dedupe key), never retried on a permanent error (``TelegramFrontend._on_failed`` logs
+        ``stray_topic_delete_failed``; private chats have no close or hide fallback)."""
         if thread_id is None or self.ctx.telegram_chat_id == 0:
             return
-        self.ctx.outbox.enqueue("deleteForumTopic", {"chat_id": self.ctx.telegram_chat_id,
-                                                     "message_thread_id": thread_id},
-                                dedupe_key=f"topic_delete:{thread_id}")  # fmt: skip
+        req = rawapi.DeleteForumTopic(chat_id=self.ctx.telegram_chat_id, message_thread_id=thread_id)
+        self.ctx.outbox.enqueue("deleteForumTopic", req.payload(), dedupe_key=f"topic_delete:{thread_id}")
 
     # ------------------------------------------------- stopped_message_generation (rule 2)
     async def on_raw(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

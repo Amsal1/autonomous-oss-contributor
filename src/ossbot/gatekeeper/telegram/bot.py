@@ -226,6 +226,11 @@ class TelegramFrontend:
         return self.ui.topics.prepare(self.ui.notifier.prepare(row))
 
     async def _on_sent(self, row: OutboxRow, result: dict[str, Any]) -> None:
+        if row.method == "deleteForumTopic":
+            thread = row.payload.get("message_thread_id")
+            log.info(
+                "stray topic deleted thread=%s", thread, extra={"event": "stray_topic_deleted", "thread_id": thread}
+            )
         await self.publisher.on_sent(row, result)
         self.ui.dashboard.on_sent(row, result)
 
@@ -233,8 +238,11 @@ class TelegramFrontend:
         """Permanent failures with a defined recovery (§14.20.5)."""
         text = str(error).lower()
         if row.method == "deleteForumTopic":  # the implicit topic of a command typed in All: never retried
-            log.warning("stray topic delete failed: %s", type(error).__name__,
-                        extra={"event": "stray_topic_delete_failed", "error_class": type(error).__name__})  # fmt: skip
+            # no fallback exists: closeForumTopic and hideGeneralForumTopic are supergroup-only (ADR-0020)
+            thread, reason = row.payload.get("message_thread_id"), str(error)[:120]
+            log.warning("stray topic delete failed thread=%s: %s (%s)", thread, type(error).__name__, reason,
+                        extra={"event": "stray_topic_delete_failed", "error_class": type(error).__name__,
+                               "thread_id": thread, "reason": reason})  # fmt: skip
             return True
         if THREAD_NOT_FOUND in text and row.thread_key is not None:
             return await self.ui.topics.on_thread_not_found(row, self.sender.call)

@@ -118,11 +118,21 @@ class SendMessageDraft(_Req):
     keep_on_stop: bool | None = None
 
 
+class DeleteForumTopic(_Req):
+    """``deleteForumTopic``: in a private chat with a user since Bot API 9.3, no rights needed (only a
+    supergroup needs ``can_delete_messages``); checked 2026-10-21 (ADR-0020 addendum). There is no
+    private-chat close or hide: ``closeForumTopic`` and ``hideGeneralForumTopic`` are supergroup-only."""
+
+    chat_id: int
+    message_thread_id: Annotated[int, Field(ge=1)]
+
+
 METHODS: dict[str, type[_Req]] = {
     "sendRichMessage": SendRichMessage,
     "editMessageText#rich": EditMessageRich,
     "sendRichMessageDraft": SendRichMessageDraft,
     "sendMessageDraft": SendMessageDraft,
+    "deleteForumTopic": DeleteForumTopic,
 }
 
 
