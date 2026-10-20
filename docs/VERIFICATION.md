@@ -4,6 +4,26 @@ Results of the phase verification bars (docs/PLAN.md) and of the live checks of 
 
 ## Phase 2 live checks
 
+### FEAT-009 (build round 4: fixes for review round 3, 2026-10-20 about 11:30-11:45 +07)
+
+Same rules as round 3: product code only, dry-run ON, no GitHub write, Telegram only to the owner through the outbox, no secret value read or printed. Code first, targeted tests, one hermetic run, one redeploy plus the required second ("unchanged") run.
+
+| Step | Command (SHA) | Result |
+|---|---|---|
+| Leftover WIP | `git status --porcelain` at d05d4a7 | only the reviewer's `docs/review-build-FEAT-009.{json,md}` (round 3); committed with 8a6c152 |
+| F009-R3-1, -2, -4 targeted tests | `dev.ps1 pytest -q tests/telegram/test_commands_full.py tests/telegram/test_priorities.py` (8a6c152 tree) | 34 passed |
+| Owner-reported 299 s run | `dev.ps1 pytest -q --durations=5 tests/unit/test_no_tunnels.py tests/unit/gatekeeper/test_dedupe_keys.py tests/telegram/test_rawapi.py` | 25 tests in 3.1 s, slowest 0.83 s: the drvfs walk fix of c5ce99c holds; nothing hangs in pathlib. The listing gained `stub:{message_id}:rejected` |
+| Lint gate | `lint.ps1` | ruff clean, 452 files formatted, mypy 217 files clean, 8 contracts kept |
+| Hermetic bar (once) | `dev.ps1 pytest -q -m "unit or telegram or e2e" -n auto` (8a6c152 tree before the last test edit) | 3257 passed, 1 failed in 55 s: `test_up_confirms_and_is_refused_while_killed` expected the old `/up is refused` text, now the §14.16 killed view (F009-R3-4); updated, `test_lifecycle_cmds.py` + `test_dedupe_keys.py` 10 passed. Log `.ossbot-local/hermetic-r3.log` |
+| Redeploy 1 | `bootstrap.ps1 -Only provision` (8a6c152, carries b85e4c3) | `app-deploy: changed`, `enable-start: changed` (services restarted 04:42:38-43Z), every other step `unchanged`; doctor PASS 40, WARN 1 (Hermes surface ConnectError right after the restart). Log `.ossbot-local/logs/feat009-r3b-redeploy1.log` |
+| Redeploy 2 | same, right after | every step `unchanged`, doctor PASS 41. Log `.ossbot-local/logs/feat009-r3b-redeploy2.log` |
+| Doctor | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor` | PASS 45 |
+| One dashboard after the restart | `.ossbot-local/outbox_peek.py` (read-only) | after the 04:42:39Z restart only `editMessageText` rows of the live dashboard view (message 507): no new `sendMessage` dashboard and no `pinChatMessage`. The two extra dashboards pinned by the round-3 start (505, 506) are marked stale in `tg_views` |
+| Proposal and preview card in the real chat | not run | The fake upstream exists only inside the e2e harness (`tests/fakes`, its own temp database and stub kiro-cli); the deployed gatekeeper knows only the real targets. Getting cards there through product code means `ossctl work <issue URL>` (real target, vet + scout with the production model roles, not `roles.test`) for the proposal card, and the owner's gate-1 tap plus a full fetch-to-package run for the preview card. Writing rows into the live database is not product code. Left to the owner, so FEAT-009 is back to `in_progress` |
+| Owner-only checks still open | – | typed `/kill` then `/resume` in the real chat; a dry-run proposal card and a preview card in the real chat (as above); visual check of one pinned dashboard (unpin 505/506 by hand); the client-rendering probes DES-V-32 / CR3-V-1/4/5/6/12/14/15 |
+
+Fixes in 8a6c152: an anomaly pause, or a pause requested by a service account (runner, sandboxd, Hermes), is P0: it rings and is never held (F009-R3-1). `/reject [cid] [reason]` goes picker -> reasons -> confirm and reuses the card's reject effects and the 7-day repo cooldown (F009-R3-2). A command confirm minted before `/kill` shows the killed view and changes nothing; only `resume_confirm` acts while killed (F009-R3-4).
+
 ### FEAT-009 (Telegram workspace M1; build round 3, 2026-10-20 about 10:00-11:30 +07)
 
 Product code only (the deployed gatekeeper, `ossctl` as root, a read-only `mode=ro` peek at the outbox). Dry-run stayed ON, no GitHub write, Telegram only to the owner through the outbox, no secret value read or printed. Test cadence per the build plan: code first, targeted tests while iterating, one hermetic run, one redeploy.
