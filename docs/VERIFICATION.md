@@ -573,6 +573,22 @@ Commits aac1a5a..4e7e746 on `main` (details per item: `.ossbot-local/postv1/veri
 | 7 Hermes noise | `ROOT bash tests/system/test_hermes_install_hygiene.sh`; `scripts\ossctl.ps1 logs hermes -Since 10m -Grep "context length|deadlock|out of sync|Failed with result|exit-code"` | all checks passed (ExecStop, stamp external, `Result=success` after a planned stop); after the new unit only "Deactivated successfully" stops; no context-length or out-of-sync warning since |
 | shellcheck | `shellcheck -x scripts/lib/hermes.sh tests/system/test_hermes_install_hygiene.sh` | clean |
 
+## Post-v1 Package BACKEND (model backend interface, ADR-0022, 2026-10-20)
+
+Commits 4f6db46..HEAD on `main` (details: `.ossbot-local/postv1/verify-backend.md`, not tracked). Live checks
+ran on the code deployed from 990e595 (the backend code; later commits change docs, tests and `config/models.yaml`).
+
+| Item | Command | Result |
+|---|---|---|
+| Lint gate | `.ossbot-local\lint.ps1` | all clean; 245 files mypy, 12 contracts kept (new: model backends never import the gatekeeper, sandboxd or the Docker filter) |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120 -q` | 3629 passed |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | exit 0; app-deploy changed, all units restarted; doctor PASS 40, WARN 1 (hermes tool surface ConnectError while Hermes restarted) |
+| Doctor | `scripts\ossctl.ps1 doctor` | PASS 45, no FAIL: sandbox images, kiro-cli 2.32.0, sandbox Kiro auth + catalog (20 models), safety probes all passed for 54450b8cb061, hermes-side probe clean |
+| Probes | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor --probes` | PASS 46: probe re-run on roles.test, all five passed |
+| Pipeline job path | `ROOT /opt/ossbot/app/.venv/bin/ossctl kiro smoke` | `state: succeeded`, answer `pong`, model roles.test, 8.1 s, 0 tool calls (the redeployed sandboxd with the per-backend key-scan list) |
+| `backend: kiro` live | `config/models.yaml` uncommented after the redeploy; `scripts\ossctl.ps1 model list`; `scripts\ossctl.ps1 doctor --quick` | the gatekeeper reads the file (all roles resolved, catalog 20 models); doctor PASS 41 |
+| Services | `systemctl is-active` runner, sandboxd, gatekeeper, hermes; runner and sandboxd journal since the redeploy | all active; no error or traceback (one `chat_jobs_poll_failed` 503 while the gatekeeper restarted) |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

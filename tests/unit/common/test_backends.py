@@ -23,11 +23,18 @@ from ossbot.common.backends import (
 from ossbot.common.config import ConfigError, parse_models
 
 REPO = Path(__file__).resolve().parents[3]
-MODELS = (REPO / "config" / "models.yaml").read_bytes()
+SHIPPED = (REPO / "config" / "models.yaml").read_bytes()
+# The shipped file sets `backend: kiro`; the cases below start from the file without that line.
+MODELS = re.sub(rb"(?m)^backend:[^\n]*\n", b"", SHIPPED)
 
 
 def _with_backend(line: str) -> bytes:
     return MODELS.replace(b"\nversion: 1\n", f"\nversion: 1\n{line}\n".encode(), 1)
+
+
+def test_shipped_file_names_kiro() -> None:
+    assert re.search(rb"(?m)^backend: kiro\b", SHIPPED) and b"backend:" not in MODELS
+    assert parse_models(SHIPPED).backend == "kiro" and backend_for(parse_models(SHIPPED)) is KIRO_HEADLESS
 
 
 def test_registry() -> None:
