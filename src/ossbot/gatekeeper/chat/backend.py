@@ -121,8 +121,8 @@ class RelayGate:
 class ChatBackend(Protocol):
     async def gate(self) -> GateResult: ...
 
-    def stream(self, parts: list[dict[str, Any]], session_key: str, *, request_role: str | None = None
-               ) -> AsyncIterator[Event]: ...  # fmt: skip
+    def stream(self, parts: list[dict[str, Any]], session_key: str, *, request_role: str | None = None,
+               instructions: str | None = None) -> AsyncIterator[Event]: ...  # fmt: skip
 
 
 class HermesApiBackend:
@@ -136,16 +136,17 @@ class HermesApiBackend:
     async def gate(self) -> GateResult:
         return await self._gate.check()
 
-    async def stream(self, parts: list[dict[str, Any]], session_key: str, *, request_role: str | None = None
-                     ) -> AsyncIterator[Event]:  # fmt: skip
+    async def stream(self, parts: list[dict[str, Any]], session_key: str, *, request_role: str | None = None,
+                     instructions: str | None = None) -> AsyncIterator[Event]:  # fmt: skip
         """Gate, then the turn's events. ``request_role`` (e.g. ``test`` for live checks, MDL-3) is sent
-        as ``model="role:<name>"``; the provider honours only its allowlisted request roles."""
+        as ``model="role:<name>"``; the provider honours only its allowlisted request roles.
+        ``instructions`` is Hermes's per-turn ephemeral system prompt (the follow-up block, §14.12.4)."""
         gate = await self._gate.check()
         if not gate.open:
             raise RelayClosed(gate)
         model = f"role:{request_role}" if request_role else None
         try:
-            async for event in self.client.stream(parts, session_key, model=model,
+            async for event in self.client.stream(parts, session_key, model=model, instructions=instructions,
                                                   provider=self.PROVIDER if model else None):  # fmt: skip
                 yield event
         except HermesUnavailable:

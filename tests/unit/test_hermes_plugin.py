@@ -96,3 +96,18 @@ def test_feature_store_round_trip(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         store.save("k", {"x": "y" * 5000})
     assert store.delete("2026-10-19T12:00-lunch") and not store.delete("2026-10-19T12:00-lunch")
+
+
+def test_notify_and_feature_cards_carry_the_turns_session_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """U12: unsolicited messages name the turn they serve; the key comes from Hermes's session vars."""
+    calls: list[tuple[str, Any, Any]] = []
+    monkeypatch.setattr(tools, "call", lambda m, p, b=None, **k: calls.append((p, b, k)) or (202, {"queued": True}))
+    assert json.loads(tools.ossbot_notify({"text": "lunch?", "priority": "P1"}))["success"] is True
+    assert json.loads(tools.ossbot_feature_card({"feature": "nutrition", "kind": "meal", "data": {"g": 1}}))["success"]
+    assert calls == [
+        ("/v1/notify", {"text": "lunch?", "priority": "P1"}, {"session": True}),
+        ("/v1/features/nutrition/cards", {"kind": "meal", "data": {"g": 1}}, {"session": True}),
+    ]
+    assert json.loads(tools.ossbot_notify({"text": "x", "priority": "P0"}))["success"] is False
+    monkeypatch.setenv("HERMES_SESSION_KEY", "tg-4242-t7")
+    assert tools.session_key() == "tg-4242-t7"  # outside Hermes: the environment (no gateway module)

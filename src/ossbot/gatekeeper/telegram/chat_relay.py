@@ -202,7 +202,7 @@ async def run_turn(ctx: AppContext, handlers: Any, spec: TurnSpec, turn_id: int,
     await lane.send_once()  # step 2: the "Thinking…" draft at once (the draft a Stop targets)
     lane_task = asyncio.ensure_future(lane.run())
     try:
-        events = backend.stream(spec.parts, spec.key)
+        events = backend.stream(spec.parts, spec.key, instructions=followups.INSTRUCTIONS)
         end = await chat_stream.consume(events, state, stop, lane.touch)
     except (HermesError, HermesUnavailable, RelayClosed) as exc:
         turns.finalize(turn_id, cancelled=False, failed=True)

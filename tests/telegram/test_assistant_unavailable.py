@@ -22,7 +22,7 @@ async def rig(ctx: AppContext) -> AsyncIterator[TgRig]:
 
 
 class DownBackend(FakeBackend):
-    async def stream(self, parts, session_key, *, request_role=None):  # type: ignore[no-untyped-def,override]
+    async def stream(self, parts, session_key, *, request_role=None, instructions=None):  # type: ignore[no-untyped-def,override]
         self.calls.append((parts, session_key))
         raise HermesUnavailable("ConnectError")
         yield  # pragma: no cover - makes this an async generator

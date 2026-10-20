@@ -65,6 +65,7 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/models/catalog"): frozenset({W}),
     ("POST", "/v1/discovery-requests"): frozenset({R, O}),
     ("POST", "/v1/notify"): frozenset({W, R}),
+    ("POST", "/v1/features/{feature}/cards"): frozenset({R}),  # FEAT-010 item 49: Hermes feature cards (U12)
     ("GET", "/v1/models"): frozenset({O}),
     ("PUT", "/v1/models/{role}"): frozenset({O}),
     ("POST", "/v1/models/refresh"): frozenset({O}),
@@ -205,10 +206,13 @@ async def test_transition_via_api_worker_only(ctx: AppContext) -> None:
 
 
 async def test_notify_rate_limited(ctx: AppContext) -> None:
+    assert ctx.chat is not None
+    ctx.chat.service.turns.start("tg-4242-1", 1)  # Hermes notices need an active turn (U12)
+    headers = {"X-Hermes-Session-Key": "tg-4242-1"}
     async with client(ctx, UID_REQUESTER) as c:
         for _ in range(10):
-            assert (await c.post("/v1/notify", json={"text": "hi"})).status_code == 202
-        assert (await c.post("/v1/notify", json={"text": "hi"})).status_code == 429
+            assert (await c.post("/v1/notify", json={"text": "hi"}, headers=headers)).status_code == 202
+        assert (await c.post("/v1/notify", json={"text": "hi"}, headers=headers)).status_code == 429
     async with client(ctx, UID_WORKER) as c:
         assert (await c.post("/v1/notify", json={"text": "hi"})).status_code == 202  # per caller
 

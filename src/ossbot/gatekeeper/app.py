@@ -20,6 +20,7 @@ from fastapi.responses import JSONResponse
 from ossbot.common.config import ConfigError
 from ossbot.common.control_flags import Blocked
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper import features as feature_registry
 from ossbot.gatekeeper.api import (
     actions,
     audit,
@@ -27,6 +28,7 @@ from ossbot.gatekeeper.api import (
     config,
     contributions,
     control,
+    features,
     models,
     notify,
     prefs,
@@ -198,6 +200,8 @@ def create_app(ctx: AppContext, *, housekeeping: bool = True, services: Sequence
                   openapi_url=None)  # fmt: skip
     app.state.ctx = ctx
     _install_handlers(app)
-    for module in (control, config, contributions, actions, models, audit, notify, work, prefs, stage_runs, chat):
+    feature_registry.load(ctx.config.telegram.features.enabled)  # §14.18.3: entry points, enabled ones only
+    for module in (control, config, contributions, actions, models, audit, notify, work, prefs, stage_runs, chat,
+                   features):  # fmt: skip
         app.include_router(module.router)
     return app

@@ -415,3 +415,13 @@ class DiscoveryRequest(ApiModel):
 
 class NotifyRequest(ApiModel):
     text: Annotated[str, Field(min_length=1, max_length=4000)]
+    # §14.12.7: "P1" or "P2"; P0 is gatekeeper-internal, so any other value (P0 included) is a 422, which
+    # the endpoint answers itself (schema errors are 400 gatekeeper-wide)
+    priority: Annotated[str, Field(min_length=1, max_length=8)] = "P2"
+
+
+class FeatureCardRequest(ApiModel):
+    """``POST /v1/features/{feature}/cards`` (§14.12.7): ``data`` is validated by the feature's own model."""
+
+    kind: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
+    data: dict[str, Any]

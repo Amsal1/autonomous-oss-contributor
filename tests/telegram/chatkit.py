@@ -42,9 +42,10 @@ class FakeBackend:
     async def gate(self) -> GateResult:
         return self._gate
 
-    async def stream(self, parts: list[dict[str, Any]], session_key: str, *, request_role: str | None = None
-                     ) -> AsyncIterator[Event]:  # fmt: skip
+    async def stream(self, parts: list[dict[str, Any]], session_key: str, *, request_role: str | None = None,
+                     instructions: str | None = None) -> AsyncIterator[Event]:  # fmt: skip
         self.calls.append((parts, session_key))
+        self.instructions = instructions
         self.started.set()
         try:
             for event in self.events:

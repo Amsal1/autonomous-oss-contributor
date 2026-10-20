@@ -41,11 +41,27 @@ class _UDS(http.client.HTTPConnection):
         self.sock = sock
 
 
-def call(method: str, path: str, body: dict[str, Any] | None = None, *, timeout: float = 20.0) -> tuple[int, Any]:
+def session_key() -> str:
+    """The session key of the turn this tool call serves (the gatekeeper's ``X-Hermes-Session-Key``),
+    from Hermes's per-turn session vars (``gateway.session_context``), else the environment."""
+    try:
+        from gateway.session_context import get_session_env  # type: ignore[import-not-found]  # noqa: PLC0415 - Hermes-side only
+
+        return str(get_session_env("HERMES_SESSION_KEY", "") or "")[:256]
+    except ImportError:
+        return os.environ.get("HERMES_SESSION_KEY", "")[:256]
+
+
+def call(method: str, path: str, body: dict[str, Any] | None = None, *, timeout: float = 20.0,
+         session: bool = False) -> tuple[int, Any]:  # fmt: skip
+    """``session``: send the turn's session key (U12: unsolicited messages attach to that turn only)."""
     conn = _UDS(SOCKET, timeout)
     try:
         payload = None if body is None else json.dumps(body)
         headers = {"Content-Type": "application/json"} if payload is not None else {}
+        key = session_key() if session else ""
+        if key and not any(c in key for c in "\r\n\x00"):
+            headers["X-Hermes-Session-Key"] = key
         conn.request(method, path, body=payload, headers=headers)
         resp = conn.getresponse()
         raw = resp.read(MAX_BODY + 1)[:MAX_BODY]
@@ -126,7 +142,26 @@ def ossbot_request_discovery(params: dict[str, Any]) -> str:
 
 @_safe
 def ossbot_notify(params: dict[str, Any]) -> str:
-    return _result(*call("POST", "/v1/notify", {"text": _text(params, "text", 4000)}))
+    priority = params.get("priority", "P2")
+    if priority not in ("P1", "P2"):
+        raise ValueError('priority must be "P1" or "P2"')
+    body = {"text": _text(params, "text", 4000), "priority": priority}
+    return _result(*call("POST", "/v1/notify", body, session=True))
+
+
+FEATURE_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+
+
+@_safe
+def ossbot_feature_card(params: dict[str, Any]) -> str:
+    """Show a feature card in the conversation (DESIGN §14.12.7); the gatekeeper validates ``data``."""
+    feature, kind = _text(params, "feature", 32), _text(params, "kind", 32)
+    if not FEATURE_RE.match(feature) or not FEATURE_RE.match(kind):
+        raise ValueError("feature and kind are lowercase names")
+    data = params.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("data must be a JSON object")
+    return _result(*call("POST", f"/v1/features/{feature}/cards", {"kind": kind, "data": data}, session=True))
 
 
 @_safe
@@ -228,8 +263,22 @@ TOOLS: list[tuple[dict[str, Any], Any]] = [
         ossbot_request_discovery,
     ),
     (
-        _schema("ossbot_notify", "Send the owner a short note in the ossbot chat.", {"text": _STR}, ("text",)),
+        _schema(
+            "ossbot_notify",
+            "Send the owner a short note in this conversation (P2 silent by default; P1 is loud, at most 5 a day).",
+            {"text": _STR, "priority": {"type": "string", "enum": ["P1", "P2"]}},
+            ("text",),
+        ),
         ossbot_notify,
+    ),
+    (
+        _schema(
+            "ossbot_feature_card",
+            "Show a card of an enabled ossbot feature in this conversation (validated by ossbot).",
+            {"feature": _STR, "kind": _STR, "data": {"type": "object"}},
+            ("feature", "kind", "data"),
+        ),
+        ossbot_feature_card,
     ),
     (
         _schema("ossbot_pause", "Pause the OSS pipeline (the owner resumes it).", {"reason": _STR}, ("reason",)),

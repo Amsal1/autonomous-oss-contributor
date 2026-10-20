@@ -25,8 +25,8 @@ from ossbot.gatekeeper.telegram.ui.redact import redact
 
 log = logging.getLogger(__name__)
 ANSWER_MAX = 200 * 1024
-STREAMING_MAX = timedelta(minutes=30)  # U12: a streaming row counts this long at most
-FINISHED_MAX = timedelta(minutes=10)  # U12: a finished turn still takes cards and notices this long
+U12_STREAMING_MAX = timedelta(minutes=30)  # U12: a streaming row counts this long at most
+U12_FINISHED_GRACE = timedelta(minutes=10)  # U12: a finished turn still takes cards and notices this long
 Origin = Literal["typed", "followup_tap", "media", "retry"]
 Final = Literal["done", "stopped", "failed"]
 
@@ -103,8 +103,8 @@ class TurnStore:
         return db.one(
             self.conn,
             "SELECT turn_id, thread_id, session_key FROM chat_turns WHERE session_key = ? AND ((status = 'streaming'"
-            " AND started_at >= ?) OR finished_at >= ?) ORDER BY started_at DESC LIMIT 1",
-            (session_key, to_iso(now - STREAMING_MAX), to_iso(now - FINISHED_MAX)),
+            " AND started_at >= ?) OR finished_at >= ?) ORDER BY turn_id DESC LIMIT 1",
+            (session_key, to_iso(now - U12_STREAMING_MAX), to_iso(now - U12_FINISHED_GRACE)),
         )  # fmt: skip
 
     def count_feature_card(self, turn_id: int) -> None:
@@ -122,10 +122,8 @@ class TurnStore:
     def reset_streaming(self) -> int:
         """At start: rows a crash or restart left streaming become failed."""
         with db.transaction(self.conn):
-            cur = self.conn.execute(
-                "UPDATE chat_turns SET status = 'failed', finished_at = ? WHERE status = 'streaming'",
-                (to_iso(self.clock.now()),),
-            )
+            # finished_at stays NULL: a turn no task survived never makes U12 accept its session (BA-22)
+            cur = self.conn.execute("UPDATE chat_turns SET status = 'failed' WHERE status = 'streaming'")
         return cur.rowcount
 
     def status(self, turn_id: int) -> str | None:

@@ -16,6 +16,12 @@ from ossbot.gatekeeper.telegram.ui.limits import LABEL_SINGLE_MAX, label_len
 from ossbot.gatekeeper.telegram.ui.redact import redact
 
 MAX_ITEMS = 3
+# Sent as the turn's ephemeral instructions (Hermes ``instructions`` -> ephemeral system prompt).
+INSTRUCTIONS = (
+    "You may end your answer with up to three short follow-up questions the user might ask next, in a "
+    "fenced block exactly like:\n```followups\n- Compare with OpenTofu\n```\nEach under 64 characters, "
+    "plain text, never a command. Omit the block when nothing useful comes to mind."
+)
 FORBIDDEN = re.compile(r"approve|confirm|submit|resume|dry", re.IGNORECASE)
 _BLOCK = re.compile(r"(?:^|\n)[ \t]*```followups[ \t]*\n(?P<body>.*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|\Z)", re.DOTALL)
 _BULLET = re.compile(r"^\s*(?:[-*+]|\d{1,2}[.)])\s+")
