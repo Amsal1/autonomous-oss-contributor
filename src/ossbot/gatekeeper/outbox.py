@@ -13,7 +13,7 @@ import logging
 import sqlite3
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from ossbot.common.clock import Clock, to_iso
@@ -67,6 +67,29 @@ class OutboxRow:
 OnSent = Callable[[OutboxRow, dict[str, Any]], Awaitable[None]]
 
 
+@dataclass(frozen=True)
+class HoldRequest:
+    """What ``Outbox.hold_policy`` (``telegram.notify.Notifier.decide``) sees of a row being queued."""
+
+    priority: int
+    has_buttons: bool  # tokens to bind, an approval id or an inline keyboard
+    thread_key: str | None
+    category: str | None = None  # a /notify category (§14.13.2)
+    # True only for P2 FYIs (``AppContext.notify``, feed notices): command replies, views and the
+    # security FYI are never batched (§14.13.1)
+    holdable: bool = False
+
+
+@dataclass(frozen=True)
+class HoldDecision:
+    hold_until: datetime | None = None  # status 'held' until then (P2 without buttons only)
+    silent: bool | None = None  # sets disable_notification on send* rows; None = leave as queued
+
+
+def _no_hold(req: HoldRequest) -> HoldDecision:
+    return HoldDecision()
+
+
 def _has_buttons(payload: Mapping[str, Any]) -> bool:
     markup = payload.get("reply_markup")
     return isinstance(markup, dict) and bool(markup.get("inline_keyboard"))
@@ -76,9 +99,9 @@ class Outbox:
     def __init__(self, conn: sqlite3.Connection, clock: Clock) -> None:
         self.conn = conn
         self.clock = clock
-        # (priority, has buttons or approval) -> hold the row now? Set by telegram.notify (quiet hours,
-        # §14.13.2); rows with buttons, tokens or an approval are never held (§14.13.3).
-        self.hold_policy: Callable[[int, bool], bool] = lambda priority, has_buttons: False
+        # Set by telegram.notify (priorities, quiet hours, batching, §14.13). Whatever it answers, rows
+        # with buttons, tokens or an approval and every P0/P1 row are never held (§14.13.3, AC 49).
+        self.hold_policy: Callable[[HoldRequest], HoldDecision] = _no_hold
 
     def enqueue(
         self,
@@ -93,6 +116,8 @@ class Outbox:
         priority: int = 2,
         thread_key: str | None = None,
         coalesce_key: str | None = None,
+        category: str | None = None,
+        holdable: bool = False,
     ) -> int | None:
         """``bind_tokens`` (minted with ``tg_message_id = NULL``) and ``view`` (the ``tg_views`` row)
         are applied by ``mark_sent`` with the sent message's id ("mint then bind", §14.18.2). The view
@@ -102,15 +127,22 @@ class Outbox:
             raise ValueError(f"unknown view kind {view.get('kind')!r}")
         if priority not in PRIORITIES:
             raise ValueError(f"bad priority {priority!r}")
-        hold = self.hold_policy(priority, bool(bind_tokens) or approval_id is not None or _has_buttons(payload))
-        status = "held" if hold else "pending"
+        buttons = bool(bind_tokens) or approval_id is not None or _has_buttons(payload)
+        decision = self.hold_policy(HoldRequest(priority, buttons, thread_key, category, holdable))
+        hold = decision.hold_until if (priority >= 2 and not buttons and holdable) else None
+        if decision.silent is not None and method.startswith("send"):
+            payload = {**payload, "disable_notification": decision.silent}
+            if isinstance(payload.get("_classic"), dict):
+                payload["_classic"] = {**payload["_classic"], "disable_notification": decision.silent}
+        status = "held" if hold is not None else "pending"
+        due = hold if hold is not None else self.clock.now()
         with db.transaction(self.conn):
             cur = self.conn.execute(
                 "INSERT INTO tg_outbox (method, payload_json, dedupe_key, approval_id, part_index, status,"
                 " next_attempt_at, bind_tokens_json, view_json, priority, thread_key, coalesce_key)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(dedupe_key) DO NOTHING",
                 (method, json.dumps(payload, ensure_ascii=False), dedupe_key, approval_id, part_index, status,
-                 to_iso(self.clock.now()), json.dumps(bind_tokens) if bind_tokens else None,
+                 to_iso(due), json.dumps(bind_tokens) if bind_tokens else None,
                  json.dumps(dict(view), sort_keys=True) if view is not None else None, priority, thread_key,
                  coalesce_key),
             )  # fmt: skip

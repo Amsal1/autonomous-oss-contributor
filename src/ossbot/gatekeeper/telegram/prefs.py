@@ -18,7 +18,8 @@ KEYS: dict[str, tuple[str, ...] | None] = {
     "file_view": ("auto", "classic"),
     "rich_unavailable_until": None,
     "quiet_until": None,
-    "notify": None,  # {"feed": bool, "progress": bool, "digest": bool}
+    "notify": None,  # {category: bool} for telegram.notify.CATEGORIES (§14.13.2)
+    "away": None,  # {"cards": n, "messages": n} rung silently during quiet hours (the 🌅 summary)
     "short_description": None,
     "flat_mode_reason": None,
 }

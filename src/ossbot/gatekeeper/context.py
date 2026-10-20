@@ -165,8 +165,13 @@ class AppContext:
             self.on_approval_created(approval_id)
         return created
 
-    def notify(self, text: str) -> None:
-        """FYI/alert to the owner's private chat via the outbox (dropped while Telegram is unset)."""
+    def notify(self, text: str, *, priority: int | None = None, category: str | None = None,
+               coalesce_key: str | None = None) -> None:  # fmt: skip
+        """FYI/alert to the owner's private chat via the outbox (dropped while Telegram is unset).
+
+        The priority comes from the text's fixed leading icon unless given (``telegram.notify.classify``:
+        🛑/🚨 are P0 in 🚦 Control and always ring; FYIs are silent P2 in 📈 OSS feed and may be held
+        in quiet hours or a batch window, §14.13)."""
         try:
             chat_id = self.telegram_chat_id
         except RuntimeError:
@@ -178,7 +183,14 @@ class AppContext:
                 extra={"event": "notify_dropped"},
             )
             return
-        self.outbox.enqueue("sendMessage", {"chat_id": chat_id, "text": text})
+        from ossbot.gatekeeper.telegram import notify as tg_notify  # noqa: PLC0415 - telegram imports the context
+
+        prio, holdable = tg_notify.classify(text)
+        if priority is not None:
+            prio, holdable = priority, holdable and priority >= 2
+        self.outbox.enqueue("sendMessage", {"chat_id": chat_id, "text": text}, priority=prio,
+                            thread_key=tg_notify.THREAD_OF[prio], category=category, holdable=holdable,
+                            coalesce_key=coalesce_key)  # fmt: skip
 
     def operator_fyi(self, action: str, uid: int, pid: int) -> None:
         """Every operator 'go' action is announced on Telegram (§12.2, T7)."""

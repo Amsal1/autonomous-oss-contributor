@@ -43,7 +43,9 @@ def _files() -> tuple[Path, ...]:
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.endswith(".egg-info")]
         for name in filenames:
             path = Path(dirpath) / name
-            if path.suffix in SKIP_SUFFIXES or path.resolve() in GUARDS:
+            # ROOT is resolved, so the joined path compares directly: a ``resolve()`` per file costs
+            # an lstat per path component on drvfs and made this walk take minutes
+            if path.suffix in SKIP_SUFFIXES or path in GUARDS:
                 continue
             out.append(path)
     return tuple(out)

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ossbot.gatekeeper.telegram.dashboard import Dashboard
+from ossbot.gatekeeper.telegram.notify import Notifier
 from ossbot.gatekeeper.telegram.pending_input import PendingInputs
 from ossbot.gatekeeper.telegram.prefs import UxPrefs
 from ossbot.gatekeeper.telegram.scopes import Scopes
@@ -23,6 +24,7 @@ class TelegramUi:
     dashboard: Dashboard
     pending: PendingInputs
     prefs: UxPrefs
+    notifier: Notifier
 
 
 def ui_of(ctx: AppContext) -> TelegramUi:
@@ -30,6 +32,6 @@ def ui_of(ctx: AppContext) -> TelegramUi:
     if isinstance(cached, TelegramUi):
         return cached
     ui = TelegramUi(Topics(ctx), Scopes(ctx), Dashboard(ctx), PendingInputs(ctx.conn, ctx.clock),
-                    UxPrefs(ctx.conn, ctx.clock))  # fmt: skip
+                    UxPrefs(ctx.conn, ctx.clock), Notifier(ctx))  # fmt: skip
     ctx.__dict__["_telegram_ui"] = ui
     return ui

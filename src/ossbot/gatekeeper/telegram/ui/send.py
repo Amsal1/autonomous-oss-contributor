@@ -189,6 +189,8 @@ def deliver(
     dedupe_key: str | None = None,
     silent: bool | None = None,
     coalesce_key: str | None = None,
+    category: str | None = None,
+    holdable: bool = False,
 ) -> int | None:
     """Queue a view; returns the outbox row id (None when deduplicated or Telegram is unset).
     ``thread`` names a system topic (resolved at send time); ``thread_id`` is the originating thread of
@@ -213,6 +215,7 @@ def deliver(
         return ctx.outbox.enqueue(
             method, payload, dedupe_key=dedupe_key or f"view:{new_token()}", bind_tokens=flat or None,
             view=record if ok else {"kind": "fyi"}, priority=priority, thread_key=thread, coalesce_key=coalesce_key,
+            category=category, holdable=holdable,
         )  # fmt: skip
 
 

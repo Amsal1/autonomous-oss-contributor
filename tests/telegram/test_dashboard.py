@@ -60,6 +60,7 @@ async def test_edits_are_throttled_and_skipped_when_unchanged(ctx: AppContext, r
     assert edit["message_id"] == _dashboard_id(ctx) and "⏸ <b>ossbot</b> · PAUSED ·" in edit["text"]
     ctx.control.kill("test", "tg:4242")
     assert dash.tick() is False  # < 30 s since the last edit
+    await rig.flush()  # the kill FYI is a due P0 alert, which the dashboard edit waits behind (§14.10.3)
     clock.advance(timedelta(seconds=30))
     assert dash.tick() is True
 

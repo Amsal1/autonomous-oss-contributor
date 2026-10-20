@@ -185,11 +185,17 @@ class TelegramFrontend:
         self.publisher = CardPublisher(ctx)
         self.sender = TelegramSender(application.bot)
         self.ui = ui_of(ctx)
+        # §14.13: priorities, quiet hours and batching at enqueue; sound and coalescing at send
+        ctx.outbox.hold_policy = self.ui.notifier.decide
         self.worker = OutboxWorker(ctx.outbox, self.sender, self._on_sent, batch=1, on_failed=self._on_failed,
-                                   prepare=self.ui.topics.prepare)  # fmt: skip
+                                   prepare=self._prepare)  # fmt: skip
         self._task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
         self._lifecycle_seen: tuple[str, str] | None = None
+
+    def _prepare(self, row: OutboxRow) -> OutboxRow:
+        """Sound and coalescing (§14.13), then the topic (§14.10.1), just before each send."""
+        return self.ui.topics.prepare(self.ui.notifier.prepare(row))
 
     async def _on_sent(self, row: OutboxRow, result: dict[str, Any]) -> None:
         await self.publisher.on_sent(row, result)
@@ -298,6 +304,7 @@ class TelegramFrontend:
             text = offline_description(self.ctx.clock.now().strftime("%H:%M")) if graceful else ONLINE
             await self.ui.scopes.set_description(self.sender.call, text)
             self.ui.dashboard.tick(force=True)
+        self.ui.notifier.release()  # held P2 rows whose window or quiet hours ended (§14.13.3)
         self.ui.dashboard.tick()
 
     async def _outbox_loop(self) -> None:
