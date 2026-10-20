@@ -133,7 +133,10 @@ def callback_update(
 def message_update(from_id: int, chat_id: int, text: str, chat_type: str = "private", *,
                    thread_id: int | None = None, reply_to: int | None = None, date: int = FAKE_NOW,
                    forward: bool = False, message_id: int | None = None, quote: str | None = None,
-                   quote_manual: bool = True) -> dict[str, Any]:  # fmt: skip
+                   quote_manual: bool = True, is_topic: bool = True,
+                   topic_created: dict[str, Any] | None = None) -> dict[str, Any]:  # fmt: skip
+    """``is_topic=False`` drops ``is_topic_message`` while keeping ``message_thread_id``; ``topic_created``
+    (a ``ForumTopicCreated``) makes ``reply_to_message`` the topic's creation service message."""
     message: dict[str, Any] = {
         "message_id": message_id or next(_update_ids),
         "date": date,
@@ -143,7 +146,12 @@ def message_update(from_id: int, chat_id: int, text: str, chat_type: str = "priv
     }
     if thread_id is not None:
         message["message_thread_id"] = thread_id
-        message["is_topic_message"] = True
+        if is_topic:
+            message["is_topic_message"] = True
+    if topic_created is not None and reply_to is None and thread_id is not None:
+        message["reply_to_message"] = {"message_id": thread_id, "date": date, "chat": chat(chat_id, chat_type),
+                                       "from": user(from_id), "message_thread_id": thread_id,
+                                       "is_topic_message": True, "forum_topic_created": topic_created}  # fmt: skip
     if reply_to is not None:
         message["reply_to_message"] = {"message_id": reply_to, "date": date, "chat": chat(chat_id, chat_type),
                                        "from": {"id": BOT_ID, "is_bot": True, "first_name": "ossbot"},

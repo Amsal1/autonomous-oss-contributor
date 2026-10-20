@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from ossbot.common.clock import to_iso
@@ -27,13 +27,24 @@ from ossbot.gatekeeper.telegram.ui.icons import SECTION_ICON, SYSTEM_TOPICS
 
 if TYPE_CHECKING:
     from ossbot.gatekeeper.context import AppContext
+    from ossbot.gatekeeper.telegram.routing import Incoming
 
 log = logging.getLogger(__name__)
 Call = Callable[[str, dict[str, Any]], Awaitable[Any]]
 Mode = Literal["topics", "flat"]
+Where = Literal["all", "thread", "system", "stray", "flat"]
 SEND_METHODS = frozenset({"sendMessage", "sendRichMessage", "sendDocument", "sendPhoto", "sendMessageDraft",
                           "sendRichMessageDraft"})  # fmt: skip
 THREAD_NOT_FOUND = "thread not found"
+
+
+@dataclass(frozen=True)
+class CommandTarget:
+    """Where a command's reply goes (``thread_id``; None = All) and the implicit topic to delete."""
+
+    thread_id: int | None
+    delete_thread: int | None
+    where: Where
 
 
 class Topics:
@@ -101,6 +112,23 @@ class Topics:
             return None
         row = db.one(self.ctx.conn, "SELECT name FROM tg_topics WHERE thread_id = ?", (thread_id,))
         return None if row is None else str(row["name"])
+
+    def command_target(self, inc: Incoming, seq_count: int) -> CommandTarget:
+        """The reply target of a command (ADR-0020 addendum 2026-10-21). A command typed in "All" makes
+        Telegram create a topic named from its text (``is_name_implicit``, Bot API 9.3); when the command is
+        that topic's first owner message (``seq_count`` == 1) the reply goes to All and the topic is
+        deleted. A system topic is never deleted; any other thread id is answered in place, with or
+        without ``is_topic_message``. Flat mode keeps the originating ``thread_id`` as before."""
+        if self.mode == "flat":
+            return CommandTarget(inc.thread_id, None, "flat")
+        thread = inc.raw_thread_id
+        if thread is None:
+            return CommandTarget(None, None, "all")
+        if self.name_of(thread) is not None:
+            return CommandTarget(thread, None, "system")
+        if inc.implicit_topic and seq_count == 1:
+            return CommandTarget(None, thread, "stray")
+        return CommandTarget(thread, None, "thread")
 
     # ------------------------------------------------------------------ send-time
     def prepare(self, row: OutboxRow) -> OutboxRow:

@@ -783,6 +783,7 @@ class Handlers:
         )
         has_media = bool(message.photo or message.document or message.voice or message.audio or message.video
                          or message.location)  # fmt: skip
+        created = reply_to.forum_topic_created if reply_to is not None else None
         return routing.Incoming(
             kind="message", chat_id=message.chat.id, text=message.text or message.caption or "",
             thread_id=message.message_thread_id if message.is_topic_message else None,
@@ -790,14 +791,44 @@ class Handlers:
             reply_to_from_bot=bool(reply_to is not None and reply_to.from_user and reply_to.from_user.is_bot),
             forwarded=message.forward_origin is not None, entity_urls=urls, has_media=has_media,
             date=int(message.date.timestamp()) if message.date else 0,
+            raw_thread_id=message.message_thread_id, is_topic_message=bool(message.is_topic_message),
+            implicit_topic=bool(created is not None and created.is_name_implicit),
         )  # fmt: skip
 
+    @staticmethod
+    def _log_thread_fields(message: Any, inc: routing.Incoming) -> None:
+        """Diagnostic (ADR-0020 addendum 2026-10-21): the thread facts of an owner message. Ids and
+        flags only: never the text, the chat id or the user id."""
+        reply_to = message.reply_to_message
+        created = reply_to.forum_topic_created if reply_to is not None else None
+        fields: dict[str, Any] = {
+            "message_id": message.message_id, "message_thread_id": inc.raw_thread_id,
+            "is_topic_message": inc.is_topic_message, "reply_topic_created": created is not None,
+            "is_name_implicit": created.is_name_implicit if created is not None else None,
+            "has_direct_messages_topic": getattr(message, "direct_messages_topic", None) is not None,
+            "is_command": inc.text.lstrip().startswith("/"),
+            "unknown_keys": sorted(str(key) for key in (message.api_kwargs or {})),
+        }  # fmt: skip
+        log.info("tg_thread_fields message=%s thread=%s topic_message=%s implicit=%s", fields["message_id"],
+                 inc.raw_thread_id if inc.raw_thread_id is not None else "none", inc.is_topic_message,
+                 fields["is_name_implicit"], extra={"event": "tg_thread_fields", **fields})  # fmt: skip
+
     def _count_message(self, inc: routing.Incoming) -> None:
-        """§14.11.3: owner messages count toward the thread's message counter (file-view reuse)."""
-        key = f"{inc.chat_id}:{inc.thread_id or 0}"
+        """§14.11.3: owner messages count toward the thread's message counter (file-view reuse). A thread
+        id without ``is_topic_message`` is counted under its raw key too (``command_target``)."""
+        keys = [f"{inc.chat_id}:{inc.thread_id or 0}"]
+        if inc.raw_thread_id is not None and inc.raw_thread_id != inc.thread_id:
+            keys.append(f"{inc.chat_id}:{inc.raw_thread_id}")
         with db.transaction(self.ctx.conn):
-            self.ctx.conn.execute("INSERT INTO tg_thread_seq (thread_key, n) VALUES (?, 1) ON CONFLICT(thread_key)"
-                                  " DO UPDATE SET n = n + 1", (key,))  # fmt: skip
+            for key in keys:
+                self.ctx.conn.execute("INSERT INTO tg_thread_seq (thread_key, n) VALUES (?, 1) ON CONFLICT"
+                                      "(thread_key) DO UPDATE SET n = n + 1", (key,))  # fmt: skip
+
+    def _thread_seq(self, chat_id: int, thread_id: int | None) -> int:
+        if thread_id is None:
+            return 0
+        row = db.one(self.ctx.conn, "SELECT n FROM tg_thread_seq WHERE thread_key = ?", (f"{chat_id}:{thread_id}",))
+        return int(row["n"]) if row is not None else 0
 
     def _stale_s(self, inc: routing.Incoming) -> int:
         """Seconds the message waited, when that is over ``telegram.stale_message_minutes`` (else 0)."""
@@ -813,6 +844,7 @@ class Handlers:
         assert update.effective_user is not None
         user_id = update.effective_user.id
         inc = self._incoming(message)
+        self._log_thread_fields(message, inc)
         ui = ui_of(self.ctx)
         route = routing.classify(self.ctx.conn, ui.topics, ui.pending, inc)
         stale_s = self._stale_s(inc)
@@ -876,14 +908,22 @@ class Handlers:
         words = inc.text.strip().split()
         name = words[0][1:].split("@", 1)[0].lower()
         spec = COMMANDS.get(name)
-        cctx = CommandContext(self.ctx, user_id, words[1:], thread_id=inc.thread_id, message_id=message_id,
+        target = ui_of(self.ctx).topics.command_target(inc, self._thread_seq(inc.chat_id, inc.raw_thread_id))
+        log.info("command_reply_target where=%s thread=%s delete=%s", target.where,
+                 target.thread_id if target.thread_id is not None else "none",
+                 target.delete_thread if target.delete_thread is not None else "none",
+                 extra={"event": "command_reply_target", "where": target.where, "reply_thread": target.thread_id,
+                        "delete_thread": target.delete_thread})  # fmt: skip
+        thread_id = target.thread_id
+        cctx = CommandContext(self.ctx, user_id, words[1:], thread_id=thread_id, message_id=message_id,
                               stale_s=stale_s, handlers=self)  # fmt: skip
         if spec is None:
             reply = Reply(f"Unknown command {esc(words[0][:40])}. Try /help.")
         elif self.ctx.control.view().state == "killed" and name not in KILLED_ALLOWED:
             reply = Reply(KILLED_TEXT, view=killed_view(self.ctx))  # §14.16: reason, since, Resume and Logs
         elif spec.effect == "io":  # BA-18: never hold the update slot on I/O
-            self.spawn(self._run_command(spec.func(cctx, words[1:]), inc.thread_id, stale_s), "command")
+            self.spawn(self._run_command(spec.func(cctx, words[1:]), thread_id, stale_s, target.delete_thread),
+                       "command")  # fmt: skip
             return
         else:
             try:
@@ -894,14 +934,27 @@ class Handlers:
                 # §14.18.5 item 4: the local effect (kill/pause transaction) is committed first, then
                 # the cancellable work stops; submit and command tasks keep their Phase 1 rules.
                 self.cancel(KILL_CANCELS)
-        self._send_reply(reply, thread_id=inc.thread_id, stale_s=stale_s)
+        self._send_reply(reply, thread_id=thread_id, stale_s=stale_s)
+        self._delete_stray_topic(target.delete_thread)
 
-    async def _run_command(self, effect: Awaitable[Reply], thread_id: int | None, stale_s: int) -> None:
+    async def _run_command(self, effect: Awaitable[Reply], thread_id: int | None, stale_s: int,
+                           delete_thread: int | None = None) -> None:  # fmt: skip
         try:
             reply = await effect
         except (Blocked, ApprovalError, TransitionError) as exc:
             reply = Reply(f"Refused: {esc(str(exc)[:300])}")
         self._send_reply(reply, thread_id=thread_id, stale_s=stale_s)
+        self._delete_stray_topic(delete_thread)
+
+    def _delete_stray_topic(self, thread_id: int | None) -> None:
+        """Remove the topic Telegram created implicitly for a command typed in All (``deleteForumTopic``
+        works in a private chat with a user, Bot API 9.3); queued after the reply, never retried on a
+        permanent error (``TelegramFrontend._on_failed`` logs ``stray_topic_delete_failed``)."""
+        if thread_id is None or self.ctx.telegram_chat_id == 0:
+            return
+        self.ctx.outbox.enqueue("deleteForumTopic", {"chat_id": self.ctx.telegram_chat_id,
+                                                     "message_thread_id": thread_id},
+                                dedupe_key=f"topic_delete:{thread_id}")  # fmt: skip
 
     # ------------------------------------------------- stopped_message_generation (rule 2)
     async def on_raw(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

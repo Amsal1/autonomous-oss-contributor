@@ -92,6 +92,10 @@ gatekeeper pins the dashboard only once it has landed in Control (a dashboard th
 re-sent into Control once). Some clients also show that pin in the "All" view; tapping it opens the
 dashboard in Control. The Bot API cannot change that (ADR-0020 addendum).
 
+Commands typed in "All" are answered in All, and the topic Telegram creates for them (named after the
+command) is removed. If an empty topic stays (some mobile clients don't tell the bot its id), send
+commands in 🚦 Control.
+
 ## 7. Or restore instead of steps 4 and 6
 
 ```powershell

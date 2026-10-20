@@ -8,7 +8,9 @@ import pytest
 
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.telegram import routing
 from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.topics import CommandTarget
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
 from tests.telegram.tgharness import TgRig, make_rig
@@ -79,3 +81,30 @@ async def test_topics_off_in_config(ctx: AppContext) -> None:
     async for rig in make_rig(ctx, topics=True):
         assert ui_of(ctx).topics.mode == "flat"
         assert "createForumTopic" not in rig.req.methods()
+
+
+@pytest.mark.parametrize(("raw", "implicit", "seq", "expect"), [
+    (None, False, 0, (None, None, "all")),
+    (5150, True, 1, (None, 5150, "stray")),  # Telegram's implicit topic of a command typed in All
+    (5150, True, 2, (5150, None, "thread")),  # not the topic's first owner message
+    (5150, False, 1, (5150, None, "thread")),  # a named (user) topic or S2 without the flag
+    ("control", True, 1, ("control", None, "system")),  # a system topic is never deleted
+])  # fmt: skip
+async def test_command_target(ctx: AppContext, rig: TgRig, raw: object, implicit: bool, seq: int,
+                              expect: tuple[object, object, str]) -> None:  # fmt: skip
+    topics = _topics(ctx)
+    raw_id = topics[raw] if isinstance(raw, str) else raw
+    want = tuple(topics[v] if isinstance(v, str) and v in topics else v for v in expect)
+    inc = routing.Incoming(kind="message", chat_id=1, raw_thread_id=raw_id if isinstance(raw_id, int) else None,
+                           implicit_topic=implicit)  # fmt: skip
+    got = ui_of(ctx).topics.command_target(inc, seq)
+    assert (got.thread_id, got.delete_thread, got.where) == want
+
+
+async def test_command_target_in_flat_mode_keeps_the_thread(ctx: AppContext) -> None:
+    async for _ in make_rig(ctx, topics=False):
+        topics = ui_of(ctx).topics
+        inc = routing.Incoming(kind="message", chat_id=1, thread_id=None, raw_thread_id=5150, implicit_topic=True)
+        assert topics.command_target(inc, 1) == CommandTarget(None, None, "flat")
+        inc = routing.Incoming(kind="message", chat_id=1, thread_id=4711, raw_thread_id=4711)
+        assert topics.command_target(inc, 1) == CommandTarget(4711, None, "flat")

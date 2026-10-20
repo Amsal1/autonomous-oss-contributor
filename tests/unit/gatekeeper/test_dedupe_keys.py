@@ -38,6 +38,7 @@ KEY_FORMATS: dict[str, bool] = {
     "status:{cid}:{event_id}": False,  # one P1 reply per GitHub event id
     "status:{cid}:{content_hash}:{edited_at}": True,  # a status card edit (content can recur)
     "mirror_row4:{approval_id}": False,  # card row 4 once per approval (item 51)
+    "topic_delete:{thread_id}": False,  # the implicit topic of a command typed in All, deleted once
 }
 
 

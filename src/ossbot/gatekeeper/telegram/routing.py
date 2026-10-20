@@ -46,6 +46,10 @@ class Incoming:
     entity_urls: tuple[str, ...] = ()
     has_media: bool = False
     date: int = 0  # unix seconds of message.date
+    # Raw thread facts for the command reply target (``Topics.command_target``); routing ignores them.
+    raw_thread_id: int | None = None  # message.message_thread_id, even without is_topic_message
+    is_topic_message: bool = False
+    implicit_topic: bool = False  # reply_to_message.forum_topic_created.is_name_implicit (Bot API 9.3)
 
 
 @dataclass(frozen=True)

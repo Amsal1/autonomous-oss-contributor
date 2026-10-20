@@ -3,6 +3,7 @@ pinned dashboard, sent into the topic it was asked from, with its own tokens so 
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -73,9 +74,127 @@ async def test_status_equals_the_pinned_dashboard_in_the_asking_topic(ctx: AppCo
     assert _purposes(ctx, rig, status) == _purposes(ctx, rig, dash)
     assert rig.token_of(status, "🔄") != rig.token_of(dash, "🔄")  # its own tokens (I3: bound per message)
     assert status.get("message_thread_id") == thread
+    assert "deleteForumTopic" not in rig.req.methods()
     assert dash["message_thread_id"] == topics["control"]
     mid = rig.message_id_of(-1)
     assert db.one(ctx.conn, "SELECT kind FROM tg_views WHERE message_id = ?", (mid,))["kind"] == "status"
+
+
+STRAY = 5150  # the topic Telegram creates for a message typed in "All" (an id the bot never made)
+IMPLICIT = {"name": "/status", "icon_color": 7322096, "is_name_implicit": True}
+EXPLICIT = {"name": "My notes", "icon_color": 7322096}
+
+
+def _deletes(rig: TgRig) -> list[int]:
+    return [int(p["message_thread_id"]) for m, p in rig.req.calls if m == "deleteForumTopic"]
+
+
+def _status_after_dashboard(ctx: AppContext, rig: TgRig, dash: dict[str, Any]) -> dict[str, Any]:
+    status = rig.sent()[-1]
+    assert status["text"] == dash["text"]
+    mid = rig.message_id_of(-1)
+    assert db.one(ctx.conn, "SELECT kind FROM tg_views WHERE message_id = ?", (mid,))["kind"] == "status"
+    return status
+
+
+@pytest.mark.parametrize("is_topic", [True, False])
+async def test_status_from_all_with_an_implicit_topic_answers_in_all_and_deletes_it(
+    ctx: AppContext, rig: TgRig, is_topic: bool
+) -> None:
+    ui_of(ctx).dashboard.send_new()
+    await rig.flush()
+    dash = _last_dashboard(rig)
+    rig.req.calls.clear()
+    await rig.say("/status", thread_id=STRAY, topic_created=IMPLICIT, is_topic=is_topic)
+    status = _status_after_dashboard(ctx, rig, dash)
+    assert "message_thread_id" not in status  # All
+    assert _deletes(rig) == [STRAY]
+    methods = rig.req.methods()
+    assert methods.index("sendMessage") < methods.index("deleteForumTopic")  # the reply first
+
+
+async def test_status_from_all_without_a_thread_id_deletes_nothing(ctx: AppContext, rig: TgRig) -> None:
+    await rig.say("/status")  # true All, or a client that omits the new topic's id (the documented limit)
+    assert "message_thread_id" not in rig.sent()[-1]
+    assert _deletes(rig) == []
+
+
+async def test_thread_without_is_topic_message_is_answered_in_that_thread(ctx: AppContext, rig: TgRig) -> None:
+    await rig.say("/status", thread_id=STRAY, is_topic=False)  # S2: no implicit flag
+    assert rig.sent()[-1]["message_thread_id"] == STRAY
+    assert _deletes(rig) == []
+
+
+@pytest.mark.parametrize("where", ["control", "reviews"])
+async def test_system_topics_answer_in_place_and_are_never_deleted(ctx: AppContext, rig: TgRig, where: str) -> None:
+    thread = _topics(ctx)[where]
+    await rig.say("/status", thread_id=thread, topic_created=IMPLICIT)
+    assert rig.sent()[-1]["message_thread_id"] == thread
+    assert _deletes(rig) == []
+
+
+async def test_user_created_topic_answers_in_place(ctx: AppContext, rig: TgRig) -> None:
+    await rig.say("/status", thread_id=4711, topic_created=EXPLICIT)
+    assert rig.sent()[-1]["message_thread_id"] == 4711
+    assert _deletes(rig) == []
+
+
+async def test_second_message_in_an_implicit_topic_answers_there(ctx: AppContext, rig: TgRig) -> None:
+    await rig.say("hi", thread_id=STRAY, topic_created={**IMPLICIT, "name": "hi"})
+    rig.req.calls.clear()
+    await rig.say("/status", thread_id=STRAY, topic_created={**IMPLICIT, "name": "hi"})
+    assert rig.sent()[-1]["message_thread_id"] == STRAY
+    assert _deletes(rig) == []
+
+
+@pytest.mark.parametrize(("command", "expect"), [("/help", "/status"), ("/title x", "Only a chat thread")])
+async def test_other_commands_from_all_answer_in_all_and_delete_their_topic(
+    ctx: AppContext, rig: TgRig, command: str, expect: str
+) -> None:
+    await rig.say(command, thread_id=STRAY, topic_created={**IMPLICIT, "name": command})
+    reply = rig.sent()[-1]
+    assert "message_thread_id" not in reply and expect in reply["text"]
+    assert _deletes(rig) == [STRAY]
+
+
+async def test_flat_mode_never_deletes_a_topic(ctx: AppContext) -> None:
+    async for flat in make_rig(ctx, topics=False):
+        ui_of(ctx).dashboard.send_new()
+        await flat.flush()
+        dash = _last_dashboard(flat)
+        await flat.say("/status", thread_id=STRAY, topic_created=IMPLICIT)
+        assert _deletes(flat) == []
+        assert dash["text"] == "🚦 " + flat.sent()[-1]["text"]
+
+
+async def test_delete_failure_is_logged_and_not_retried(
+    ctx: AppContext, rig: TgRig, caplog: pytest.LogCaptureFixture
+) -> None:
+    rig.req.fail("deleteForumTopic", "Bad Request: TOPIC_ID_INVALID")
+    with caplog.at_level(logging.INFO):
+        await rig.say("/status", thread_id=STRAY, topic_created=IMPLICIT)
+        await rig.flush()
+    assert "Updated" in rig.sent()[-1]["text"]  # the card is still sent
+    assert _deletes(rig) == [STRAY]  # one attempt only
+    assert [r for r in caplog.records if getattr(r, "event", None) == "stray_topic_delete_failed"]
+
+
+async def test_thread_fields_are_logged_without_text(
+    ctx: AppContext, rig: TgRig, caplog: pytest.LogCaptureFixture
+) -> None:
+    secret = "/status zebra-quokka-7731"
+    with caplog.at_level(logging.INFO):
+        await rig.say(secret, thread_id=STRAY, topic_created=IMPLICIT)
+    fields = [r for r in caplog.records if getattr(r, "event", None) == "tg_thread_fields"]
+    assert len(fields) == 1
+    rec = fields[0]
+    assert rec.message_thread_id == STRAY and rec.is_name_implicit is True and rec.is_command is True
+    assert rec.reply_topic_created is True and rec.has_direct_messages_topic is False
+    target = [r for r in caplog.records if getattr(r, "event", None) == "command_reply_target"]
+    assert [(r.where, r.reply_thread, r.delete_thread) for r in target] == [("stray", None, STRAY)]
+    for r in caplog.records:  # neither the message nor any extra carries the text
+        assert "zebra-quokka" not in r.getMessage()
+        assert "zebra-quokka" not in str(vars(r))
 
 
 async def test_flat_mode_differs_only_by_the_section_icon(ctx: AppContext) -> None:
