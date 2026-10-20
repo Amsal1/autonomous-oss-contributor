@@ -564,3 +564,4 @@ Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.m
 |---|---|---|---|
 | 2026-10-20 | O3 | CR3-V-2, CR3-V-3 | draft streamed, Stop ended it with partial text, no Too Many Requests |
 | 2026-10-20 | O5 | CR3-V-7 | Stop interrupts the Hermes turn; Kiro ACP request not cancelled (no session/cancel), log: in-flight request may keep running |
+| 2026-10-20 | O1 | CR3-V-4 | Threaded mode on; topics created; dashboard pin shows in All, not Control (item 4 / A4) |

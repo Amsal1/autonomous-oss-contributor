@@ -146,9 +146,10 @@ The first live PR candidate is the V3 ACP adapter for
 
 ## Known limitations
 
-- **Shutdown drain (6a).** It does not drain on a real Windows shutdown: `down.ps1` exits
-  `0xC0000142` and the next start reports `last shutdown unclean`. Crash safety held, with no lost or
-  duplicated work. The fix belongs in FEAT-008's blocker and needs R1 to verify.
+- **Shutdown drain (6a).** v1 did not drain on a real Windows shutdown: its `down.ps1` child exited
+  `0xC0000142` and the next start reported `last shutdown unclean`. Crash safety held, with no lost or
+  duplicated work. Post-v1 the blocker drains through a channel opened at logon (ADR-0021 addendum);
+  the simulated test passes, and R1 has to confirm it on a real restart. 6b is retired.
 - **Threaded mode and the pin.** Telegram runs in flat mode until Threaded mode is on in @BotFather.
   `pinChatMessage` cannot name a thread: the dashboard is pinned only once it is in 🚦 Control, and a
   client may still list that pin in "All" (O1, ADR-0020 addendum).
@@ -275,30 +276,43 @@ adds `KiroV3Client.cancel()` (ACP `session/cancel`, ADR-0002 addendum). O5 stays
 - The 6b task ended with `0xC000026B`.
 - The next start reported `last shutdown unclean`.
 
-A possible fix: a helper started at logon that already holds the `wsl.exe` session and only waits for
-the signal. The blocker that ran had been started by a simulated test, not by the logon task. R1 also
-shows whether a logon-started blocker behaves differently.
+The same happened on the restarts at 14:38 and 14:46 UTC. Windows refuses to initialise any new
+process in a session that is ending; the earlier "passes" were cancelled shutdowns only.
+
+**Post-v1 fix (ADR-0021 addendum).** No process is started at shutdown any more. At logon the blocker
+opens a drain channel, one hidden `wsl.exe -d ossbot -u root --exec ossctl drain-listen` child that
+it keeps (and restarts while the distro runs). On `WM_QUERYENDSESSION` it writes `down 90 blocker` to
+that channel and waits for `drained`. 6b (the User32 1074 task) is retired, because it hit the same
+refusal (`0xC000026B`); bootstrap removes it. The simulated test passes; only a real restart proves it.
 
 **R1 Restart** (CR1-6a, CR1-6b, DES-V-31, DES-AC-32).
 
 Steps:
 
-1. Run `scripts\status.ps1`. It should show `shutdown blocker running` and `shutdown hook Ready`. Make
-   sure no ossbot build is running, then choose Start → Power → **Restart**.
-2. Note three things:
+1. After the post-v1 redeploy, close and restart the blocker once so the new code runs:
+   `scripts\bootstrap.ps1 -Uninstall -Only shutdownhooks`, then `scripts\bootstrap.ps1 -Only shutdownhooks`
+   (this also removes the retired 6b task).
+2. Run `scripts\status.ps1`. It should show `shutdown blocker  running (pid N, idle, channel up pid M)`
+   and `shutdown hook  retired (control channel)`. Make sure no ossbot build is running, then choose
+   Start → Power → **Restart** with ossbot up.
+3. Note three things:
    - (a) whether the blocking screen lists "ossbot: stopping safely…";
    - (b) whether the restart continues without "Restart anyway";
    - (c) how long it waited.
-3. Log in again and wait 2 minutes. Then run
+4. Log in again and wait 2 minutes. Then run
    `powershell -NoProfile -File scripts\dev\restart-evidence.ps1`.
-4. Repeat once with **Shut down**. Fast Startup is on.
+5. Repeat once with **Shut down**. Fast Startup is on.
 
 Expected:
 
 - (a) yes, (b) yes, (c) up to about 90 s.
-- The blocker log shows `down.ps1 exit=0`.
-- `lifecycle.log` shows `down kind=graceful caller=blocker` and `end exit=0`.
-- `status.ps1` shows `last shutdown graceful`, or `hook` if 6b ran first.
+- The blocker log shows `channel: sent down 90 blocker`, `channel: ack`, `channel: drained exit=0`
+  and `drain exit=0; block reason destroyed=True`, with no `started pid` or `spawn refused` line.
+- `lifecycle.log` shows `down kind=graceful caller=blocker pid=…: start timeout=90 (channel)` and
+  `end exit=0`.
+- `status.ps1` shows `last shutdown graceful (marker …)`.
+- If it shows `unclean (no shutdown marker: …)`, the VM ended before the drain finished: record it with
+  `-Status missing` and attach the restart-evidence output.
 
 Record it:
 
