@@ -201,7 +201,7 @@ def explorer_view(s: Subject, section: int = 1, page: int = 1, *, picker: bool =
             rows.append([k.button("💬 Comment", "comment_hunk", s.arg(path=None)),
                          k.button("⬇️ Show card", "show_card", s.arg())])  # fmt: skip
     view = k.View(kind="explorer", blocks=blocks, rows=rows[:6], cid=s.cid, rev=s.rev, action_id=s.action_id,
-                  page=section, state={"section": section, "page": page})  # fmt: skip  # rich views: M3 (item 50)
+                  page=section, state={"section": section, "page": page}, rich=True)  # fmt: skip  # M3: behind auto
     view.max_rows = 6
     return view
 
@@ -261,5 +261,5 @@ def file_view(s: Subject, index: int, page: int = 1, *, seq: int = 0, picker_pag
         rows.append(tools)
     state = {"seq": seq, "index": index, "page": page, "lines": [list(x) for x in shown.lines]}
     view = k.View(kind="file", blocks=blocks, rows=rows, cid=s.cid, rev=s.rev, action_id=s.action_id,
-                  path=fp.path, page=page, state=state, rich=False)  # fmt: skip
+                  path=fp.path, page=page, state=state, rich=True)  # fmt: skip  # ux_prefs.file_view: classic wins
     return view

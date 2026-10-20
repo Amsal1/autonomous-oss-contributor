@@ -183,6 +183,7 @@ async def test_review_opens_the_explorer_of_an_open_card(rig: TgRig) -> None:
     approval = rig.ctx.create_approval(action, "test")
     rig.ctx.on_approval_created(approval)
     await rig.flush()
+    ui_of(rig.ctx).prefs.set("rich_views", "off")  # the explorer is rich under auto (test_rich_fallback.py)
     await rig.say("/review")
     mid = sent_with(rig, "Review which card?")
     await rig.tap(token(rig, mid, f"🧭 {cid}"), message=mid)

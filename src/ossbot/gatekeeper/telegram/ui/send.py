@@ -234,6 +234,15 @@ DOCUMENT_MAX = 45 * 1024 * 1024  # Bot API upload 50 MB (§14.17.4)
 DOC_NAME_RE = r"^[A-Za-z0-9._-]{1,80}$"
 
 
+def edit_or_resend(ctx: AppContext, view_row: Any, view: View) -> int:
+    """BA-9: edit the view's message in place (rich when it was sent rich); a refused rich edit is turned
+    into a classic reply plus a "moved ↓" stub by the outbox's failure path. Returns the message id that
+    holds the view now (the new reply's id is bound when it is sent)."""
+    message_id = int(view_row["message_id"])
+    edit(ctx, view, message_id=message_id)
+    return message_id
+
+
 def document(ctx: AppContext, name: str, data: bytes, *, caption: str = "", thread: Thread | None = None,
              thread_id: int | None = None, reply_to: int | None = None) -> int | None:  # fmt: skip
     """``sendDocument`` through the outbox: the bytes are spooled to the gatekeeper's state dir (the
@@ -256,22 +265,42 @@ def document(ctx: AppContext, name: str, data: bytes, *, caption: str = "", thre
     return ctx.outbox.enqueue("sendDocument", payload, dedupe_key=f"view:{new_token()}", thread_key=thread)
 
 
+def sent_rich(ctx: AppContext, message_id: int) -> bool:
+    """Whether the message currently holds a rich message (its last successful send or edit was rich)."""
+    row = db.one(ctx.conn, "SELECT method, payload_json FROM tg_outbox WHERE status = 'sent' AND (result_message_id"
+                           " = ? OR json_extract(payload_json, '$.message_id') = ?) ORDER BY id DESC LIMIT 1",
+                 (message_id, message_id))  # fmt: skip
+    if row is None:
+        return False
+    return row["method"] == "sendRichMessage" or (row["method"] == "editMessageText"
+                                                  and '"rich_message"' in str(row["payload_json"]))  # fmt: skip
+
+
 def edit(ctx: AppContext, view: View, *, message_id: int, dedupe_key: str | None = None,
-         chat_id: int | None = None, rich_message: bool = False) -> int | None:  # fmt: skip
+         chat_id: int | None = None, rich_message: bool | None = None) -> int | None:  # fmt: skip
     """Re-render a view in place (``editMessageText``); tokens are minted bound to ``message_id``.
-    A message that was sent rich is edited rich, with the classic view as its fallback (BA-9)."""
+    A message that was sent rich is edited rich, with the classic view as its fallback (BA-9): when a
+    rich edit is refused, ``TelegramFrontend._edit_fallback`` sends the classic view as a new reply and
+    stubs the old message "moved ↓" (``edit_or_resend``). ``rich_message`` None = detect it."""
     chat = chat_id or ctx.telegram_chat_id
     if chat == 0:
         return None
+    if rich_message is None:
+        rich_message = sent_rich(ctx, message_id)
     record = view_record(view)
     with db.transaction(ctx.conn):
         tokens = mint(ctx, view, chat_id=chat, message_id=message_id)
-        _, payload, ok = build(ctx, view, chat_id=chat, tokens=tokens)
+        built, payload, ok = build(ctx, view, chat_id=chat, tokens=tokens)
+        if built == "sendRichMessage":  # an edit is editMessageText: start from the classic twin
+            payload = dict(payload["_classic"])
         payload["message_id"] = message_id
         payload.pop("disable_notification", None)
         method = "editMessageText"
         if rich_message and ok:
-            message = rich.render(view)
+            try:
+                message = rich.render(view)
+            except ViewTooLarge:  # never a classic edit of a rich message: the stub replaces the view
+                message = rich.render(View(kind=view.kind, blocks=[], rows=[]))
             req = rawapi.EditMessageRich.model_validate({
                 "chat_id": chat, "message_id": message_id, "rich_message": blocks.dump(message),
                 "reply_markup": payload.get("reply_markup"),

@@ -66,6 +66,7 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/discovery-requests"): frozenset({R, O}),
     ("POST", "/v1/notify"): frozenset({W, R}),
     ("POST", "/v1/features/{feature}/cards"): frozenset({R}),  # FEAT-010 item 49: Hermes feature cards (U12)
+    ("POST", "/v1/reminders"): frozenset({R}),  # FEAT-010 item 50: ossbot_reminder_create (U12)
     ("GET", "/v1/models"): frozenset({O}),
     ("PUT", "/v1/models/{role}"): frozenset({O}),
     ("POST", "/v1/models/refresh"): frozenset({O}),

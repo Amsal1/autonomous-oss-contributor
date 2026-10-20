@@ -136,7 +136,15 @@ class DetailsEl:
     lines: tuple[Line, ...]
 
 
-Element = Lines | PreBlock | Quote | FooterEl | Markdown | DetailsEl
+@dataclass(frozen=True)
+class TableEl:
+    """Gatekeeper facts in columns: a rich ``table`` (header row first) or a classic aligned ``<pre>``."""
+
+    header: tuple[str, ...]
+    rows: tuple[tuple[str, ...], ...]
+
+
+Element = Lines | PreBlock | Quote | FooterEl | Markdown | DetailsEl | TableEl
 
 
 @dataclass(frozen=True)
@@ -322,7 +330,8 @@ def with_rows(view: View, rows: Rows) -> View:
 
 
 __all__ = ["CLASSIC_MAX", "Block", "Bold", "ButtonSpec", "Code", "Const", "DetailsEl", "Element", "FooterEl", "Italic",
-           "Line", "Lines", "Link", "Markdown", "PreBlock", "Quote", "Rows", "Span", "Text", "Time", "Verbatim", "View",
+           "Line", "Lines", "Link", "Markdown", "PreBlock", "Quote", "Rows", "Span", "TableEl", "Text", "Time",
+           "Verbatim", "View",
            "ViewTooLarge", "bound", "button", "card", "claim", "confirm_view", "copy_button", "disabled_button", "fact",
            "header", "line", "list_view", "mode_badge", "pager", "picker", "plain", "stub", "toast", "url_button",
            "with_rows"]  # fmt: skip

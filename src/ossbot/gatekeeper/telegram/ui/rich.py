@@ -34,6 +34,7 @@ from ossbot.gatekeeper.telegram.ui.kit import (
     PreBlock,
     Quote,
     Span,
+    TableEl,
     Text,
     Time,
     Verbatim,
@@ -110,6 +111,11 @@ def _element(el: Element, surface: str) -> list[rb.Block]:
     if isinstance(el, DetailsEl):
         return [rb.Details(summary=_line(el.summary, surface),
                            blocks=[rb.Paragraph(text=_line(ln, surface)) for ln in el.lines])]  # fmt: skip
+    if isinstance(el, TableEl):
+        cells: list[list[rb.TableCell]] = [[rb.TableCell(text=_visible(c), is_header=True) for c in el.header]]
+        cells += [[rb.TableCell(text=_visible(c) or None, align="left" if i == 0 else "right")
+                   for i, c in enumerate(r)] for r in el.rows]  # fmt: skip
+        return [rb.Table(cells=cells, is_bordered=True, is_compact=True)]
     raise TypeError(type(el).__name__)
 
 
@@ -134,6 +140,8 @@ def use_rich(view: View, prefs: UxPrefs, default: str) -> bool:
         return False
     if prefs.until("rich_unavailable_until") is not None:
         return False
+    if view.kind in {"file", "interdiff"} and prefs.get("file_view", "auto") == "classic":
+        return False  # §14.23 item 1: line comments by quote-reply on classic file views
     mode = prefs.get("rich_views", default)
     return mode in {"auto", "on"}
 

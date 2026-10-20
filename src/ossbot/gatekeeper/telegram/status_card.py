@@ -1,0 +1,345 @@
+"""S10/S11: the live status card of an open PR (DESIGN §14.11.11, §14.19 item 2).
+
+One ``tg_views(kind='status')`` message per open LIVE PR in ✅ Reviews, a reply to its card. The facts come
+from the gatekeeper's read-only GitHub client (PR, reviews, check runs, comments) in a spawned
+``github_read`` task, polled every ``POLL_S`` per PR (and on ``🔄 Refresh``); the card is edited in place
+at most once per ``telegram.status_card.min_edit_interval_s`` (60 s) and only when its content changes.
+
+* **P1 events** (a maintainer review, a comment mentioning the owner's login, a ❌ check) are new loud
+  messages replying to the status card, once per event id.
+* **Merged**: the card becomes ``🎉 Merged by @x · <time>`` with only the PR link, then a summary (time to
+  merge, review rounds, lines changed, merges this month, streak; ``message_effect_id`` when configured).
+* **Closed**: ``🗂 Closed`` with the closer and the last maintainer comment (≤ 300, quoted, untrusted).
+* ``📜 Timeline`` edits in place to the PR's events; ``🛑 Stop watching`` asks for a confirm tap, then
+  ``WATCHING → ABANDONED`` (actor human, M4); the PR stays open on GitHub.
+
+Every GitHub-authored string (titles, logins, comments, check names) is untrusted ``Text``.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import TYPE_CHECKING, Annotated, Any
+from zoneinfo import ZoneInfo
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from ossbot.common.clock import from_iso, to_iso
+from ossbot.common.schemas import State
+from ossbot.gatekeeper import db, outcomes
+from ossbot.gatekeeper.state_machine import Actor, TransitionError
+from ossbot.gatekeeper.telegram.actions import Tap, action
+from ossbot.gatekeeper.telegram.ui import kit as k
+from ossbot.gatekeeper.telegram.ui import send as ui_send
+
+if TYPE_CHECKING:
+    from ossbot.gatekeeper.context import AppContext
+
+log = logging.getLogger(__name__)
+POLL_S = 300
+CHECKS_SHOWN = 8
+EVENTS_KEPT = 200
+OPEN_STATES = (State.SUBMITTED.value, State.WATCHING.value)
+OK, PENDING, FAILED = "✅", "⏳", "❌"
+
+
+@dataclass
+class Facts:
+    state: str  # open | merged | closed
+    title: str
+    url: str
+    number: int
+    merged_by: str = ""
+    closed_at: str = ""
+    merged_at: str = ""
+    created_at: str = ""
+    changed_lines: int = 0
+    checks: list[tuple[str, str]] = field(default_factory=list)  # (name, ✅|⏳|❌)
+    approvals: int = 0
+    changes_by: list[str] = field(default_factory=list)
+    maintainer_comments: int = 0
+    last_comment_at: str = ""
+    last_maintainer_comment: str = ""
+    events: list[dict[str, str]] = field(default_factory=list)  # {id, kind, who, text, at, p1}
+
+
+def _check_icon(run: dict[str, Any]) -> str:
+    if run.get("status") != "completed":
+        return PENDING
+    return OK if run.get("conclusion") in {"success", "neutral", "skipped"} else FAILED
+
+
+async def collect(reader: Any, c: dict[str, Any], login: str) -> Facts:
+    upstream, number = str(c["upstream"]), int(c["pr_number"])
+    pr = await reader.pull(upstream, number) or {}
+    facts = Facts("merged" if pr.get("merged") else str(pr.get("state") or "open"), str(pr.get("title") or ""),
+                  str(pr.get("html_url") or c.get("pr_url") or ""), number,
+                  merged_by=str((pr.get("merged_by") or {}).get("login") or ""), closed_at=str(pr.get("closed_at")
+                  or ""), merged_at=str(pr.get("merged_at") or ""), created_at=str(pr.get("created_at") or ""),
+                  changed_lines=int(pr.get("additions") or 0) + int(pr.get("deletions") or 0))  # fmt: skip
+    sha = str((pr.get("head") or {}).get("sha") or c.get("head_sha") or "")
+    if sha:
+        facts.checks = [(str(r.get("name") or "?")[:60], _check_icon(r)) for r in await reader.check_runs(upstream,
+                                                                                                      sha)]  # fmt: skip
+        for name, icon in facts.checks:
+            if icon == FAILED:
+                facts.events.append({"id": f"check:{sha[:12]}:{name}", "kind": "check", "who": "", "text": name,
+                                     "at": "", "p1": "1"})  # fmt: skip
+    latest: dict[str, str] = {}
+    for r in await reader.reviews(upstream, number):
+        who = str((r.get("user") or {}).get("login") or "")
+        if not who or who.lower() == login.lower():
+            continue
+        state = str(r.get("state") or "")
+        latest[who] = state
+        facts.events.append({"id": f"review:{r.get('id')}", "kind": "review", "who": who, "text": state.lower(),
+                             "at": str(r.get("submitted_at") or ""), "p1": "1"})  # fmt: skip
+    facts.approvals = sum(1 for s in latest.values() if s == "APPROVED")
+    facts.changes_by = [w for w, s in latest.items() if s == "CHANGES_REQUESTED"]
+    for cm in await reader.comments_since(upstream, number, str(c.get("created_at") or "1970-01-01T00:00:00Z")):
+        who = str((cm.get("user") or {}).get("login") or "")
+        if not who or who.lower() == login.lower():
+            continue
+        body = str(cm.get("body") or "")
+        facts.maintainer_comments += 1
+        facts.last_comment_at = str(cm.get("created_at") or "")
+        facts.last_maintainer_comment = body
+        mention = f"@{login}".lower() in body.lower() if login else False
+        facts.events.append({"id": f"comment:{cm.get('id')}", "kind": "comment", "who": who, "text": body[:300],
+                             "at": facts.last_comment_at, "p1": "1" if mention else ""})  # fmt: skip
+    return facts
+
+
+def _time(iso: str, fallback: str = "") -> k.Span:
+    try:
+        at = from_iso(iso) if iso.endswith("Z") or "+" in iso else datetime.fromisoformat(iso)
+    except ValueError:
+        return k.Const(fallback)
+    return k.Time(int(at.timestamp()), at.strftime("%Y-%m-%d %H:%M"))
+
+
+def view(ctx: AppContext, c: dict[str, Any], f: Facts) -> k.View:
+    repo = str(c["upstream"])
+    ok = sum(1 for _, i in f.checks if i == OK)
+    pending = sum(1 for _, i in f.checks if i == PENDING)
+    failed = sum(1 for _, i in f.checks if i == FAILED)
+    if f.state == "merged":
+        head: k.Line = (k.Const("🎉 "), k.Bold(k.Const("Merged")), k.Const(" by @"), k.Text(f.merged_by or "?", 40),
+                        k.Const(" · "), _time(f.merged_at))  # fmt: skip
+        lines: list[k.Line] = [head, (k.Bold(k.Text(f.title, 200)),)]
+        return k.View(kind="status", cid=str(c["id"]), rows=[[k.url_button("🔗 Open PR ↗", f.url)]] if f.url else [],
+                      blocks=[k.Block((k.Lines(tuple(lines)),))])  # fmt: skip
+    if f.state == "closed":
+        lines = [(k.Const("🗂 "), k.Bold(k.Const("Closed")), k.Const(f" · PR #{f.number} · "), k.Text(repo, 100)),
+                 (k.Bold(k.Text(f.title, 200)),)]  # fmt: skip
+        blocks = [k.Block((k.Lines(tuple(lines)),))]
+        if f.last_maintainer_comment:
+            blocks.append(k.Block((k.Quote(((k.Text(f.last_maintainer_comment, 300),),)),), name="last"))
+        return k.View(kind="status", cid=str(c["id"]), blocks=blocks,
+                      rows=[[k.url_button("🔗 Open PR ↗", f.url)]] if f.url else [])  # fmt: skip
+    lines = [
+        (k.Const("🚀 "), k.Bold(k.Const(f"PR #{f.number} open")), k.Const(" · "), k.Text(repo, 100), k.Const(" · "),
+         k.mode_badge(False)),
+        (k.Bold(k.Text(f.title, 200)),),
+        k.line(f"CI: {OK} {ok} · {PENDING} {pending} · {FAILED} {failed}"),
+        (k.Const("Reviews: "), k.Text(", ".join(f"👀 @{w} requested changes" for w in f.changes_by) or "none yet",
+                                      200), k.Const(f" · {f.approvals} approvals")),
+        (k.Const(f"Comments: {f.maintainer_comments} from maintainers"),
+         *((k.Const(" · last "), _time(f.last_comment_at)) if f.last_comment_at else ())),
+        k.line(f"Watch: round {int(c.get('watch_rounds') or 0)}/{ctx.config.policy.limits.watch_rounds_max}"),
+    ]  # fmt: skip
+    blocks = [k.Block((k.Lines(tuple(lines)),), name="facts")]
+    if f.checks:
+        shown = " · ".join(f"{i} {n}" for n, i in f.checks[:CHECKS_SHOWN]) + (" · …" if len(f.checks) > 8 else "")
+        blocks.append(k.Block((k.Quote(((k.Text(shown, 900),),), expandable=True),), required=False, name="checks"))
+    cid = str(c["id"])
+    rows: k.Rows = [[*([k.url_button("🔗 Open PR ↗", f.url)] if f.url else []),
+                     k.button("🔄 Refresh", "status_refresh", {"cid": cid})],
+                    [k.button("📜 Timeline", "status_timeline", {"cid": cid}),
+                     k.button("🛑 Stop watching", "stop_watch", {"cid": cid})]]  # fmt: skip
+    return k.View(kind="status", cid=cid, blocks=blocks, rows=rows, rich=True)
+
+
+def _hash(v: k.View) -> str:
+    return hashlib.sha256(repr((v.blocks, [[b.label for b in r] for r in v.rows])).encode()).hexdigest()[:16]
+
+
+def _existing(ctx: AppContext, cid: str) -> Any:
+    return db.one(ctx.conn, "SELECT * FROM tg_views WHERE kind = 'status' AND cid = ? AND stale = 0"
+                            " ORDER BY message_id DESC LIMIT 1", (cid,))  # fmt: skip
+
+
+def _card_message(ctx: AppContext, cid: str) -> int | None:
+    row = db.one(ctx.conn, "SELECT message_id FROM tg_views WHERE kind = 'card' AND cid = ? ORDER BY message_id DESC"
+                           " LIMIT 1", (cid,))  # fmt: skip
+    return int(row["message_id"]) if row is not None else None
+
+
+def _set_state(ctx: AppContext, message_id: int, state: dict[str, Any]) -> None:
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE tg_views SET state_json = ?, updated_at = ? WHERE message_id = ?",
+                         (json.dumps(state), to_iso(ctx.clock.now()), message_id))  # fmt: skip
+
+
+def _summary(ctx: AppContext, c: dict[str, Any], f: Facts) -> k.View:
+    zone = ZoneInfo(ctx.config.profile.telegram.timezone)
+    now = ctx.clock.now()
+    month_start = now.astimezone(zone).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    merged_month = int(ctx.conn.execute("SELECT COUNT(*) FROM outcomes WHERE result = 'merged' AND finished_at >= ?",
+                                        (to_iso(month_start.astimezone(now.tzinfo)),)).fetchone()[0])  # fmt: skip
+    from ossbot.gatekeeper.telegram import digest  # noqa: PLC0415 - digest imports the runtime
+
+    days = outcomes.streak(digest.live_days(ctx), now.astimezone(zone).date())
+    spent = ""
+    if f.created_at and f.merged_at:
+        try:
+            delta = datetime.fromisoformat(f.merged_at.replace("Z", "+00:00")) - datetime.fromisoformat(
+                f.created_at.replace("Z", "+00:00"))  # fmt: skip
+            spent = f"{delta.days} d {delta.seconds // 3600} h"
+        except ValueError:
+            spent = ""
+    lines = (k.header("🎉", "Merged", f"PR #{f.number}"),
+             k.line(f"Time to merge {spent or '—'} · review rounds {int(c.get('watch_rounds') or 0)} · "
+                    f"{f.changed_lines} lines changed"),
+             k.line(f"Merge #{max(1, merged_month)} this month · streak {days} day{'s' if days != 1 else ''}"),
+             )  # fmt: skip
+    return k.View(kind="fyi", blocks=[k.Block((k.Lines(lines),))])
+
+
+async def refresh(ctx: AppContext, reader: Any, cid: str, *, force: bool = False) -> bool:
+    """Read the PR and send, edit or finalize its status card. True when something was queued."""
+    c = db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (cid,))
+    if c is None or c["pr_number"] is None or reader is None:
+        return False
+    facts = await collect(reader, dict(c), ctx.config.profile.github_login)
+    v = view(ctx, dict(c), facts)
+    digest_ = _hash(v)
+    existing = _existing(ctx, cid)
+    now = ctx.clock.now()
+    if existing is None:
+        if facts.state != "open":
+            return False
+        ui_send.deliver(ctx, v, thread="reviews", reply_to=_card_message(ctx, cid), silent=True,
+                        dedupe_key=f"status:{cid}:card")  # fmt: skip
+        return True
+    state = json.loads(existing["state_json"] or "{}")
+    mid = int(existing["message_id"])
+    queued = False
+    seen = set(state.get("seen", []))
+    for ev in facts.events:
+        if ev["id"] in seen:
+            continue
+        seen.add(ev["id"])
+        if ev["p1"] and facts.state == "open":
+            label = {"review": "👀 Review", "comment": "💬 Mention", "check": "❌ Check failed"}[ev["kind"]]
+            line: k.Line = (k.Const(f"{label} · PR #{facts.number}"), *((k.Const(" · @"), k.Text(ev["who"], 40))
+                            if ev["who"] else ()), k.Const(": "), k.Text(ev["text"], 300))  # fmt: skip
+            ui_send.deliver(ctx, k.plain("fyi", line), thread="reviews", reply_to=mid, priority=1,
+                            dedupe_key=f"status:{cid}:{ev['id']}")  # fmt: skip
+            queued = True
+    state["seen"] = sorted(seen)[-EVENTS_KEPT:]
+    state["events"] = [{k_: e[k_] for k_ in ("kind", "who", "text", "at")} for e in facts.events][-50:]
+    state["polled_at"] = to_iso(now)
+    last_edit = state.get("edited_at")
+    interval = timedelta(seconds=ctx.config.telegram.status_card.min_edit_interval_s)
+    changed = digest_ != state.get("hash")
+    final = facts.state != "open"
+    if changed and (force or final or last_edit is None or now - from_iso(last_edit) >= interval):
+        ui_send.edit(ctx, v, message_id=mid, dedupe_key=f"status:{cid}:{digest_}")
+        state.update({"hash": digest_, "edited_at": to_iso(now)})
+        queued = True
+        if facts.state == "merged" and not state.get("summary_sent"):
+            effect = ctx.config.telegram.effects.merged
+            out = ui_send.deliver(ctx, _summary(ctx, dict(c), facts), thread="reviews", reply_to=mid,
+                                  dedupe_key=f"status:{cid}:merged")  # fmt: skip
+            if effect and out is not None:
+                row = db.one(ctx.conn, "SELECT payload_json FROM tg_outbox WHERE id = ?", (out,))
+                if row is not None:
+                    payload = {**json.loads(row["payload_json"]), "message_effect_id": effect}
+                    ctx.conn.execute("UPDATE tg_outbox SET payload_json = ? WHERE id = ?", (json.dumps(payload), out))
+            state["summary_sent"] = True
+    _set_state(ctx, mid, state)
+    return queued
+
+
+async def tick(ctx: AppContext, reader: Any) -> int:
+    """Poll every open LIVE PR whose card was polled ``POLL_S`` ago or never (one PR per tick)."""
+    if reader is None:
+        return 0
+    marks = ",".join("?" * len(OPEN_STATES))
+    rows = ctx.conn.execute(f"SELECT id FROM contributions WHERE pr_number IS NOT NULL AND state IN ({marks})"  # noqa: S608
+                            " ORDER BY updated_at", OPEN_STATES).fetchall()  # fmt: skip
+    now = ctx.clock.now()
+    for r in rows:
+        existing = _existing(ctx, str(r["id"]))
+        polled = json.loads(existing["state_json"] or "{}").get("polled_at") if existing is not None else None
+        if polled is None or now - from_iso(polled) >= timedelta(seconds=POLL_S):
+            try:
+                await refresh(ctx, reader, str(r["id"]))
+            except Exception:  # noqa: BLE001 - one PR's failed read never stops the others
+                log.warning("status card refresh failed", extra={"event": "status_card_failed"})
+            return 1
+    return 0
+
+
+# ------------------------------------------------------------------------------------ buttons
+class CidArg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cid: Annotated[str, Field(pattern=r"^c_[0-9A-HJKMNP-TV-Z]{10}$")]
+
+
+@action("status_refresh", arg=CidArg, effect="io")
+async def status_refresh(tap: Tap) -> str:
+    done = await refresh(tap.app, getattr(tap.handlers, "reader", None), tap.arg.cid, force=True)
+    return "🔄 Refreshed." if done else "🔄 No change."
+
+
+@action("status_timeline", arg=CidArg)
+async def status_timeline(tap: Tap) -> str:
+    row = _existing(tap.app, tap.arg.cid)
+    events = json.loads(row["state_json"] or "{}").get("events", []) if row is not None else []
+    lines: list[k.Line] = [k.header("📜", "Timeline", tap.arg.cid)]
+    for e in events[-15:]:
+        who = f" @{e['who']}" if e.get("who") else ""
+        lines.append((k.Const(f"{e['kind']}{who}: "), k.Text(str(e.get("text") or ""), 120)))
+    if not events:
+        lines.append(k.line("No events yet."))
+    rows = [[k.button("🔄 Refresh", "status_refresh", {"cid": tap.arg.cid})]]
+    ui_send.edit(tap.app, k.View(kind="status", cid=tap.arg.cid, blocks=[k.Block((k.Lines(tuple(lines)),))],
+                                 rows=rows), message_id=tap.message_id)  # fmt: skip
+    return ""
+
+
+@action("stop_watch", arg=CidArg)
+async def stop_watch(tap: Tap) -> str:
+    """M4: the confirm tap (single-use, 24 h) is a separate message."""
+    rows: k.Rows = [[k.button("🛑 Stop watching", "stop_watch_confirm", {"cid": tap.arg.cid}, style="danger",
+                              single_use=True),
+                     k.button("↩️ Cancel", "stop_watch_cancel", {"cid": tap.arg.cid}, single_use=True)]]  # fmt: skip
+    view = k.confirm_view("Stop watching this PR? No more replies or fixes are drafted; the PR stays open on"
+                          " GitHub.", rows=rows)  # fmt: skip
+    ui_send.deliver(tap.app, view, thread_id=tap.thread_id, reply_to=tap.message_id)
+    return ""
+
+
+@action("stop_watch_confirm", arg=CidArg)
+async def stop_watch_confirm(tap: Tap) -> str:
+    try:
+        tap.app.state_machine.transition(tap.arg.cid, State.WATCHING, State.ABANDONED, Actor.HUMAN,
+                                         {"reason": "stop_watching"}, tap.actor)  # fmt: skip
+    except TransitionError as exc:
+        text = f"Not changed: {str(exc)[:120]}"
+    else:
+        text = "🛑 Stopped watching. The PR stays open on GitHub."
+    ui_send.edit(tap.app, k.plain("fyi", k.line(text)), message_id=tap.message_id)
+    return ""
+
+
+@action("stop_watch_cancel", arg=CidArg)
+async def stop_watch_cancel(tap: Tap) -> str:
+    ui_send.edit(tap.app, k.plain("fyi", k.line("Still watching.")), message_id=tap.message_id)
+    return ""

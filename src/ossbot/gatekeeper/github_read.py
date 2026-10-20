@@ -111,3 +111,32 @@ class GitHubReader:
             f"/repos/{upstream}/issues/{number}/comments", {"since": since, "per_page": "100"}
         )
         return [d for d in doc if isinstance(d, dict)] if isinstance(doc, list) else []
+
+    async def _list(self, path: str, params: dict[str, str] | None = None) -> list[dict[str, Any]]:
+        doc = await self.json_or_none(path, {"per_page": "100", **(params or {})})
+        return [d for d in doc if isinstance(d, dict)] if isinstance(doc, list) else []
+
+    # ------------------------------------------------- digest stats and the status card (§14.13.4, §14.11.11)
+    async def followers(self, login: str) -> int | None:
+        """``GET /users/{login}`` ``followers``."""
+        doc = await self.json_or_none(f"/users/{login}")
+        value = doc.get("followers") if isinstance(doc, dict) else None
+        return value if isinstance(value, int) else None
+
+    async def stars(self, login: str, *, max_pages: int = 10) -> int:
+        """Sum of ``stargazers_count`` over the user's non-fork public repos (``type=owner``, paged)."""
+        total = 0
+        for page in range(1, max_pages + 1):
+            repos = await self._list(f"/users/{login}/repos", {"type": "owner", "page": str(page)})
+            total += sum(int(r.get("stargazers_count") or 0) for r in repos if not r.get("fork"))
+            if len(repos) < 100:
+                break
+        return total
+
+    async def reviews(self, upstream: str, number: int) -> list[dict[str, Any]]:
+        return await self._list(f"/repos/{upstream}/pulls/{number}/reviews")
+
+    async def check_runs(self, upstream: str, sha: str) -> list[dict[str, Any]]:
+        doc = await self.json_or_none(f"/repos/{upstream}/commits/{sha}/check-runs", {"per_page": "100"})
+        runs = doc.get("check_runs") if isinstance(doc, dict) else None
+        return [r for r in runs if isinstance(r, dict)] if isinstance(runs, list) else []

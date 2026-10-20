@@ -35,6 +35,7 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow, OutboxWorker, SendError
 from ossbot.gatekeeper.pollstats import PollStats
+from ossbot.gatekeeper.telegram import digest, reminders, status_card
 from ossbot.gatekeeper.telegram.commands import admin as admin_cmds
 from ossbot.gatekeeper.telegram.commands.registry import load_plugins
 from ossbot.gatekeeper.telegram.handlers import Handlers
@@ -217,6 +218,8 @@ class TelegramFrontend:
         self._lifecycle_seen: tuple[str, str] | None = None
         self._back_online: tuple[int, bool] | None = None  # (seconds offline, graceful down) until announced
         self._last_beat: datetime | None = None
+        self.reader: Any = None  # the gatekeeper's GitHub read client (digest stats, status cards)
+        self._reads: asyncio.Task[None] | None = None
 
     def _prepare(self, row: OutboxRow) -> OutboxRow:
         """Sound and coalescing (§14.13), then the topic (§14.10.1), just before each send."""
@@ -252,11 +255,15 @@ class TelegramFrontend:
         "moved ↓" and its view row goes stale; the view's tokens are re-bound to the new message."""
         old = int(row.payload.get("message_id") or 0)
         payload = {k_: v for k_, v in classic.items() if k_ != "message_id"}
-        payload["reply_parameters"] = {"message_id": old, "allow_sending_without_reply": True}
         tokens = [b_["callback_data"][2:] for r in (classic.get("reply_markup") or {}).get("inline_keyboard", [])
                   for b_ in r if "callback_data" in b_]  # fmt: skip
         stored = db.one(self.ctx.conn, "SELECT view_json FROM tg_outbox WHERE id = ?", (row.id,))
         view = json.loads(stored["view_json"]) if stored is not None and stored["view_json"] else None
+        # AC 64: a review view moves below as a reply to its card; any other view replies to the old message
+        card = db.one(self.ctx.conn, "SELECT message_id FROM tg_views WHERE kind = 'card' AND action_id = ? ORDER BY"
+                                     " message_id DESC LIMIT 1", ((view or {}).get("action_id"),))  # fmt: skip
+        target = int(card["message_id"]) if card is not None else old
+        payload["reply_parameters"] = {"message_id": target, "allow_sending_without_reply": True}
         with db.transaction(self.ctx.conn):
             if tokens:
                 marks = ",".join("?" * len(tokens))
@@ -331,8 +338,19 @@ class TelegramFrontend:
             await self.ui.scopes.set_description(self.sender.call, text)
             self.ui.dashboard.tick(force=True)
         self.ui.notifier.release()  # held P2 rows whose window or quiet hours ended (§14.13.3)
+        reminders.fire_due(self.ctx)  # §14.19 item 3: the gatekeeper's own scheduler
+        if (self._reads is None or self._reads.done()) and self.ctx.control.view().state != "killed":
+            self._reads = asyncio.create_task(self._background_reads())
         self._heartbeat()
         self.ui.dashboard.tick()
+
+    async def _background_reads(self) -> None:
+        """Digest runs and status cards: GitHub GETs off the outbox loop, one pass at a time."""
+        for step in (digest.tick, status_card.tick):
+            try:
+                await step(self.ctx, self.reader)
+            except Exception:
+                log.exception("background telegram read failed", extra={"event": "telegram_reads_failed"})
 
     def _note_offline(self) -> None:
         """At start: how long the gatekeeper was gone (the last heartbeat) and whether that was a full

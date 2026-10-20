@@ -1,0 +1,232 @@
+"""The daily and weekly digest (DESIGN §14.13.4, §14.19 item 1; AC 42).
+
+Daily at ``telegram.digest.daily`` and weekly at ``telegram.digest.weekly`` (local time,
+``telegram.timezone``), both to 📈 OSS feed as silent P2; a kind whose ``/notify`` toggle is off is not
+generated at all. One ``digest_runs`` row per ``(kind, period_start)`` makes each run happen once.
+
+Content: LIVE contributions (opened, merged, closed, rejected) with dry-run rehearsals counted apart,
+pending approvals and the soonest expiry, PRs waiting on maintainers vs on you, review rounds, followers
+and stars gained (gatekeeper GitHub reads, snapshotted in ``digest_runs.stats_json``; "gained" is the
+delta to the previous snapshot), the streak, top error classes, Hermes usage, and the merge rate by size
+class (weekly, and daily when a proposal or merge happened that day). No button changes the size
+preference; the digest only names ``/size``.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from collections import Counter
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from typing import TYPE_CHECKING, Any, Literal
+from zoneinfo import ZoneInfo
+
+from ossbot.common.clock import from_iso, to_iso
+from ossbot.gatekeeper import db, outcomes
+from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.ui import kit as k
+from ossbot.gatekeeper.telegram.ui import send as ui_send
+
+if TYPE_CHECKING:
+    from ossbot.gatekeeper.context import AppContext
+
+log = logging.getLogger(__name__)
+Kind = Literal["daily", "weekly"]
+DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+WINDOW_DAYS = 90
+LIVE_EVENTS = ("open_pr", "push_update", "comment")
+
+
+@dataclass(frozen=True)
+class Period:
+    kind: Kind
+    start: date  # local date the run belongs to (daily: today; weekly: the configured weekday)
+    since: datetime  # UTC start of the counted window
+    until: datetime
+
+
+def _zone(ctx: AppContext) -> ZoneInfo:
+    return ZoneInfo(ctx.config.profile.telegram.timezone)
+
+
+def due(ctx: AppContext, now: datetime | None = None) -> list[Period]:
+    """The digests whose local time has come and that have no ``digest_runs`` row yet."""
+    now = now or ctx.clock.now()
+    zone = _zone(ctx)
+    local = now.astimezone(zone)
+    cfg = ctx.config.telegram.digest
+    toggles = ui_of(ctx).notifier.toggles()
+    out: list[Period] = []
+    hh, mm = (int(x) for x in cfg.daily.split(":"))
+    if toggles.get("digest_daily", True) and local.time() >= time(hh, mm):
+        start = local.date()
+        out.append(Period("daily", start, (now - timedelta(days=1)), now))
+    day, at = cfg.weekly.split(" ")
+    wh, wm = (int(x) for x in at.split(":"))
+    if toggles.get("digest_weekly", True) and DAYS[local.weekday()] == day and local.time() >= time(wh, wm):
+        out.append(Period("weekly", local.date(), now - timedelta(days=7), now))
+    return [p for p in out if db.one(ctx.conn, "SELECT 1 FROM digest_runs WHERE kind = ? AND period_start = ?",
+                                     (p.kind, p.start.isoformat())) is None]  # fmt: skip
+
+
+def _count(ctx: AppContext, sql: str, params: tuple[Any, ...]) -> int:
+    return int(ctx.conn.execute(sql, params).fetchone()[0])
+
+
+def live_days(ctx: AppContext) -> set[date]:
+    """Local days with a LIVE contribution event: an executed action or a merge."""
+    zone = _zone(ctx)
+    stamps = [str(r[0]) for r in ctx.conn.execute(
+        "SELECT executed_at FROM outbound_actions WHERE status = 'done' AND executed_at IS NOT NULL"
+        " AND kind IN ('open_pr', 'push_update', 'comment')")]  # fmt: skip
+    stamps += [str(r[0]) for r in ctx.conn.execute(
+        "SELECT finished_at FROM outcomes WHERE result = 'merged' AND finished_at IS NOT NULL")]  # fmt: skip
+    return {from_iso(s).astimezone(zone).date() for s in stamps}
+
+
+def _previous_stats(ctx: AppContext, kind: Kind) -> dict[str, Any]:
+    row = db.one(ctx.conn, "SELECT stats_json FROM digest_runs WHERE kind = ? AND sent_at IS NOT NULL"
+                           " ORDER BY period_start DESC LIMIT 1", (kind,))  # fmt: skip
+    return json.loads(row["stats_json"]) if row is not None else {}
+
+
+async def github_stats(ctx: AppContext, reader: Any) -> dict[str, int]:
+    """Followers and stars (read-only GETs with the gatekeeper's read client); {} when unavailable."""
+    login = ctx.config.profile.github_login
+    if reader is None or not login:
+        return {}
+    try:
+        followers = await reader.followers(login)
+        stars = await reader.stars(login)
+    except Exception:  # noqa: BLE001 - a failed read only drops the two lines
+        log.warning("digest GitHub stats unavailable", extra={"event": "digest_stats_failed"})
+        return {}
+    return {"followers": followers, "stars": stars} if followers is not None else {"stars": stars}
+
+
+def collect(ctx: AppContext, period: Period, gh: dict[str, int]) -> dict[str, Any]:
+    since, until = to_iso(period.since), to_iso(period.until)
+    span = (since, until)
+    stats: dict[str, Any] = {
+        "opened": _count(ctx, "SELECT COUNT(*) FROM outcomes WHERE pr_opened_at >= ? AND pr_opened_at < ?", span),
+        "merged": _count(ctx, "SELECT COUNT(*) FROM outcomes WHERE result = 'merged' AND finished_at >= ?"
+                              " AND finished_at < ?", span),
+        "closed": _count(ctx, "SELECT COUNT(*) FROM outcomes WHERE result = 'closed' AND finished_at >= ?"
+                              " AND finished_at < ?", span),
+        "rejected": _count(ctx, "SELECT COUNT(*) FROM contributions WHERE state IN ('REJECTED','PROPOSAL_REJECTED')"
+                                " AND updated_at >= ? AND updated_at < ?", span),
+        "dry_run": _count(ctx, "SELECT COUNT(*) FROM outcomes WHERE result = 'dry_run' AND finished_at >= ?"
+                               " AND finished_at < ?", span),
+        "proposed": _count(ctx, "SELECT COUNT(*) FROM outcomes WHERE proposed_at >= ? AND proposed_at < ?", span),
+        "pending": _count(ctx, "SELECT COUNT(*) FROM approvals WHERE status IN ('pending','armed')", ()),
+        "waiting_maintainers": _count(ctx, "SELECT COUNT(*) FROM contributions WHERE state = 'WATCHING'", ()),
+        "waiting_you": _count(ctx, "SELECT COUNT(*) FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+                                   " WHERE a.status IN ('pending','armed') AND o.kind IN ('comment','push_update')",
+                              ()),
+        "review_rounds": _count(ctx, "SELECT COALESCE(SUM(watch_rounds), 0) FROM contributions WHERE state ="
+                                     " 'WATCHING'", ()),
+        "turns": _count(ctx, "SELECT COUNT(*) FROM chat_turns WHERE started_at >= ? AND started_at < ?", span),
+        "hermes_demoted": ctx.audit.count_since("hermes_p1_demoted", since),
+        **gh,
+    }  # fmt: skip
+    soonest = db.one(ctx.conn, "SELECT MIN(expires_at) AS e FROM approvals WHERE status IN ('pending','armed')")
+    stats["soonest_expiry"] = soonest["e"] if soonest is not None else None
+    models = Counter(
+        str(r[0])
+        for r in ctx.conn.execute(
+            "SELECT model FROM chat_turns WHERE started_at >= ? AND started_at < ? AND model IS NOT NULL", span
+        )
+    )
+    stats["models"] = dict(models.most_common(3))
+    errors = Counter(
+        str(r[0])
+        for r in ctx.conn.execute(
+            "SELECT error_class FROM stage_runs WHERE error_class IS NOT NULL AND started_at >= ?", (since,)
+        )
+    )
+    stats["errors"] = dict(errors.most_common(3))
+    stats["streak"] = outcomes.streak(live_days(ctx), period.start)
+    return stats
+
+
+def _gained(stats: dict[str, Any], prev: dict[str, Any], key: str) -> str | None:
+    if key not in stats:
+        return None
+    if key not in prev:
+        return f"{stats[key]}"
+    delta = int(stats[key]) - int(prev[key])
+    return f"{stats[key]} ({'+' if delta >= 0 else ''}{delta})"
+
+
+def view(ctx: AppContext, period: Period, stats: dict[str, Any], prev: dict[str, Any]) -> k.View:
+    title = "Daily digest" if period.kind == "daily" else "Weekly digest"
+    lines: list[k.Line] = [
+        k.header("📈", title, period.start.isoformat()),
+        k.fact("🚀 LIVE:", f"{stats['opened']} opened · {stats['merged']} merged · {stats['closed']} closed · "
+                          f"{stats['rejected']} rejected"),
+        k.fact("🧪 Dry runs:", str(stats["dry_run"])),
+        k.fact("✅ Pending approvals:", str(stats["pending"])),
+        k.fact("⏳ Waiting:", f"{stats['waiting_maintainers']} on maintainers · {stats['waiting_you']} on you"),
+        k.fact("🔁 Review rounds:", str(stats["review_rounds"])),
+    ]  # fmt: skip
+    if stats.get("soonest_expiry"):
+        at = from_iso(str(stats["soonest_expiry"]))
+        lines.append((k.Const("⌛ Soonest expiry "), k.Time(int(at.timestamp()), at.strftime("%Y-%m-%d %H:%M"))))
+    for key, label in (("followers", "👥 Followers:"), ("stars", "⭐ Stars:")):
+        shown = _gained(stats, prev, key)
+        if shown is not None:
+            lines.append(k.fact(label, shown))
+    lines.append(k.fact("🔥 Streak:", f"{stats['streak']} day{'s' if stats['streak'] != 1 else ''}"))
+    if stats["errors"]:
+        lines.append(k.fact("❌ Top errors:", ", ".join(f"{e} ×{n}" for e, n in stats["errors"].items())))
+    models = ", ".join(f"{m} ×{n}" for m, n in stats["models"].items())
+    lines.append(k.fact("🤖 Hermes:", f"{stats['turns']} turns" + (f" · {models}" if models else "")))
+    if stats["hermes_demoted"]:
+        lines.append(k.line(f"🤖 Hermes asked for {stats['hermes_demoted']} more loud notices today"))
+    blocks = [k.Block((k.Lines(tuple(lines)),), name="facts")]
+    if period.kind == "weekly" or stats["proposed"] or stats["merged"]:
+        since = to_iso(ctx.clock.now() - timedelta(days=WINDOW_DAYS))
+        rows = outcomes.merge_rate_rows(ctx.conn, since)
+        if rows:
+            table = k.TableEl(
+                ("class", "proposed", "started", "PRs", "merged", "rate"),
+                tuple((r.label, str(r.proposed), str(r.started), str(r.prs), str(r.merged), r.rate) for r in rows),
+            )
+            limit = ctx.discovery_prefs.effective().autonomous_max_class
+            blocks.append(k.Block((
+                k.Lines(((k.Const("📏 "), k.Bold(k.Const("By size")), k.Const(" · last 90 days · LIVE only")),)),
+                table, k.Lines((k.line(f"Auto size ≤ {limit} · tune with /size"),)),
+            ), required=False, priority=1, name="by_size"))  # fmt: skip
+    return k.View(kind="digest", blocks=blocks, rich=True)
+
+
+async def run(ctx: AppContext, period: Period, reader: Any) -> int | None:
+    """Collect, render, record and send one digest (the ``digest_runs`` row first: it runs once)."""
+    prev = _previous_stats(ctx, period.kind)
+    stats = collect(ctx, period, await github_stats(ctx, reader))
+    with db.transaction(ctx.conn):
+        cur = ctx.conn.execute("INSERT INTO digest_runs (kind, period_start, sent_at, stats_json) VALUES (?, ?, ?, ?)"
+                               " ON CONFLICT(kind, period_start) DO NOTHING",
+                               (period.kind, period.start.isoformat(), to_iso(ctx.clock.now()),
+                                json.dumps(stats, sort_keys=True)))  # fmt: skip
+        if not cur.rowcount:
+            return None
+    return ui_send.deliver(ctx, view(ctx, period, stats, prev), thread="feed", priority=2, silent=True,
+                           dedupe_key=f"digest:{period.kind}:{period.start.isoformat()}",
+                           category=f"digest_{period.kind}")  # fmt: skip
+
+
+async def tick(ctx: AppContext, reader: Any) -> int:
+    sent = 0
+    for period in due(ctx):
+        if await run(ctx, period, reader) is not None:
+            sent += 1
+    return sent
+
+
+def now_period(ctx: AppContext, kind: Kind) -> Period:
+    """``📨 Send now``: today's period of ``kind`` (a second Send now the same day sends nothing new)."""
+    now = ctx.clock.now()
+    days = 1 if kind == "daily" else 7
+    return Period(kind, now.astimezone(_zone(ctx)).date(), now - timedelta(days=days), now)

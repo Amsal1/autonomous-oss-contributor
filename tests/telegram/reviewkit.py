@@ -9,6 +9,7 @@ from typing import Any
 
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.telegram.prefs import UxPrefs
 from tests.conftest import packaged_contribution
 from tests.telegram.tgharness import TgRig
 
@@ -57,8 +58,11 @@ def write_patch(ctx: AppContext, cid: str, rev: int, text: str = PATCH) -> None:
 
 
 async def publish(rig: TgRig, action: str) -> Card:
-    """A new approval for ``action``, published and delivered (card, parts, then the arm edit)."""
+    """A new approval for ``action``, published and delivered (card, parts, then the arm edit). The review
+    views stay classic here (``rich_views: off``), so these tests read their HTML; the rich forms and the
+    rich -> classic fallback are covered by ``test_rich_fallback.py``."""
     ctx = rig.ctx
+    UxPrefs(ctx.conn, ctx.clock).set("rich_views", "off")
     with db.transaction(ctx.conn):
         approval = ctx.create_approval(action, "test")
     ctx.on_approval_created(approval)

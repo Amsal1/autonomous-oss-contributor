@@ -30,6 +30,7 @@ from ossbot.gatekeeper.telegram.ui.kit import (
     PreBlock,
     Quote,
     Span,
+    TableEl,
     Text,
     Time,
     Verbatim,
@@ -116,6 +117,12 @@ def _element(el: Element, c: _Ctx) -> str:
     if isinstance(el, DetailsEl):
         inner = "\n".join(_line(ln, c) for ln in el.lines)
         return f"<b>{_line(el.summary, c)}</b>\n<blockquote expandable>{inner}</blockquote>"
+    if isinstance(el, TableEl):
+        rows = [el.header, *el.rows]
+        widths = [max(len(r[i]) for r in rows if i < len(r)) for i in range(len(el.header))]
+        text = "\n".join("  ".join(cell.ljust(widths[i]) if i == 0 else cell.rjust(widths[i])
+                                   for i, cell in enumerate(r)).rstrip() for r in rows)  # fmt: skip
+        return f"<pre>{esc(make_visible(text)[0])}</pre>"
     raise TypeError(type(el).__name__)
 
 

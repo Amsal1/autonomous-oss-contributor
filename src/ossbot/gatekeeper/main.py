@@ -78,6 +78,7 @@ def build_services(ctx: AppContext) -> list[Service]:
     handlers = Handlers(ctx, submitter.submit, submitter.preflight)
     handlers.reader = GitHubReader(client)
     frontend = TelegramFrontend(ctx, build_application(bot_token, handlers))
+    frontend.reader = handlers.reader  # digest stats and status cards (read-only GETs, §14.13.4, §14.11.11)
     submitter.retry_note = frontend.publisher.retry_note
     reconciler.retry_note = frontend.publisher.retry_note
     services.append(frontend)

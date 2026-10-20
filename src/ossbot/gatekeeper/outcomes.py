@@ -8,6 +8,8 @@ imports do not skew the merge rate by size class the weekly digest shows (§14.1
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
+from datetime import date, timedelta
 from typing import Any
 
 from ossbot.common.schemas import State
@@ -64,6 +66,75 @@ def set_measured(conn: sqlite3.Connection, cid: str, measured_class: str, now: s
 def _update(conn: sqlite3.Connection, cid: str, sets: dict[str, Any]) -> None:
     assignments = ", ".join(f"{k} = ?" for k in sets)
     conn.execute(f"UPDATE outcomes SET {assignments} WHERE cid = ?", (*sets.values(), cid))  # noqa: S608
+
+
+CLASS_ORDER = ("xs", "s", "m", "l", "xl", "xxl")
+BIG = ("l", "xl", "xxl")
+RATE_MIN_PRS = 3
+
+
+@dataclass(frozen=True)
+class ClassRow:
+    """One row of the digest's merge-rate-by-size table (§14.13.4)."""
+
+    label: str  # xs | s | m | l | xl | xxl | l+ | 👤 yours
+    proposed: int
+    started: int
+    prs: int
+    merged: int
+    closed: int
+
+    @property
+    def rate(self) -> str:
+        """merged ÷ (merged + closed), shown only from 3 PRs; open PRs count in PRs, not in the rate."""
+        decided = self.merged + self.closed
+        if self.prs < RATE_MIN_PRS or decided == 0:
+            return "—"
+        return f"{round(100 * self.merged / decided)}%"
+
+
+def _row(label: str, items: list[sqlite3.Row]) -> ClassRow:
+    return ClassRow(
+        label, len(items), sum(1 for r in items if r["started_at"]), sum(1 for r in items if r["pr_opened_at"]),
+        sum(1 for r in items if r["result"] == "merged"), sum(1 for r in items if r["result"] == "closed"),
+    )  # fmt: skip
+
+
+def merge_rate_rows(conn: sqlite3.Connection, since: str) -> list[ClassRow]:
+    """Proposals proposed since ``since`` (90 days), LIVE only (dry-run rehearsals excluded): one row per
+    autonomous class with data, ``l``/``xl``/``xxl`` merged into ``l+`` while each has fewer than 3 PRs,
+    and ``👤 yours`` for user-directed items of any class."""
+    rows = conn.execute(
+        "SELECT * FROM outcomes WHERE COALESCE(proposed_at, updated_at) >= ? AND COALESCE(result, '') != 'dry_run'",
+        (since,),
+    ).fetchall()  # fmt: skip
+    auto: dict[str, list[sqlite3.Row]] = {}
+    yours: list[sqlite3.Row] = []
+    for r in rows:
+        if r["source"] == "user":
+            yours.append(r)
+        else:
+            auto.setdefault(str(r["measured_class"] or r["size_class"] or "?"), []).append(r)
+    out = [_row(c, auto[c]) for c in CLASS_ORDER if c not in BIG and c in auto]
+    big = {c: auto[c] for c in BIG if c in auto}
+    alone = [c for c in BIG if c in big and sum(1 for r in big[c] if r["pr_opened_at"]) >= RATE_MIN_PRS]
+    out += [_row(c, big[c]) for c in alone]
+    merged = [r for c, items in big.items() if c not in alone for r in items]
+    if merged:
+        out.append(_row("l+", merged))
+    if yours:
+        out.append(_row("👤 yours", yours))
+    return out
+
+
+def streak(days_with_events: set[date], today: date) -> int:
+    """Consecutive local days ending today or yesterday with at least one LIVE contribution event."""
+    day = today if today in days_with_events else today - timedelta(days=1)
+    n = 0
+    while day in days_with_events:
+        n += 1
+        day -= timedelta(days=1)
+    return n
 
 
 def merge_rate_by_class(conn: sqlite3.Connection) -> dict[str, dict[str, int]]:

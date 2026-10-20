@@ -153,6 +153,13 @@ FEATURE_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 
 
 @_safe
+def ossbot_reminder_create(params: dict[str, Any]) -> str:
+    """A reminder in this conversation (DESIGN §14.19 item 3); ``when`` is ISO 8601 with a zone."""
+    body = {"when": _text(params, "when", 40), "text": _text(params, "text", 500)}
+    return _result(*call("POST", "/v1/reminders", body, session=True))
+
+
+@_safe
 def ossbot_feature_card(params: dict[str, Any]) -> str:
     """Show a feature card in the conversation (DESIGN §14.12.7); the gatekeeper validates ``data``."""
     feature, kind = _text(params, "feature", 32), _text(params, "kind", 32)
@@ -270,6 +277,15 @@ TOOLS: list[tuple[dict[str, Any], Any]] = [
             ("text",),
         ),
         ossbot_notify,
+    ),
+    (
+        _schema(
+            "ossbot_reminder_create",
+            "Remind the owner later in this conversation. when: ISO 8601 with a zone, e.g. 2026-10-21T09:00+07:00.",
+            {"when": _STR, "text": _STR},
+            ("when", "text"),
+        ),
+        ossbot_reminder_create,
     ),
     (
         _schema(

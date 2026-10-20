@@ -74,6 +74,7 @@ def view(ctx: AppContext, cid: str, rev: int, action_id: str | None, page: int =
         blocks = [k.Block((k.Lines((head, note)),)), k.Block((k.PreBlock(chunks[page - 1]),))]
         rows = [k.pager("nav", {"cid": cid, "rev": rev, "action_id": action_id, "view": "interdiff"}, page,
                         len(chunks))] if len(chunks) > 1 else []  # fmt: skip
-        return k.View(kind="interdiff", blocks=blocks, rows=rows, cid=cid, rev=rev, action_id=action_id, page=page)
+        return k.View(kind="interdiff", blocks=blocks, rows=rows, cid=cid, rev=rev, action_id=action_id, page=page,
+                      rich=True)  # fmt: skip
     note = k.line("Interdiff unavailable — review the full diff (🧾 Files)")
     return k.View(kind="interdiff", blocks=[k.Block((k.Lines((head, note)),))], cid=cid, rev=rev, action_id=action_id)
