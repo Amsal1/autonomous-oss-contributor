@@ -32,6 +32,8 @@ class Confirm:
     purpose: str
     label: str
     arg: str | None = None
+    # §14.14.2: danger for a go/config confirm that widens anything, primary otherwise
+    style: Literal["primary", "danger", "success"] = "primary"
 
 
 @dataclass(frozen=True)

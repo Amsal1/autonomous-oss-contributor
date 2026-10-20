@@ -22,6 +22,7 @@ from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Reply, 
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.review import queue, resolve
 from ossbot.gatekeeper.telegram.review.resolve import SKILL_PATTERN
+from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
 
 
@@ -108,6 +109,50 @@ def resend_rescope(app: AppContext, cid: str) -> str:
     reason: rescope_cards.Reason = "ceiling" if report.get("rescope_reason") == "ceiling" else "overrun"
     rescope_cards.send(app, cid, int(report.get("rev") or 1), reason, report)
     return "Re-sent the size card"
+
+
+class ReviewOpenArg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    approval_id: str = Field(pattern=r"^a_[0-9A-Za-z]{10}$")
+
+
+def _open_review(app: AppContext, approval_id: str) -> str:
+    """The S2 explorer of an open approval card (read only: the explorer never approves)."""
+    from ossbot.gatekeeper.telegram.publisher import CardPublisher  # noqa: PLC0415 - avoids a cycle
+    from ossbot.gatekeeper.telegram.review.actions import open_explorer  # noqa: PLC0415
+
+    row = db.one(app.conn, "SELECT 1 FROM approvals WHERE id = ? AND status IN ('pending','armed')", (approval_id,))
+    if row is None:
+        return "That card is no longer open."
+    meta = CardPublisher(app).meta(approval_id)
+    rev = meta.get("rev")
+    open_explorer(app, meta["cid"], rev if isinstance(rev, int) else 1, meta.get("action_id"))
+    return ""
+
+
+@command("review", help="Explore an open card's changes: /review [cid]", safety="read")
+async def review_cmd(ctx: CommandContext, args: list[str]) -> Reply:
+    app = ctx.app
+    sql = ("SELECT a.id, o.cid, o.kind FROM approvals a JOIN outbound_actions o ON o.id = a.action_id WHERE"
+           " a.status IN ('pending','armed') AND o.kind IN ('open_pr','push_update')")  # fmt: skip
+    if args:
+        if not ID_RE.match(args[0]) or not args[0].startswith("c_"):
+            return Reply("Usage: /review [c_0123456789]")
+        row = db.one(app.conn, sql + " AND o.cid = ? ORDER BY a.created_at DESC LIMIT 1", (args[0],))
+        if row is None:
+            return Reply(esc(resolve.nothing_text(resolve.state_of(app.conn, args[0]))))
+        return Reply(esc(_open_review(app, str(row["id"])) or "🧭 Explorer below."))
+    rows = app.conn.execute(sql + " ORDER BY a.created_at LIMIT 8").fetchall()
+    if not rows:
+        return Reply("No open PR cards to review. /queue shows everything waiting.")
+    btns = [k.button(f"🧭 {r['cid']}", "review_open", {"approval_id": r["id"]}) for r in rows]
+    return Reply("", view=k.plain("picker", k.line("🧭 Review which card?"),
+                                  rows=[btns[i : i + 2] for i in range(0, len(btns), 2)]))  # fmt: skip
+
+
+@action("review_open", arg=ReviewOpenArg)
+async def review_open(tap: Tap) -> str:
+    return _open_review(tap.app, tap.arg.approval_id)
 
 
 @action("queue_sort", arg=SortArg)

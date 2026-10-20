@@ -44,6 +44,8 @@ from ossbot.gatekeeper.telegram.commands import (
     builtin,  # noqa: F401 - registers the built-ins
     load_builtin_modules,
 )
+from ossbot.gatekeeper.telegram.commands.common import cancel_button
+from ossbot.gatekeeper.telegram.commands.lifecycle import killed_view
 from ossbot.gatekeeper.telegram.commands.registry import (
     COMMANDS,
     CONFIRM_EFFECTS,
@@ -55,6 +57,7 @@ from ossbot.gatekeeper.telegram.escape import b, esc
 from ossbot.gatekeeper.telegram.review import confirm as review_confirm
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.ui import kit as k
+from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui import send as ui_send
 from ossbot.gatekeeper.telegram.ui.sanitize import undefuse as sanitize_undefuse
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -85,6 +88,8 @@ MEDIA_LATER = "🤖 Photos, files and voice reach the assistant with the streami
 PROPOSAL_PURPOSES = frozenset({"proposal_start", "proposal_confirm", "proposal_cancel"})
 # Skill activation (§14.15, §15.5; s_ ids): two taps; the kit card and the diff/ask views are PLAN item 47.
 SKILL_PURPOSES = frozenset({"skill_approve", "skill_confirm", "skill_cancel", "skill_reject"})
+SKILL_VIEWS = frozenset({"skill_diff", "skill_ask"})  # multi-use views of the skill card (§14.15)
+ASK_WHY = "Explain why you want skill {skill} v{version} and what it will do"
 
 
 def _button(btn: keyboards.Button) -> InlineKeyboardButton:
@@ -232,19 +237,23 @@ class Handlers:
     def reply_view(self, reply: Reply, *, stale_s: int = 0) -> k.View:
         """A command ``Reply`` as a kit view: its text is gatekeeper HTML; the confirm is a single-use,
         5-minute, message-bound token minted then bound at send (§14.18.2)."""
+        stale: list[k.Line] = []
+        if stale_s > 0:  # CR3-AC-16: the age is shown on whatever the stale command produced
+            when = int(self.ctx.clock.now().timestamp()) - stale_s
+            stale.append((k.Const("(sent "), k.Time(when, f"{stale_s // 60} min ago"),
+                          k.Const(" while I was offline)")))  # fmt: skip
         if reply.view is not None:
             view: k.View = reply.view
+            if stale:
+                view.blocks = [*view.blocks, k.Block((k.Lines(tuple(stale)),))]
         else:
-            lines: list[k.Line] = [(k.Html(reply.text),)]
-            if stale_s > 0:
-                when = int(self.ctx.clock.now().timestamp()) - stale_s
-                lines.append((k.Const("(sent "), k.Time(when, f"{stale_s // 60} min ago"),
-                              k.Const(" while I was offline)")))  # fmt: skip
+            lines: list[k.Line] = [(k.Html(reply.text),), *stale]
             kind = "confirm_prompt" if reply.confirm is not None else "fyi"
             view = k.View(kind=kind, blocks=[k.Block((k.Lines(tuple(lines)),))])
-        if reply.confirm is not None:
+        if reply.confirm is not None:  # §14.14.2: [✅ <verb>] [↩️ Cancel]
             view.rows = [*view.rows, [k.ButtonSpec(reply.confirm.label, reply.confirm.purpose, single_use=True,
-                                                   ttl=COMMAND_CONFIRM_TTL, raw_arg=reply.confirm.arg)]]  # fmt: skip
+                                                   ttl=COMMAND_CONFIRM_TTL, raw_arg=reply.confirm.arg,
+                                                   style=reply.confirm.style), cancel_button()]]  # fmt: skip
         return view
 
     def _send_reply(self, reply: Reply, *, thread_id: int | None = None, reply_to: int | None = None,
@@ -312,6 +321,8 @@ class Handlers:
                 await self._proposal(query, token, purpose, row, user_id, chat_id, message_id)
             elif purpose in SKILL_PURPOSES:
                 await self._skill(query, token, purpose, row, user_id, chat_id, message_id)
+            elif purpose in SKILL_VIEWS:
+                await self._skill_view(query, token, purpose, row, user_id, chat_id, message_id)
             elif purpose in CONFIRMS:
                 with db.transaction(self.ctx.conn):
                     self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
@@ -376,12 +387,17 @@ class Handlers:
         if purpose == "skill_approve":
             arm = svc.approve(token, **tap)
             text = f"{svc.card_view(sid).card}\n\n{b(arm.confirm_text)}"
-            await self._edit(query, text, keyboards.confirm_rows(arm.confirm_token, arm.cancel_token))
+            # danger: activation widens what Hermes does (§14.14.2)
+            rows: keyboards.Rows = [
+                [("🧠 Activate skill", arm.confirm_token, "danger"), ("↩️ Cancel", arm.cancel_token)]
+            ]
+            await self._edit(query, text, rows)
         elif purpose == "skill_confirm":
             svc.confirm(token, **tap)
-            self.ctx.skill_reviews.request_activation(sid, f"tg:{user_id}")
+            binding = self.ctx.skill_reviews.request_activation(sid, f"tg:{user_id}")
+            done = b(f"Activating · v{binding.get('version')}")
             await self._edit(
-                query, f"{svc.card_view(sid).card}\n\n✅ {b('Activating')}: root installs the approved files."
+                query, f"{svc.card_view(sid).card}\n\n🧠 {done}: root installs exactly the approved files."
             )
         elif purpose == "skill_reject":
             svc.reject(token, **tap)
@@ -392,6 +408,30 @@ class Handlers:
             tokens = svc.rotate_card_tokens(sid)
             await self._edit(query, svc.card_view(sid).card, svc.card_rows(sid, tokens))
         await query.answer()
+
+    async def _skill_view(
+        self, query: Any, token: str, purpose: str, row: Any, user_id: int, chat_id: int, message_id: int
+    ) -> None:
+        """🧾 Full diff (a redacted ``.diff`` document) and 💬 Ask Hermes why (relayed to the 💬 Assistant
+        session; the 🤖 answer never touches the card)."""
+        with db.transaction(self.ctx.conn):
+            self.ctx.approvals.use_token(token, (purpose,), chat_id=chat_id, message_id=message_id)
+        appr = db.one(self.ctx.conn, "SELECT s.skill, s.version, r.diff FROM skill_approvals s JOIN skill_reviews r"
+                      " ON r.id = s.skill_review_id WHERE s.id = ?", (row["approval_id"],))  # fmt: skip
+        if appr is None:
+            await query.answer("This skill is no longer staged.")
+            return
+        if purpose == "skill_diff":
+            diff = ui_redact.redact(str(appr["diff"] or ""), surface="skill_diff")[0] or "(no textual change)"
+            ui_send.document(self.ctx, f"{appr['skill']}-v{appr['version']}.diff", diff.encode("utf-8"),
+                             thread="reviews", reply_to=message_id)  # fmt: skip
+            await query.answer("🧾 Full diff below.")
+            return
+        text = f"Re: skill {appr['skill']} v{appr['version']}\n" + ASK_WHY.format(skill=appr["skill"],
+                                                                                  version=appr["version"])  # fmt: skip
+        await chat_relay.relay(self.ctx, self, kind="system_chat", topic="assistant", text=text, user_id=user_id,
+                               thread_id=None, message_id=message_id)  # fmt: skip
+        await query.answer("💬 Asked Hermes in 💬 Assistant.")
 
     async def _finish_confirm(self, message_id: int, effect: Awaitable[Reply]) -> None:
         try:
@@ -785,7 +825,7 @@ class Handlers:
         if spec is None:
             reply = Reply(f"Unknown command {esc(words[0][:40])}. Try /help.")
         elif self.ctx.control.view().state == "killed" and name not in KILLED_ALLOWED:
-            reply = Reply(KILLED_TEXT)
+            reply = Reply(KILLED_TEXT, view=killed_view(self.ctx))  # §14.16: reason, since, Resume and Logs
         elif spec.effect == "io":  # BA-18: never hold the update slot on I/O
             self.spawn(self._run_command(spec.func(cctx, words[1:]), inc.thread_id, stale_s), "command")
             return

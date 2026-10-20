@@ -47,6 +47,8 @@ class ModelsAdmin:
         self.clock = clock
         self.audit = audit
         self.notify = notify
+        # (model_id, name) -> True when it sent the Telegram new-model card (§16.3, set by the frontend)
+        self.on_new_model: Callable[[str, str | None], bool] | None = None
 
     def read(self) -> ModelsConfig:
         return parse_models(self.path.read_bytes())
@@ -112,6 +114,8 @@ class ModelsAdmin:
             elif notify:
                 for row in pending:
                     name = row["display_name"]
+                    if self.on_new_model is not None and self.on_new_model(row["model_id"], name):
+                        continue
                     suffix = f" ({name})" if name and name != row["model_id"] else ""
                     self.notify(f"New Kiro model: {row['model_id']}{suffix}")
             self.conn.execute(f"UPDATE model_catalog SET notified = 1 WHERE model_id IN ({marks})", ids)  # noqa: S608

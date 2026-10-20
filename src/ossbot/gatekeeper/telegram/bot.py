@@ -20,7 +20,7 @@ import contextlib
 import json
 import logging
 import warnings
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -29,19 +29,22 @@ from telegram.ext import Application
 from telegram.request import BaseRequest, HTTPXRequest, RequestData
 from telegram.warnings import PTBDeprecationWarning, PTBUserWarning
 
-from ossbot.common.clock import to_iso
+from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.ids import new_token
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow, OutboxWorker, SendError
 from ossbot.gatekeeper.pollstats import PollStats
+from ossbot.gatekeeper.telegram.commands import admin as admin_cmds
 from ossbot.gatekeeper.telegram.commands.registry import load_plugins
 from ossbot.gatekeeper.telegram.handlers import Handlers
 from ossbot.gatekeeper.telegram.publisher import CARD_PREFIX, DECISION_TABLES, RETRY_PREFIX, CardPublisher
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.scopes import ONLINE, offline_description
 from ossbot.gatekeeper.telegram.topics import THREAD_NOT_FOUND
+from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import rich as ui_rich
+from ossbot.gatekeeper.telegram.ui import send as ui_send
 from telegram import Bot, InputFile
 
 log = logging.getLogger(__name__)
@@ -51,6 +54,7 @@ ALLOWED_UPDATES = ["message", "callback_query", "stopped_message_generation"]
 OUTBOX_INTERVAL_SECONDS = 1.0  # <= 1 msg/s per chat
 CONNECT_BACKOFF_MIN_S = 2.0
 CONNECT_BACKOFF_MAX_S = 60.0
+BACK_ONLINE_AFTER_S = 5 * 60  # a shorter gap (a restart) gets no "Back online" message
 __all__ = ["CARD_PREFIX", "DECISION_TABLES", "RETRY_PREFIX", "CardPublisher", "PollTrackingRequest",
            "TelegramFrontend", "TelegramSender", "build_application", "telegram_enabled"]  # fmt: skip
 
@@ -148,10 +152,28 @@ class PollTrackingRequest(BaseRequest):
             raise
         if url.endswith("/getUpdates"):
             if 200 <= code < 300:
-                self.stats.ok()
+                self.stats.ok(_update_count(body) if self.stats.first_batch is None else 0)
             else:
                 self.stats.failed(f"HTTP {code}")
         return code, body
+
+
+def _update_count(body: bytes) -> int:
+    try:
+        result = json.loads(body).get("result")
+    except (ValueError, AttributeError):
+        return 0
+    return len(result) if isinstance(result, list) else 0
+
+
+def back_online_text(offline_s: int, graceful: bool, waiting: int) -> tuple[k.Line, ...]:
+    """§14.16: ``⏰ <b>Back online</b> · offline 8 h 52 m (graceful down) · 2 messages waiting``."""
+    hours, minutes = divmod(offline_s // 60, 60)
+    span = f"{hours} h {minutes} m" if hours else f"{minutes} m"
+    tail = f"offline {span}" + (" (graceful down)" if graceful else "")
+    if waiting:
+        tail += f" · {waiting} message{'s' if waiting != 1 else ''} waiting"
+    return ((k.Const("⏰ "), k.Bold(k.Const("Back online")), k.Const(f" · {tail}")),)
 
 
 def build_application(
@@ -187,11 +209,14 @@ class TelegramFrontend:
         self.ui = ui_of(ctx)
         # §14.13: priorities, quiet hours and batching at enqueue; sound and coalescing at send
         ctx.outbox.hold_policy = self.ui.notifier.decide
+        ctx.models.on_new_model = lambda model_id, name: admin_cmds.new_model_card(ctx, model_id, name)
         self.worker = OutboxWorker(ctx.outbox, self.sender, self._on_sent, batch=1, on_failed=self._on_failed,
                                    prepare=self._prepare)  # fmt: skip
         self._task: asyncio.Task[None] | None = None
         self._connect_task: asyncio.Task[None] | None = None
         self._lifecycle_seen: tuple[str, str] | None = None
+        self._back_online: tuple[int, bool] | None = None  # (seconds offline, graceful down) until announced
+        self._last_beat: datetime | None = None
 
     def _prepare(self, row: OutboxRow) -> OutboxRow:
         """Sound and coalescing (§14.13), then the topic (§14.10.1), just before each send."""
@@ -285,6 +310,7 @@ class TelegramFrontend:
     async def workspace(self) -> None:
         """Topics (or flat mode), the owner's menus, the short description and the dashboard (§14.10)."""
         try:
+            self._note_offline()
             await self.ui.topics.bootstrap(self.sender.call)
             await self.ui.scopes.apply(self.sender.call)
             await self.ui.scopes.set_description(self.sender.call, ONLINE)
@@ -305,7 +331,37 @@ class TelegramFrontend:
             await self.ui.scopes.set_description(self.sender.call, text)
             self.ui.dashboard.tick(force=True)
         self.ui.notifier.release()  # held P2 rows whose window or quiet hours ended (§14.13.3)
+        self._heartbeat()
         self.ui.dashboard.tick()
+
+    def _note_offline(self) -> None:
+        """At start: how long the gatekeeper was gone (the last heartbeat) and whether that was a full
+        graceful down (the persisted short description said 💤 Offline)."""
+        prefs = self.ui.prefs
+        raw = prefs.get("last_seen")
+        if isinstance(raw, str):
+            try:
+                gone = int((self.ctx.clock.now() - from_iso(raw)).total_seconds())
+            except ValueError:
+                gone = 0
+            if gone >= BACK_ONLINE_AFTER_S:
+                described = str(prefs.get("short_description") or "")
+                self._back_online = (gone, described.startswith("💤"))
+        prefs.set("last_seen", to_iso(self.ctx.clock.now()))
+
+    def _heartbeat(self) -> None:
+        """The last-seen time (once a minute) and, after the first successful poll, the one Control
+        message ``⏰ Back online`` (§14.16)."""
+        now = self.ctx.clock.now()
+        if self._last_beat is None or (now - self._last_beat).total_seconds() >= 60:
+            self._last_beat = now
+            self.ui.prefs.set("last_seen", to_iso(now))
+        waiting = self.ctx.poll_stats.first_batch
+        if self._back_online is not None and waiting is not None:
+            gone, graceful = self._back_online
+            self._back_online = None
+            ui_send.deliver(self.ctx, k.plain("fyi", *back_online_text(gone, graceful, waiting)), thread="control",
+                            priority=1)  # fmt: skip
 
     async def _outbox_loop(self) -> None:
         while True:

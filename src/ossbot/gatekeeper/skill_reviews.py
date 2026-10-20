@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sqlite3
 import stat
 from collections.abc import Callable, Mapping
@@ -25,7 +26,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ossbot.common.clock import Clock, to_iso
+from ossbot.common.clock import Clock, from_iso, to_iso
 from ossbot.common.control_flags import HermesTier, write_flag
 from ossbot.common.paths import Paths
 from ossbot.gatekeeper import db
@@ -34,7 +35,7 @@ from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.chat.hermes_surface import PLUGIN_PREFIX, allowed_tools
 from ossbot.gatekeeper.skill_approvals import SkillApprovals
 from ossbot.gatekeeper.telegram.cards import CardMessages
-from ossbot.gatekeeper.telegram.escape import b, esc
+from ossbot.gatekeeper.telegram.escape import b, esc, make_visible, tg_time, untrusted
 from ossbot.gatekeeper.telegram.ui.redact import redact
 
 log = logging.getLogger(__name__)
@@ -138,24 +139,62 @@ class DbSkillSource:
         return str(row["id"])
 
 
+SKILL_MAX_BYTES = 64 * 1024
+URL_RE = re.compile(r"https?://")
+HIDDEN_RE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]")
+MENTIONS = ("approve", "confirm", "dry-run", "token")
+ACTION_WORD = {"create": "new", "update": "update", "delete": "removal"}
+
+
+def skill_checks(text: str, above: list[str]) -> str:
+    """The deterministic check line of §14.15 (computed on the staged diff, never model-authored)."""
+    size = len(text.encode("utf-8"))
+    urls = len(URL_RE.findall(text))
+    words = [w for w in MENTIONS if w in text.lower()]
+    parts = [f"{'✅' if size <= SKILL_MAX_BYTES else '⚠️'} size ≤ 64 KB",
+             "✅ no tool beyond tier" if not above else f"⚠️ beyond tier: {', '.join(above)}",
+             f"⚠️ {urls} URL{'s' if urls != 1 else ''}" if urls else "✅ no URLs",
+             "⚠️ hidden chars" if HIDDEN_RE.search(text) else "✅ no hidden chars"]  # fmt: skip
+    if words:
+        parts.append(f"⚠️ mentions {', '.join(words)}")
+    return "Checks " + " · ".join(parts)
+
+
 def render_skill_card(conn: sqlite3.Connection, row: sqlite3.Row) -> CardMessages:
-    """The minimal skill card (§14.15; the kit renderer is PLAN item 47): escaped text, diff as parts."""
+    """The skill approval card (§14.15, mockup 08): header with the mode badge marked n/a (S3), the 🤖
+    reason, tools vs the tier, files, the deterministic checks and the digest; the diff follows as
+    verbatim ``language-diff`` parts. Hermes-staged text is redacted for display (not publish bytes: a
+    secret in it is an expected redaction, never a withheld card, CR3-F6-5)."""
     review = db.one(conn, "SELECT * FROM skill_reviews WHERE id = ?", (row["skill_review_id"],))
     if review is None:
-        return CardMessages(f"🧩 {b('Skill')} {esc(row['skill'])}: no longer staged.")
+        return CardMessages(f"🧠 {b('Skill')} {esc(row['skill'])}: no longer staged.")
     files = json.loads(review["files_json"])
-    tools = json.loads(review["declared_tools_json"]) or ["none"]
+    tools = json.loads(review["declared_tools_json"])
+    above = tools_above(review["tier"], tools)
+    raw = review["diff"] or ""
+    dry = db.current_dry_run(conn)
+    badge = "🧪 DRY RUN" if dry else "🔴 LIVE"
+    reason = untrusted(redact(review["summary"] or "")[0][:200])  # 🤖 Hermes text: visible, defused (U6, U8)
+    try:
+        staged = tg_time(int(from_iso(review["created_at"]).timestamp()), str(review["created_at"])[:16])
+    except (TypeError, ValueError):
+        staged = esc(str(review["created_at"])[:16])
+    sha = str(review["content_sha256"])
     lines = [
-        f"🧩 {b('Skill')} {esc(review['skill'])} · v{review['version']} · {esc(review['action'])}",
-        f"Hermes asks to {'remove' if review['action'] == 'delete' else 'activate'} a self-written skill"
-        f" (tier {esc(review['tier'])}; dry-run n/a: local change).",
-        f"Summary: {esc(redact(review['summary'] or '')[0][:300]) or '—'}",
-        f"Declared tools: {esc(', '.join(tools))} (the tier, not the skill, decides the tools)",
-        f"Files: {esc(', '.join(sorted(files)) or 'none')}",
-        f"Digest: {esc(review['content_sha256'][:16])}…",
+        f"🧠 {b('Skill ready for approval')} · {esc(review['skill'])} v{review['version']}"
+        f" ({ACTION_WORD.get(review['action'], esc(review['action']))}) · {esc(row['id'])}"
+        f" · {b(badge + ' (n/a: local change)')}",
+        f"Requested by Hermes (tier {esc(review['tier'])}) · 🤖 “{reason or '—'}”",
+        f"Tools requested: {esc(', '.join(tools) or 'none')} · "
+        + ("✅ all within tier" if not above else f"⚠️ beyond tier: {esc(', '.join(above))}"),
+        f"Files: {esc(' · '.join(sorted(files)) or 'none')} · total {len(raw.encode('utf-8')) / 1024:.1f} KB",
+        esc(skill_checks(raw, above)),
+        f"sha256 {esc(sha[:4])}…{esc(sha[-4:])} · staged {staged}",
     ]
-    diff = redact(review["diff"] or "")[0] or "(no textual change)"
-    parts = [f"<pre>{esc(diff[i : i + PART_CHARS])}</pre>" for i in range(0, len(diff), PART_CHARS)][:MAX_PARTS]
+    diff = redact(raw)[0] or "(no textual change)"
+    chunks = [diff[i : i + PART_CHARS] for i in range(0, len(diff), PART_CHARS)][:MAX_PARTS]
+    parts = [f"{esc(review['skill'])} diff ({n}/{len(chunks)})\n<pre><code class=\"language-diff\">"
+             f"{esc(make_visible(c)[0])}</code></pre>" for n, c in enumerate(chunks, 1)]  # fmt: skip
     if len(diff) > PART_CHARS * MAX_PARTS:
         parts[-1] += "\n(diff truncated)"
     return CardMessages("\n".join(lines), parts)

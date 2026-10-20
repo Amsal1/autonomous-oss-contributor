@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from ossbot.gatekeeper.outbox import SendError
 from ossbot.gatekeeper.telegram.commands.registry import MenuState, menu
+from ossbot.gatekeeper.telegram.prefs import UxPrefs
 
 if TYPE_CHECKING:
     from ossbot.gatekeeper.context import AppContext
@@ -86,4 +87,6 @@ class Scopes:
                         extra={"event": "telegram_menu_failed"})  # fmt: skip
             return False
         self.description = text
+        # persisted: the next start tells a graceful down ("💤 Offline …") from a sleep (§14.16)
+        UxPrefs(self.ctx.conn, self.ctx.clock).set("short_description", text)
         return True

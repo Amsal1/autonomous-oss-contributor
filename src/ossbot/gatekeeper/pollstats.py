@@ -26,10 +26,13 @@ class PollStats:
     consecutive_failures: int = 0
     total_failures: int = 0
     reconnects: int = 0
+    first_batch: int | None = None  # updates in the first successful getUpdates (the "Back online" count)
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
-    def ok(self) -> None:
+    def ok(self, updates: int = 0) -> None:
         with self._lock:
+            if self.first_batch is None:
+                self.first_batch = updates
             if self.consecutive_failures:
                 self.reconnects += 1
                 log.warning(

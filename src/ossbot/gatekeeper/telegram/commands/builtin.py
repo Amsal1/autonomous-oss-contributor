@@ -99,7 +99,7 @@ async def dryrun(ctx: CommandContext, args: list[str]) -> Reply:
             return Reply("Dry-run is already OFF (LIVE).")
         return Reply(
             f"Turn dry-run {b('OFF')}? Approved changes will then be published for real.",
-            Confirm("dryrun_off_confirm", "⚠️ Confirm LIVE mode"),
+            Confirm("dryrun_off_confirm", "⚠️ Confirm LIVE mode", style="danger"),
         )
     return Reply(f"Dry-run is {b('ON' if current else 'OFF')}. Usage: /dryrun on | /dryrun off")
 

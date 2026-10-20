@@ -74,10 +74,15 @@ class SkillApprovals(TableDecisions):
         return fields
 
     def confirm_text(self, binding: Mapping[str, Any]) -> str:
-        return f"Confirm: activate skill {binding['skill']} v{binding['version']} for Hermes. Expires in 5 min."
+        """§14.15: the same sentence in DRY RUN and LIVE (activation is a local change, S3)."""
+        sha = str(binding.get("content_sha256") or "")
+        return (f"Confirm: activate skill {binding['skill']} v{binding['version']} (sha256 {sha[:4]}…{sha[-4:]})"
+                f" for Hermes — local change, dry-run does not apply. Tools stay within tier {binding.get('tier')}."
+                " Expires in 5 min.")  # fmt: skip
 
     def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
-        return [[("✅ Activate", tokens[self.approve_purpose]), ("❌ Reject", tokens["skill_reject"])]]
+        return [[("✅ Approve skill", tokens[self.approve_purpose], "success"), ("❌ Reject", tokens["skill_reject"])],
+                [("🧾 Full diff", tokens["skill_diff"]), ("💬 Ask Hermes why", tokens["skill_ask"])]]  # fmt: skip
 
     # -------------------------------------------------------------------- lifecycle
     def create(self, skill_review_id: str, skill: str, version: int, *, tg_chat_id: int, body_parts_total: int,

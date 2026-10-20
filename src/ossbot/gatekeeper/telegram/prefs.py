@@ -19,6 +19,7 @@ KEYS: dict[str, tuple[str, ...] | None] = {
     "rich_unavailable_until": None,
     "quiet_until": None,
     "notify": None,  # {category: bool} for telegram.notify.CATEGORIES (§14.13.2)
+    "last_seen": None,  # the frontend's heartbeat (ISO), the "Back online · offline N" span (§14.16)
     "away": None,  # {"cards": n, "messages": n} rung silently during quiet hours (the 🌅 summary)
     "short_description": None,
     "flat_mode_reason": None,
