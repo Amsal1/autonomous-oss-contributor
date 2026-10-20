@@ -608,6 +608,24 @@ Dry-run stayed ON, no GitHub write, Windows not restarted, nothing pushed.
 | Simulated shutdown | `tests\system\test_shutdown_blocker.ps1` | 50 PASS, 0 FAIL: `channel: sent down 90 blocker`, `ack`, `drained exit=0 elapsed=10.1`; lifecycle.log `down kind=graceful caller=blocker …: start timeout=90 (channel)`, `end exit=0`; `up.ps1` brought the units back; `status.ps1` `last shutdown graceful (marker …)` |
 | Lifecycle and logs scripts | `tests\system\test_lifecycle_scripts.ps1`; `tests\system\test_ossctl_logs.ps1` | 62 PASS; 21 PASS |
 
+## Post-v1 showcase close-out (2026-10-21)
+
+Commits 719b236..3b3f1e1 on `main`: ShutdownBlocker back-off, commands in All, README showcase (details:
+`.ossbot-local/postv1/wf-showcase/`, not tracked). Dry-run stayed ON, no GitHub write, Windows not restarted.
+
+| Check | Command | Result |
+|---|---|---|
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 3740 passed in 63 s |
+| Lint gate | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 521 files formatted, mypy 246 files, 12 contracts kept, 0 broken; no shell file changed since 684a592 |
+| README table | `ossctl docs commands --check` | current |
+| Personal values | `ossctl lint personal` | 893 tracked files: 0 hits |
+| Secrets | `gitleaks git --redact --no-banner --config .gitleaks.toml .` | 236 commits, no leaks |
+| ShutdownBlocker back-off (PV1-C-BACKOFF) | `tests\system\test_shutdown_blocker.ps1` | all checks passed, sections 1-8: restarts after quick exits no sooner than 60 s (61.1 s), one back-off log line per series, `channel stable again`; plain restart after 11 s unchanged; simulated WM_QUERYENDSESSION TRUE after drain in 11.7 s, drain exit 0 |
+| Commands in All (CR3-V-4, PV1-A3) | `bootstrap.ps1 -Only provision` (twice, 4724ac7 then 9884df9); `scripts\ossctl.ps1 doctor`; owner `/status` in All | exit 0; doctor PASS 45, dry_run True; card in All, the implicit `/status` topic deleted in about 2 s (`implicit_topic_match action=delete`, `stray_topic_deleted`); see the O1 row below |
+| README showcase (PV1-C-SHOWCASE) | `scripts\dev\make-demo.ps1` twice from a clean scratch; `make-demo.ps1 -Check` | byte-identical docs/media between runs; `-Check` PASS (render digest matches the manifest); 35 pages pass the faithfulness check in the renderer and on Chrome's DOM; personal check 0 hits; demo.gif 663,034 bytes, 720x820, 18.3 s, loops; demo.mp4 485,825 bytes; 18 stills 768x1608 |
+
+Owner checks still open: the real restart and shutdown (R1, FINAL_REPORT "Restart test"), and the README as GitHub renders it (banner, badges, GIF, stills, mermaid) after the next push.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
