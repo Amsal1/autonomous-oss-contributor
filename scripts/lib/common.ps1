@@ -427,6 +427,32 @@ function Get-OssHostTaskStates {
     return [pscustomobject]@{ Autostart = $auto; Blocker = $blk; Hook = $hook }
 }
 
+$script:OssLogUnits = @('gatekeeper', 'hermes', 'runner', 'sandboxd')
+
+function Get-OssLogsArgv {
+    # `scripts\ossctl.ps1 logs`: the wsl.exe argv for a read-only journalctl of one ossbot unit. --exec
+    # runs journalctl without bash, so a '|' in the regex stays one argument (no pipe). Throws on bad input.
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [string]$Since = '15m',
+        [string]$Grep = '',
+        [int]$Lines = 200,
+        [string]$Distro = $script:OssDistro
+    )
+    if ($script:OssLogUnits -notcontains $Name) { throw "unknown service '$Name' (one of: $($script:OssLogUnits -join ', '))" }
+    if ($Since -notmatch '^(\d{1,4})([smhd])$') { throw "bad -Since '$Since' (e.g. 30s, 15m, 2h, 1d)" }
+    $unit = @{ s = 's'; m = 'min'; h = 'h'; d = 'd' }[$Matches[2]]
+    if ($Lines -lt 1 -or $Lines -gt 5000) { throw "bad -Lines $Lines (1..5000)" }
+    $argv = @('-d', $Distro, '-u', 'root', '--exec', '/usr/bin/journalctl', '-u', "ossbot-$Name.service",
+        "--since=-$($Matches[1])$unit", '--no-pager', '-o', 'short-iso', '-n', "$Lines")
+    if ($Grep) {
+        if ($Grep.Length -gt 200) { throw '-Grep is longer than 200 characters' }
+        if ($Grep -match '["\x00\r\n]' -or $Grep.EndsWith('\')) { throw '-Grep must not contain a double quote, NUL or newline, or end in a backslash' }
+        $argv += "--grep=$Grep"
+    }
+    return , $argv
+}
+
 function Format-OssLastShutdown {
     # status.ps1 'last shutdown' from the boot gate's record {type, marker_ts, detected_at}. An unclean
     # record has no marker by definition; only a missing record gets the -Missing text.

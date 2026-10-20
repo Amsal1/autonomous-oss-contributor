@@ -5,14 +5,37 @@
   ossctl.ps1 doctor [--quick] [--probes]   Windows checks (.wslconfig hash, Hyper-V firewall,
                                            localhost-forwarding probe, autostart task, kill marker),
                                            then the distro doctor as root.
+  ossctl.ps1 logs <gatekeeper|hermes|runner|sandboxd> [-Since 15m] [-Grep <regex>] [-Lines 200]
+                                           read-only journal of one unit (journalctl as root through
+                                           wsl --exec, so '|' in the regex needs no escaping).
   ossctl.ps1 <anything else>               runs /opt/ossbot/app/.venv/bin/ossctl <args> as ossadmin
                                            (operator role; TTY confirms happen in this console).
+.EXAMPLE
+  scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep "Too Many Requests|429"
 #>
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 . (Join-Path $PSScriptRoot 'lib\wslconfig.ps1')
 $ossctl = '/opt/ossbot/app/.venv/bin/ossctl'
 $cmdArgs = @($args)
+
+if ($cmdArgs.Count -gt 0 -and $cmdArgs[0] -eq 'logs') {
+    $opts = @{ Since = '15m'; Grep = ''; Lines = 200 }
+    if ($cmdArgs.Count -lt 2) { Write-Host "usage: ossctl.ps1 logs <$($script:OssLogUnits -join '|')> [-Since 15m] [-Grep <regex>] [-Lines 200]"; exit 2 }
+    for ($i = 2; $i -lt $cmdArgs.Count; $i += 2) {
+        $key = ([string]$cmdArgs[$i]).TrimStart('-')
+        $match = @('Since', 'Grep', 'Lines') | Where-Object { $_ -eq $key }
+        if (-not $match -or $i + 1 -ge $cmdArgs.Count) { Write-Host "unknown or incomplete option '$($cmdArgs[$i])' (-Since, -Grep, -Lines)"; exit 2 }
+        $opts[$match] = $cmdArgs[$i + 1]
+    }
+    try { $wslArgs = Get-OssLogsArgv -Name ([string]$cmdArgs[1]) -Since ([string]$opts.Since) -Grep ([string]$opts.Grep) -Lines ([int]$opts.Lines) }
+    catch { Write-Host "logs: $($_.Exception.Message)"; exit 2 }
+    & wsl.exe @wslArgs
+    $code = $LASTEXITCODE
+    # journalctl exits 1 when --grep matched nothing: that is an answer, not an error
+    if ($code -eq 1 -and $opts.Grep) { Write-Host "(no matching lines)"; exit 0 }
+    exit $code
+}
 
 if ($cmdArgs.Count -eq 0 -or $cmdArgs[0] -ne 'doctor') {
     & wsl.exe -d $script:OssDistro -u ossadmin --exec $ossctl @cmdArgs

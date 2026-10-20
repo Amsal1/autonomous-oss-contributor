@@ -224,7 +224,7 @@ dashboard is pinned only once its send result is in Control, and re-sent into Co
 - Steps: ask Hermes a long question in a thread. Then ask another and tap ⏹ Stop after a few lines.
 - Expected:
   - A draft appears within 1 s and updates at most once a second.
-  - `journalctl -u ossbot-gatekeeper` shows no "Too Many Requests".
+  - `scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep "Too Many Requests|429"` prints no lines.
   - Stop ends the stream within 2 s with "⏹ Stopped by you", and the partial text ends in `…`.
 
 **O4 Small rendering items** (CR3-V-5, CR3-V-6, CR3-V-12).
@@ -237,10 +237,14 @@ dashboard is pinned only once its send result is in Control, and re-sent into Co
   - The `.html` opens in a browser or viewer.
   - The command text is not a tappable link.
 
-**O5 Hermes API** (CR3-V-7).
-- Steps: during O3, check whether Stop also ended the Hermes run. `journalctl -u ossbot-hermes` shows
-  the run cancelled.
-- Expected: no Hermes run keeps going after Stop.
+**O5 Hermes API** (CR3-V-7). **Re-opened** (2026-10-20): Stop interrupted the Hermes turn, but the
+Kiro ACP request kept running ("no sockets found; in-flight request may keep running"). Post-v1 item 2
+adds `KiroV3Client.cancel()` (ACP `session/cancel`, ADR-0002 addendum). O5 stays open until the live
+`ossctl hermes probe --cancel-check` on roles.test passes and you re-check Stop.
+- Steps: during O3, tap ⏹ Stop, then run
+  `scripts\ossctl.ps1 logs hermes -Since 15m -Grep "interrupt|cancel|kiro_acp turn"`.
+- Expected: `kiro_acp cancel: session/cancel sent` and `kiro_acp turn: … stop=cancelled` within a few
+  seconds of the Stop, and no "no sockets found; in-flight request may keep running".
 
 **O6 Photos** (CR2-7l, CR3-IH-4, CR3-V-8, CR3-V-13).
 - Steps: send a food photo (compressed), then an album of 2-3 photos, then a photo sent as a file.

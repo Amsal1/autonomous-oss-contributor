@@ -67,7 +67,8 @@ else, including restore from a backup, is in [`docs/SETUP.md`](docs/SETUP.md).
 ## Daily use
 
 - **Up and down with the laptop.** ossbot starts with Windows (`ossbot-autostart`) and shuts down
-  gracefully on Windows shutdown or restart (a per-user shutdown blocker plus an event-triggered task).
+  gracefully on Windows shutdown or restart (a per-user shutdown blocker that drains ossbot through a
+  channel into the distro it opened at logon).
   By hand: `scripts\up.ps1`, `scripts\down.ps1`, `scripts\status.ps1`, or `ossctl up|down|status`
   in the distro, or `/up`, `/down`, `/drain`, `/undrain` on Telegram. `down` drains running work
   (default 120 s), re-queues the rest and sends a summary; it never invalidates approvals.
@@ -79,6 +80,8 @@ else, including restore from a backup, is in [`docs/SETUP.md`](docs/SETUP.md).
 - **Backups.** `scripts\backup.ps1` (or `ossctl backup now`) writes an age-encrypted archive to
   `backups\`; `ossctl backup schedule on` enables the weekly timer.
 - **Upgrades.** `ossctl kiro upgrade`, `ossctl hermes upgrade` after bumping `config/versions.lock.yaml`.
+- **Logs.** `scripts\ossctl.ps1 logs <gatekeeper|hermes|runner|sandboxd> [-Since 15m] [-Grep <regex>]`
+  reads one service's journal from Windows (read-only; `|` in the regex is safe).
 
 ## Telegram tour
 

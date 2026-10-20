@@ -187,3 +187,8 @@ restores `.wslconfig` and removes the Scheduled Tasks and Hyper-V rules. Deletin
 - **Kill or resume from Windows.** `scripts\kill.ps1` works even with a broken venv (the kill script is
   streamed over stdin); `scripts\resume.ps1` asks for `Type RESUME`.
 - **Doctor FAIL on a token.** Re-enter it with `setup-secrets.ps1`, then `ossctl config reload`.
+- **Service logs from Windows.** `scripts\ossctl.ps1 logs <gatekeeper|hermes|runner|sandboxd>
+  [-Since 15m] [-Grep <regex>] [-Lines 200]`, for example
+  `scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep "Too Many Requests|429"`. It runs `journalctl`
+  as root through `wsl --exec`, without bash, so a `|` in the regex needs no escaping. A `wsl … --`
+  command line without `--exec` goes through bash, which splits such a pattern at the `|`.
