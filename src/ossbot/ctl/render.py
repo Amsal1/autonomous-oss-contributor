@@ -81,6 +81,9 @@ IO_URING_SYSCTL = Path("/proc/sys/kernel/io_uring_disabled")
 # no DNS name can match (a TLD is never all-numeric, and no host name contains ':' or '[').
 IP_LITERAL_PATTERNS = (r"^(0x[0-9a-f]*|[0-9]+)(\.(0x[0-9a-f]*|[0-9]+)){0,3}\.?$", ":", r"^\[")
 DEFAULT_CONTROL_DIR = Path("/var/lib/ossbot/control")
+# Present only while `ossctl hermes login` has the IdC login window open (root-only /run, tmpfs, so a
+# reboot clears it); squid_drift reads the real window state from it, not from the conf under test.
+LOGIN_WINDOW_FLAG = Path("/run/ossbot-hermes-login-window")
 # §11.5 invariants no egress mode relaxes, asserted by the renderer on top of the data (decision B3).
 REQUIRED_DENIED_CIDRS = (
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8",
@@ -355,12 +358,16 @@ def squid_drift(
     resolv_conf: Path = Path("/etc/resolv.conf"),
     control_dir: Path = DEFAULT_CONTROL_DIR,
     now: float | None = None,
+    login_window_flag: Path = LOGIN_WINDOW_FLAG,
 ) -> list[str]:
     """The live squid.conf must equal the render of its snapshot for the current egress mode.
 
     No conf yet is not drift (the proxy refuses to start without one). The snapshot is the one the
     conf names (snapshots are kept), so a confirmed reload is not drift before the proxy restart;
-    the mode is always the current flag (fail closed ``allowlist``)."""
+    the mode is always the current flag (fail closed ``allowlist``). The Hermes IdC login window is
+    the real window state: a conf with the window open is drift unless ``ossctl hermes login`` holds
+    ``login_window_flag`` (while it does, either render is accepted, so its open and close steps never
+    count as drift)."""
     tag = "firewall_drift:squid_mode"
     try:
         text = conf.read_text(encoding="utf-8")
@@ -393,7 +400,7 @@ def squid_drift(
         mode = read_egress_mode(control_dir, bundle.egress.mode_default)
         expected = render_squid(
             bundle, digest, nameservers(resolv_conf), template.read_text(encoding="utf-8"),
-            hermes_login="\nacl cat_kiro_idc_login " in text, mode=mode,
+            hermes_login=login_window_flag.exists() and "\nacl cat_kiro_idc_login " in text, mode=mode,
         )  # fmt: skip
     except (OSError, ValueError) as exc:
         return [f"{tag} cannot render the expected config: {exc}"]

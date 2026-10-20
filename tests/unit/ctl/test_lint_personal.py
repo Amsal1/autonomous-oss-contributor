@@ -72,6 +72,17 @@ def test_staged_new_file_is_checked(repo: Path) -> None:
     assert [h.key for h in lp.run(repo)[0]] == ["confidentiality_floor"]
 
 
+def test_staged_mode_scans_the_index_not_the_worktree(repo: Path) -> None:
+    _track(repo, "src/p.py", "who = 'octo-owner'\n")  # staged with the value
+    (repo / "src" / "p.py").write_text("who = 'nobody'\n", encoding="utf-8")  # worktree cleaned, not staged
+    _track(repo, "src/q.py", "ok = 1\n")
+    (repo / "src" / "q.py").write_text("ok = 'Jane Q Owner'\n", encoding="utf-8")  # unstaged edit only
+    assert lp.run(repo)[0] == [lp.Hit("src/q.py", 1, "commit_name")]
+    hits, summary = lp.run(repo, staged=True)
+    assert hits == [lp.Hit("src/p.py", 1, "github_login")]
+    assert "staged files" in summary
+
+
 def test_docs_are_exempt_and_word_boundaries_hold(repo: Path) -> None:
     _track(repo, "docs/design.md", "octo-owner everywhere\n")
     _track(repo, "src/c.py", "malocto-owner2 = 1  # glued letters are not the login\n")

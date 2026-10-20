@@ -3,7 +3,7 @@
 # (core.hooksPath=.githooks). Runs under Git for Windows' sh or a Linux git.
 #   1. gitleaks on the staged changes: tools/bin/gitleaks.exe (sha256-verified by install-hooks.ps1),
 #      else a gitleaks on PATH, else the distro's gitleaks. No gitleaks at all fails the commit.
-#   2. ossctl lint personal (no config/profile.yaml value in a tracked file outside docs/), through the
+#   2. ossctl lint personal --staged (no config/profile.yaml value in a staged blob outside docs/), through the
 #      distro's dev venv on Windows or ossctl on PATH; skipped with a warning when ossctl is not
 #      installed yet (fresh clone before bootstrap).
 set -u
@@ -55,10 +55,10 @@ fi
 
 # ---- 2. personal values
 if [ "$on_windows" = 1 ] && have_distro && in_distro test -x "$DEV_VENV/bin/ossctl"; then
-  in_distro "$DEV_VENV/bin/ossctl" lint personal --root .
+  in_distro "$DEV_VENV/bin/ossctl" lint personal --staged --root .
   rc=$?
 elif command -v ossctl >/dev/null 2>&1; then
-  ossctl lint personal --root .
+  ossctl lint personal --staged --root .
   rc=$?
 else
   echo "pre-commit: ossctl not installed yet; personal-value lint skipped" >&2

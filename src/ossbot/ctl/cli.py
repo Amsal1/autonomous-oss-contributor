@@ -615,15 +615,21 @@ def hermes_login() -> None:
         _fail("hermes login needs a terminal")
     render = ["/opt/ossbot/app/.venv/bin/python", "-I", "-m", "ossbot.ctl.render", "squid"]
     restart = ["/usr/bin/systemctl", "restart", "ossbot-proxy.service"]
-    subprocess.run([*render, "--hermes-login"], check=True, timeout=120)
-    subprocess.run(restart, check=True, timeout=120)
+    from ossbot.ctl.render import LOGIN_WINDOW_FLAG  # noqa: PLC0415
+
+    LOGIN_WINDOW_FLAG.touch(mode=0o600)  # the drift check accepts the open window only while this exists
     try:
-        env = {"HOME": "/home/hermes", "PATH": "/usr/bin:/bin", "HTTPS_PROXY": "http://10.212.0.2:3141"}
-        subprocess.run(["/usr/sbin/runuser", "-u", "hermes", "--", "/home/hermes/.local/bin/kiro-cli", "login",
-                        "--use-device-flow"], env=env, cwd="/", check=False, timeout=900)  # fmt: skip
-    finally:
-        subprocess.run(render, check=True, timeout=120)
+        subprocess.run([*render, "--hermes-login"], check=True, timeout=120)
         subprocess.run(restart, check=True, timeout=120)
+        try:
+            env = {"HOME": "/home/hermes", "PATH": "/usr/bin:/bin", "HTTPS_PROXY": "http://10.212.0.2:3141"}
+            subprocess.run(["/usr/sbin/runuser", "-u", "hermes", "--", "/home/hermes/.local/bin/kiro-cli", "login",
+                            "--use-device-flow"], env=env, cwd="/", check=False, timeout=900)  # fmt: skip
+        finally:
+            subprocess.run(render, check=True, timeout=120)
+            subprocess.run(restart, check=True, timeout=120)
+    finally:
+        LOGIN_WINDOW_FLAG.unlink(missing_ok=True)
     _show(_hermes_probe())
 
 
@@ -1358,12 +1364,13 @@ def docs_commands(
 @lint_app.command("personal")
 def lint_personal(
     root: Annotated[Path, typer.Option("--root", help="repository root")] = Path("."),
+    staged: Annotated[bool, typer.Option("--staged", help="scan the index blobs (what will be committed)")] = False,
 ) -> None:
     """No value of config/profile.yaml in a tracked file outside docs/ (AC 23). Prints keys, never values."""
     from ossbot.ctl import lint_personal as lp  # noqa: PLC0415
 
     try:
-        hits, summary = lp.run(root)
+        hits, summary = lp.run(root, staged=staged)
     except lp.LintError as exc:
         _fail(f"lint personal: {exc}")
     for hit in hits:

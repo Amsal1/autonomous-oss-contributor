@@ -14,7 +14,10 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 from ossbot.common.yamlio import YamlError, safe_load
 
@@ -88,19 +91,49 @@ def tracked_files(root: Path) -> list[str]:
     return [p for p in proc.stdout.decode("utf-8", errors="replace").split("\0") if p]
 
 
-def scan(root: Path, files: list[str], values: list[tuple[str, str]]) -> list[Hit]:
-    patterns = [(key, _pattern(value)) for key, value in values]
-    hits: list[Hit] = []
+def _worktree_blobs(root: Path, files: list[str]) -> Iterator[tuple[str, bytes]]:
     for rel in files:
-        if rel.startswith(EXEMPT_PREFIXES):
-            continue
         path = root / rel
         try:
             if not path.is_file() or path.stat().st_size > MAX_FILE_BYTES:
                 continue
-            blob = path.read_bytes()
+            yield rel, path.read_bytes()
         except OSError:
             continue
+
+
+def _staged_blobs(root: Path, files: list[str]) -> Iterator[tuple[str, bytes]]:
+    """The index content of each file (what the commit will contain), via one ``git cat-file --batch``."""
+    wanted = [rel for rel in files if "\n" not in rel]
+    if not wanted:
+        return
+    git = shutil.which("git") or "/usr/bin/git"
+    request = "".join(f":{rel}\n" for rel in wanted).encode("utf-8")
+    proc = subprocess.run(
+        [git, "-C", str(root), "cat-file", "--batch"], input=request, capture_output=True, check=False, timeout=120
+    )
+    if proc.returncode != 0:
+        raise LintError(f"git cat-file failed: {proc.stderr.decode(errors='replace').strip()}")
+    out, pos = proc.stdout, 0
+    for rel in wanted:
+        end = out.index(b"\n", pos)
+        header = out[pos:end].split()
+        pos = end + 1
+        if len(header) != 3:  # "<name> missing" (e.g. a gitlink); nothing to read
+            continue
+        size = int(header[2])
+        blob = out[pos : pos + size]
+        pos += size + 1
+        if header[1] == b"blob" and size <= MAX_FILE_BYTES:
+            yield rel, blob
+
+
+def scan(root: Path, files: list[str], values: list[tuple[str, str]], *, staged: bool = False) -> list[Hit]:
+    patterns = [(key, _pattern(value)) for key, value in values]
+    hits: list[Hit] = []
+    files = [rel for rel in files if not rel.startswith(EXEMPT_PREFIXES)]
+    blobs = _staged_blobs(root, files) if staged else _worktree_blobs(root, files)
+    for rel, blob in blobs:
         if b"\0" in blob[:8192]:  # binary
             continue
         for lineno, line in enumerate(blob.decode("utf-8", errors="replace").splitlines(), start=1):
@@ -110,8 +143,11 @@ def scan(root: Path, files: list[str], values: list[tuple[str, str]]) -> list[Hi
     return hits
 
 
-def run(root: Path) -> tuple[list[Hit], str]:
-    """Returns the hits and a one-line summary. Raises LintError when the profile itself is tracked."""
+def run(root: Path, *, staged: bool = False) -> tuple[list[Hit], str]:
+    """Returns the hits and a one-line summary. Raises LintError when the profile itself is tracked.
+
+    ``staged`` scans the index blobs instead of the working tree, so a partially staged file is checked
+    exactly as it will be committed (the pre-commit hook passes ``--staged``)."""
     files = tracked_files(root)
     if PROFILE.as_posix() in files:
         raise LintError(f"{PROFILE.as_posix()} is tracked; it must stay gitignored (git rm --cached it)")
@@ -125,6 +161,7 @@ def run(root: Path) -> tuple[list[Hit], str]:
     if not isinstance(profile, dict):
         raise LintError(f"{PROFILE.as_posix()} is not a mapping")
     values = personal_values(profile)
-    hits = scan(root, files, values)
-    summary = f"checked {len(files)} tracked files for {len(values)} profile values outside docs/: {len(hits)} hit(s)"
+    hits = scan(root, files, values, staged=staged)
+    kind = "staged" if staged else "tracked"
+    summary = f"checked {len(files)} {kind} files for {len(values)} profile values outside docs/: {len(hits)} hit(s)"
     return hits, summary

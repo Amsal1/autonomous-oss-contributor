@@ -418,6 +418,24 @@ def test_squid_drift_after_a_mode_switch_without_apply(tmp_path: Path) -> None:
     assert problem.startswith("firewall_drift:squid_mode ") and "allowlist" in problem
 
 
+def test_squid_drift_open_login_window_needs_the_login_flag(tmp_path: Path) -> None:
+    """F005-R2-4: the window state comes from `ossctl hermes login`'s flag, not from the conf under test."""
+    conf, root, template, resolv = _snapshot_env(tmp_path, "research")
+    control, flag = tmp_path / "control", tmp_path / "login-window"
+    files = {n: (ROOT / "config" / n).read_bytes() for n in ("policy.yaml", "egress.yaml", "targets.yaml")}
+    files["profile.yaml"] = (ROOT / "tests" / "fixtures" / "profile.test.yaml").read_bytes()
+    digest = write_snapshot(root, files)  # same content, same digest as _snapshot_env's
+    conf.write_text(
+        render.render_squid(parse_bundle(files), digest, [NS], TEMPLATE, hermes_login=True, mode="research")
+    )
+    [problem] = render.squid_drift(conf, root, template, resolv, control, login_window_flag=flag)
+    assert problem.startswith("firewall_drift:squid_mode ")  # left open, no login running
+    flag.touch()
+    assert render.squid_drift(conf, root, template, resolv, control, login_window_flag=flag) == []  # login running
+    conf.write_text(render.render_squid(parse_bundle(files), digest, [NS], TEMPLATE, mode="research"))
+    assert render.squid_drift(conf, root, template, resolv, control, login_window_flag=flag) == []  # closing
+
+
 def test_squid_drift_unparseable_flag_means_allowlist(tmp_path: Path) -> None:
     conf, root, template, resolv = _snapshot_env(tmp_path, "open")
     control = tmp_path / "control"
