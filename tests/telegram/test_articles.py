@@ -174,6 +174,26 @@ async def _confirm_without_settling(rig: TgRig, panel: dict[str, Any], panel_mid
     await rig.app.process_update(Update.de_json(data, rig.app.bot))
 
 
+async def test_shutdown_awaits_the_shielded_request_so_the_page_is_recorded(rig: TgRig) -> None:
+    """F6-4: Handlers.drain (graceful shutdown) waits for a createPage in flight."""
+    fake = FakeTelegraph()
+    enable(rig.ctx, fake)
+    final, answer_mid = await _answer(rig)
+    panel, panel_mid = await _panel(rig, final, answer_mid)
+    fake.gate = asyncio.Event()
+    await _confirm_without_settling(rig, panel, panel_mid)
+    for _ in range(50):
+        if fake.calls:
+            break
+        await asyncio.sleep(0.01)
+    drain = asyncio.ensure_future(rig.handlers.drain())
+    await asyncio.sleep(0.05)
+    assert not drain.done()  # still waiting for the shielded request
+    fake.gate.set()
+    await drain
+    assert db.one(rig.ctx.conn, "SELECT COUNT(*) AS n FROM telegraph_pages")["n"] == 1
+
+
 async def test_kill_before_the_request_leaves_not_published_stopped(rig: TgRig) -> None:
     """AC 68: cancelled before createPage started: nothing is sent to Telegraph."""
     fake = FakeTelegraph()

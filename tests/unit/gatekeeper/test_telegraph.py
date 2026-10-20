@@ -10,6 +10,7 @@ import pytest
 
 from ossbot.gatekeeper import telegraph as tgph
 from ossbot.gatekeeper.context import AppContext
+from tests.conftest import REPO_ROOT
 from tests.telegram.telegraphkit import LONG, FakeTelegraph, enable
 
 GHP = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
@@ -24,9 +25,24 @@ def _turn(ctx: AppContext, **cols: Any) -> Any:
     return tgph.turn_row(ctx, int(cur.lastrowid or 0))
 
 
+def _eligible(ctx: AppContext, turn: Any) -> str | None:
+    return tgph.eligible(turn, ctx.config.telegram.telegraph, None)
+
+
 def test_off_by_default(ctx: AppContext) -> None:
     assert ctx.config.telegram.telegraph.enabled is False
-    assert tgph.eligible(ctx, _turn(ctx)) == "Telegraph is off"
+    assert _eligible(ctx, _turn(ctx)) == "Telegraph is off"
+
+
+def test_no_other_module_reimplements_an_eligibility_rule() -> None:
+    """BA-19: telegraph.eligible is the only check (articles, chat_relay and the task call telegraph.check)."""
+    for path in (REPO_ROOT / "src" / "ossbot").rglob("*.py"):
+        if path.name in {"telegraph.py", "config.py"}:
+            continue
+        text = path.read_text(encoding="utf-8")
+        for rule in ("offer_min_chars", "max_content_kb", 'turn["feature_cards"]', 'turn["had_attachments"]',
+                     "PRIVATE_TOOLS"):  # fmt: skip
+            assert rule not in text, (path, rule)
 
 
 @pytest.mark.parametrize(("cols", "why"), [
@@ -41,13 +57,21 @@ def test_off_by_default(ctx: AppContext) -> None:
 ])  # fmt: skip
 def test_eligibility_reads_the_current_row(ctx: AppContext, cols: dict[str, Any], why: str | None) -> None:
     enable(ctx, FakeTelegraph())
-    assert tgph.eligible(ctx, _turn(ctx, **cols)) == why
+    assert _eligible(ctx, _turn(ctx, **cols)) == why
+
+
+def test_a_reviews_thread_is_never_eligible(ctx: AppContext) -> None:
+    enable(ctx, FakeTelegraph())
+    turn = _turn(ctx, thread_id=77)
+    assert tgph.eligible(turn, ctx.config.telegram.telegraph, 77) == "a Reviews answer"
+    assert tgph.eligible(turn, ctx.config.telegram.telegraph, 78) is None
 
 
 def test_no_token_means_not_offered(ctx: AppContext) -> None:
     enable(ctx, FakeTelegraph())
+    turn = _turn(ctx)
     ctx.env = {}
-    assert tgph.eligible(ctx, _turn(ctx)) == "no Telegraph account (ossctl telegraph setup)"
+    assert tgph.check(ctx, int(turn["turn_id"])) == "no Telegraph account (ossctl telegraph setup)"
 
 
 @pytest.mark.parametrize(("extra", "hit"), [

@@ -46,7 +46,7 @@ class PathArg(BaseModel):
 
 def offer_rows(ctx: AppContext, turn_id: int) -> k.Rows:
     """The ``📖`` row of a ``chat_answer`` view, only for an eligible turn (checked at render)."""
-    if ctx.telegraph is None or tgph.eligible(ctx, tgph.turn_row(ctx, turn_id)) is not None:
+    if ctx.telegraph is None or tgph.check(ctx, turn_id) is not None:
         return []
     return [[k.button("📖 Open as article", "article_publish", {"turn_id": turn_id})]]
 
@@ -81,7 +81,7 @@ async def article_publish(tap: Tap) -> str:
         return "Telegraph is off."
     if not tgph.system_running(app):
         return tgph.REFUSED_STATE
-    why = tgph.eligible(app, tgph.turn_row(app, tap.arg.turn_id))
+    why = tgph.check(app, tap.arg.turn_id)
     if why is not None:
         return f"Not eligible: {why}"
     if db.one(app.conn, "SELECT 1 FROM telegraph_pages WHERE turn_id = ? AND unpublished_at IS NULL",
@@ -106,11 +106,11 @@ async def article_confirm(tap: Tap) -> str:
     if not tgph.system_running(app):
         _say(app, tap.message_id, "Not published (paused or killed).")
         return tgph.REFUSED_STATE
-    if tgph.eligible(app, tgph.turn_row(app, tap.arg.turn_id)) is not None:
+    if tgph.check(app, tap.arg.turn_id) is not None:
         _say(app, tap.message_id, tgph.NOT_ELIGIBLE)
         return tgph.NOT_ELIGIBLE
     _say(app, tap.message_id, "⏳ Publishing…")
-    run = tgph.Publishing()
+    run = tgph.PublishTaskState()
     panel, answer, thread = tap.message_id, _answer_of(app, tap), tap.thread_id
 
     def announce(page: tgph.Page, title: str, after_stop: bool) -> None:
@@ -124,18 +124,16 @@ async def article_confirm(tap: Tap) -> str:
         try:
             status, result = await app.telegraph.publish(tap.arg.turn_id, run, announce)
         except asyncio.CancelledError:
-            run.cancelled = True
+            run.outer_cancelled = True
             raise
         except tgph.TelegraphError as exc:
-            run.phase = "done"
             _say(app, panel, f"Not published: Telegraph error ({str(exc)[:80]})")
             return
         if status == "refused":
-            run.phase = "done"
             _say(app, panel, str(result))
 
-    def on_done(task: asyncio.Task[Any]) -> None:
-        if task.cancelled() and run.phase == "before":
+    def on_done(task: asyncio.Task[Any]) -> None:  # BA-20: only a stop before the request edits the panel
+        if task.cancelled() and not run.request_started:
             _say(app, panel, "Not published (stopped).")
 
     tap.handlers.spawn(work(), "telegraph", on_done=on_done)
@@ -177,7 +175,7 @@ async def article_unpublish_confirm(tap: Tap) -> str:
         _say(app, tap.message_id, tgph.REFUSED_UNPUBLISH)
         return tgph.REFUSED_UNPUBLISH
     _say(app, tap.message_id, "⏳ Unpublishing…")
-    run = tgph.Publishing()
+    run = tgph.PublishTaskState()
     panel = tap.message_id
 
     def announce(after_stop: bool) -> None:
@@ -193,18 +191,16 @@ async def article_unpublish_confirm(tap: Tap) -> str:
         try:
             text = await app.telegraph.unpublish(tap.arg.path, run, announce)
         except asyncio.CancelledError:
-            run.cancelled = True
+            run.outer_cancelled = True
             raise
         except tgph.TelegraphError as exc:
-            run.phase = "done"
             _say(app, panel, f"Not changed: Telegraph error ({str(exc)[:80]})")
             return
         if text is not None:
-            run.phase = "done"
             _say(app, panel, text)
 
     def on_done(task: asyncio.Task[Any]) -> None:
-        if task.cancelled() and run.phase == "before":
+        if task.cancelled() and not run.request_started:
             _say(app, panel, "Not changed (stopped). The page is still public.")
 
     tap.handlers.spawn(work(), "telegraph", on_done=on_done)

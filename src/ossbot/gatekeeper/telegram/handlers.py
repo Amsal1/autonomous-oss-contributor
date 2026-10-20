@@ -200,6 +200,9 @@ class Handlers:
         self.cancel(KILL_CANCELS)
         while self.tasks:
             await asyncio.gather(*list(self.tasks), return_exceptions=True)
+        inflight = getattr(self.ctx.telegraph, "inflight", None)  # F6-4: a shielded Telegraph request finishes
+        while inflight:  # and its page row is written before the gatekeeper stops (§14.12.8 step 4)
+            await asyncio.gather(*list(inflight), return_exceptions=True)
 
     async def _timed(self, name: str, threshold_s: float, coro: Awaitable[None]) -> None:
         started = time.monotonic()

@@ -22,11 +22,12 @@ import json
 import logging
 import re
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from ossbot.common.clock import to_iso
+from ossbot.common.config import TelegraphConfig
 from ossbot.common.hashing import sha256_hex
 from ossbot.gatekeeper import db, policy
 from ossbot.gatekeeper.telegraph_writer import GATEKEEPER_PROXY, Page, TelegraphError, TelegraphWriter, make_client
@@ -35,6 +36,7 @@ if TYPE_CHECKING:
     from ossbot.gatekeeper.context import AppContext
 
 log = logging.getLogger(__name__)
+T = TypeVar("T")
 ALLOWED_TAGS = frozenset({"p", "h3", "h4", "ul", "ol", "li", "pre", "code", "blockquote", "b", "i", "s", "u", "hr",
                           "br", "a"})  # fmt: skip
 PRIVATE_TOOLS = frozenset({"memory", "session_search"})
@@ -63,13 +65,21 @@ def turn_row(ctx: AppContext, turn_id: int) -> Any:
     return db.one(ctx.conn, "SELECT * FROM chat_turns WHERE turn_id = ?", (turn_id,))
 
 
-def eligible(ctx: AppContext, turn: Any) -> str | None:
-    """None when the turn may be offered as an article, else why not (from the current row)."""
-    cfg = ctx.config.telegram.telegraph
-    if not cfg.enabled:
-        return "Telegraph is off"
+def check(ctx: AppContext, turn_id: int) -> str | None:
+    """The call sites' entry (render, tap, Confirm, before createPage): an account must exist, then
+    ``eligible`` on a freshly read ``chat_turns`` row."""
     if not token(ctx):
         return "no Telegraph account (ossctl telegraph setup)"
+    from ossbot.gatekeeper.telegram.runtime import ui_of  # noqa: PLC0415 - telegram imports the context
+
+    reviews = ui_of(ctx).topics.thread_id_raw("reviews")
+    return eligible(turn_row(ctx, turn_id), ctx.config.telegram.telegraph, reviews)
+
+
+def eligible(turn: Any, cfg: TelegraphConfig, reviews_thread_id: int | None) -> str | None:
+    """BA-19, the only eligibility check: None = eligible, else the failing rule (for the INFO log)."""
+    if not cfg.enabled:
+        return "Telegraph is off"
     if turn is None or turn["status"] not in {"done", "stopped"} or not turn["answer_text"]:
         return "no stored answer"
     text = str(turn["answer_text"])
@@ -85,9 +95,7 @@ def eligible(ctx: AppContext, turn: Any) -> str | None:
         return "unknown tools"
     if any(t in PRIVATE_TOOLS or t.startswith("ossbot_") for t in tools):
         return "the turn used memory, session search or ossbot tools"
-    from ossbot.gatekeeper.telegram.runtime import ui_of  # noqa: PLC0415 - telegram imports the context
-
-    reviews = ui_of(ctx).topics.thread_id_raw("reviews")
+    reviews = reviews_thread_id
     if str(turn["session_key"]).endswith("-reviews") or (reviews is not None and turn["thread_id"] == reviews):
         return "a Reviews answer"
     if int(turn["feature_cards"] or 0):
@@ -238,11 +246,12 @@ def make_title(markdown: str) -> str:
 
 # ------------------------------------------------------------------------------- the service
 @dataclass
-class Publishing:
-    """One publish or unpublish run (the shielded section announces itself after a stop)."""
+class PublishTaskState:
+    """BA-20: one per ``telegraph`` task, shared by the task and its ``on_done``. ``request_started`` is set
+    right before the shielded request; ``outer_cancelled`` when a stop reached the outer task."""
 
-    phase: str = "before"  # before | request | done
-    cancelled: bool = False
+    request_started: bool = False
+    outer_cancelled: bool = False
 
 
 class Telegraph:
@@ -251,16 +260,16 @@ class Telegraph:
     def __init__(self, ctx: AppContext, writer: TelegraphWriter) -> None:
         self.ctx = ctx
         self.writer = writer
+        self.inflight: set[asyncio.Task[Any]] = set()
 
-    async def publish(self, turn_id: int, run: Publishing,
+    async def publish(self, turn_id: int, run: PublishTaskState,
                       announce: Callable[[Page, str, bool], None]) -> tuple[str, Page | str]:  # fmt: skip
         """("published", page) or ("refused", text). The request, the page row and the announcement are
         shielded: a stop during ``createPage`` still records the page and announces it (after stop)."""
         ctx = self.ctx
-        turn = turn_row(ctx, turn_id)
-        if eligible(ctx, turn) is not None:
+        if check(ctx, turn_id) is not None:
             return "refused", NOT_ELIGIBLE
-        text = str(turn["answer_text"])
+        text = str(turn_row(ctx, turn_id)["answer_text"])  # rebuilt from the stored, redacted answer
         hit = await scan(ctx, text)
         if hit is not None:
             return "refused", f"Not published: the answer contains {hit}"
@@ -270,19 +279,22 @@ class Telegraph:
         title = make_title(text)
         if not system_running(ctx):
             return "refused", "Not published (paused or killed)."
-        if eligible(ctx, turn_row(ctx, turn_id)) is not None:  # right before createPage (AC 65)
+        if check(ctx, turn_id) is not None:  # right before createPage (AC 65)
             return "refused", NOT_ELIGIBLE
-        run.phase = "request"
-        page = await asyncio.shield(self._create(turn_id, title, nodes, text, run, announce))
+        run.request_started = True
+        page = await asyncio.shield(self._track(self._create(turn_id, title, nodes, text, run, announce)))
         return "published", page
 
-    async def _create(self, turn_id: int, title: str, nodes: list[Any], text: str, run: Publishing,
+    def _track(self, coro: Coroutine[Any, Any, T]) -> asyncio.Task[T]:
+        """The shielded request as a task in ``inflight``: ``Handlers.drain`` awaits it at shutdown (F6-4)."""
+        task = asyncio.ensure_future(coro)
+        self.inflight.add(task)
+        task.add_done_callback(self.inflight.discard)
+        return task
+
+    async def _create(self, turn_id: int, title: str, nodes: list[Any], text: str, run: PublishTaskState,
                       announce: Callable[[Page, str, bool], None]) -> Page:  # fmt: skip
-        try:
-            page = await self.writer.create_page(title, nodes, self.ctx.config.telegram.telegraph.author_name)
-        except TelegraphError:
-            run.phase = "done"
-            raise
+        page = await self.writer.create_page(title, nodes, self.ctx.config.telegram.telegraph.author_name)
         with db.transaction(self.ctx.conn):
             self.ctx.conn.execute(
                 "INSERT INTO telegraph_pages (path, url, title, turn_id, content_sha256, published_at)"
@@ -290,33 +302,27 @@ class Telegraph:
                 (page.path, page.url, title, turn_id, sha256_hex(text.encode("utf-8")), to_iso(self.ctx.clock.now())),
             )  # fmt: skip
             self.ctx.audit.append("telegram", "telegraph_published", {"path": page.path, "turn_id": turn_id})
-        run.phase = "done"
-        announce(page, title, run.cancelled)
+        announce(page, title, run.outer_cancelled)
         return page
 
-    async def unpublish(self, path: str, run: Publishing, announce: Callable[[bool], None]) -> str | None:
+    async def unpublish(self, path: str, run: PublishTaskState, announce: Callable[[bool], None]) -> str | None:
         """None when the page was blanked (the shielded section announced it), else the refusal text."""
         if not system_running(self.ctx):
             return REFUSED_UNPUBLISH
         row = db.one(self.ctx.conn, "SELECT * FROM telegraph_pages WHERE path = ?", (path,))
         if row is None or row["unpublished_at"] is not None:
             return "Already unpublished."
-        run.phase = "request"
-        await asyncio.shield(self._blank(path, run, announce))
+        run.request_started = True
+        await asyncio.shield(self._track(self._blank(path, run, announce)))
         return None
 
-    async def _blank(self, path: str, run: Publishing, announce: Callable[[bool], None]) -> None:
-        try:
-            await self.writer.edit_page(path, REMOVED_TITLE, [{"tag": "p", "children": [REMOVED_TEXT]}])
-        except TelegraphError:
-            run.phase = "done"
-            raise
+    async def _blank(self, path: str, run: PublishTaskState, announce: Callable[[bool], None]) -> None:
+        await self.writer.edit_page(path, REMOVED_TITLE, [{"tag": "p", "children": [REMOVED_TEXT]}])
         with db.transaction(self.ctx.conn):
             self.ctx.conn.execute("UPDATE telegraph_pages SET unpublished_at = ? WHERE path = ?",
                                   (to_iso(self.ctx.clock.now()), path))  # fmt: skip
             self.ctx.audit.append("telegram", "telegraph_unpublished", {"path": path})
-        run.phase = "done"
-        announce(run.cancelled)
+        announce(run.outer_cancelled)
 
 
 async def create_account(*, direct: bool = True) -> str:
@@ -336,7 +342,6 @@ def pages(ctx: AppContext) -> list[Any]:
                                  " DESC LIMIT 20").fetchall())  # fmt: skip
 
 
-__all__ = ["NOT_ELIGIBLE", "REFUSED_STATE", "REFUSED_UNPUBLISH", "Page", "Publishing", "Telegraph", "TelegraphError",
-           "TelegraphWriter",
-           "create_account", "eligible", "make_client", "make_title", "pages", "rotate_token", "scan",
-           "system_running", "tags_of", "to_nodes", "token", "turn_row"]  # fmt: skip
+__all__ = ["NOT_ELIGIBLE", "REFUSED_STATE", "REFUSED_UNPUBLISH", "Page", "PublishTaskState", "Telegraph",
+           "TelegraphError", "TelegraphWriter", "check", "create_account", "eligible", "make_client", "make_title",
+           "pages", "rotate_token", "scan", "system_running", "tags_of", "to_nodes", "token", "turn_row"]  # fmt: skip
