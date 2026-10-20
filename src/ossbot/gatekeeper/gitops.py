@@ -151,6 +151,41 @@ def github_url(full_name: str) -> str:
     return f"https://github.com/{full_name}.git"
 
 
+ASKPASS_SCRIPT = """#!/bin/sh
+# ossbot askpass: username from the URL, password from an inherited memfd (never argv/env).
+case "$1" in
+  Username*) printf '%s\\n' "$OSSBOT_GIT_USER" ;;
+  *) cat "/proc/self/fd/$OSSBOT_ASKPASS_FD" ;;
+esac
+"""
+
+
+def install_askpass(home: Path) -> Path:
+    """The askpass helper of both writers (``github_writer``, ``review_mirror_writer``)."""
+    home.mkdir(parents=True, exist_ok=True)
+    path = home / "askpass.sh"
+    tmp = home / f".askpass.sh.tmp-{os.getpid()}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o700)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(ASKPASS_SCRIPT)
+    os.chmod(tmp, stat.S_IRWXU)
+    os.replace(tmp, path)
+    return path
+
+
+def push_with_token(git: Git, token: str, login: str, argv: Sequence[str], *, cwd: Path) -> None:
+    """Run a push argv with the token on an inherited memfd read by askpass (never argv, URL or env)."""
+    askpass = install_askpass(git.home)
+    fd = os.memfd_create("ossbot-askpass", os.MFD_CLOEXEC)
+    try:
+        os.write(fd, token.encode("utf-8"))
+        os.set_inheritable(fd, True)
+        env = {"GIT_ASKPASS": str(askpass), "OSSBOT_ASKPASS_FD": str(fd), "OSSBOT_GIT_USER": login}
+        git.run(argv, cwd=cwd, pass_fds=(fd,), extra_env=env)
+    finally:
+        os.close(fd)
+
+
 def repo_key(upstream: str) -> str:
     if not UPSTREAM_RE.match(upstream):
         raise ValueError(f"bad upstream {upstream!r}")

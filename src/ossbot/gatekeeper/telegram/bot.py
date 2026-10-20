@@ -351,6 +351,11 @@ class TelegramFrontend:
                 await step(self.ctx, self.reader)
             except Exception:
                 log.exception("background telegram read failed", extra={"event": "telegram_reads_failed"})
+        if self.ctx.review_mirror is not None:  # opt-in (ADR-0019 C): a no-op unless the mirror is on
+            try:
+                await self.ctx.review_mirror.tick()
+            except Exception:
+                log.exception("review mirror tick failed", extra={"event": "review_mirror_tick_failed"})
 
     def _note_offline(self) -> None:
         """At start: how long the gatekeeper was gone (the last heartbeat) and whether that was a full

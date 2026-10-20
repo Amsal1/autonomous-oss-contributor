@@ -263,6 +263,8 @@ class ApprovalService:
         # (kind, text) -> policy violations (policy.check_text with the current snapshot, wired by
         # build_context); objects with a ``code`` attribute
         self.text_check: Callable[[str, str], list[Any]] | None = None
+        # action id -> the review mirror PR URL for card row 4 (``ReviewMirror.card_url``, wired by main)
+        self.mirror_url: Callable[[str], str | None] = lambda action_id: None
 
     # ---------------------------------------------------------------------- helpers
     def _now(self) -> datetime:
@@ -766,7 +768,8 @@ class ApprovalService:
 
     def card_rows(self, approval_id: str, tokens: dict[str, str]) -> keyboards.Rows:
         action = self._action_of(approval_id)
-        return keyboards.card_rows(action["kind"], tokens, files=cards.file_count(self.conn, str(action["id"])))
+        return keyboards.card_rows(action["kind"], tokens, files=cards.file_count(self.conn, str(action["id"])),
+                                   mirror_url=self.mirror_url(str(action["id"])))  # fmt: skip
 
     def part_count(self, approval_id: str) -> int:
         return cards.part_count(self.conn, str(self._action_of(approval_id)["id"]))

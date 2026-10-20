@@ -8,8 +8,6 @@ argv, the URL, the environment or a log line. A push is never forced (no ``+``, 
 
 from __future__ import annotations
 
-import os
-import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -17,15 +15,7 @@ from typing import Any, Protocol
 import httpx
 
 from ossbot.gatekeeper.github_read import GitHubError, raise_for
-from ossbot.gatekeeper.gitops import REF_NAME_RE, SHA_RE, Git, GitError, github_url
-
-ASKPASS_SCRIPT = """#!/bin/sh
-# ossbot askpass: username from the URL, password from an inherited memfd (never argv/env).
-case "$1" in
-  Username*) printf '%s\\n' "$OSSBOT_GIT_USER" ;;
-  *) cat "/proc/self/fd/$OSSBOT_ASKPASS_FD" ;;
-esac
-"""
+from ossbot.gatekeeper.gitops import REF_NAME_RE, SHA_RE, Git, GitError, github_url, push_with_token
 
 
 class Pusher(Protocol):
@@ -40,18 +30,6 @@ def push_argv(fork_repo: str, login: str, head: str, branch: str) -> list[str]:
     return ["-c", "credential.helper=", "push", "--no-verify", "--porcelain", url, f"{head}:refs/heads/{branch}"]
 
 
-def install_askpass(home: Path) -> Path:
-    home.mkdir(parents=True, exist_ok=True)
-    path = home / "askpass.sh"
-    tmp = home / f".askpass.sh.tmp-{os.getpid()}"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o700)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        fh.write(ASKPASS_SCRIPT)
-    os.chmod(tmp, stat.S_IRWXU)
-    os.replace(tmp, path)
-    return path
-
-
 class GitPusher:
     def __init__(self, git: Git, token: str, login: str) -> None:
         self.git = git
@@ -59,26 +37,12 @@ class GitPusher:
         self.login = login
 
     def push(self, mirror: Path, fork_repo: str, head: str, branch: str) -> None:
-        askpass = install_askpass(self.git.home)
-        fd = os.memfd_create("ossbot-askpass", os.MFD_CLOEXEC)
         try:
-            os.write(fd, self.token.encode("utf-8"))
-            os.set_inheritable(fd, True)
-            self.git.run(
-                push_argv(fork_repo, self.login, head, branch),
-                cwd=mirror,
-                pass_fds=(fd,),
-                extra_env={
-                    "GIT_ASKPASS": str(askpass),
-                    "OSSBOT_ASKPASS_FD": str(fd),
-                    "OSSBOT_GIT_USER": self.login,
-                },
-            )
+            push_with_token(self.git, self.token, self.login, push_argv(fork_repo, self.login, head, branch),
+                            cwd=mirror)  # fmt: skip
         except GitError as exc:
             transient = any(s in exc.stderr for s in ("Could not resolve", "timed out", "Connection", "HTTP 5"))
             raise GitHubError(f"push failed ({exc.returncode})", transient=transient) from exc
-        finally:
-            os.close(fd)
 
 
 @dataclass(frozen=True)

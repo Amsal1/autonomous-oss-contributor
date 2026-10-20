@@ -413,6 +413,7 @@ class AlwaysDenied(Strict):
 # grantees. fetch, validate, runner and gatekeeper are not keys, so data can never widen what
 # untrusted code (or the trusted writers) can reach; the renderer asserts the invariants on top.
 ModeGrantee = Literal["research", "hermes", "agent-llm", "catalog"]
+TELEGRAPH_CATEGORY = "telegraph"  # DESIGN §14.12.8: the gatekeeper's opt-in Telegraph egress
 
 
 class EgressConfig(Strict):
@@ -442,6 +443,8 @@ class EgressConfig(Strict):
         unknown = sorted(set(refs) - known)
         if unknown:
             raise ValueError(f"unknown egress categories: {unknown}")
+        if TELEGRAPH_CATEGORY in refs:  # §14.12.8: rendered only for the gatekeeper, only while enabled
+            raise ValueError("the telegraph category can't be listed by a profile, caller or mode")
         ports = [c.port for c in self.host_callers.values()]
         if len(ports) != len(set(ports)):
             raise ValueError("host caller ports must be distinct")
@@ -484,6 +487,12 @@ class InterestsProfile(Strict):
     prior_contributions: list[Annotated[str, Field(pattern=REPO_RE)]] = Field(default_factory=list)
 
 
+class ReviewMirrorProfile(Strict):
+    """ADR-0019 option C: the owner's private mirror repo (e.g. ``owner/ossbot-review``); unset = no mirror."""
+
+    repo: Annotated[str, Field(pattern=REPO_RE)] | None = None
+
+
 class ProfileConfig(Strict):
     version: Literal[1]
     github_login: Annotated[str, Field(pattern=GITHUB_LOGIN_RE)]
@@ -496,6 +505,7 @@ class ProfileConfig(Strict):
     kiro: KiroProfile
     backup: BackupProfile = BackupProfile()
     interests: InterestsProfile = InterestsProfile()
+    review_mirror: ReviewMirrorProfile = ReviewMirrorProfile()
 
     @model_validator(mode="after")
     def _login_not_forbidden(self) -> ProfileConfig:

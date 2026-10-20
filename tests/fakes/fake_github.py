@@ -46,6 +46,13 @@ class FakeGitHub:
     fork_visible_after: int = 0  # GETs of a new fork that still 404
     on_write: Callable[[str], None] | None = None
     next_number: int = 500
+    # review mirror (FEAT-010 item 51): Actions setting per repo, PR reviews and line comments, the status of
+    # a POST git/refs (the enable-time foreign-write probe), and the token-expiration header of GET /user
+    actions_enabled: dict[str, bool] = field(default_factory=dict)
+    reviews: dict[tuple[str, int], list[dict[str, Any]]] = field(default_factory=dict)
+    review_comments: dict[tuple[str, int], list[dict[str, Any]]] = field(default_factory=dict)
+    create_ref_status: int = 403
+    token_expiration: str | None = None
     router: respx.MockRouter = field(init=False)
 
     def __post_init__(self) -> None:
@@ -96,9 +103,16 @@ class FakeGitHub:
 
     def _dispatch(self, method: str, path: str, params: dict[str, str], body: Any) -> httpx.Response:
         if path == "/user":
-            return httpx.Response(200, json={"login": self.login}, headers={"X-OAuth-Scopes": self.scopes})
+            headers = {"X-OAuth-Scopes": self.scopes}
+            if self.token_expiration:
+                headers["github-authentication-token-expiration"] = self.token_expiration
+            return httpx.Response(200, json={"login": self.login}, headers=headers)
         if path == "/search/issues":
             return httpx.Response(200, json={"total_count": 0, "items": []})
+        mu = re.fullmatch(r"/users/([^/]+)/repos", path)
+        if mu:
+            owner = mu.group(1).lower()
+            return httpx.Response(200, json=[d for k, d in sorted(self.repos.items()) if k.split("/")[0] == owner])
         m = re.fullmatch(r"/repos/([^/]+/[^/]+)(/.*)?", path)
         if m is None:
             return httpx.Response(404, json={"message": "Not Found"})
@@ -130,12 +144,13 @@ class FakeGitHub:
             return httpx.Response(200, json=self.comments.get((repo, number), []))
         if rest == "/pulls":
             if method == "POST":
-                if any(p["head"]["label"] == body["head"] for p in self.pulls.get(repo, [])):
+                head = body["head"] if ":" in body["head"] else f"{repo.split('/')[0]}:{body['head']}"  # same-repo PR
+                if any(p["head"]["label"] == head for p in self.pulls.get(repo, [])):
                     errors = [{"message": "A pull request already exists"}]
                     return httpx.Response(422, json={"message": "Validation Failed", "errors": errors})
-                owner, branch = body["head"].split(":", 1)
+                owner, branch = head.split(":", 1)
                 pr = self.add_pull(self.repos[repo]["full_name"], title=body["title"], body=body["body"],
-                                   user={"login": owner}, head={"label": body["head"], "ref": branch},
+                                   user={"login": owner}, head={"label": head, "ref": branch},
                                    base={"ref": body["base"]})  # fmt: skip
                 return httpx.Response(201, json=pr)
             items = self.pulls.get(repo, [])
@@ -160,7 +175,20 @@ class FakeGitHub:
         m3 = re.fullmatch(r"/pulls/(\d+)", rest)
         if m3:
             pr = next((p for p in self.pulls.get(repo, []) if p["number"] == int(m3.group(1))), None)
+            if pr is not None and method == "PATCH":
+                pr.update({k: v for k, v in body.items() if k in {"title", "body", "state"}})
             return httpx.Response(200, json=pr) if pr else httpx.Response(404, json={})
+        m6 = re.fullmatch(r"/pulls/(\d+)/(reviews|comments)", rest)
+        if m6 and method == "GET":
+            store = self.reviews if m6.group(2) == "reviews" else self.review_comments
+            return httpx.Response(200, json=store.get((repo, int(m6.group(1))), []))
+        if rest == "/actions/permissions" and method == "GET":
+            return httpx.Response(200, json={"enabled": self.actions_enabled.get(repo, True)})
+        if rest == "/git/refs" and method == "POST":
+            return httpx.Response(self.create_ref_status, json={"message": "fake"})
+        m7 = re.fullmatch(r"/git/refs/heads/(.+)", rest)
+        if m7 and method == "DELETE":
+            return httpx.Response(204) if self.refs.pop((repo, m7.group(1)), None) else httpx.Response(422, json={})
         m4 = re.fullmatch(r"/git/ref/heads/(.+)", rest)
         if m4:
             sha = self.refs.get((repo, m4.group(1)))

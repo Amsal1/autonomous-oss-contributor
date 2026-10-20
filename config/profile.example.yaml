@@ -18,3 +18,5 @@ interests:                               # used to weight discovery and prompt t
   summary: "Describe your role and stack"
   categories_priority: {llm-observability: 1, iac: 2, android: 3}
   prior_contributions: []
+review_mirror:                           # ADR-0019 C, opt-in: a PRIVATE repo you own, Actions disabled
+  repo: null                             # e.g. your-github-login/ossbot-review; also needs ossctl review-mirror enable

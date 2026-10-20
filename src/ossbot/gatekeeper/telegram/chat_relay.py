@@ -271,7 +271,10 @@ def _answer(ctx: AppContext, spec: TurnSpec, answer: answer_view.Answer) -> None
     rich_ok = rich.use_rich(k.View("chat_answer", [], rich=True), ui.prefs, ctx.config.telegram.rich_views_default)
     to_assistant = spec.kind == "system_chat"
     _prefix_view(ctx, spec, to_assistant=to_assistant)
-    views = answer_view.views(answer, wrapped=spec.flat, rich=rich_ok, extra=_extra(spec))
+    from ossbot.gatekeeper.telegram import articles  # noqa: PLC0415 - articles imports the command registry
+
+    views = answer_view.views(answer, wrapped=spec.flat, rich=rich_ok, extra=_extra(spec),
+                              rows=articles.offer_rows(ctx, answer.turn_id))  # fmt: skip  # §14.12.8, off by default
     _deliver_all(ctx, spec, views, to_assistant=to_assistant)
     if answer_view.needs_document(answer, rich=rich_ok, wrapped=spec.flat):
         ui_send.document(ctx, "answer.md", answer.text.encode("utf-8"), thread="assistant" if to_assistant else None,

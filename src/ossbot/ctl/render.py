@@ -46,6 +46,7 @@ from urllib.parse import urlparse
 import jinja2
 
 from ossbot.common.config import (
+    TELEGRAPH_CATEGORY,
     ConfigBundle,
     ConfigError,
     EgressConfig,
@@ -206,7 +207,12 @@ def squid_context(
             dst = _dst(category, cats)
             if dst is not None:
                 rules.append({"port": caller, "src": "src_host", "dst": dst})
-    referenced = {r["dst"][4:] for r in rules if r["dst"].startswith("cat_")}
+    # §14.12.8: the gatekeeper's opt-in Telegraph egress, ahead of the always_denied line (which keeps
+    # telegra.ph denied for every other caller); absent from the render while telegraph.enabled is false
+    pre_deny: list[dict[str, str]] = []
+    if bundle.telegram.telegraph.enabled and TELEGRAPH_CATEGORY in cats and "gatekeeper" in callers:
+        pre_deny.append({"port": "gatekeeper", "src": "src_host", "dst": f"cat_{TELEGRAPH_CATEGORY}"})
+    referenced = {r["dst"][4:] for r in [*rules, *pre_deny] if r["dst"].startswith("cat_")}
     ctx = {
         "snapshot_hash": snapshot_hash,
         "mode": mode,
@@ -220,6 +226,7 @@ def squid_context(
         # never render anything but literal networks into the dst ACL
         "denied_cidrs": [str(ipaddress.ip_network(c, strict=True)) for c in egress.always_denied.cidrs],
         "rules": rules,
+        "pre_deny_rules": pre_deny,
     }
     assert_context_invariants(ctx)
     return ctx
@@ -247,6 +254,11 @@ def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
         raise RenderError(f"always_denied.domains lacks {missing_domains}")
     if tuple(ctx["ip_literal_patterns"]) != IP_LITERAL_PATTERNS:
         raise RenderError("IP-literal deny patterns changed")
+    for r in ctx.get("pre_deny_rules", []):  # only the gatekeeper's Telegraph rule may precede the denies
+        if r != {"port": "gatekeeper", "src": "src_host", "dst": f"cat_{TELEGRAPH_CATEGORY}"}:
+            raise RenderError(f"unexpected rule ahead of the denies: {r}")
+    if any(r["dst"] == f"cat_{TELEGRAPH_CATEGORY}" for r in rules):
+        raise RenderError("the telegraph category is rendered only for the gatekeeper, ahead of the denies")
 
 
 def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
@@ -262,6 +274,7 @@ def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
         "denied_cidrs": ctx["denied_cidrs"],
         "ip_literal_patterns": ctx["ip_literal_patterns"],
         "fetch_validate_runner_gatekeeper_rules": fixed,
+        "pre_deny_rules": ctx["pre_deny_rules"],
         "their_categories": {k: v for k, v in ctx["categories"].items() if k in used},
     }
 

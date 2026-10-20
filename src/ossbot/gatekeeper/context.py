@@ -80,6 +80,8 @@ class AppContext:
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
     card_recover: Callable[[], None] = field(default=lambda: None)
     chat: ChatRuntime | None = None  # the assistant backend (§15.6), set by build_context
+    review_mirror: Any = None  # the opt-in review mirror service (ADR-0019 C), set by main
+    telegraph: Any = None  # the opt-in Telegraph service (§14.12.8), set by main
 
     @property
     def config(self) -> ConfigBundle:

@@ -39,6 +39,20 @@ def test_only_submit_imports_github_writer() -> None:
     assert importers == ["ossbot.gatekeeper.submit"]
 
 
+def test_only_review_mirror_imports_its_writer() -> None:
+    """AC 26 (ADR-0019 C, U5): only review_mirror imports review_mirror_writer."""
+    name = "ossbot.gatekeeper.review_mirror_writer"
+    importers = sorted(_module(p) for p in SRC.rglob("*.py") if any(i == name for i in _imports(p)))
+    assert importers == ["ossbot.gatekeeper.review_mirror"]
+
+
+def test_only_telegraph_imports_its_writer() -> None:
+    """AC 26 (§14.12.8, U11): only telegraph imports telegraph_writer."""
+    name = "ossbot.gatekeeper.telegraph_writer"
+    importers = sorted(_module(p) for p in SRC.rglob("*.py") if any(i == name for i in _imports(p)))
+    assert importers == ["ossbot.gatekeeper.telegraph"]
+
+
 def test_untrusted_side_never_imports_gatekeeper() -> None:
     for package in ("runner", "sandboxd", "sandbox_tools"):
         for path in (SRC / package).rglob("*.py"):
@@ -50,4 +64,6 @@ def test_lint_imports_contracts_kept() -> None:
     proc = subprocess.run([str(exe), "--no-cache"], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "Only ossbot.gatekeeper.submit imports ossbot.gatekeeper.github_writer KEPT" in proc.stdout
+    assert "Only ossbot.gatekeeper.review_mirror imports ossbot.gatekeeper.review_mirror_writer KEPT" in proc.stdout
+    assert "Only ossbot.gatekeeper.telegraph imports ossbot.gatekeeper.telegraph_writer KEPT" in proc.stdout
     assert "0 broken" in proc.stdout

@@ -9,6 +9,7 @@ confirm; the gatekeeper announces each one on Telegram. When the gatekeeper is d
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
@@ -48,6 +49,10 @@ app.add_typer(config_app, name="config")
 app.add_typer(audit_app, name="audit")
 app.add_typer(egress_app, name="egress")
 app.add_typer(hermes_app, name="hermes")
+mirror_app = typer.Typer(no_args_is_help=True, help="opt-in private review mirror (ADR-0019 C; off by default)")
+app.add_typer(mirror_app, name="review-mirror")
+telegraph_app = typer.Typer(no_args_is_help=True, help="opt-in Telegraph articles (§14.12.8; off by default)")
+app.add_typer(telegraph_app, name="telegraph")
 chat_app = typer.Typer(no_args_is_help=True, help="assistant backend (selftest)")
 app.add_typer(chat_app, name="chat")
 model_app = typer.Typer(no_args_is_help=True, help="global model switch (config/models.yaml)")
@@ -416,6 +421,107 @@ def egress_status() -> None:
     if code != 200:
         _fail(f"gatekeeper answered {code}: {data}")
     _show(data)
+
+
+@mirror_app.command("enable")
+def review_mirror_enable() -> None:
+    """Run the enable-time probes (identity, private repo, Actions off, foreign-write probe, classic token
+    can't see the mirror) with the gatekeeper's mirror token (TTY confirm; ADR-0019 C). The mirror is
+    active once telegram.yaml review_mirror.enabled: true is loaded by a confirmed /reload too."""
+    _confirm("REVIEW MIRROR ENABLE")
+    code, data = api("POST", "/v1/review-mirror/enable", {})
+    if code != 200:
+        _fail(f"review mirror enable refused ({code}): {data}")
+    _show(data)
+
+
+@mirror_app.command("disable")
+def review_mirror_disable() -> None:
+    """Turn the review mirror off (open mirror PRs stay until purge)."""
+    code, data = api("POST", "/v1/review-mirror/disable", {})
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
+    _show(data)
+
+
+@mirror_app.command("status")
+def review_mirror_status() -> None:
+    """Configured repo, token present, enable state and open mirror PRs."""
+    code, data = api("GET", "/v1/review-mirror")
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
+    _show(data)
+
+
+@mirror_app.command("purge")
+def review_mirror_purge() -> None:
+    """Close every open mirror PR and delete its branches (TTY confirm). GitHub keeps refs/pull/<n>/head
+    in the repo: delete and recreate the mirror repo to remove those too."""
+    _confirm("REVIEW MIRROR PURGE")
+    code, data = api("POST", "/v1/review-mirror/purge", {})
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
+    _show(data)
+
+
+GATEKEEPER_ENV_FILE = Path("/etc/ossbot/secrets/gatekeeper.env")
+
+
+def _set_gatekeeper_env(key: str, value: str, path: Path = GATEKEEPER_ENV_FILE) -> None:
+    """Replace one KEY=VALUE in gatekeeper.env atomically, keeping its owner and mode (root:gatekeeper 0640).
+    The value is never printed."""
+    st = path.stat()
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if not ln.startswith(f"{key}=")]
+    tmp = path.with_name(f".tmp-{os.getpid()}-{path.name}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write("\n".join([*lines, f"{key}={value}"]) + "\n")
+    os.chown(tmp, st.st_uid, st.st_gid)
+    os.chmod(tmp, st.st_mode & 0o777)
+    os.replace(tmp, path)
+
+
+def _telegraph_token_write(token: str) -> None:
+    _set_gatekeeper_env("TELEGRAPH_ACCESS_TOKEN", token)
+    subprocess.run(["/usr/bin/systemctl", "try-restart", "ossbot-gatekeeper.service"], check=False, timeout=60)
+    typer.echo("TELEGRAPH_ACCESS_TOKEN written to gatekeeper.env; the gatekeeper was restarted. Articles stay off"
+               " until telegram.yaml telegraph.enabled: true is loaded by a confirmed /reload.")  # fmt: skip
+
+
+@telegraph_app.command("setup")
+def telegraph_setup() -> None:
+    """Create the Telegraph account (createAccount, short_name ossbot) and store its token in gatekeeper.env
+    (root, TTY confirm; DESIGN §14.12.8). Nothing is published."""
+    _require_root("telegraph setup")
+    from ossbot.ctl.doctor import env_value  # noqa: PLC0415
+    from ossbot.gatekeeper import telegraph  # noqa: PLC0415 - the only path to telegraph_writer
+
+    if env_value("gatekeeper.env", "TELEGRAPH_ACCESS_TOKEN"):
+        _fail("a Telegraph token exists already: ossctl telegraph rotate replaces it", 2)
+    _confirm("TELEGRAPH SETUP")
+    try:
+        token = asyncio.run(telegraph.create_account())
+    except telegraph.TelegraphError as exc:
+        _fail(f"createAccount failed: {exc}")
+    _telegraph_token_write(token)
+
+
+@telegraph_app.command("rotate")
+def telegraph_rotate() -> None:
+    """revokeAccessToken: a new Telegraph token replaces the old one in gatekeeper.env (root, TTY confirm)."""
+    _require_root("telegraph rotate")
+    from ossbot.ctl.doctor import env_value  # noqa: PLC0415
+    from ossbot.gatekeeper import telegraph  # noqa: PLC0415 - the only path to telegraph_writer
+
+    current = env_value("gatekeeper.env", "TELEGRAPH_ACCESS_TOKEN")
+    if not current:
+        _fail("no Telegraph token yet: run ossctl telegraph setup", 2)
+    _confirm("TELEGRAPH ROTATE")
+    try:
+        token = asyncio.run(telegraph.rotate_token(current))
+    except telegraph.TelegraphError as exc:
+        _fail(f"revokeAccessToken failed: {exc}")
+    _telegraph_token_write(token)
 
 
 @hermes_app.command("tier")

@@ -263,6 +263,43 @@ def test_invariants_identical_in_every_mode() -> None:
     assert "::/128" in _acls(texts["open"])["denied_dst"]  # P1-15
 
 
+def _with_telegraph(bundle: render.ConfigBundle, enabled: bool) -> render.ConfigBundle:
+    tg = bundle.telegram.model_copy(
+        update={"telegraph": bundle.telegram.telegraph.model_copy(update={"enabled": enabled})}
+    )
+    return render.ConfigBundle(bundle.policy, bundle.targets, bundle.egress, bundle.profile, tg)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_telegraph_category_only_for_the_gatekeeper_and_only_when_enabled(mode: str) -> None:
+    """AC 28 (§14.12.8): off -> no telegraph ACL at all; on -> one gatekeeper allow ahead of the denies,
+    and telegra.ph stays in always_denied for every other caller in every mode."""
+
+    def squid(bundle: render.ConfigBundle) -> str:
+        return render.render_squid(bundle, "0" * 64, [NS], TEMPLATE, mode=mode)  # type: ignore[arg-type]
+
+    off = squid(_with_telegraph(_bundle(), False))
+    assert "cat_telegraph" not in off
+    assert off == squid(_bundle())
+    on = squid(_with_telegraph(_bundle(), True))
+    assert _acls(on)["cat_telegraph"][2:] == ["api.telegra.ph"]
+    lines = on.splitlines()
+    uses = [ln for ln in lines if "cat_telegraph" in ln and ln.startswith("http_access")]
+    assert uses == ["http_access allow port_gatekeeper src_host cat_telegraph !ip_literal !denied_dst"]
+    assert lines.index(uses[0]) < lines.index("http_access deny denied_domains")
+    assert {"telegra.ph", "api.telegra.ph", "edit.telegra.ph"} <= set(_acls(on)["denied_domains"][2:])
+
+
+def test_the_telegraph_category_cannot_be_listed_by_anyone() -> None:
+    text = (ROOT / "config" / "egress.yaml").read_text(encoding="utf-8")
+    for bad in (text.replace("  research: [kiro_core, github_user_content]", "  research: [kiro_core, telegraph]"),
+                text.replace("categories: [gatekeeper]}", "categories: [gatekeeper, telegraph]}"),
+                text.replace("  allowlist: {}", "  allowlist: {hermes: [telegraph]}")):  # fmt: skip
+        assert bad != text
+        with pytest.raises(ConfigError, match="telegraph"):
+            parse_yaml_model(EgressConfig, "egress.yaml", bad.encode())
+
+
 def test_grant_to_a_code_running_profile_is_rejected_by_the_schema() -> None:
     """Decision B3: grantee keys are a closed Literal set; fetch/validate/runner/gatekeeper are not."""
     text = (ROOT / "config" / "egress.yaml").read_text(encoding="utf-8")

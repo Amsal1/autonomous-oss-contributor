@@ -15,8 +15,16 @@ from ossbot.common.paths import Paths
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import gitops
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.github_writer import ASKPASS_SCRIPT, install_askpass, push_argv
-from ossbot.gatekeeper.gitops import GIT_ARGS, Git, effective_config, git_env, https_fetch
+from ossbot.gatekeeper.github_writer import push_argv
+from ossbot.gatekeeper.gitops import (
+    ASKPASS_SCRIPT,
+    GIT_ARGS,
+    Git,
+    effective_config,
+    git_env,
+    https_fetch,
+    install_askpass,
+)
 from tests.conftest import insert_contribution
 from tests.githarness import GitWorld, package_request, stage_artifacts
 from tests.unit.gatekeeper.test_package_verify import VETTED, package_ok, post

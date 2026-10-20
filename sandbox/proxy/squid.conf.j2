@@ -46,6 +46,10 @@ acl denied_dst dst {{ denied_cidrs | join(" ") }}
 http_access deny !Safe_ports
 http_access deny CONNECT !SSL_ports
 http_access deny manager
+{% for r in pre_deny_rules -%}
+# §14.12.8: the gatekeeper's opt-in Telegraph egress (rendered only while telegraph.enabled is true)
+http_access allow port_{{ r.port }} {{ r.src }} {{ r.dst }} !ip_literal !denied_dst
+{% endfor -%}
 http_access deny denied_domains
 http_access deny ip_literal
 # 3128 serves only the task pools, never the host side of the bridge.

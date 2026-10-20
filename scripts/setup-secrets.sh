@@ -5,10 +5,10 @@
 #   bash -s -- --selftest     validate + write against a temp root only (fake well-formed values)
 # Record entries are KEY=VALUE, NUL-terminated. An empty VALUE keeps the existing one. Keys:
 #   TELEGRAM_BOT_TOKEN GITHUB_WRITE_TOKEN GITHUB_READ_TOKEN KIRO_API_KEY_SANDBOX KIRO_API_KEY_HERMES
-#   REVERSE_IMAGE_SEARCH_KEY (optional)
+#   REVERSE_IMAGE_SEARCH_KEY GITHUB_REVIEW_MIRROR_TOKEN (optional)
 # Files (root:<svc> 0640): gatekeeper.env (GITHUB_WRITE_TOKEN, TELEGRAM_BOT_TOKEN, HERMES_API_KEY,
 # OSSBOT_TOKEN_PEPPER, KIRO_KEY_SHA256 = sha256 of both Kiro keys and the read token, comma-separated,
-# REVERSE_IMAGE_SEARCH_KEY when set), runner.env
+# REVERSE_IMAGE_SEARCH_KEY, GITHUB_REVIEW_MIRROR_TOKEN and TELEGRAPH_ACCESS_TOKEN when set), runner.env
 # (GITHUB_READ_TOKEN), sandboxd.env (KIRO_API_KEY, GITHUB_READ_TOKEN for the MCP jobs), hermes.env
 # (API_SERVER_ENABLED, API_SERVER_KEY = HERMES_API_KEY, KIRO_API_KEY, GITHUB_READ_TOKEN). The seeded randoms (OSSBOT_TOKEN_PEPPER, HERMES_API_KEY) are kept.
 # Values are never printed. Exit 0 ok, 1 validation error, 2 usage.
@@ -16,7 +16,9 @@ set -uo pipefail
 
 SECRETS_DIR=${OSSBOT_SECRETS_DIR:-/etc/ossbot/secrets}
 KEYS=(TELEGRAM_BOT_TOKEN GITHUB_WRITE_TOKEN GITHUB_READ_TOKEN KIRO_API_KEY_SANDBOX KIRO_API_KEY_HERMES
-  REVERSE_IMAGE_SEARCH_KEY)
+  REVERSE_IMAGE_SEARCH_KEY GITHUB_REVIEW_MIRROR_TOKEN)
+# GITHUB_REVIEW_MIRROR_TOKEN: optional (ADR-0019 C, off by default): a fine-grained PAT scoped to the one
+# private mirror repo; gatekeeper.env only, never Hermes or a sandbox. It must not be the read token.
 # REVERSE_IMAGE_SEARCH_KEY: optional hook for the reverse image search feature (DESIGN §14.12.7,
 # §14.19 item 11). No provider is wired yet (user decision pending); the key only lands in
 # gatekeeper.env, is redacted like every gatekeeper secret, and is never given to Hermes.
@@ -27,6 +29,7 @@ declare -A PATTERN=(
   [KIRO_API_KEY_SANDBOX]='^ksk_[A-Za-z0-9_-]{16,}$'
   [KIRO_API_KEY_HERMES]='^ksk_[A-Za-z0-9_-]{16,}$'
   [REVERSE_IMAGE_SEARCH_KEY]='^[A-Za-z0-9_.:-]{16,256}$'
+  [GITHUB_REVIEW_MIRROR_TOKEN]='^github_pat_[A-Za-z0-9_]{20,}$'
 )
 declare -A NEW=()
 
@@ -59,6 +62,10 @@ validate() {
     log "the sandbox and the hermes Kiro keys must be two different keys"
     bad=1
   fi
+  if [[ -n ${NEW[GITHUB_REVIEW_MIRROR_TOKEN]:-} && ${NEW[GITHUB_REVIEW_MIRROR_TOKEN]:-} == "${NEW[GITHUB_READ_TOKEN]:-}" ]]; then
+    log "the review mirror token must be its own fine-grained token, not the read token"
+    bad=1
+  fi
   return "$bad"
 }
 
@@ -83,7 +90,7 @@ sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 apply() {
   local d=$SECRETS_DIR gk=$SECRETS_DIR/gatekeeper.env
   install -d -o root -g root -m 0751 "$d"
-  local pepper hkey telegram write read ksb khe ris hashes=""
+  local pepper hkey telegram write read ksb khe ris mirror tgph hashes=""
   pepper=$(env_get "$gk" OSSBOT_TOKEN_PEPPER); [[ -n $pepper ]] || pepper=$(random_token)
   hkey=$(env_get "$gk" HERMES_API_KEY); [[ -n $hkey ]] || hkey=$(random_token)
   telegram=${NEW[TELEGRAM_BOT_TOKEN]:-$(env_get "$gk" TELEGRAM_BOT_TOKEN)}
@@ -92,13 +99,15 @@ apply() {
   ksb=${NEW[KIRO_API_KEY_SANDBOX]:-$(env_get "$d/sandboxd.env" KIRO_API_KEY)}
   khe=${NEW[KIRO_API_KEY_HERMES]:-$(env_get "$d/hermes.env" KIRO_API_KEY)}
   ris=${NEW[REVERSE_IMAGE_SEARCH_KEY]:-$(env_get "$gk" REVERSE_IMAGE_SEARCH_KEY)}
+  mirror=${NEW[GITHUB_REVIEW_MIRROR_TOKEN]:-$(env_get "$gk" GITHUB_REVIEW_MIRROR_TOKEN)}
+  tgph=$(env_get "$gk" TELEGRAPH_ACCESS_TOKEN)  # written by ossctl telegraph setup|rotate, kept here
   [[ -n $ksb ]] && hashes=$(sha "$ksb")
   [[ -n $khe ]] && hashes=${hashes:+$hashes,}$(sha "$khe")
   # GHMCP-2: the read token reaches the MCP jobs and Hermes, so a leak of it is caught like a Kiro key
   [[ -n $read ]] && hashes=${hashes:+$hashes,}$(sha "$read")
   write_env "$gk" gatekeeper "GITHUB_WRITE_TOKEN=$write" "TELEGRAM_BOT_TOKEN=$telegram" \
     "HERMES_API_KEY=$hkey" "OSSBOT_TOKEN_PEPPER=$pepper" "KIRO_KEY_SHA256=$hashes" \
-    "REVERSE_IMAGE_SEARCH_KEY=$ris"
+    "REVERSE_IMAGE_SEARCH_KEY=$ris" "GITHUB_REVIEW_MIRROR_TOKEN=$mirror" "TELEGRAPH_ACCESS_TOKEN=$tgph"
   write_env "$d/runner.env" ossrunner "GITHUB_READ_TOKEN=$read"
   # GHMCP-2/4: the read-only GitHub MCP server of the scout/reviewer jobs and of Hermes
   write_env "$d/sandboxd.env" ossbox "KIRO_API_KEY=$ksb" "GITHUB_READ_TOKEN=$read"
@@ -165,6 +174,13 @@ selftest() {
   apply >/dev/null
   check "reverse image search key kept in gatekeeper.env only" \
     '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" REVERSE_IMAGE_SEARCH_KEY) == fake-reverse-image-key-0123 && -z $(env_get "$SECRETS_DIR/hermes.env" REVERSE_IMAGE_SEARCH_KEY) ]]'
+  NEW=([GITHUB_REVIEW_MIRROR_TOKEN]='github_pat_FAKE_FAKE_FAKE_FAKE_FAKE' [GITHUB_READ_TOKEN]='github_pat_FAKE_FAKE_FAKE_FAKE_FAKE')
+  check "the read token is refused as the mirror token" '! validate >/dev/null'
+  NEW=([GITHUB_REVIEW_MIRROR_TOKEN]='github_pat_FAKE_MIRROR_ONLY_0000000')
+  check "mirror token accepted" 'validate'
+  apply >/dev/null
+  check "mirror token in gatekeeper.env only" \
+    '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" GITHUB_REVIEW_MIRROR_TOKEN) == github_pat_FAKE_MIRROR_ONLY_0000000 && -z $(env_get "$SECRETS_DIR/hermes.env" GITHUB_REVIEW_MIRROR_TOKEN) && -z $(env_get "$SECRETS_DIR/sandboxd.env" GITHUB_REVIEW_MIRROR_TOKEN) ]]'
   check "no temp files left" '[[ -z $(find "$SECRETS_DIR" -name ".tmp-*") ]]'
   check "real secrets dir untouched" '[[ $SECRETS_DIR != /etc/ossbot/secrets ]]'
   rm -rf "$root"

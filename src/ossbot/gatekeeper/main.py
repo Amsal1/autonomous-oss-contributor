@@ -27,9 +27,12 @@ from ossbot.gatekeeper.context import AppContext, build_context
 from ossbot.gatekeeper.github_read import GitHubReader, make_client
 from ossbot.gatekeeper.policy import PolicyStartupError
 from ossbot.gatekeeper.reconcile import Reconciler, ReconcileService
+from ossbot.gatekeeper.review_mirror import ReviewMirror
 from ossbot.gatekeeper.submit import make_submitter
 from ossbot.gatekeeper.telegram.bot import TelegramFrontend, build_application, telegram_enabled
 from ossbot.gatekeeper.telegram.handlers import Handlers
+from ossbot.gatekeeper.telegraph import Telegraph, TelegraphWriter
+from ossbot.gatekeeper.telegraph import make_client as make_telegraph_client
 
 log = logging.getLogger("ossbot.gatekeeper")
 SOCKET_GROUP = "ossapi"
@@ -70,6 +73,12 @@ def build_services(ctx: AppContext) -> list[Service]:
     submitter = make_submitter(ctx, client, write_token)
     reconciler = Reconciler(ctx, GitHubReader(client))
     services: list[Service] = [ReconcileService(reconciler)]
+    mirror_token = os.environ.get("GITHUB_REVIEW_MIRROR_TOKEN") or None  # optional (ADR-0019 C, off by default)
+    ctx.review_mirror = ReviewMirror(ctx, make_client(mirror_token) if mirror_token else None, mirror_token,
+                                     classic=client)  # fmt: skip
+    ctx.approvals.mirror_url = ctx.review_mirror.card_url
+    # §14.12.8, off by default: the writer exists always; nothing is offered unless telegraph.enabled
+    ctx.telegraph = Telegraph(ctx, TelegraphWriter(make_telegraph_client(), os.environ.get("TELEGRAPH_ACCESS_TOKEN")))
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN") or None
     if not telegram_enabled(ctx, bot_token):
         log.warning("Telegram front-end disabled (awaiting TELEGRAM_BOT_TOKEN / profile.telegram.user_id)")
@@ -87,7 +96,8 @@ def build_services(ctx: AppContext) -> list[Service]:
 
 def main() -> int:
     redactor = Redactor()
-    for name in ("TELEGRAM_BOT_TOKEN", "GITHUB_WRITE_TOKEN", "OSSBOT_TOKEN_PEPPER", "HERMES_API_KEY"):
+    for name in ("TELEGRAM_BOT_TOKEN", "GITHUB_WRITE_TOKEN", "OSSBOT_TOKEN_PEPPER", "HERMES_API_KEY",
+                 "GITHUB_REVIEW_MIRROR_TOKEN", "TELEGRAPH_ACCESS_TOKEN"):  # fmt: skip
         value = os.environ.get(name)
         if value:
             redactor.add_secret(value)

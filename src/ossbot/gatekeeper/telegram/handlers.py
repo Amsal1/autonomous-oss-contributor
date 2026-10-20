@@ -104,6 +104,8 @@ ASK_WHY = "Explain why you want skill {skill} v{version} and what it will do"
 
 def _button(btn: keyboards.Button) -> InlineKeyboardButton:
     style = btn[2] if len(btn) == 3 else None
+    if btn[1].startswith(keyboards.MIRROR_URL_PREFIX):  # card row 4 (§14.11.14)
+        return InlineKeyboardButton(btn[0], url=btn[1])
     return InlineKeyboardButton(btn[0], callback_data=keyboards.callback_data(btn[1]), style=style)
 
 

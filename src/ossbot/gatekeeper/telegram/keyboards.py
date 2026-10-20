@@ -17,6 +17,7 @@ CALLBACK_RE = re.compile(r"^t:[A-Za-z0-9_-]{22}\Z")
 Button = tuple[str, str] | tuple[str, str, str]
 Rows = list[list[Button]]
 DISABLED = ""  # the token of a disabled button (no callback)
+MIRROR_URL_PREFIX = "https://github.com/"  # a URL button (row 4, §14.11.14); tokens never contain ':' or '/'
 
 APPROVE_LABEL: dict[OutboundKind, str] = {
     "open_pr": "✅ Approve & Submit",
@@ -45,7 +46,8 @@ def token_of(data: str | None) -> str | None:
     return data[2:]
 
 
-def card_rows(kind: OutboundKind, tokens: dict[str, str], *, files: int | None = None) -> Rows:
+def card_rows(kind: OutboundKind, tokens: dict[str, str], *, files: int | None = None,
+              mirror_url: str | None = None) -> Rows:  # fmt: skip
     """The S1 card keyboard for ``card_purposes(kind, has_interdiff)`` (§14.18.4.1)."""
     rows: Rows = [[(APPROVE_LABEL[kind], tokens["approve"], "success"), (REJECT_LABEL[kind], tokens["reject"])]]
     if kind in {"open_pr", "push_update"}:
@@ -56,6 +58,8 @@ def card_rows(kind: OutboundKind, tokens: dict[str, str], *, files: int | None =
         if kind == "open_pr":
             third.append(("📝 Edit text", tokens["edit_text_pick"]))
         rows.append(third)
+        if mirror_url:  # §14.11.14: row 4, a URL button (no token), only while the mirror is on and pushed
+            rows.append([("🐙 Review on GitHub ↗", mirror_url)])
     else:
         rows.append([("📝 Edit text", tokens["edit_text_pick"])])
     return rows
@@ -76,6 +80,8 @@ def single_row(label: str, token: str) -> Rows:
 def button_json(button: Button) -> dict[str, Any]:
     if button[1] == DISABLED:  # a Bot API 10.3 DisabledButton (e.g. ⛔ Not startable)
         return {"text": button[0], "disabled": {}}
+    if button[1].startswith(MIRROR_URL_PREFIX):  # the review mirror's URL button (never a token)
+        return {"text": button[0], "url": button[1]}
     out: dict[str, Any] = {"text": button[0], "callback_data": callback_data(button[1])}
     if len(button) == 3:
         out["style"] = button[2]

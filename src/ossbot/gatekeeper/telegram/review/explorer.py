@@ -35,6 +35,7 @@ class Subject:
     contrib: sqlite3.Row
     files: list[FilePatch]
     source: str = "change"  # "interdiff": the files come from interdiff.patch (§14.11.7 INTERDIFF mode)
+    mirror: str | None = None  # §14.11.14: "🐙 Mirror PR #12 · tree-equal ✅" (section 1) while the mirror is on
 
     def arg(self, **extra: Any) -> dict[str, Any]:
         out = {"cid": self.cid, "rev": self.rev, "action_id": self.action_id, **extra}
@@ -51,7 +52,10 @@ def subject(conn: sqlite3.Connection, derived_dir: Any, cid: str, rev: int, acti
     if action_id is not None:
         row = db.one(conn, "SELECT kind FROM outbound_actions WHERE id = ?", (action_id,))
         kind = str(row["kind"]) if row else kind
-    return Subject(cid, rev, action_id, kind, str(contrib["upstream"]), contrib, patchview.load(derived_dir))
+    from ossbot.gatekeeper import review_mirror  # noqa: PLC0415 - the mirror imports the review modules lazily
+
+    return Subject(cid, rev, action_id, kind, str(contrib["upstream"]), contrib, patchview.load(derived_dir),
+                   mirror=review_mirror.explorer_line(conn, cid, rev))  # fmt: skip
 
 
 def _json(value: Any) -> dict[str, Any]:
@@ -84,6 +88,8 @@ def _section_lines(s: Subject, section: int, page: int) -> SectionOut:
         report = _json(c["size_report_json"])
         if report.get("measured_class"):
             lines.append(k.line(f"Size ✅ {report['measured_class']}"))
+        if s.mirror:
+            lines.append(k.line(s.mirror))
     elif section == 2:
         lines.append((k.Const("Issue: "), k.Text(c["issue_title"] or "(none)", 300)))
         vet = _json(c["vetting_json"])

@@ -152,6 +152,28 @@ forbidden_modules = ["ossbot.gatekeeper.github_writer"]
 allow_indirect_imports = false
 
 [[tool.importlinter.contracts]]
+# ADR-0019 C, U5 (FEAT-010 item 51): the review mirror's writer is reachable only through review_mirror.
+name = "Only ossbot.gatekeeper.review_mirror imports ossbot.gatekeeper.review_mirror_writer"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.**"]
+ignore_imports = ["ossbot.gatekeeper.review_mirror -> ossbot.gatekeeper.review_mirror_writer"]
+unmatched_ignore_imports_alerting = "error"
+forbidden_modules = ["ossbot.gatekeeper.review_mirror_writer"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
+# DESIGN §14.12.8, U11 (FEAT-010 item 52): the Telegraph writer is reachable only through telegraph.
+name = "Only ossbot.gatekeeper.telegraph imports ossbot.gatekeeper.telegraph_writer"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.**"]
+ignore_imports = ["ossbot.gatekeeper.telegraph -> ossbot.gatekeeper.telegraph_writer"]
+unmatched_ignore_imports_alerting = "error"
+forbidden_modules = ["ossbot.gatekeeper.telegraph_writer"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
 name = "Untrusted-side components never import the gatekeeper"
 type = "forbidden"
 source_modules = ["ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools"]
@@ -185,7 +207,7 @@ forbidden_modules = ["ossbot.gatekeeper.submit", "ossbot.gatekeeper.github_write
 [[tool.importlinter.contracts]]
 # DESIGN §14.20.1 (PLAN item 44): the chat relay can't reach a decision, a state change or the control
 # plane, and writes Telegram rows only through telegram.ui (never the outbox directly). The features
-# package, review_mirror_writer and telegraph_writer get theirs when they land (FEAT-010).
+# package, review_mirror_writer and telegraph_writer have their own contracts (FEAT-010).
 name = "The chat relay never imports the approval, state, control or outbox modules"
 type = "forbidden"
 source_modules = ["ossbot.gatekeeper.chat"]
@@ -199,7 +221,8 @@ name = "Features never import the approval, submit, writer, state or control mod
 type = "forbidden"
 source_modules = ["ossbot.gatekeeper.features"]
 forbidden_modules = ["ossbot.gatekeeper.approvals", "ossbot.gatekeeper.decisions", "ossbot.gatekeeper.submit",
-    "ossbot.gatekeeper.github_writer", "ossbot.gatekeeper.state_machine", "ossbot.gatekeeper.control"]
+    "ossbot.gatekeeper.github_writer", "ossbot.gatekeeper.state_machine", "ossbot.gatekeeper.control",
+    "ossbot.gatekeeper.review_mirror_writer", "ossbot.gatekeeper.telegraph_writer"]
 
 [[tool.importlinter.contracts]]
 # DESIGN §14.20.1, U1: the kit renders and queues; it never decides. Only the decision services mint
