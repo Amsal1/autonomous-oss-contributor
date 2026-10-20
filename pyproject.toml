@@ -3,6 +3,8 @@ name = "ossbot"
 version = "0.1.0"
 description = "Self-hosted autonomous open-source contributor with a deterministic human-approval gatekeeper"
 readme = "docs/DESIGN.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12,<3.14"
 # Pinned with == (PLAN Decision 4); latest stable on PyPI as of 2026-10-17.
 dependencies = [

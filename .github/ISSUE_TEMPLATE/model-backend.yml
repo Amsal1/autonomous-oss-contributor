@@ -1,0 +1,59 @@
+name: New model backend
+description: Propose a pipeline or assistant model backend (ADR-0022, CONTRIBUTING "Adding a model backend").
+labels: [model-backend]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A backend must use the provider's official CLI or public API under the user's own account and
+        terms. Proxies or routers that violate a provider's terms will not be accepted.
+  - type: dropdown
+    id: side
+    attributes:
+      label: Side
+      options:
+        - pipeline (headless role jobs in sandboxd)
+        - assistant (Hermes model-provider plugin)
+        - both
+    validations:
+      required: true
+  - type: textarea
+    id: official
+    attributes:
+      label: Official CLI or API
+      description: Name, version, documentation link and license or terms of the CLI/API you would use.
+    validations:
+      required: true
+  - type: textarea
+    id: auth
+    attributes:
+      label: Authentication
+      description: How it authenticates (API key, OAuth device flow, ...), and whether it works headless without a browser session.
+    validations:
+      required: true
+  - type: textarea
+    id: credentials
+    attributes:
+      label: Credential names and formats
+      description: Environment variable names (credential_env) and the key format (credential_patterns). Never paste a real key.
+    validations:
+      required: true
+  - type: textarea
+    id: probes
+    attributes:
+      label: Safety probes
+      description: How the five probes (research_deny, symlink, coder_surface, settings, workspace) would run against this CLI/API, and how its tool surface and workspace are restricted.
+    validations:
+      required: true
+  - type: textarea
+    id: egress
+    attributes:
+      label: Egress hosts
+      description: The hosts the backend needs (for a new category in config/egress.yaml).
+    validations:
+      required: true
+  - type: textarea
+    id: models
+    attributes:
+      label: Model catalog
+      description: How the backend lists its models (for the catalog entrypoint).

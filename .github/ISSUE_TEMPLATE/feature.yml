@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a new capability or a change in behaviour.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Proposals that weaken an invariant I1-I13, add a second GitHub write path or add exposure
+        (inbound ports, tunnels, webhooks, a Mini App) will not be accepted; see CONTRIBUTING.md.
+        For a new model backend, use the "New model backend" template.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What you are trying to do and why the current behaviour is not enough.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: What should change. Name the components and files if you know them.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety impact
+      description: Which invariants, gates, sandboxes or credentials does it touch? "None" is a valid answer if you checked.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered

@@ -122,3 +122,11 @@ age:
   url: "https://github.com/FiloSottile/age/releases/download/v1.3.2/age-v1.3.2-linux-amd64.tar.gz"
   sha256: "cbe24006683f8eb669266162894b9a522a1af52f2665fbc63a4bb032ed26ac10"
   source: "GitHub releases API latest = v1.3.2 (2026-08-29, re-checked 2026-10-19); sha256 = release asset digest; man page doc/age.1.ronn at v1.3.2"
+
+apache_license_2_0:
+  # LICENSE = this file byte for byte (LF already, 11358 bytes), then a 3-line third-party pointer
+  # appended (scripts/dev/fetch-license.ps1; -CheckOnly re-verifies the prefix). Post-v1 Package OSS O1.
+  url: "https://www.apache.org/licenses/LICENSE-2.0.txt"
+  sha256: "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  license_file_sha256: "ed81f0187ee2405242e87d71997fcae808e93e6198ddcef11ef33ce44cfd03d3"
+  source: "fetched 2026-10-20 with scripts/dev/fetch-license.ps1; sha256 of the served bytes"

@@ -22,6 +22,9 @@ SELF = Path(__file__).resolve()
 GUARDS = {SELF, (ROOT / "tests/system/test_no_exposure.sh").resolve()}
 # the user and agent docs state the no-exposure rule and name the forbidden tools (like docs/, which is skipped)
 GUARDS |= {ROOT / "README.md", ROOT / "AGENTS.md", *(ROOT / ".kiro/steering").glob("*.md")}
+# the community docs state the same rule ("what will not be accepted", the PR checklist, security scope)
+GUARDS |= {ROOT / "CONTRIBUTING.md", ROOT / "SECURITY.md", ROOT / ".github/PULL_REQUEST_TEMPLATE.md",
+           *(ROOT / ".github/ISSUE_TEMPLATE").glob("*.yml")}  # fmt: skip
 FORBIDDEN = {
     "cloudflared tunnel": re.compile(r"(?i)\bcloudflared\b|trycloudflare"),
     "ngrok": re.compile(r"(?i)\bngrok\b"),

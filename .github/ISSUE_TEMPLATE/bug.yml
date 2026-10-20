@@ -1,0 +1,63 @@
+name: Bug report
+description: Something in ossbot does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems (approval bypass, sandbox escape, token leak) go to a private advisory, not
+        here: see SECURITY.md. Redact tokens, keys, chat ids and personal values from everything below.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: input
+    id: commit
+    attributes:
+      label: Commit
+      description: Output of `git rev-parse --short HEAD`.
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - gatekeeper / Telegram
+        - runner / pipeline
+        - sandboxd / sandboxes / egress
+        - Hermes assistant
+        - Windows scripts / lifecycle
+        - provisioning / doctor / ossctl
+        - docs
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - DRY RUN
+        - LIVE
+        - not relevant
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and doctor output
+      description: Relevant lines from `scripts\ossctl.ps1 logs <service>` and `scripts\ossctl.ps1 doctor` (redacted).
+      render: text

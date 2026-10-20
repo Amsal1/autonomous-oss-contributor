@@ -43,7 +43,8 @@ step_app_deploy() {
   ensure_dir /var/cache/ossbot-uv root root 0700
   local -a sources=()
   local p
-  for p in src pyproject.toml uv.lock prompts vendor hermes sandbox/proxy; do
+  # LICENSE and NOTICE: pyproject's license-files, needed to build the wheel
+  for p in src pyproject.toml uv.lock LICENSE NOTICE prompts vendor hermes sandbox/proxy; do
     [[ -e $OSSBOT_REPO/$p ]] && sources+=("$p")
   done
   # The wheel metadata names docs/DESIGN.md as the readme; ship it so the build is reproducible.

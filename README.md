@@ -271,6 +271,16 @@ list: v1 ships the registry and no feature yet; each new feature adds one line h
 This repository is developed with AI assistance (Kiro); every change is reviewed by a human
 maintainer. Contributions it prepares carry an AI disclosure.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) (dev setup, tests, DCO sign-off, AI-assisted contributions,
+adding a model backend), the [Code of Conduct](CODE_OF_CONDUCT.md) and [SECURITY.md](SECURITY.md) for
+private vulnerability reports. The invariants every change must keep are in [AGENTS.md](AGENTS.md).
+
 ## License
 
-License: TBD.
+Licensed under the [Apache License 2.0](LICENSE). Anyone may use, modify and redistribute it. Under
+section 4(d), a redistribution (including a modified version) must keep the attribution in
+[NOTICE](NOTICE), which credits the author. Third-party components and their licenses are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); the vendored `vendor/hermes-kiro-provider` keeps its
+MIT license.
