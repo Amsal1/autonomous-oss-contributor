@@ -30,6 +30,14 @@ KEY_FORMATS: dict[str, bool] = {
     "stub:{message_id}:submitted": False,  # S9: the card's one outcome edit after the submit returns
     "stub:{message_id}:rejected": False,  # /reject: the card's one outcome edit (an approval rejects once)
     "view:{token}": False,  # new per send (a fresh token), so it never repeats
+    # FEAT-010
+    "react:{message_id}:{emoji}": False,  # one reaction per message and emoji (item 49)
+    "digest:{kind}:{period_start}": False,  # one digest per kind and period (item 50)
+    "status:{cid}:card": False,  # the status card is sent once per PR
+    "status:{cid}:merged": False,  # the merged summary once per PR
+    "status:{cid}:{event_id}": False,  # one P1 reply per GitHub event id
+    "status:{cid}:{content_hash}:{edited_at}": True,  # a status card edit (content can recur)
+    "mirror_row4:{approval_id}": False,  # card row 4 once per approval (item 51)
 }
 
 

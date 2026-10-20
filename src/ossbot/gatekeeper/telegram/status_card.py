@@ -249,7 +249,7 @@ async def refresh(ctx: AppContext, reader: Any, cid: str, *, force: bool = False
     changed = digest_ != state.get("hash")
     final = facts.state != "open"
     if changed and (force or final or last_edit is None or now - from_iso(last_edit) >= interval):
-        ui_send.edit(ctx, v, message_id=mid, dedupe_key=f"status:{cid}:{digest_}")
+        ui_send.edit(ctx, v, message_id=mid, dedupe_key=f"status:{cid}:{digest_}:{to_iso(now)}")
         state.update({"hash": digest_, "edited_at": to_iso(now)})
         queued = True
         if facts.state == "merged" and not state.get("summary_sent"):

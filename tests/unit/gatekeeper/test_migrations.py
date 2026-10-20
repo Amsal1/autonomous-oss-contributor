@@ -14,7 +14,8 @@ CR004_TABLES = {"runner_requests"}
 HERMES_TABLES = {"skill_reviews", "chat_turns", "chat_sessions"}  # 0004_hermes.sql (FEAT-007)
 UX_TABLES = {"tg_topics", "pending_input", "review_comments", "ux_prefs"}  # 0005_telegram_ux.sql (FEAT-009)
 UX_OUTBOX_COLUMNS = {"priority", "thread_key", "coalesce_key", "merged_into"}
-LATEST = 5
+LATEST = 6
+M2_TABLES = {"digest_runs", "reminders", "review_mirror", "telegraph_pages"}  # 0006_telegram_m2.sql (FEAT-010)
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -28,7 +29,7 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def test_from_empty(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "a.db")
     assert db.migrate(conn) == LATEST
-    assert _tables(conn) >= DECISION_TABLES | CR004_TABLES | HERMES_TABLES | UX_TABLES
+    assert _tables(conn) >= DECISION_TABLES | CR004_TABLES | HERMES_TABLES | UX_TABLES | M2_TABLES
     assert _columns(conn, "tg_outbox") >= OUTBOX_COLUMNS | UX_OUTBOX_COLUMNS
     assert "comments_json" in _columns(conn, "change_requests")
     assert db.migrate(conn) == LATEST  # idempotent
