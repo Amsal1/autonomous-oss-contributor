@@ -556,6 +556,23 @@ Incident during this step: adding `lifecycle:` to `config/policy.yaml` before de
 | Phase 1 notes for CR-002 | | Egress is data: `config/egress.yaml` `categories`, `sandbox_profiles`, `host_callers` and `always_denied` go through the config snapshot to `ossbot.ctl.render squid`, with no per-profile special cases. So `open` for `agent-llm` is the config line `agent-llm: [kiro_core, web_public]`. One constraint: `agent-llm` and `catalog` share the llm pool (DESIGN 10.3), and the renderer refuses pool-mates with different categories. `open` therefore also needs `catalog` with the same list, or its own pool. The every-mode invariants (`ip_literal`, `denied_dst`, vsock/io_uring, DNS, Hyper-V) are not in that data. Tests that pin today's defaults and must change with CR-002: `test_egress_surface.sh` (hermes raw CONNECT `gist.github.com.` / `x.github.io.` 403) and the squid golden |
 | CR-003 Telegram UX and PR review surface (`docs/plan/CR-003-telegram-ux.md`, ADR-0019, mockups in `docs/ux/`; written and committed by a separate design workflow) | Phase 2, sequenced last | **pending approval**. Once `docs/ux/cr003-verdict.json` is APPROVED and the user confirms, it replaces the Telegram presentation details of DESIGN 14. Phase 2 builds the backend and the deterministic handlers first. If CR-003 is not approved by the time the Telegram presentation and review-flow work comes up, pause and ask; do not implement the old 14 presentation |
 
+## Post-v1 Package A (owner-found bugs, 2026-10-20)
+
+Commits aac1a5a..4e7e746 on `main` (details per item: `.ossbot-local/postv1/verify-a.md`, not tracked).
+
+| Item | Command | Result |
+|---|---|---|
+| Lint gate | `.ossbot-local\lint.ps1` (ruff check, ruff format --check, mypy, lint-imports) | all clean; 241 files mypy, 11 contracts kept |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120 -q` (dev venv, at 02a48ac) | 3605 passed |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | exit 0; app, hermes (install stamp external, managed config), hermes unit changed; doctor PASS 40, WARN 1 (hermes tool surface ConnectError while Hermes restarted) |
+| 1 shutdown drain | `tests\system\test_shutdown_blocker.ps1` (all 7 sections; 2-4 and 7 re-run after the test fix in 4e7e746) | all checks passed: channel up with a pong in 1.0 s; WM_QUERYENDSESSION returned TRUE after `drained exit=0` (5.7 s) with no process launched during the query; lifecycle.log `start timeout=90 (channel)` / `end exit=0`; units stopped; after the VM ended and `up.ps1`, `last shutdown graceful`; a killed channel restarted at once; with the distro stopped the query returned TRUE in 0.2 s with "no channel"; a channel killed right after `ack` still finished the drain and wrote the marker |
+| 1 status / 6b | `tests\system\test_lifecycle_scripts.ps1`; `bootstrap.ps1 -Only shutdownhooks`; `scripts\ossctl.ps1 doctor --quick` | 62 PASS (incl. the four `-StatusJsonFile` last-shutdown renderings); hook task removed (retired); doctor PASS 41 incl. `blocker channel: channel up` and `shutdown hook task: retired` |
+| 2 Kiro cancel | `pytest tests/acp -n auto` | 90 passed (9 new in `test_cancel.py`); the live `ossctl hermes probe --cancel-check` on roles.test is for the close-out |
+| 3/4 /status and pin | `pytest tests/telegram` | 529 passed; `/status` == pinned dashboard (classic, rich, labels, purposes), pin only in Control |
+| 6 logs | `tests\system\test_ossctl_logs.ps1` | 21 PASS, incl. the live `logs gatekeeper -Since 5m -Grep "a|b"` (exit 0, no bash error) |
+| 7 Hermes noise | `ROOT bash tests/system/test_hermes_install_hygiene.sh`; `scripts\ossctl.ps1 logs hermes -Since 10m -Grep "context length|deadlock|out of sync|Failed with result|exit-code"` | all checks passed (ExecStop, stamp external, `Result=success` after a planned stop); after the new unit only "Deactivated successfully" stops; no context-length or out-of-sync warning since |
+| shellcheck | `shellcheck -x scripts/lib/hermes.sh tests/system/test_hermes_install_hygiene.sh` | clean |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
