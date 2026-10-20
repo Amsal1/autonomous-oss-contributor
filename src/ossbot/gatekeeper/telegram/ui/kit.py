@@ -118,7 +118,25 @@ class FooterEl:
     line: Line
 
 
-Element = Lines | PreBlock | Quote | FooterEl
+@dataclass(frozen=True)
+class Markdown:
+    """Model-authored Markdown (a Hermes answer): the renderers redact the whole text first (U14), then
+    convert it with ``chat/md2blocks`` (§14.12.2). ``quoted`` puts the whole body in one quote as plain
+    text (flat mode and ✅ Reviews, U6)."""
+
+    text: str
+    quoted: bool = False
+
+
+@dataclass(frozen=True)
+class DetailsEl:
+    """A closed ``details`` block (rich) or a bold summary plus an expandable quote (classic)."""
+
+    summary: Line
+    lines: tuple[Line, ...]
+
+
+Element = Lines | PreBlock | Quote | FooterEl | Markdown | DetailsEl
 
 
 @dataclass(frozen=True)
@@ -163,6 +181,7 @@ class View:
     rich: bool = False  # may be rendered rich (never approval cards or confirms, U3)
     placeholder: str | None = None  # ForceReply prompt (classic only)
     max_rows: int = 6
+    link_preview: str | None = None  # classic only: the one source an answer cites (§14.12.3)
 
     def keyboard_labels(self) -> list[list[str]]:
         return [[b.label for b in row] for row in self.rows]
@@ -302,8 +321,8 @@ def with_rows(view: View, rows: Rows) -> View:
     return replace(view, rows=rows)
 
 
-__all__ = ["CLASSIC_MAX", "Block", "Bold", "ButtonSpec", "Code", "Const", "Element", "FooterEl", "Italic", "Line",
-           "Lines", "Link", "PreBlock", "Quote", "Rows", "Span", "Text", "Time", "Verbatim", "View", "ViewTooLarge",
-           "bound", "button", "card", "claim", "confirm_view", "copy_button", "disabled_button", "fact", "header",
-           "line", "list_view", "mode_badge", "pager", "picker", "plain", "stub", "toast", "url_button",
+__all__ = ["CLASSIC_MAX", "Block", "Bold", "ButtonSpec", "Code", "Const", "DetailsEl", "Element", "FooterEl", "Italic",
+           "Line", "Lines", "Link", "Markdown", "PreBlock", "Quote", "Rows", "Span", "Text", "Time", "Verbatim", "View",
+           "ViewTooLarge", "bound", "button", "card", "claim", "confirm_view", "copy_button", "disabled_button", "fact",
+           "header", "line", "list_view", "mode_badge", "pager", "picker", "plain", "stub", "toast", "url_button",
            "with_rows"]  # fmt: skip

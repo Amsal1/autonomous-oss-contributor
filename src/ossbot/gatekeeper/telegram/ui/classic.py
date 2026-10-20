@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ossbot.gatekeeper.chat import md2blocks
 from ossbot.gatekeeper.telegram.escape import defuse_commands, esc, esc_attr, make_visible, tg_time
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui.kit import (
@@ -17,6 +18,7 @@ from ossbot.gatekeeper.telegram.ui.kit import (
     Bold,
     Code,
     Const,
+    DetailsEl,
     Element,
     FooterEl,
     Html,
@@ -24,6 +26,7 @@ from ossbot.gatekeeper.telegram.ui.kit import (
     Line,
     Lines,
     Link,
+    Markdown,
     PreBlock,
     Quote,
     Span,
@@ -104,6 +107,15 @@ def _element(el: Element, c: _Ctx) -> str:
         return f"<blockquote expandable>{inner}</blockquote>" if el.expandable else f"<blockquote>{inner}</blockquote>"
     if isinstance(el, FooterEl):
         return f"<i>{_line(el.line, c)}</i>"
+    if isinstance(el, Markdown):
+        text, hits = ui_redact.redact(el.text, surface=c.surface)
+        c.redacted += hits
+        if el.quoted:
+            return f"<blockquote expandable>{esc(defuse_commands(make_visible(text)[0]))}</blockquote>"
+        return md2blocks.classic_html(text)
+    if isinstance(el, DetailsEl):
+        inner = "\n".join(_line(ln, c) for ln in el.lines)
+        return f"<b>{_line(el.summary, c)}</b>\n<blockquote expandable>{inner}</blockquote>"
     raise TypeError(type(el).__name__)
 
 

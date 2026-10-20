@@ -42,6 +42,7 @@ ViewKind = Literal[
 Thread = Literal["control", "reviews", "feed", "assistant"]
 WITHHELD = "⚠️ Withheld: it matched a secret pattern (bug) · nothing can be approved from it; see /logs"
 TOO_LARGE = "⚠️ View too large to render (bug) · see /logs"
+RICH_ONLY = "⚠️ This part could only be shown as a rich message; ask again for a shorter answer"
 
 
 class ViewRecord(BaseModel):
@@ -129,16 +130,23 @@ def keyboard(view: View, tokens: list[list[str | None]]) -> dict[str, Any] | Non
 
 
 # ------------------------------------------------------------------------------- payloads
-def _classic_payload(ctx: AppContext, view: View, chat_id: int) -> tuple[dict[str, Any], int]:
+def _classic_payload(ctx: AppContext, view: View, chat_id: int, *, rich_first: bool = False
+                     ) -> tuple[dict[str, Any], int]:  # fmt: skip
     try:
         out = classic.render(view)
     except ViewTooLarge as exc:
+        if rich_first:  # a long rich part: its classic twin is a fixed notice (see ``build``)
+            return {"chat_id": chat_id, "text": RICH_ONLY, "parse_mode": "HTML",
+                    "link_preview_options": {"is_disabled": True}}, 0  # fmt: skip
         log.error("view too large: %s %s", exc.kind, exc.sizes, extra={"event": "view_too_large", "kind": exc.kind})
         return {"chat_id": chat_id, "text": TOO_LARGE, "parse_mode": "HTML"}, -1
     if out.verbatim_hits:
         return {"chat_id": chat_id, "text": WITHHELD, "parse_mode": "HTML"}, -1
+    preview: dict[str, Any] = {"is_disabled": True}
+    if view.link_preview is not None:  # §14.12.3: an answer citing exactly one source previews it, small
+        preview = {"url": view.link_preview, "prefer_small_media": True, "show_above_text": False}
     payload: dict[str, Any] = {"chat_id": chat_id, "text": out.text, "parse_mode": "HTML",
-                               "link_preview_options": {"is_disabled": True}}  # fmt: skip
+                               "link_preview_options": preview}  # fmt: skip
     return payload, 0
 
 
@@ -146,7 +154,11 @@ def build(ctx: AppContext, view: View, *, chat_id: int, tokens: list[list[str | 
           reply_to: int | None = None, silent: bool | None = None) -> tuple[str, dict[str, Any], bool]:  # fmt: skip
     """(method, payload, ok). ``ok`` False = the view was replaced by a fixed stub (no buttons)."""
     view.check()
-    payload, status = _classic_payload(ctx, view, chat_id)
+    prefs = UxPrefs(ctx.conn, ctx.clock)
+    rich_ok = rich.use_rich(view, prefs, ctx.config.telegram.rich_views_default)
+    # a long rich part (≤ 30,000 characters, §14.12.1 step 4) has no one-message classic twin: its classic
+    # fallback (used only after a rich 400) is a fixed notice; the rich message itself is unchanged
+    payload, status = _classic_payload(ctx, view, chat_id, rich_first=rich_ok)
     ok = status == 0
     markup = keyboard(view, tokens) if ok else None
     if ok and view.placeholder is not None:
@@ -161,8 +173,7 @@ def build(ctx: AppContext, view: View, *, chat_id: int, tokens: list[list[str | 
         payload["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
     if silent is not None:
         payload["disable_notification"] = silent
-    prefs = UxPrefs(ctx.conn, ctx.clock)
-    if not ok or not rich.use_rich(view, prefs, ctx.config.telegram.rich_views_default):
+    if not ok or not rich_ok:
         return "sendMessage", payload, ok
     try:
         message = rich.render(view)

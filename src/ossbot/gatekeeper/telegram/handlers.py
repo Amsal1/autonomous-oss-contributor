@@ -38,7 +38,17 @@ from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import Actor, TransitionError
-from ossbot.gatekeeper.telegram import actions, cards, chat_relay, inputs, keyboards, proposal_cards, rawapi, routing
+from ossbot.gatekeeper.telegram import (
+    actions,
+    cards,
+    chat_media,
+    chat_relay,
+    inputs,
+    keyboards,
+    proposal_cards,
+    rawapi,
+    routing,
+)
 from ossbot.gatekeeper.telegram.auth import authorized, authorized_chat_only
 from ossbot.gatekeeper.telegram.commands import (
     builtin,  # noqa: F401 - registers the built-ins
@@ -84,7 +94,6 @@ KILLED_TEXT = "🛑 ossbot is killed: only /status /resume /logs /help work now.
 REJECT_REASONS = {"not_valuable": "Not valuable", "wrong_approach": "Wrong approach",
                   "repo_unsuitable": "Repo unsuitable (7d)", "other": "Other…", "back": "↩️ Back"}  # fmt: skip
 REPO_UNSUITABLE_COOLDOWN = timedelta(days=7)
-MEDIA_LATER = "🤖 Photos, files and voice reach the assistant with the streaming update; send text for now."
 # Gate 1 decision purposes (p_ ids); the kit purposes (skip, adjust, ...) arrive with FEAT-009.
 PROPOSAL_PURPOSES = frozenset({"proposal_start", "proposal_confirm", "proposal_cancel"})
 # Skill activation (§14.15, §15.5; s_ ids): two taps; the kit card and the diff/ask views are PLAN item 47.
@@ -112,6 +121,8 @@ class Handlers:
         self.tasks: set[asyncio.Task[Any]] = set()
         self._by_kind: dict[TaskKind, set[asyncio.Task[Any]]] = {}
         self._sessions: dict[str, asyncio.Task[Any]] = {}  # session_key -> its running chat_turn
+        self._stops: dict[int, asyncio.Event] = {}  # turn_id (= draft_id) -> its Stop event
+        self.albums: dict[str, Any] = {}  # media_group_id -> its buffer (chat_media.Album)
         self.application: Application[Any, Any, Any, Any, Any, Any] | None = None
         # the gatekeeper's GitHub reader (GET only): /work and link-card facts, always in a github_read task
         self.reader: Any = None
@@ -164,6 +175,13 @@ class Handlers:
 
     def session_busy(self, session_key: str) -> bool:
         return session_key in self._sessions
+
+    def stop_event(self, turn_id: int) -> asyncio.Event:
+        """The Stop signal of one streaming turn (``draft_id = turn_id``, §14.12.1 step 5)."""
+        return self._stops.setdefault(turn_id, asyncio.Event())
+
+    def forget_stop(self, turn_id: int) -> None:
+        self._stops.pop(turn_id, None)
 
     def cancel(self, kinds: frozenset[TaskKind] | set[TaskKind]) -> int:
         """Cancel the running tasks of ``kinds``; returns how many were cancelled."""
@@ -835,14 +853,18 @@ class Handlers:
         if route.kind == "ignore":
             return
         kind = route.then if route.kind == "link_card" and route.then else routing.chat_kind(route.topic)
-        if inc.has_media and not inc.text:
-            ui_send.deliver(self.ctx, k.plain("fyi", k.line(MEDIA_LATER)), thread_id=inc.thread_id,
-                            reply_to=message.message_id)  # fmt: skip
-            return
         note = None
         if stale_s:
             note = (k.Const("↪️ replying to your message from "), k.Time(inc.date, f"{stale_s // 60} min ago"))
-        await chat_relay.relay(self.ctx, self, kind=kind, topic=route.topic, text=typed.text, user_id=user_id,
+        text = typed.text
+        if inc.has_media:  # §14.12.5: downloads and stripping run in a spawned media task, never here
+            location = chat_media.location_text(message)
+            if location is None:
+                chat_media.accept(self.ctx, self, message, chat_media.Where(kind, route.topic, user_id, inc.thread_id,
+                                                                            note))  # fmt: skip
+                return
+            text = location
+        await chat_relay.relay(self.ctx, self, kind=kind, topic=route.topic, text=text, user_id=user_id,
                                thread_id=inc.thread_id, message_id=message.message_id, stale_note=note)  # fmt: skip
 
     async def _command(self, inc: routing.Incoming, user_id: int, message_id: int, stale_s: int) -> None:
@@ -888,7 +910,8 @@ class Handlers:
         row = db.one(self.ctx.conn, "SELECT session_key FROM chat_turns WHERE turn_id = ? AND status = 'streaming'",
                      (stopped.draft_id,))  # fmt: skip
         task = self._sessions.get(str(row["session_key"])) if row is not None else None
-        if task is None:
+        stop = self._stops.get(stopped.draft_id)
+        if task is None or stop is None:
             log.debug("stopped_message_generation for an unknown draft", extra={"event": "stop_ignored"})
             return
-        task.cancel()
+        stop.set()  # the turn task closes the stream and sends the partial with "⏹ Stopped by you"

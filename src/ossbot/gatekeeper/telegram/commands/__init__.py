@@ -19,6 +19,7 @@ BUILTIN_MODULES: tuple[str, ...] = (
     "ossbot.gatekeeper.telegram.commands.lifecycle",
     "ossbot.gatekeeper.telegram.commands.admin",
     "ossbot.gatekeeper.telegram.commands.personal",
+    "ossbot.gatekeeper.telegram.chat_actions",
 )
 
 

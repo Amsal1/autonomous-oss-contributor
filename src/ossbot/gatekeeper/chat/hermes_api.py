@@ -13,6 +13,7 @@ import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
+from urllib.parse import quote
 
 import httpx
 
@@ -32,7 +33,7 @@ class HermesError(RuntimeError):
 
 @dataclass
 class Event:
-    kind: Literal["delta", "tool", "completed", "failed"]
+    kind: Literal["delta", "tool", "tool_done", "completed", "failed"]
     text: str = ""
     tool: str = ""
     response_id: str = ""
@@ -50,6 +51,24 @@ def _obj(doc: dict[str, Any], key: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+ARGUMENTS_MAX = 8192
+
+
+def _url_argument(raw: Any) -> str:
+    """The ``url`` argument of a finished ``function_call`` (``web_fetch``), http(s) only, else "".
+    Only this one field is ever read from tool arguments (§14.12.3: arguments are never shown)."""
+    if not isinstance(raw, str) or len(raw) > ARGUMENTS_MAX:
+        return ""
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return ""
+    url = doc.get("url") if isinstance(doc, dict) else None
+    if not isinstance(url, str) or len(url) > 2048 or not url.lower().startswith(("http://", "https://")):
+        return ""
+    return url
+
+
 def parse_event(name: str, data: str) -> Event | None:
     """One SSE event -> an ``Event`` (unknown types are ignored)."""
     try:
@@ -64,9 +83,12 @@ def parse_event(name: str, data: str) -> Event | None:
         return Event("delta", text=delta if isinstance(delta, str) else "")
     if kind in ("response.output_item.added", "response.output_item.done"):
         item = _obj(doc, "item") or {}
-        if item.get("type") == "function_call" and kind.endswith("added"):
-            return Event("tool", tool=str(item.get("name") or "")[:64])
-        return None
+        if item.get("type") != "function_call":
+            return None
+        name = str(item.get("name") or "")[:64]
+        if kind.endswith("added"):
+            return Event("tool", tool=name)
+        return Event("tool_done", tool=name, data={"url": _url_argument(item.get("arguments"))})
     if kind == "response.completed":
         resp = _obj(doc, "response") or {}
         return Event("completed", response_id=str(resp.get("id") or "")[:80], data=resp)
@@ -150,6 +172,18 @@ class HermesClient:
             # closes the chunked body, a read error): the turn fails and the relay gate re-checks the
             # surface before the next one (PLAN item 42, test_crash_safety.sh Hermes case).
             raise HermesUnavailable(type(exc).__name__) from exc
+
+    async def delete_session(self, session_key: str) -> bool:
+        """``/memory`` → Forget this chat: ``DELETE /api/sessions/{id}`` (§14.12.6; [VERIFY] at the pinned
+        version). True only for a 2xx answer; any failure is reported to the owner, never raised."""
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        try:
+            async with self._client() as client:
+                resp = await client.delete(f"/api/sessions/{quote(_session_key(session_key), safe='')}",
+                                           headers=headers)  # fmt: skip
+        except (httpx.TransportError, ValueError):
+            return False
+        return 200 <= resp.status_code < 300
 
     @staticmethod
     async def _events(resp: httpx.Response) -> AsyncIterator[Event]:

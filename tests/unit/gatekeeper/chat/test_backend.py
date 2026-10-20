@@ -63,7 +63,19 @@ def test_final_text_skips_commentary_and_non_text_parts() -> None:
 
 
 IGNORED = ["not json", "[1]", '{"type": "response.unknown"}',
-           '{"type": "response.output_item.done", "item": {"type": "function_call"}}']  # fmt: skip
+           '{"type": "response.output_item.done", "item": {"type": "message"}}']  # fmt: skip
+
+
+@pytest.mark.parametrize(("arguments", "url"), [
+    ('{"url": "https://developer.hashicorp.com/x"}', "https://developer.hashicorp.com/x"),
+    ('{"url": "file:///etc/passwd"}', ""), ('{"query": "x"}', ""), ("not json", ""), (None, ""),
+])  # fmt: skip
+def test_a_finished_function_call_carries_only_its_http_url(arguments: str | None, url: str) -> None:
+    """§14.12.3: the ``web_fetch`` URL feeds the status line and the sources; nothing else is read."""
+    doc = {"type": "response.output_item.done", "item": {"type": "function_call", "name": "web_fetch",
+                                                         "arguments": arguments}}  # fmt: skip
+    event = hermes_api.parse_event("", json.dumps(doc))
+    assert event is not None and event.kind == "tool_done" and event.data == {"url": url}
 
 
 @pytest.mark.parametrize("data", IGNORED)

@@ -27,6 +27,8 @@ class FakeBotRequest(BaseRequest):
         self.topics = topics
         self.user_topics = user_topics
         self.fail_queue: dict[str, list[tuple[int, str]]] = {}
+        self.file_bytes: dict[str, bytes] = {}  # file_id -> bytes served by getFile + download
+        self.downloads: list[str] = []
 
     def fail(self, method: str, description: str, *, code: int = 400, times: int = 1) -> None:
         self.fail_queue.setdefault(method, []).extend([(code, description)] * times)
@@ -58,6 +60,9 @@ class FakeBotRequest(BaseRequest):
         pool_timeout: Any = None,
     ) -> tuple[int, bytes]:
         endpoint = url.rsplit("/", 1)[-1]
+        if "/file/bot" in url:  # a getFile download (File.download_as_bytearray)
+            self.downloads.append(endpoint)
+            return 200, self.file_bytes[endpoint]
         params = dict(request_data.parameters) if request_data is not None else {}
         self.calls.append((endpoint, params))
         if request_data is not None and request_data.contains_files:
@@ -80,6 +85,10 @@ class FakeBotRequest(BaseRequest):
                       "chat": {"id": params.get("chat_id"), "type": "private"}}  # fmt: skip
             if params.get("message_thread_id"):
                 result["message_thread_id"] = params["message_thread_id"]
+        elif endpoint == "getFile":
+            fid = str(params.get("file_id"))
+            result = {"file_id": fid, "file_unique_id": f"u{fid}", "file_size": len(self.file_bytes.get(fid, b"")),
+                      "file_path": f"files/{fid}"}  # fmt: skip
         elif endpoint == "createForumTopic":
             result = {"message_thread_id": next(self.thread_ids), "name": params.get("name", ""),
                       "icon_color": params.get("icon_color", 0)}  # fmt: skip
@@ -143,6 +152,36 @@ def message_update(from_id: int, chat_id: int, text: str, chat_type: str = "priv
         message["quote"] = {"text": quote, "position": 0, "is_manual": quote_manual}
     if forward:
         message["forward_origin"] = {"type": "hidden_user", "sender_user_name": "someone", "date": date}
+    return {"update_id": next(_update_ids), "message": message}
+
+
+def media_update(from_id: int, chat_id: int, *, photo: str | None = None, document: dict[str, Any] | None = None,
+                 voice: bool = False, location: tuple[float, float] | None = None, caption: str = "",
+                 media_group_id: str | None = None, thread_id: int | None = None,
+                 message_id: int | None = None) -> dict[str, Any]:  # fmt: skip
+    """A photo (``file_id``; three sizes, the largest 2560 px), a document (``file_id``, ``mime_type``,
+    ``file_name``, ``file_size``), a voice note or a location, with an optional caption and album id."""
+    message: dict[str, Any] = {"message_id": message_id or next(_update_ids), "date": FAKE_NOW,
+                               "chat": chat(chat_id), "from": user(from_id)}  # fmt: skip
+    if photo is not None:
+        message["photo"] = [
+            {"file_id": f"{photo}-s", "file_unique_id": f"{photo}-us", "width": 320, "height": 240, "file_size": 9},
+            {"file_id": photo, "file_unique_id": f"{photo}-u", "width": 1280, "height": 960},
+            {"file_id": f"{photo}-x", "file_unique_id": f"{photo}-ux", "width": 2560, "height": 1920},
+        ]
+    if document is not None:
+        message["document"] = {"file_unique_id": f"u{document['file_id']}", **document}
+    if voice:
+        message["voice"] = {"file_id": "voice1", "file_unique_id": "uvoice1", "duration": 3}
+    if location is not None:
+        message["location"] = {"latitude": location[0], "longitude": location[1]}
+    if caption:
+        message["caption"] = caption
+    if media_group_id is not None:
+        message["media_group_id"] = media_group_id
+    if thread_id is not None:
+        message["message_thread_id"] = thread_id
+        message["is_topic_message"] = True
     return {"update_id": next(_update_ids), "message": message}
 
 

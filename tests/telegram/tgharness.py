@@ -49,6 +49,7 @@ class TgRig:
         """Wait for every spawned task to finish (without cancelling, unlike ``Handlers.drain``)."""
         while self.handlers.tasks:
             await asyncio.gather(*list(self.handlers.tasks), return_exceptions=True)
+            await asyncio.sleep(0)  # done callbacks (which drop finished tasks) run on the next loop step
 
     async def send(self, data: dict[str, Any]) -> None:
         await self.app.process_update(Update.de_json(data, self.app.bot))

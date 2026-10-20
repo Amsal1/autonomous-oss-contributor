@@ -36,6 +36,11 @@ class RichTextCode(_M):
     text: RichText
 
 
+class RichTextStrikethrough(_M):
+    type: Literal["strikethrough"] = "strikethrough"
+    text: RichText
+
+
 class RichTextUrl(_M):
     type: Literal["url"] = "url"
     text: RichText
@@ -49,7 +54,16 @@ class RichTextDateTime(_M):
     date_time_format: Annotated[str, Field(pattern=r"^(r|w?[dD]?[tT]?)$")]
 
 
-type RichText = str | list[RichText] | RichTextBold | RichTextItalic | RichTextCode | RichTextUrl | RichTextDateTime
+type RichText = (
+    str
+    | list[RichText]
+    | RichTextBold
+    | RichTextItalic
+    | RichTextCode
+    | RichTextStrikethrough
+    | RichTextUrl
+    | RichTextDateTime
+)
 
 
 class Paragraph(_M):
@@ -80,11 +94,38 @@ class Divider(_M):
 
 class ListItem(_M):
     blocks: list[Block]
+    has_checkbox: Literal[True] | None = None  # task lists: display only (§14.12.2)
+    is_checked: Literal[True] | None = None
+    value: Annotated[int, Field(ge=0)] | None = None  # ordered lists: the item number
+    type: Literal["1"] | None = None
 
 
 class ListBlock(_M):
     type: Literal["list"] = "list"
     items: list[ListItem]
+
+
+class TableCell(_M):
+    """``RichBlockTableCell``: ``align`` and ``valign`` are required by the Bot API."""
+
+    text: RichText | None = None
+    is_header: Literal[True] | None = None
+    align: Literal["left", "center", "right"] = "left"
+    valign: Literal["top", "middle", "bottom"] = "top"
+
+
+class Table(_M):
+    type: Literal["table"] = "table"
+    cells: list[list[TableCell]]
+    is_bordered: Literal[True] | None = None
+    is_compact: Literal[True] | None = None
+
+
+class Thinking(_M):
+    """``InputRichBlockThinking``: the "Thinking…" placeholder, valid only in ``sendRichMessageDraft``."""
+
+    type: Literal["thinking"] = "thinking"
+    text: RichText
 
 
 class BlockQuote(_M):
@@ -107,7 +148,17 @@ class Details(_M):
 
 
 type Block = Annotated[
-    Paragraph | Heading | Pre | Footer | Divider | ListBlock | BlockQuote | ExpandableBlockQuote | Details,
+    Paragraph
+    | Heading
+    | Pre
+    | Footer
+    | Divider
+    | ListBlock
+    | BlockQuote
+    | ExpandableBlockQuote
+    | Details
+    | Table
+    | Thinking,
     Field(discriminator="type"),
 ]
 
@@ -117,8 +168,9 @@ class InputRichMessage(_M):
     skip_entity_detection: Literal[True] = True
 
 
-for _model in (RichTextBold, RichTextItalic, RichTextCode, RichTextUrl, RichTextDateTime, Paragraph, Heading, Pre,
-               Footer, ListItem, ListBlock, BlockQuote, ExpandableBlockQuote, Details, InputRichMessage):  # fmt: skip
+for _model in (RichTextBold, RichTextItalic, RichTextCode, RichTextStrikethrough, RichTextUrl, RichTextDateTime,
+               Paragraph, Heading, Pre, Footer, ListItem, ListBlock, BlockQuote, ExpandableBlockQuote, Details,
+               TableCell, Table, Thinking, InputRichMessage):  # fmt: skip
     _model.model_rebuild()
 
 
@@ -144,6 +196,8 @@ def _walk(blocks: list[Block], depth: int) -> tuple[int, int, int]:
         for attr in ("text", "summary"):
             if hasattr(blk, attr):
                 chars += text_len(getattr(blk, attr))
+        if isinstance(blk, Table):
+            chars += sum(text_len(cell.text) for row in blk.cells for cell in row)
         children: list[Block] = []
         if isinstance(blk, BlockQuote | Details):
             children = list(blk.blocks)
@@ -153,6 +207,11 @@ def _walk(blocks: list[Block], depth: int) -> tuple[int, int, int]:
             c, ch, d = _walk(children, depth + 1)
             count, chars, deepest = count + c, chars + ch, max(deepest, d)
     return count, chars, deepest
+
+
+def measure(blocks: list[Block]) -> tuple[int, int, int]:
+    """(blocks, characters, max depth) of a block list, nested blocks included."""
+    return _walk(blocks, 1)
 
 
 def check_budget(message: InputRichMessage) -> None:

@@ -12,8 +12,9 @@ import pytest
 
 from ossbot.common.hashing import sha256_text
 from ossbot.common.redact import REDACTED
+from ossbot.gatekeeper.chat import answer_view
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.telegram import chat_relay, work_links
+from ossbot.gatekeeper.telegram import work_links
 from ossbot.gatekeeper.telegram.ui import blocks, classic, rich
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui.sanitize import parse_github_url
@@ -33,9 +34,10 @@ def views(secret: str) -> list[k.View]:
     text = f"Here is the value: {secret} — keep it safe"
     ref = parse_github_url("https://github.com/langfuse/langfuse/issues/1")
     assert ref is not None
-    part = chat_relay.chunks(text)[0]
+    answer = answer_view.Answer(1, text)
     return [
-        k.View(kind="chat_answer", rich=True, blocks=chat_relay.quoted_answer(chat_relay.HEADER, part)),
+        answer_view.views(answer, wrapped=True, rich=True)[0],
+        answer_view.views(answer, wrapped=False, rich=True)[0],
         work_links.link_view(ref, {"title": text, "state": "open"}, text),
         k.View(kind="fyi", blocks=[k.Block((k.claim("Planner", text), k.Quote(((k.Text(text, 1500),),)),
                                              k.PreBlock(text)))]),

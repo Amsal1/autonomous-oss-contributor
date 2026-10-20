@@ -25,7 +25,8 @@ from ossbot.gatekeeper.telegram.handlers import KILL_CANCELS, Handlers
 from telegram import Update
 from tests.conftest import packaged_contribution
 from tests.fakes.fake_hermes import FakeHermesStream
-from tests.fakes.fake_telegram import FakeBotRequest, callback_update, message_update
+from tests.fakes.fake_telegram import FakeBotRequest, callback_update, message_update, stopped_update
+from tests.telegram.chatkit import FakeBackend, deltas, wire
 
 OWNER = 4242
 CARD_MSG = 50
@@ -233,6 +234,57 @@ async def test_io_command_does_not_hold_the_slot_and_survives_kill(ctx: AppConte
         assert done == ["effect"]
     finally:
         del registry.COMMANDS["heldtest"]
+
+
+# ------------------------------------------------------- real chat turns (AC 59 Stop, AC 67, BA-15)
+def _status(ctx: AppContext) -> list[str]:
+    return [str(r["status"]) for r in ctx.conn.execute("SELECT status FROM chat_turns")]
+
+
+async def test_stop_during_a_real_stream_ends_it_within_2s(ctx: AppContext, rig: Rig,
+                                                            no_slow_handlers: None) -> None:  # fmt: skip
+    backend = wire(ctx, FakeBackend(deltas("a long answer "), hold=True))
+    await rig.say("explain")
+    await backend.started.wait()
+    turn_id = int(db.one(ctx.conn, "SELECT turn_id FROM chat_turns")["turn_id"])  # type: ignore[index]
+    started = time.monotonic()
+    assert await rig.update(stopped_update(OWNER, turn_id)) < 2.0
+    await asyncio.wait_for(backend.closed.wait(), 2.0)
+    await rig.handlers.drain()
+    assert time.monotonic() - started < 2.0 and _status(ctx) == ["stopped"]
+
+
+async def test_message_and_kill_in_one_batch_then_resume_answers_the_next_message(ctx: AppContext, rig: Rig) -> None:
+    """AC 67 / BA-15 on real rows: finalize_turn is the chat turn's on_done, so a turn cancelled before
+    its first step still ends ``stopped``; after /resume the session is free and the next one is answered."""
+    backend = wire(ctx, FakeBackend(deltas("answer")))
+    await rig.say("first")  # spawned, not started: no await since
+    await rig.say("/kill")
+    await asyncio.sleep(0.05)
+    assert _status(ctx) == ["stopped"] and backend.calls == [] and not rig.handlers.tasks
+    ctx.control.request_resume("tg:4242")
+    for flag in (ctx.paths.killed_flag, ctx.paths.paused_flag, ctx.paths.resume_request):
+        flag.unlink(missing_ok=True)  # what the root enforcer does
+    ctx.control.reconcile()
+    await rig.say("second")
+    while rig.handlers.tasks:
+        await asyncio.gather(*list(rig.handlers.tasks), return_exceptions=True)
+        await asyncio.sleep(0)
+    assert sorted(_status(ctx)) == ["done", "stopped"] and len(backend.calls) == 1
+
+
+async def test_an_older_tasks_callback_leaves_the_newer_session_entry(ctx: AppContext, rig: Rig) -> None:
+    release = asyncio.Event()
+    task_old = rig.handlers.spawn(release.wait(), "chat_turn", session_key=SESSION)
+    newer = rig.handlers.spawn(asyncio.sleep(3600), "chat_turn", session_key=SESSION)  # replaced the entry
+    release.set()
+    await task_old
+    await asyncio.sleep(0)
+    assert rig.handlers.session_busy(SESSION)  # still the newer task's
+    newer.cancel()
+    await asyncio.gather(newer, return_exceptions=True)
+    await asyncio.sleep(0)
+    assert not rig.handlers.session_busy(SESSION)
 
 
 # Calls that leave SQLite/local reads: root helpers, the lifecycle and Hermes clients, the proxy

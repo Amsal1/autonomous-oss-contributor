@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from ossbot.common.clock import to_iso
+from ossbot.gatekeeper.chat import md2blocks
 from ossbot.gatekeeper.telegram.escape import make_visible
 from ossbot.gatekeeper.telegram.prefs import UxPrefs
 from ossbot.gatekeeper.telegram.ui import blocks as rb
@@ -22,12 +23,14 @@ from ossbot.gatekeeper.telegram.ui.kit import (
     Bold,
     Code,
     Const,
+    DetailsEl,
     Element,
     FooterEl,
     Italic,
     Line,
     Lines,
     Link,
+    Markdown,
     PreBlock,
     Quote,
     Span,
@@ -98,6 +101,15 @@ def _element(el: Element, surface: str) -> list[rb.Block]:
         return [rb.BlockQuote(blocks=paragraphs)]
     if isinstance(el, FooterEl):
         return [rb.Footer(text=_line(el.line, surface))]
+    if isinstance(el, Markdown):
+        text, _ = ui_redact.redact(el.text, surface=surface)
+        if el.quoted:
+            return [rb.BlockQuote(blocks=[rb.Paragraph(text=_visible(p)) for p in text.split("\n") if p.strip()]
+                                  or [rb.Paragraph(text=" ")])]  # fmt: skip
+        return md2blocks.rich_blocks(text) or [rb.Paragraph(text=" ")]
+    if isinstance(el, DetailsEl):
+        return [rb.Details(summary=_line(el.summary, surface),
+                           blocks=[rb.Paragraph(text=_line(ln, surface)) for ln in el.lines])]  # fmt: skip
     raise TypeError(type(el).__name__)
 
 

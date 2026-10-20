@@ -24,9 +24,10 @@ from hypothesis import strategies as st
 from ossbot.common.ids import new_token
 from ossbot.common.schemas import ProposalSubmit, State
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper.chat import answer_view
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import ProposalService
-from ossbot.gatekeeper.telegram import cards, chat_relay, proposal_cards, rescope_cards, size_pickers, work_links
+from ossbot.gatekeeper.telegram import cards, proposal_cards, rescope_cards, size_pickers, work_links
 from ossbot.gatekeeper.telegram.cards import AskedItem, CardView, NumstatEntry
 from ossbot.gatekeeper.telegram.dashboard import PURPOSES, Dashboard
 from ossbot.gatekeeper.telegram.review import comments, edit_text, explorer, patchview, stale
@@ -128,8 +129,10 @@ def explorer_views(text: str) -> Out:
 
 
 def chat_answer(text: str) -> Out:
-    part = chat_relay.chunks(text)[0]
-    return [k.View(kind="chat_answer", rich=True, blocks=chat_relay.quoted_answer(chat_relay.HEADER, part))]
+    """Every part of the answer, flat mode (header + quote) and Markdown (topic mode)."""
+    answer = answer_view.Answer(1, text, followups=["Compare with OpenTofu"], sources=["https://example.org/a"])
+    # classic-split parts (each must fit one classic message); rich-split parts are in test_kit_limits.py
+    return [*answer_view.views(answer, wrapped=True, rich=False), *answer_view.views(answer, wrapped=False, rich=False)]
 
 
 def link_views(text: str) -> Out:

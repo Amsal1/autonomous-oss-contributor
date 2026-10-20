@@ -17,8 +17,8 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper.chat import answer_view
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.telegram import chat_relay
 from ossbot.gatekeeper.telegram.ui import blocks, classic, rich
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -37,9 +37,12 @@ untrusted = st.text(st.characters(codec="utf-8"), max_size=6000)
 
 
 def _answer(text: str) -> k.View:
-    """The longest single chunk the relay ever renders (``chat_relay.chunks``)."""
-    part = chat_relay.chunks(text)[0]
-    return k.View(kind="chat_answer", rich=True, blocks=chat_relay.quoted_answer(chat_relay.HEADER, part))
+    """The first part of a flat-mode answer (header + quote), the longest the relay renders."""
+    return answer_view.views(answer_view.Answer(1, text), wrapped=True, rich=True)[0]
+
+
+def _answer_md_classic(text: str) -> k.View:
+    return answer_view.views(answer_view.Answer(1, text), wrapped=False, rich=False)[0]
 
 
 def _card_like(text: str) -> k.View:
@@ -50,7 +53,22 @@ def _card_like(text: str) -> k.View:
     return k.View(kind="card", blocks=blocks)
 
 
-BUILDERS: dict[str, Callable[[str], k.View]] = {"chat_answer_quoted": _answer, "card_like": _card_like}
+BUILDERS: dict[str, Callable[[str], k.View]] = {
+    "chat_answer_quoted": _answer, "chat_answer_classic": _answer_md_classic, "card_like": _card_like,
+}  # fmt: skip
+
+
+@settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])
+@given(text=st.text(st.sampled_from(list("ab *_`~|#->[]()\n")), max_size=40000))
+def test_markdown_answer_parts_fit_rich_and_classic(text: str) -> None:
+    """Every part of a Markdown answer fits one rich message; its classic twin is one message or the
+    fixed rich-only notice (never cut)."""
+    for rich_flag in (True, False):
+        for view in answer_view.views(answer_view.Answer(1, text), wrapped=False, rich=rich_flag):
+            if rich_flag:
+                blocks.check_budget(rich.render(view))
+            else:
+                assert len(classic.render(view).text) <= CLASSIC_MAX
 
 
 @settings(max_examples=40, deadline=None, suppress_health_check=[HealthCheck.too_slow])

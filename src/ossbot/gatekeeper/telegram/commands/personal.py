@@ -8,12 +8,14 @@ drops a card (§14.13.2).
 
 from __future__ import annotations
 
+import warnings
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
+from telegram.error import TelegramError
 
 from ossbot.common.clock import to_iso
 from ossbot.common.ids import ID_RE
@@ -160,18 +162,35 @@ async def settings_pick(tap: Tap) -> str:
 
 # -------------------------------------------------------------------------------------- /new
 async def _new(ctx: CommandContext) -> Reply:
-    if ctx.app.chat is None:
+    """§14.12.6: topic mode creates a ``💬 Chat <date HH:MM>`` topic and replies there; flat mode bumps
+    the session number. Hermes memory persists either way."""
+    app = ctx.app
+    if app.chat is None:
         return Reply("🤖 The assistant is not configured.")
-    ctx.app.chat.service.turns.new_session(ctx.tg_user_id)
+    if ui_of(app).topics.mode == "topics" and ctx.handlers is not None and ctx.handlers.application is not None:
+        local = app.clock.now().astimezone(ZoneInfo(app.config.profile.telegram.timezone))
+        name = f"💬 Chat {local:%Y-%m-%d %H:%M}"
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                result = await ctx.handlers.application.bot.do_api_request(
+                    "createForumTopic", api_kwargs={"chat_id": app.telegram_chat_id, "name": name})  # fmt: skip
+            thread = int(result["message_thread_id"])
+        except (TelegramError, KeyError, TypeError, ValueError):  # topics refused: a fresh flat-style session
+            app.chat.service.turns.new_session(ctx.tg_user_id)
+            return Reply("💬 New Hermes conversation: your next message starts fresh.")
+        ui_send.deliver(app, k.plain("fyi", k.line("💬 New chat started ↓")), thread_id=thread)
+        return Reply(f"💬 New chat: {esc(name)}")
+    app.chat.service.turns.new_session(ctx.tg_user_id)
     return Reply("💬 New Hermes conversation: your next message starts fresh.")
 
 
-@command("new", help="Start a new Hermes conversation", safety="personal")
+@command("new", help="Start a new Hermes conversation", safety="personal", effect="io")
 async def new(ctx: CommandContext, args: list[str]) -> Reply:
     return await _new(ctx)
 
 
-@command("newchat", help="Alias of /new", safety="personal")
+@command("newchat", help="Alias of /new", safety="personal", effect="io")
 async def newchat(ctx: CommandContext, args: list[str]) -> Reply:
     return await _new(ctx)
 

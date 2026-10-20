@@ -13,6 +13,7 @@ unknown keys there instead of raising) and are parsed with ``MessageGenerationSt
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -162,8 +163,9 @@ class MessageGenerationStopped(_Resp):
     draft_id: int
 
 
-def parse_stopped(api_kwargs: dict[str, Any] | Any) -> MessageGenerationStopped | None:
-    raw = api_kwargs.get("stopped_message_generation") if isinstance(api_kwargs, dict) else None
+def parse_stopped(api_kwargs: Mapping[str, Any] | Any) -> MessageGenerationStopped | None:
+    """PTB keeps unknown update keys in ``api_kwargs``, a read-only ``MappingProxyType`` (not a dict)."""
+    raw = api_kwargs.get("stopped_message_generation") if isinstance(api_kwargs, Mapping) else None
     if not isinstance(raw, dict):
         return None
     try:
