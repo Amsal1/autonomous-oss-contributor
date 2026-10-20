@@ -211,6 +211,10 @@ class Dashboard:
         return ctx.outbox.enqueue("sendMessage", payload, dedupe_key=f"view:{new_token()}", bind_tokens=minted,
                                   view=record, thread_key="control", priority=3)  # fmt: skip
 
+    def _send_queued(self) -> bool:
+        return db.one(self.ctx.conn, "SELECT 1 FROM tg_outbox WHERE status = 'pending' AND method = 'sendMessage'"
+                      " AND json_extract(view_json, '$.kind') = 'dashboard' LIMIT 1") is not None  # fmt: skip
+
     def _payload(self, view: k.View, tokens: dict[str, str], kill_armed: str | None = None) -> dict[str, Any]:
         markup = ui_send.keyboard(view, [[None] * len(r) for r in view.rows])
         return {"chat_id": self.ctx.telegram_chat_id, "text": self.text(view), "parse_mode": "HTML",
@@ -223,6 +227,8 @@ class Dashboard:
             return False
         current = self.row()
         if current is None:
+            if self._send_queued():  # the first dashboard is still in the outbox: one dashboard, not three
+                return False
             return self.send_new() is not None
         now = ctx.clock.now()
         interval = timedelta(seconds=ctx.config.telegram.dashboard.min_edit_interval_s)

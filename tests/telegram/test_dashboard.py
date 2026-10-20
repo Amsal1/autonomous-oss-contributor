@@ -26,6 +26,21 @@ def _dashboard_id(ctx: AppContext) -> int:
     return int(db.one(ctx.conn, "SELECT message_id FROM tg_views WHERE kind = 'dashboard' AND stale = 0")[0])
 
 
+async def test_start_sends_one_dashboard_while_the_first_is_queued(ctx: AppContext) -> None:
+    """The live start sent and pinned three dashboards (workspace + the first two ticks before delivery)."""
+    async for rig in make_rig(ctx):
+        ctx.conn.execute("UPDATE tg_views SET stale = 1 WHERE kind = 'dashboard'")  # as on a fresh chat
+        rig.frontend._lifecycle_seen = None
+        await rig.frontend.workspace()
+        await rig.frontend.on_tick()
+        await rig.frontend.on_tick()
+        queued = ctx.conn.execute("SELECT COUNT(*) FROM tg_outbox WHERE status = 'pending' AND method = 'sendMessage'"
+                                  " AND json_extract(view_json, '$.kind') = 'dashboard'").fetchone()[0]  # fmt: skip
+        assert queued == 1
+        await rig.flush()
+        assert len([m for m, _ in rig.req.calls if m == "pinChatMessage"]) == 1
+
+
 async def test_dashboard_is_sent_pinned_and_golden(ctx: AppContext) -> None:
     async for rig in make_rig(ctx):
         sent = [p for m, p in rig.req.calls if m == "sendMessage"]
