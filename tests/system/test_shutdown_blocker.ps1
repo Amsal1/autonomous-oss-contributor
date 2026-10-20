@@ -12,17 +12,21 @@
     reason is registered; the message returns TRUE only after the listener answered "drained"; the
     reason is destroyed afterwards; the log shows the channel path and no process launch (no
     "started pid", no "spawn refused"); lifecycle.log has the blocker's graceful down marked
-    "(channel)"; the ossbot units are stopped (the distro itself keeps running: no wsl --terminate).
+    "(channel)"; the ossbot units are stopped. The blocker itself never terminates the distro; the test
+    then ends it, as Windows ends the VM after a real drain.
+  7 a channel of the test's own is killed right after "ack": the listener still stops the units and
+    writes the marker (last shutdown graceful after up.ps1). -Only 1,2,... runs a subset.
   3 WM_ENDSESSION(FALSE) (the shutdown was cancelled): logged, the blocker keeps running.
-  4 up.ps1 brings ossbot back; the last shutdown type is graceful.
+  4 up.ps1 brings ossbot back; the channel reopens; the last shutdown type is graceful.
   5 the channel's wsl.exe is killed: the blocker logs "channel died" and "channel restarted" within 70 s.
   6 the distro is stopped (wsl --terminate): "channel skipped: distro stopped"; WM_QUERYENDSESSION
     then returns TRUE at once with "no channel"; up.ps1 and the channel reopens within 70 s.
   Telegram: the "Going down" / "Back up" summaries to the owner only (product code).
 #>
 [CmdletBinding()]
-param([int]$DownTimeoutSec = 400, [int[]]$Only = @(1, 2, 3, 4, 5, 6))
+param([int]$DownTimeoutSec = 400, [string]$Only = '1,2,3,4,5,6,7')
 $ErrorActionPreference = 'Continue'
+$sections = @($Only -split '[,\s]+' | Where-Object { $_ } | ForEach-Object { [int]$_ })  # -File may join "2,3" as "2 3"
 . (Join-Path $PSScriptRoot '..\..\scripts\lib\common.ps1')
 Add-OssWin32
 $repo = Get-OssRepoRoot
@@ -75,7 +79,7 @@ $blkBefore = (Lines $blkLog).Count
 Ok 'blocker started' (Start-OssBlocker)
 $h = Find-OssBlockerWindow
 
-if ($Only -contains 1) {
+if ($sections -contains 1) {
     Write-Host '== 1: the blocker, its window and the drain channel'
     Ok 'blocker window found' ($h -ne [IntPtr]::Zero) ('(0x{0:x})' -f $h.ToInt64())
     Ok 'window visible (WS_VISIBLE: Windows asks it, does not just end it)' ([OssbotWin32.Native]::IsWindowVisible($h))
@@ -96,7 +100,7 @@ if ($Only -contains 1) {
     Ok 'still the same window' ((Find-OssBlockerWindow) -eq $h)
 }
 
-if ($Only -contains 2) {
+if ($sections -contains 2) {
     Write-Host '== 2: WM_QUERYENDSESSION through the channel'
     $null = Wait-Log $blkBefore 'channel up pid=' 60
     $blkBefore = (Lines $blkLog).Count
@@ -132,9 +136,13 @@ if ($Only -contains 2) {
     Ok 'lifecycle.log: ended exit 0' (@($newLc | Where-Object { $_ -match 'down kind=graceful caller=blocker .*: ossctl-exit=0' }).Count -eq 1 -and @($newLc | Where-Object { $_ -match 'down kind=graceful caller=blocker .*: end exit=0' }).Count -eq 1)
     Ok 'gatekeeper unit stopped' ((Unit-Active 'ossbot-gatekeeper.service') -ne 'active')
     Ok 'runner unit stopped' ((Unit-Active 'ossbot-runner.service') -ne 'active')
+    # A real shutdown ends the VM after the drain; the boot gate turns the marker into last-shutdown
+    # at the next distro start, so the test ends the VM the same way before up.ps1 (step 4).
+    & wsl.exe --terminate $script:OssDistro | Out-Null
+    Ok 'distro ended after the drain (as Windows ends the VM)' (-not (Test-OssDistroRunning))
 }
 
-if ($Only -contains 3) {
+if ($sections -contains 3) {
     Write-Host '== 3: WM_ENDSESSION(FALSE): the shutdown was cancelled'
     $blkBefore = (Lines $blkLog).Count
     $r = [IntPtr]::Zero
@@ -145,10 +153,13 @@ if ($Only -contains 3) {
     Ok 'state back to idle' ((Prop (State) 'phase') -eq 'idle')
 }
 
-if ($Only -contains 4) {
+if ($sections -contains 4) {
     Write-Host '== 4: up.ps1'
+    $blkBefore = (Lines $blkLog).Count
     & powershell -NoProfile -File (Join-Path $scripts 'up.ps1') -Caller blockerTest | Out-Host
     Ok 'up.ps1 exit 0' ($LASTEXITCODE -eq 0)
+    $t = Wait-Log $blkBefore 'channel up pid=\d+ pong=' 75
+    Ok 'channel reopened after up (within 70 s)' ($t -ge 0) ('({0:N1} s)' -f $t)
     $out = @(& powershell -NoProfile -File (Join-Path $scripts 'status.ps1') 2>&1 | ForEach-Object { "$_" })
     $ls = @($out | Where-Object { $_ -match '^last shutdown\s+' }) | Select-Object -First 1
     Ok 'last shutdown graceful' ($ls -match '^last shutdown\s+graceful ') "($ls)"
@@ -156,7 +167,7 @@ if ($Only -contains 4) {
     Ok 'status: blocker with channel up' ($bl -match 'channel up pid \d+') "($bl)"
 }
 
-if ($Only -contains 5) {
+if ($sections -contains 5) {
     Write-Host '== 5: the channel dies and is restarted'
     $cpid = [int](Prop (State) 'channel_pid')
     Ok 'channel pid known' ($cpid -gt 0) "($cpid)"
@@ -170,7 +181,7 @@ if ($Only -contains 5) {
     Ok 'log: restarted channel answers' ($t3 -ge 0)
 }
 
-if ($Only -contains 6) {
+if ($sections -contains 6) {
     Write-Host '== 6: distro stopped: no channel, the query returns at once'
     $blkBefore = (Lines $blkLog).Count
     & powershell -NoProfile -File (Join-Path $scripts 'down.ps1') -Timeout 10 -Caller blockerTest | Out-Host
@@ -193,6 +204,38 @@ if ($Only -contains 6) {
     Ok 'up.ps1 exit 0' ($LASTEXITCODE -eq 0)
     $t = Wait-Log $blkBefore 'channel up pid=\d+ pong=' 75
     Ok 'channel reopened within 70 s of up' ($t -ge 0) ('({0:N1} s)' -f $t)
+}
+
+if ($sections -contains 7) {
+    Write-Host '== 7: the drain finishes when the channel''s wsl.exe ends right after the ack'
+    # R1's open risk: Windows may end the channel's wsl.exe before "drained". A channel of the test's own
+    # (same argv as the blocker's) is killed right after "ack"; the listener must finish the drain.
+    $psi = New-Object System.Diagnostics.ProcessStartInfo (Join-Path $env:WINDIR 'System32\wsl.exe')
+    $psi.Arguments = "-d $($script:OssDistro) -u root --exec /opt/ossbot/app/.venv/bin/ossctl drain-listen"
+    $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $p.StandardInput.Write("ping`n"); $p.StandardInput.Flush()
+    $pong = $p.StandardOutput.ReadLine()
+    Ok 'own channel answers ping' ($pong -match '^pong up$') "($pong)"
+    $p.StandardInput.Write("down 30 blockerTest`n"); $p.StandardInput.Flush()
+    $ack = $p.StandardOutput.ReadLine()
+    Ok 'down acknowledged' ($ack -eq 'ack') "($ack)"
+    Stop-Process -Id $p.Id -Force
+    $t = -1
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt 90) {
+        if ((Unit-Active 'ossbot-gatekeeper.service') -ne 'active' -and (Unit-Active 'ossbot-runner.service') -ne 'active') { $t = $sw.Elapsed.TotalSeconds; break }
+        Start-Sleep -Seconds 1
+    }
+    Ok 'the units still stopped after the wsl.exe was killed' ($t -ge 0) ('({0:N1} s)' -f $t)
+    Start-Sleep -Seconds 3
+    & wsl.exe --terminate $script:OssDistro | Out-Null
+    & powershell -NoProfile -File (Join-Path $scripts 'up.ps1') -Caller blockerTest | Out-Host
+    Ok 'up.ps1 exit 0' ($LASTEXITCODE -eq 0)
+    $out = @(& powershell -NoProfile -File (Join-Path $scripts 'status.ps1') 2>&1 | ForEach-Object { "$_" })
+    $ls = @($out | Where-Object { $_ -match '^last shutdown\s+' }) | Select-Object -First 1
+    Ok 'the marker was written: last shutdown graceful' ($ls -match '^last shutdown\s+graceful ') "($ls)"
 }
 
 if ($script:Fail) { Write-Host "test_shutdown_blocker: $($script:Fail) check(s) FAILED" -ForegroundColor Red; exit 1 }
