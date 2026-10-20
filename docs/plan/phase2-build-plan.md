@@ -260,6 +260,7 @@ Depends on FEAT-005…008.
       Verify: `DEV pytest -m "unit or telegram"` green.
 
 - [ ] 48. Close-out FEAT-009.
+      Rows: CR3-AC-66 (FEAT-009 part), MDL-3 (FEAT-009 part) (added at the Phase 2 gate, F007-R4-1).
       What: `REDEPLOY`; hermetic suites; live owner-only checks (topics created or flat fallback, dashboard pinned, a dry-run proposal and preview card from the fake upstream rendered in the real chat, `/kill` then `/resume` from Telegram); matrix, VERIFICATION, FEAT-009 `completed`, commit.
       Verify: FEAT-009 verification list; matrix check for FEAT-009; `git status --porcelain` empty.
 
@@ -292,6 +293,7 @@ Depends on FEAT-009.
       Verify: `DEV pytest -m "unit or telegram"` green; `DEV lint-imports` green.
 
 - [ ] 53. Close-out FEAT-010.
+      Rows: CR3-IH-4 (FEAT-010 part) (added at the Phase 2 gate, F007-R4-1).
       What: `REDEPLOY`; hermetic suites; live owner-only checks (a streamed sourced answer, Stop, a food photo through Telegram, an album); matrix, VERIFICATION, FEAT-010 `completed`, commit.
       Verify: FEAT-010 verification list; matrix check for FEAT-010; `git status --porcelain` empty.
 

@@ -1,0 +1,22 @@
+{
+  "verdict": "APPROVED",
+  "feat": "FEAT-011",
+  "round": 1,
+  "findings": [
+    {
+      "id": "N1",
+      "severity": "NIT",
+      "title": "6a does not drain on a real Windows shutdown (real-shutdown finding), fix deferred to owner",
+      "detail": "FINAL_REPORT 'Restart test': down.ps1 child exits 0xC0000142, 6b ends 0xC000026B, next start 'last shutdown unclean'. FEAT-008 blocker defect; real-restart verification deferred by owner decision 2026-10-20; rows stay deferred. Phase 2 gate should confirm the owner accepts shipping with it open.",
+      "files": ["docs/FINAL_REPORT.md", "scripts/windows"]
+    },
+    {
+      "id": "N2",
+      "severity": "NIT",
+      "title": "pre-commit personal-value lint scans the working tree, not the staged blobs",
+      "detail": "ossctl lint personal reads working-tree files; with partial staging the committed content can differ from what was scanned. Scanning staged blobs (git show :path) would be exact. gitleaks already uses --staged.",
+      "files": [".githooks/pre-commit", "src/ossbot/ctl/lint_personal.py"]
+    }
+  ],
+  "reviewDoc": "d:\\Work\\autonomous-oss-contributor\\docs\\review-build-FEAT-011.md"
+}

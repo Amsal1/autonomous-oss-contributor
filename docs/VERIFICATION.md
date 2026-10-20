@@ -2,6 +2,47 @@
 
 Results of the phase verification bars (docs/PLAN.md) and of the live checks of docs/plan/NOTE-live-secrets.md. Newest first. Secret values are never recorded here, only key names and outcomes.
 
+## Phase 2 gate (round 1, 2026-10-20 about 20:44-21:15 +07)
+
+FEAT-005…011 APPROVED; start at cdd6e39 (no `docs/final-gate.json` yet, so a full round). Dry-run ON throughout, zero GitHub writes (reads only: doctor's MCP `get_me` and a public repo listing), Telegram only to the owner through product code (the kill/lifecycle FYIs of the system tests), no secret value read or printed; live model calls only through `doctor --probes` (roles.test). Each full suite ran once, logged under `.ossbot-local/logs/` (gitignored) and only the tails read; after the NIT fixes only the affected tests re-ran. One redeploy (src/ changed). DEV = `.ossbot-local/dev.ps1`, ROOT = `wsl -d ossbot -u root`.
+
+| Check | Command (SHA) | Result | Log |
+|---|---|---|---|
+| Hermetic suites | `DEV pytest -m "unit or telegram or acp or e2e" -n auto -q --timeout=120 --durations=15` (cdd6e39) | 3529 passed in 48.3 s | `gate-hermetic.log` |
+| Sandbox and Docker e2e | `ROOTDEV pytest -q -m "sandbox or e2e_docker" --durations=10 -o timeout=900` (cdd6e39) | 19 passed, 3529 deselected in 79.4 s | `gate-root.log` |
+| NIT fixes, lint gate | `ruff check src tests`, `ruff format --check src tests`, `mypy`, `lint-imports` (437c887 tree) | clean; 492 files formatted; mypy 240 files; 11 contracts kept | `gate-lint.log` |
+| NIT fixes, affected tests | `DEV pytest -q -n auto --timeout=120 tests/unit/ctl/test_{lint_personal,doctor_users,render,backup,restore}.py tests/unit/runner tests/unit/test_ci_workflow.py` (437c887 tree) | first run 22 failed (the `/proc/self/fd` listing's own fd hid sqlite's open; an old fake `discover.run` without `created`), fixed, then 257 passed | `gate-lint.log` |
+| Shell and PowerShell lint | `ROOT shellcheck tests/system/test_egress_surface.sh .githooks/pre-commit`; `scripts\dev\psscriptanalyzer.ps1` | clean; PSScriptAnalyzer 1.25.0, 26 files, 0 errors | – |
+| Redeploy (once) | `scripts\bootstrap.ps1 -Only provision`, each line timestamped (437c887) | 13 s end to end: preflight…uv 1 s, app-deploy 1 s (8 files rsynced, `uv sync`), hermes 1 s, images 1 s (`unchanged`), firewall 1 s, enable-start 7 s (dockerfilter 2 s, gatekeeper 4 s, runner and hermes restarts), doctor 1 s. Nothing slow: without an image rebuild a redeploy is restarts only; the slow redeploys of earlier rounds were the image builds | `gate-redeploy.log` |
+| System: egress surface | `ROOT bash tests/system/test_egress_surface.sh` (437c887) | all checks passed, PASS 241, 66 s; includes the new `ossnobody: no lingering` and `loginctl Linger (no)` | `gate-sys-test_egress_surface.log` |
+| System: crash safety | `ROOT bash tests/system/test_crash_safety.sh` (437c887) | all checks passed, PASS 20, 47 s | `gate-sys-test_crash_safety.log` |
+| System: lifecycle | `ROOT bash tests/system/test_lifecycle.sh` (437c887) | all checks passed, PASS 47, 39 s | `gate-sys-test_lifecycle.log` |
+| System: no exposure | `ROOT bash tests/system/test_no_exposure.sh` (437c887) | all checks passed, PASS 20 | `gate-sys-test_no_exposure.log` |
+| System: kill | `powershell -File tests\system\test_kill.ps1` (437c887) | cases 1-5 PASS; case 6 `FAIL autostart task disabled`: `kill.ps1 -Hard` did disable the task, but a disabled task reports State `Running` while its shutdown-blocker instance runs, so the test, `resume.ps1` and `ossctl.ps1 doctor` (State == 'Disabled') missed it; `resume.ps1` left autostart disabled (Settings.Enabled False afterwards). Fixed in c6e9937 (`Test-OssTaskDisabled` reads Settings.Enabled) | `gate-sys-test_kill.log` |
+| System: kill case 6 re-run | `test_kill.ps1 -Cases 6` (c6e9937 tree) | all checks passed: task disabled, `Scheduled Task ossbot-autostart re-enabled` by resume, Settings.Enabled True after | `gate-sys-test_kill-case6.log` |
+| Doctor | `ROOT ossctl doctor --probes`; `scripts\ossctl.ps1 doctor` (c6e9937, deployed 437c887 + the Windows scripts) | PASS 46 and PASS 45, no FAIL/WARN/SKIP: safety probes all passed for tuple 54450b8cb061; `github mcp (read-only)`: get_me = the owner login, a public repo root listed; autostart task PASS | `gate-doctor.log` |
+| gitleaks | `ROOT gitleaks git --redact --no-banner --config .gitleaks.toml .` (c6e9937) | 209 commits scanned, no leaks found | `gate-doctor.log` |
+| Personal values | `DEV ossctl lint personal --staged --root .` (437c887) | 804 staged files, 0 hits | – |
+| GHMCP-2 in-container | evidence of FEAT-011 item 57 (37f5d72): research-profile scout `scout-54e27f891fe8`, 9 `@github/...` read calls completed; the Go `github-mcp-server` v2.0.2 with `--read-only`, token GITHUB_READ_TOKEN by name only | not re-run (a scout job is opus-priced and not a roles.test call); the image of that run is still the deployed one (`images: unchanged`, sandbox_llm digest 18e4502b… in versions.lock) and doctor ran the same binary with the same secret read-only (row above). Zero writes: the server exposes no write tool | FEAT-011 rows above |
+| Matrix | `.ossbot-local/gate-matrix.ps1` (every row `done` with evidence or `deferred` with a reason) | 522 rows: done 469, deferred 53, offenders 0 (16 scope-deferred rows got their written reason; CR3-IH-2 moved to deferred, see NITs) | – |
+| Clean tree | `git status --porcelain` | empty after the last commit | – |
+
+Phase 2 NITs from `docs/review-build-FEAT-005.json` … `FEAT-011.json`:
+
+| NIT | Disposition |
+|---|---|
+| F005-R2-1 origin/main pushed outside the build steps | closed, no change: the owner pushes `main` himself (build-plan working rule 5); local main contains origin/main and history was never rewritten |
+| F005-R2-2 ossnobody Linger=no | fixed (1080ace): doctor `check_no_user_managers` and `test_egress_surface.sh` assert it (`test_doctor_users.py::test_login_uid_must_not_linger`; surface PASS lines above) |
+| F005-R2-3 draft hold-back assumes a bounded pattern width | deferred: the fix (refuse `extra_patterns` whose maximum width is ≥ HOLD_BACK) changes which patterns the owner may configure, a DESIGN change (hard rule 12); open owner question |
+| F005-R2-4 squid_drift reads the login window from the conf under test | fixed (437c887): `ossctl hermes login` holds root-only `/run/ossbot-hermes-login-window` while the window is open; `squid_drift` accepts an open-window conf only while it exists (`test_render.py::test_squid_drift_open_login_window_needs_the_login_flag`) |
+| F006-R5-1 cut discovery cycles reset the per-cycle budget | fixed (3ec2fae): a cut full cycle re-runs with its created cids and refusals carried, so it creates at most budget − already created; a finished cycle starts fresh (`test_github_read.py::test_a_cut_cycle_keeps_its_spent_budget_for_the_rerun`, `test_stage_flow.py::test_a_cut_cycle_rerun_spends_only_the_rest_of_the_budget`) |
+| F007-R4-1 CR3-AC-66 FEAT-007 part; three ids in no item's Rows | fixed (docs): the FEAT-007 part recorded on CR3-AC-66; CR3-AC-66 and MDL-3 added to item 48's Rows, CR3-IH-4 to item 53's |
+| F008-R2-1 SQLite copies in the backup open by path | fixed (fa56c9a): after sqlite opens, every new fd must be the path (or its -wal/-shm) and the main DB fd must have the dev/ino `_open_exact` checked; manifest owner/mode come from that fstat (`test_backup.py::test_a_directory_swapped_and_back_during_the_sqlite_copy_is_refused`, `::test_the_manifest_mode_comes_from_the_copied_file`). The optional "force hermes: entries to the hermes owner on restore" is not done: with the fd check a swapped copy is refused at backup time, so no foreign DB reaches an archive |
+| F009-R4-1 owner-only item 48 live checks | deferred: owner-only (real chat taps, visual pin check, client-rendering probes); rows deferred with FINAL_REPORT pointers O1-O8 |
+| F010-N1 closed-PR card lacks [Re-attempt later] [Forget] | deferred: what Re-attempt later means for a CLOSED contribution under AC 30 is an owner decision (hard rule 12); CR3-IH-2 now `deferred` with that reason instead of `done` |
+| F011-N1 6a does not drain on a real Windows shutdown | deferred by owner decision 2026-10-20 (FINAL_REPORT "Restart test", R1); the owner confirms at the gate whether to ship with it open |
+| F011-N2 pre-commit personal lint scans the working tree | fixed (437c887): `ossctl lint personal --staged` reads the index blobs (one `git cat-file --batch`), the hook passes it (`test_lint_personal.py::test_staged_mode_scans_the_index_not_the_worktree`) |
+
 ## Phase 2 live checks
 
 ### FEAT-011 (docs, hooks, CI, final verification; build round 1, 2026-10-20 from about 19:20 +07)
