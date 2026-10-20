@@ -13,6 +13,7 @@
 [CmdletBinding()]
 param([switch]$SkipDownload)
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'  # PowerShell 5.1's download progress bar slows Invoke-WebRequest a lot
 . (Join-Path $PSScriptRoot 'lib\common.ps1')
 $repo = Get-OssRepoRoot
 
