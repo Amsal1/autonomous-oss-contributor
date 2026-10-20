@@ -1,152 +1,297 @@
 # ossbot v1: final report
 
-Written by FEAT-011 (Stage 4, PLAN item 57). Evidence for every line is in `docs/VERIFICATION.md`
-(newest first); requirement status is in `docs/TRACEABILITY.md`.
+Phase 2 is finished. The Phase 2 gate (round 1, `docs/final-gate.md` and `docs/final-gate.json`) is
+APPROVED at b21058b with no HIGH or MEDIUM findings. Evidence for every line here is in
+`docs/VERIFICATION.md` (newest first) and requirement status in `docs/TRACEABILITY.md`. Dry-run stayed
+ON for the whole build and nothing was ever written to GitHub.
 
-## Summary
+## What was built
 
-ossbot v1 is built and deployed on this laptop in dry-run: the safety core (gatekeeper, two-tap
-approvals bound to content and mode, policy and hard ceiling, audit with root anchors, kill/pause and
-the boot gate, Docker filter, per-uid firewall and squid egress, split coder, safety-probe gates), the
-pipeline with scout and both gates, user-directed work and the size budget, Kiro headless and the V3
-ACP fork, Hermes with capability tiers and the gated skill flow, the global model switch, the graceful
-lifecycle with the Windows shutdown hooks and crash safety, encrypted backup and restore, the Telegram
-workspace (topics, dashboard, review flow, streaming assistant, notifications, digest, status card,
-opt-in review mirror and Telegraph), and the open-source docs, hygiene hooks and a manual CI workflow.
-Dry-run has stayed ON for the whole build and nothing was ever written to GitHub.
+ossbot v1 is deployed on this laptop in the `ossbot` distro. Each feature passed its own build review
+(`docs/review-build-FEAT-*.md`) before the gate.
 
-## Doctor (2026-10-20, at 352962b after the redeploy)
+| Feature | What it delivered | Build review |
+|---|---|---|
+| FEAT-005 | Phase 1 safety core brought to DESIGN rev 5: the gatekeeper, two-tap approvals bound to content and mode, policy and hard ceiling, hash-chained audit with root anchors, kill/pause and boot gate, Docker filter, per-uid firewall, squid egress with the `allowlist`/`research`/`open` modes, split coder, safety-probe gates | APPROVED, round 2 |
+| FEAT-006 | Pipeline backend: runner, scout and gate 1 proposals through to submit and watch; user-directed `/work`; size classes and the budget; the global model switch (`config/models.yaml`) | APPROVED, round 5 |
+| FEAT-007 | Kiro V3 ACP fork of hermes-kiro-provider (vendored), Hermes v0.22.2 with capability tiers and the gated skill flow, assistant backend | APPROVED, round 4 |
+| FEAT-008 | Graceful lifecycle (`up`/`draining`/`down`), Windows autostart, shutdown blocker (6a) and event task (6b), crash safety, encrypted backup and restore | APPROVED, round 2 |
+| FEAT-009 | Telegram workspace: UI kit, Bot API 10.3 adapter, topics, pinned dashboard, PR review surface, gate-1 cards, `/work`, `/size`, `/filters`, controls, notifications | APPROVED, round 4 |
+| FEAT-010 | Streaming assistant with Stop, rich views with classic fallback, status card, reminders, digest, opt-in private review mirror and Telegraph (both off by default) | APPROVED, round 2 |
+| FEAT-011 | User and harness docs, `ossctl docs commands`, `ossctl lint personal`, gitleaks pre-commit hook, manual CI workflow, final verification | APPROVED, round 1 |
 
-- `ossctl doctor --probes` (root, in the distro): PASS 46, no FAIL, WARN or SKIP.
-- `scripts\ossctl.ps1 doctor` (Windows): PASS 45.
-- Notable checks: safety probes passed for the current tuple; Hermes commit, tier `self_improve`, tool
-  surface and Hermes-side Kiro probe; GitHub MCP read (`get_me` = the owner login); Telegram `getMe`
-  200 and user id set; the gatekeeper running with dry-run ON.
+### Verification at the gate (2026-10-20, VERIFICATION "Phase 2 gate (round 1)")
 
-## Live checks in FEAT-011
+| Check | SHA | Result |
+|---|---|---|
+| Hermetic suites (`unit or telegram or acp or e2e`, `-n auto`) | cdd6e39 | 3529 passed in 48 s |
+| Sandbox and Docker e2e (root) | cdd6e39 | 19 passed |
+| Lint gate (ruff, format, mypy, lint-imports) after the NIT fixes | 437c887 | clean; mypy 240 files; 11 contracts kept |
+| Tests affected by the NIT fixes (ctl, runner, CI workflow) | 437c887 | 257 passed (after fixing 22 test-side failures) |
+| shellcheck and PSScriptAnalyzer 1.25.0 | 437c887 | clean, 0 errors |
+| System: egress surface, crash safety, lifecycle, no exposure | 437c887 | PASS 241, 20, 47, 20 |
+| System: kill | 437c887, then c6e9937 | cases 1-5 PASS; case 6 found a real defect (resume did not re-enable autostart), fixed in c6e9937, re-run green |
+| Doctor `--probes` and Windows doctor | c6e9937 | PASS 46 and PASS 45, no FAIL, WARN or SKIP |
+| gitleaks over the history | c6e9937 | 209 commits, no leaks |
+| `ossctl lint personal --staged` | 437c887 | 804 files, 0 hits |
+| Traceability matrix | b21058b | 522 rows: 469 done, 53 deferred, 0 missing or rework |
 
-- AC 17: the pre-commit hook refused a fake `ghp_` token and an owner value in a throwaway clone.
-- gitleaks over the whole history with `.gitleaks.toml`: no leaks.
-- `ossctl lint personal`: no owner value in a tracked file outside `docs/`.
-- GitHub MCP inside a scout job: a research-profile scout made 9 successful `@github/...` read calls.
-- Hermetic suites: 3521 passed at f753cb5 (`-n auto`); the owner's GitHub CI run's two failures were
-  runner artifacts and are fixed; CI is now manual.
-- Windows restart (CR-001 6a/6b): not run during the build (a restart would stop the build itself);
-  an earlier real shutdown showed 6a does not drain yet. See "Restart test".
+Only the tests affected by the NIT fixes re-ran after cdd6e39. The gate reviewer checked that no other
+test calls the changed functions and that the new parameters default to the old behaviour.
+
+## Live checks
+
+All of these ran against the real services, in dry-run, with no GitHub write:
+
+- Redeploy (`scripts\bootstrap.ps1 -Only provision`): 13 s end to end with `images: unchanged`. A
+  redeploy that does not rebuild images is restarts only. The slow redeploys earlier in the build were
+  the image rebuilds.
+- GitHub MCP in a container (GHMCP-2, 37f5d72): research-profile scout `scout-54e27f891fe8` made 9
+  completed `@github/...` read calls through the Go binary with the configured read secret. At the
+  gate, doctor ran the same binary and secret again (`get_me` returned the owner login, a public repo
+  root listed). The server exposes no write tool.
+- Safety probes passed for the deployed CLI/image/agent/settings tuple (doctor).
+- Telegram `getMe` 200; kill and lifecycle FYIs reached only the configured user.
+- Pre-commit hook (AC 17, in a throwaway clone): refused a fake `ghp_` token and an owner value,
+  allowed a clean commit.
+- Earlier phases (VERIFICATION, per feature): live food-photo answer through Hermes, Kiro V3 ACP
+  round-trips against kiro-cli 2.32.0, `ossctl targets verify` 73 PASS, the simulated shutdown blocker
+  and the 6b task.
+
+## Deferred items for your approval
+
+The 53 deferred rows each carry their reason in TRACEABILITY. Grouped:
+
+- **Out of v1 scope by DESIGN §6.1** (DES-DEF-1…13, ADR-0012, DES-V-7, DES-V-22): stack validation,
+  single-container coder, dual Telegram mode, proactive no-issue discovery, `sandbox-android`, backup
+  timer on by default, Hermes headless fallback 2, `WslcRuntime`, Langfuse, Mini App, and the scout
+  clone variant. In each case the schema accepts only the v1 value and a test checks it.
+- **Owner-only live checks** (CR3-V-1…16 except V-10, DES-V-32, CR2-7l, CR3-IH-4, DES-V-17, DES-V-18).
+  They need your Telegram clients, the real Bot API or a first live write. Steps are under "Owner live
+  checks" (O1-O8).
+- **Real Windows restart** (CR1-6a, CR1-6b, DES-V-31, DES-AC-32). A restart would have stopped the
+  build, and an earlier real shutdown showed 6a does not drain yet (F011-N1). Steps are under "Restart
+  test" (R1). You decided on 2026-10-20 to defer it. The gate asks you to confirm that v1 ships with it
+  open.
+- **Your decisions**:
+  - CR3-IH-2 / F010-N1: what Re-attempt later means on a closed-PR card.
+  - F005-R2-3: whether to refuse `extra_patterns` wider than the redaction hold-back.
+  - CR2-3f-research: a separate research job. Deferred because Hermes' own Kiro session already has
+    web search.
+  - CR3-IH-7 and CR3-V-10: notifications inbox. Needs a `notifications`-scope token.
+  - CR3-IH-13: needs a Google OAuth secret.
+  - CR3-IH-16: Mini App. Conflicts with the no-exposure rule.
+- **Later features** (CR3-IH-5, 6, 8, 12, 14, 15, 17): listed in PLAN "Deferred".
+
+Other decisions still open:
+
+- Reverse image search provider: the key hook and skill stub exist, DES-DEF-12.
+- Whether ossbot should come back up by itself after a cancelled Windows shutdown (ADR-0021: today it
+  stays down until `scripts\up.ps1` or the next logon).
+- The license, before the repository goes public (README "License: TBD").
+
+## Day-to-day use
+
+- **Up, down, status.** ossbot starts with Windows and stops with it.
+  - By hand: `scripts\up.ps1`, `scripts\down.ps1`, `scripts\status.ps1`. Inside the distro the same is
+    `ossctl up|down|status`.
+  - On Telegram: `/up`, `/down`, `/drain`, `/undrain` and `/status`.
+  - `down` drains running work (up to 120 s), re-queues the rest and never invalidates approvals.
+  - `/pause` and `/kill` (or `scripts\kill.ps1`) are separate from lifecycle and survive a reboot. Only
+    `/resume` or `scripts\resume.ps1` undoes them.
+  - After pulling changes, redeploy with `scripts\bootstrap.ps1 -Only provision`.
+- **`/work <issue, PR or repo URL> [notes]`**, or forward a GitHub link and tap 🛠 Work on this, or run
+  `ossctl work <url>`. The item is marked 👤 and skips ranking, caps, filters and the size preference.
+  It still passes both gates, the forbidden paths, the repo's AI policy, the CLA check, the
+  one-open-PR-per-repo rule and the hard ceiling.
+- **`/size`** sets the size preference for autonomous picks only (default maximum `s`, ≤ 80 non-test
+  lines). Use `/repos <repo> size <class>` per repo and `/filters` for the kinds of work. The hard
+  ceiling (80 files, 3000 code lines, 3000 test lines) changes only in `config/policy.yaml` plus a
+  confirmed `/reload`.
+- **`/model`** opens a picker that switches a production role's model, after a confirm tap. Changes
+  are checked against the Kiro catalog, audited and announced. The reviewer must differ from the coder.
+  `test` and `test_vision` change only in `config/models.yaml` or with `ossctl model set test …`.
+  `ossctl model list` shows what each role resolves to.
+- Reviewing: proposal cards (gate 1, Start work) and preview cards (gate 2, Approve then Confirm) arrive
+  in ✅ Reviews, or in the one chat while topics are off. The mode label always says DRY RUN or LIVE.
+
+## Turning dry-run off
+
+Do it only when all of these hold:
+
+- You have checked several DRY RUN previews and trust them.
+- The commit email in your profile is verified in GitHub Settings → Emails (DES-V-18). Neither token
+  can check this read-only.
+- Doctor is all PASS.
+
+`/dryrun off` asks for a confirm tap. Every dry-run toggle invalidates all open approvals, so approve
+again afterwards in LIVE mode. `/dryrun on` takes effect at once.
+
+The first live PR candidate is the V3 ACP adapter for
+`tobenwarrior/hermes-kiro-provider` (CHAT-6). The target is in `config/targets.yaml` with
+`discovery: false`. The PR text, including the AI disclosure, is in
+`docs/upstream/hermes-kiro-provider-v3.md`.
+
+1. Build the bundle: `bash scripts/dev/kiro-provider-bundle.sh` in the distro. It clones upstream at
+   `vendor/hermes-kiro-provider/UPSTREAM_COMMIT`, commits with the identity from `git var
+   GIT_AUTHOR_IDENT` plus Signed-off-by, and writes nothing to GitHub. It prints the import command.
+2. Import with `ossctl contribution import --repo tobenwarrior/hermes-kiro-provider --base <sha>
+   --from-bundle … --title-file … --body-file …`, as printed in step 1.
+3. Pass gate 1, then go through gate 2 once in DRY RUN. The audit should record "would fork/push/open
+   PR" with the exact payload.
+4. Run `/dryrun off`, approve and confirm in LIVE. This is check O8: fork, push and PR with the
+   `public_repo` token, and the commit shows your account as author. Record it with
+   `record-owner-check.ps1 -Check O8`.
+5. Turn dry-run back on with `/dryrun on` if you want every later PR to start in DRY RUN.
+
+## Known limitations
+
+- **Shutdown drain (6a).** It does not drain on a real Windows shutdown: `down.ps1` exits
+  `0xC0000142` and the next start reports `last shutdown unclean`. Crash safety held, with no lost or
+  duplicated work. The fix belongs in FEAT-008's blocker and needs R1 to verify.
+- **Topics.** Telegram runs in flat mode until topics are on in @BotFather (O1).
+- **Telegram on real clients.** Rich views, streaming rate, Stop through to Hermes, and photo albums
+  are covered by hermetic tests only (O2-O6). Voice notes answer "Voice isn't supported yet".
+- **Cancelled shutdown.** After a cancelled Windows shutdown ossbot stays down until `up`.
+- **CI** is `workflow_dispatch` only, so run it by hand from Actions.
+- **Redeploys** are fast (about 13 s) unless `sandbox/` changes and the images rebuild.
+- **Redaction.** The hold-back assumes bounded `extra_patterns` widths (F005-R2-3).
+- **Closed-PR card.** It lacks Re-attempt later and Forget (F010-N1).
+- **Re-checks at the gate.** GHMCP-2 was not re-run in a scout job at the gate, because a scout job is
+  opus-priced. Doctor re-checked the same binary and secret.
+- **Windows.** The isolation script and doctor cover the WSL boundary. The Hyper-V firewall WARNs if
+  elevation was declined.
 
 ## User action needed
 
-Key and account problems found by the live checks are listed here and never worked around. No
-credential problem was found: the bot token, both Kiro keys, the read token (also for the GitHub MCP
-server) and the write token's identity check all pass doctor.
+No credential problem was found. The bot token, both Kiro keys, the read token (also used by the GitHub
+MCP server) and the write token's identity check all pass doctor.
 
-- **Topics.** The gatekeeper logs `telegram flat mode: topic mode is off in @BotFather`. Turn topics
-  on (and allow users to create topics) in @BotFather to get the Control, Reviews, OSS feed and
-  Assistant topics (SETUP.md "Telegram topics").
-- **Unknown Telegram user.** The gatekeeper rejected updates from a Telegram user that is not the
-  owner (logged as `telegram_unauthorized`, nothing answered). Nothing to do unless that was you on a
-  second account.
-- **Before `/dryrun off`.** The first owner-approved live submit is the first real fork, push and PR:
-  check the commit attribution of that PR and that the commit email is verified on the GitHub account
-  (DESIGN §23 items 17 and 18; not checkable read-only with either token).
-- **Owner live checks O1–O8 and the restart test R1** below: their TRACEABILITY rows are `deferred`
-  ("owner live check after build") until you run them.
+- **Topics.** The gatekeeper logs `telegram flat mode: topic mode is off in @BotFather`. Turn topics on,
+  and allow users to create topics (SETUP.md "Telegram topics").
+- **Unknown Telegram user.** Updates from a user that is not you were rejected and logged as
+  `telegram_unauthorized`. Nothing to do unless that was you on a second account.
+- **Before `/dryrun off`**, see above.
+- **Owner live checks O1-O8 and restart test R1**, below.
+- **Push `main`** when you are ready. The build never pushes.
 
 ## Owner live checks
 
-Each check names its TRACEABILITY rows, the steps and the expected result. The code paths are already
-covered by hermetic tests; these confirm the real Bot API, your Telegram clients or a first live write.
-Record each one when done (no secret or personal value in the text):
+Each check names its TRACEABILITY rows, the steps and the expected result. Hermetic tests already cover
+the code paths. These checks confirm the real Bot API, your Telegram clients or a first live write.
+Record each one when done, with no secret or personal value in the text:
 
 ```powershell
 powershell -NoProfile -File scripts\dev\record-owner-check.ps1 -Check O1 -Rows CR3-V-4 -Result "what you saw"
 ```
 
-It sets the rows to `done` (or `-Status missing` if the result was wrong), appends the result to their
-evidence, recomputes the Totals line and adds a row to VERIFICATION "Owner live checks (after the
-build)". Commit `docs/TRACEABILITY.md` and `docs/VERIFICATION.md` afterwards.
+The script:
 
-**O1 Topics** (CR3-V-4, part of DES-V-32). Steps: turn topics on in @BotFather (SETUP "Telegram
-topics"), then `scripts\bootstrap.ps1 -Only provision` or restart the gatekeeper, then `/start`.
-Expected: 🚦 Control, ✅ Reviews, 📈 OSS feed and 💬 Assistant appear, the dashboard is pinned in
-Control. Note whether a "General" topic exists and whether the pin shows only in Control.
+- sets the rows to `done`, or to `missing` with `-Status missing`;
+- appends the result to their evidence;
+- recomputes the Totals line;
+- adds a row to VERIFICATION "Owner live checks (after the build)".
 
-**O2 Rich views on each client** (CR3-V-1, CR3-V-14, CR3-V-15, CR3-V-16). Steps: on Android, iOS and
-desktop, open a preview card's explorer and a file diff (`/review`), quote-reply one line of a rich
-file view, ask Hermes for an answer with a table and a code block in a topic and in flat mode, and look
-at a 2-button row with long labels. Expected: `details`, tables, `pre language=diff` and anchors
-render; a quote-reply on a rich file view becomes a line comment (if not, note the client); labels are
-cut with `…`, never wrapped into each other; an answer that cannot nest a block falls back to classic.
+Commit `docs/TRACEABILITY.md` and `docs/VERIFICATION.md` afterwards.
 
-**O3 Streaming and Stop** (CR3-V-2, CR3-V-3). Steps: ask Hermes a long question in a topic, then ask
-another and tap ⏹ Stop after a few lines. Expected: a draft appears within 1 s and updates at most once
-a second without "Too Many Requests" in `journalctl -u ossbot-gatekeeper`; Stop ends the stream within
-2 s with "⏹ Stopped by you" and the partial text ending in `…`.
+**O1 Topics** (CR3-V-4, part of DES-V-32).
+- Steps: turn topics on in @BotFather (SETUP "Telegram topics"). Then run
+  `scripts\bootstrap.ps1 -Only provision` or restart the gatekeeper, then send `/start`.
+- Expected: 🚦 Control, ✅ Reviews, 📈 OSS feed and 💬 Assistant appear, and the dashboard is pinned in
+  Control. Note whether a "General" topic exists and whether the pin shows only in Control.
 
-**O4 Small rendering items** (CR3-V-5, CR3-V-6, CR3-V-12). Steps: wait for a 🎉 message (merged PR or
-`/digest`), open an `.html` diff document from a preview card, and look at a classic message that
-mentions a command (for example the `/approve` hint). Expected: the effect plays (or the message just
-arrives, no error); the `.html` opens in a browser or viewer; the command text is not a tappable link.
+**O2 Rich views on each client** (CR3-V-1, CR3-V-14, CR3-V-15, CR3-V-16).
+- Steps, on Android, iOS and desktop:
+  1. Open a preview card's explorer and a file diff (`/review`).
+  2. Quote-reply one line of a rich file view.
+  3. Ask Hermes for an answer with a table and a code block, once in a topic and once in flat mode.
+  4. Look at a 2-button row with long labels.
+- Expected:
+  - `details`, tables, `pre language=diff` and anchors render.
+  - A quote-reply on a rich file view becomes a line comment. If not, note the client.
+  - Labels are cut with `…`, never wrapped into each other.
+  - An answer that cannot nest a block falls back to classic.
 
-**O5 Hermes API** (CR3-V-7). Steps: during O3, note whether Stop also ended the Hermes run
-(`journalctl -u ossbot-hermes` shows the run cancelled). Expected: no Hermes run keeps going after Stop.
+**O3 Streaming and Stop** (CR3-V-2, CR3-V-3).
+- Steps: ask Hermes a long question in a topic. Then ask another and tap ⏹ Stop after a few lines.
+- Expected:
+  - A draft appears within 1 s and updates at most once a second.
+  - `journalctl -u ossbot-gatekeeper` shows no "Too Many Requests".
+  - Stop ends the stream within 2 s with "⏹ Stopped by you", and the partial text ends in `…`.
 
-**O6 Photos** (CR2-7l, CR3-IH-4, CR3-V-8, CR3-V-13). Steps: send a food photo (compressed), then an album
-of 2–3 photos, then a photo sent as a file. Expected: a 🤖 answer with a protein estimate; the album
-gets one answer; the answer never quotes location or camera data. Voice notes answer "Voice isn't
-supported yet".
+**O4 Small rendering items** (CR3-V-5, CR3-V-6, CR3-V-12).
+- Steps:
+  1. Wait for a 🎉 message (a merged PR or `/digest`).
+  2. Open an `.html` diff document from a preview card.
+  3. Look at a classic message that mentions a command, for example the `/approve` hint.
+- Expected:
+  - The effect plays, or the message just arrives with no error.
+  - The `.html` opens in a browser or viewer.
+  - The command text is not a tappable link.
 
-**O7 Opt-in mirror and Telegraph** (CR3-V-9, CR3-V-11). Only if you want them: `ossctl review-mirror
-enable` with a private repo of yours, and `ossctl telegraph setup` then Publish on a long answer.
-Expected: enable passes its probes; the article opens as Instant View; Unpublish blanks it.
+**O5 Hermes API** (CR3-V-7).
+- Steps: during O3, check whether Stop also ended the Hermes run. `journalctl -u ossbot-hermes` shows
+  the run cancelled.
+- Expected: no Hermes run keeps going after Stop.
 
-**O8 First live submit** (DES-V-17, DES-V-18). Steps: verify the commit email in GitHub Settings →
-Emails, `/dryrun off` when you trust the previews, approve one PR. Expected: fork, push and PR succeed
-with the classic `public_repo` token; the PR's commit shows your account as author; note how long the
-fork took.
+**O6 Photos** (CR2-7l, CR3-IH-4, CR3-V-8, CR3-V-13).
+- Steps: send a food photo (compressed), then an album of 2-3 photos, then a photo sent as a file.
+- Expected:
+  - A 🤖 answer with a protein estimate.
+  - The album gets one answer.
+  - No answer quotes location or camera data.
+
+**O7 Opt-in mirror and Telegraph** (CR3-V-9, CR3-V-11). Only if you want these features.
+- Steps: run `ossctl review-mirror enable` with a private repo of yours. Then run
+  `ossctl telegraph setup` and tap Publish on a long answer.
+- Expected: enable passes its probes, the article opens as Instant View, and Unpublish blanks it.
+
+**O8 First live submit** (DES-V-17, DES-V-18).
+- Steps: follow "Turning dry-run off" above, with the hermes-kiro-provider V3 PR.
+- Expected: fork, push and PR succeed with the classic `public_repo` token, and the PR's commit shows
+  your account as author. Note how long the fork took.
 
 ## Restart test
 
-**Real-shutdown finding (2026-10-20, before this test).** Windows was shut down or restarted at
-03:08 UTC with ossbot running. `.ossbot-local\shutdown-blocker.log` shows the blocker (6a) got
-`WM_QUERYENDSESSION` and created the reason "ossbot: stopping safely…", but its `down.ps1` child exited
-at once with `-1073741502` (`0xC0000142`, a process that cannot initialise because the session is
-ending). The blocker then destroyed the reason and let the session end. The event task (6b) ran and
-ended `0xC000026B` (the same cause at logoff). The next start reported `last shutdown unclean`; crash
-safety held (no lost or duplicated work). So on a real shutdown 6a does not drain yet. This needs a
-fix in FEAT-008's blocker (for example a helper process started at logon that already holds the
-`wsl.exe` session and only waits for the signal, instead of starting `powershell.exe` from the
-handler) and then this test. The blocker that ran had been started by the 2026-10-19 simulated test,
-not by the logon task; a logon-started blocker may behave differently, which R1 also answers.
+**Real-shutdown finding (2026-10-20).** Windows shut down at 03:08 UTC with ossbot running.
+`.ossbot-local\shutdown-blocker.log` shows the following:
 
-**R1 Restart** (CR1-6a, CR1-6b, DES-V-31, DES-AC-32). Steps:
-1. With ossbot up (`scripts\status.ps1`: `shutdown blocker running`, `shutdown hook Ready`), save your
-   work and choose Start → Power → **Restart**. Do it when no ossbot build is running on the laptop.
-2. Note: (a) whether the blocking screen lists "ossbot: stopping safely…"; (b) whether the restart
-   continues on its own, without "Restart anyway"; (c) about how long it waited.
-3. After logging in again, wait 2 minutes, then run
-   `powershell -NoProfile -File scripts\dev\restart-evidence.ps1`. It prints the tails of
-   `.ossbot-local\shutdown-blocker.log` and `lifecycle.log`, the hook task's last result and
-   `status.ps1`'s `last shutdown`.
-4. Repeat once with **Shut down** (Fast Startup is on here).
+- The blocker (6a) got `WM_QUERYENDSESSION` and set the reason "ossbot: stopping safely…".
+- Its `down.ps1` child exited at once with `0xC0000142`. That code means a process cannot initialise
+  because the session is ending.
+- The blocker then let the session end.
+- The 6b task ended with `0xC000026B`.
+- The next start reported `last shutdown unclean`.
 
-Expected: (a) yes; (b) yes; (c) up to about 90 s; the blocker log shows `down.ps1 exit=0`,
-`lifecycle.log` a `down kind=graceful caller=blocker` with `end exit=0`, and `last shutdown graceful`
-(or `hook` if 6b won the race). Record it:
+A possible fix: a helper started at logon that already holds the `wsl.exe` session and only waits for
+the signal. The blocker that ran had been started by a simulated test, not by the logon task. R1 also
+shows whether a logon-started blocker behaves differently.
+
+**R1 Restart** (CR1-6a, CR1-6b, DES-V-31, DES-AC-32).
+
+Steps:
+
+1. Run `scripts\status.ps1`. It should show `shutdown blocker running` and `shutdown hook Ready`. Make
+   sure no ossbot build is running, then choose Start → Power → **Restart**.
+2. Note three things:
+   - (a) whether the blocking screen lists "ossbot: stopping safely…";
+   - (b) whether the restart continues without "Restart anyway";
+   - (c) how long it waited.
+3. Log in again and wait 2 minutes. Then run
+   `powershell -NoProfile -File scripts\dev\restart-evidence.ps1`.
+4. Repeat once with **Shut down**. Fast Startup is on.
+
+Expected:
+
+- (a) yes, (b) yes, (c) up to about 90 s.
+- The blocker log shows `down.ps1 exit=0`.
+- `lifecycle.log` shows `down kind=graceful caller=blocker` and `end exit=0`.
+- `status.ps1` shows `last shutdown graceful`, or `hook` if 6b ran first.
+
+Record it:
 
 ```powershell
 powershell -NoProfile -File scripts\dev\record-owner-check.ps1 -Check R1 -Rows CR1-6a,CR1-6b,DES-V-31,DES-AC-32 -Result "restart: (a) yes (b) yes (c) 15 s; last shutdown graceful; shut down: ..."
 ```
 
-If the result matches the finding above (an immediate `down.ps1` exit code and `last shutdown
-unclean`), record it with `-Status missing` and open the 6a fix.
-
-## Owner decisions pending
-
-- Reverse image search provider (SerpAPI, Bing Visual Search, Google Lens, ...): the key hook and a
-  skill stub exist; nothing is wired until a provider is chosen (DESIGN §15.6, TRACEABILITY CR3-IH-11).
-- Whether ossbot should come back up by itself when a Windows shutdown is cancelled after it went
-  down (ADR-0021: today it stays down until `scripts\up.ps1` or the next logon).
-- The 6a fix for the real-shutdown finding ("Restart test"): it changes FEAT-008's blocker and needs a
-  real restart to verify, so it is a follow-up for you to schedule, not part of this build.
-- The license (README "License: TBD"), before making the repository public.
+If the result matches the finding above, record it with `-Status missing` and schedule the 6a fix.
