@@ -4,6 +4,30 @@ Results of the phase verification bars (docs/PLAN.md) and of the live checks of 
 
 ## Phase 2 live checks
 
+### FEAT-010 (build round 2: review round 1 F1 and F2, 2026-10-20 about 18:30-19:30 +07)
+
+Product code only, dry-run ON, zero GitHub writes (the mirror is tested against `fake_github`, its push replaced), no Telegraph call (a fake API in the tests), Telegram only to the owner through the outbox, no secret value read or printed. Code first, targeted tests, one hermetic run, then the deploy and its "unchanged" re-run. DEV = `.ossbot-local/dev.ps1`.
+
+| Step | Command (SHA) | Result |
+|---|---|---|
+| Leftover WIP (F1) | `git status --porcelain` at addfd90 | 16 modified + 11 untracked files of item 50 (migration 0006, digest, reminders, status card, rich views); finished and committed in 387b562 together with the round-1 review files |
+| Item 50 targeted | `DEV pytest -q tests/telegram/test_digest.py test_reminders.py test_rich_fallback.py test_status_card.py tests/unit/gatekeeper/test_outcomes_digest.py test_authz.py` (addfd90 + WIP) | 44 passed; `DEV pytest -q -n auto tests/telegram` 503 passed |
+| Items 51-52 targeted | `DEV pytest -q tests/unit/gatekeeper/test_review_mirror*.py test_gitops_args.py test_authz.py tests/unit/common` / `... test_telegraph*.py tests/telegram/test_articles.py tests/unit/ctl/test_render.py tests/unit/gatekeeper/test_import_contracts.py` (9b0dd50 tree) | 243 passed / 85 passed |
+| Hermetic bar (once) | `DEV pytest -q -n auto -m "unit or telegram or acp or e2e"` (387b562 + the items 51-52 tree) | 3492 passed, 6 failed in 44 s: migration count 5 -> 6, the dedupe-key list (react, digest, status, mirror_row4) and one `fake_github` regression of mine; fixed in 3f7fc4d and 9b0dd50, re-run targeted 62 passed |
+| BA-19 / BA-20 / F6-4 | `DEV pytest -q tests/unit/gatekeeper/test_telegraph.py tests/telegram/test_articles.py tests/telegram/test_handlers_nonblocking.py` (19864e6) | 46 passed |
+| Lint gate | `lint.ps1` (19864e6) | ruff clean, 494 files formatted, mypy 238 files clean, lint-imports 11 contracts kept (incl. "Only review_mirror imports review_mirror_writer" and "Only telegraph imports telegraph_writer") |
+| Shell | `ROOT shellcheck scripts/setup-secrets.sh`; `STREAM scripts/setup-secrets.sh --selftest` | clean; selftest passed (mirror token kept in gatekeeper.env only, the read token refused as the mirror token) |
+| Redeploy | `bootstrap.ps1 -Only provision` at 9b0dd50, then at 19864e6 | both: `app-deploy: changed`, `enable-start: changed`, every other step `unchanged` (`hermes: changed` at 9b0dd50 for the `ossbot_reminder_create` plugin tool); doctor PASS 40, WARN 1 (Hermes surface ConnectError right after the restart). Logs `.ossbot-local/redeploy-f010-{1,2}.log` |
+| Redeploy, idempotency run | same, right after (19864e6) | every step `unchanged`, doctor PASS 41. Log `.ossbot-local/redeploy-f010-3.log` |
+| Egress surface | `ROOT bash tests/system/test_egress_surface.sh` (19864e6 deployed) | all checks passed; `telegra.ph`, `api.telegra.ph`, `EDIT.Telegra.PH` 403 for hermes, ossrunner and gatekeeper and every pool; `grep -c cat_telegraph /etc/ossbot/proxy/squid.conf` = 0 (Telegraph off: the category is absent). Log `.ossbot-local/egress-f010.log` |
+| Doctor | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor` | PASS 45 |
+| `[VERIFY]` | GitHub REST docs; telegra.ph/api | `GET /repos/{r}/actions/permissions` needs the "Administration" repository permission (read); Telegraph API host `api.telegra.ph`, pages on `telegra.ph`, tags allowlist a subset of the API's. Recorded in the ADR-0019 implementation addendum. The live parts of CR3-V-9 and CR3-V-11 need a real mirror write or publish, left to the owner |
+| Owner-only checks still open | – | a streamed sourced answer with ⏹ Stop, an album, a food photo through Telegram and a short PDF summarized, in the real chat; the client/API probes CR3-V-2, V-3, V-7, V-8, V-13, V-16. They need the owner's hands, so FEAT-010 stays `in_progress` |
+
+Delivered: item 50 in 387b562 (+3f7fc4d): rich explorer, file and interdiff views behind `auto` with the classic fallback and "moved ↓" stub, the S10/S11 status card (P1 replies for reviews, mentions and failed checks, merged summary, timeline, Stop watching), reminders (`/remind`, Hermes `ossbot_reminder_create`), the daily and weekly digest with the merge rate by size class and followers/stars/merges/streak, migration 0006. Items 51-52 in 9b0dd50 (+19864e6): the private review mirror (off by default; ossctl review-mirror enable|disable|status|purge) and Telegraph articles (off by default; two taps, refused while paused or killed, `ossctl telegraph setup|rotate`, `/articles`, gatekeeper-only egress rendered only while enabled). TRACEABILITY: 65 FEAT-010 rows updated (Totals: done 440, missing 54, deferred 28, rework 0; 522 rows); the FEAT-010 rows still open are the live probes above (CR2-7l, CR3-V-2/3/7/8/9/11/13/16, CR3-IH-4).
+
+Not built, open question: the closed-PR status card's `[🔁 Re-attempt later] [🗑 Forget]` (§14.11.11). "Re-attempt later sets the re-attempt cooldown" conflicts with AC 30 (an issue with a `CLOSED` contribution is never re-attempted), so the closed card shows only the PR link for now.
+
 ### FEAT-009 (build round 4: fixes for review round 3, 2026-10-20 about 11:30-11:45 +07)
 
 Same rules as round 3: product code only, dry-run ON, no GitHub write, Telegram only to the owner through the outbox, no secret value read or printed. Code first, targeted tests, one hermetic run, one redeploy plus the required second ("unchanged") run.

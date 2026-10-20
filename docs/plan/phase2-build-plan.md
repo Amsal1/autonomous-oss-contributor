@@ -267,25 +267,25 @@ Depends on FEAT-005…008.
 
 Depends on FEAT-009.
 
-- [ ] 49. Streaming assistant UX.
+- [x] 49. Streaming assistant UX.
       Rows: DES-FR-13, DES-AC-36, CR2-7a, CR2-7h, CR2-7k, CR2-7l, CHAT-26, TGRW-9, CR3-D8, CR3-D9, CR3-D10, CR3-D21, CR3-U10, CR3-U12, CR3-AC-18, CR3-AC-19, CR3-AC-20, CR3-AC-22, CR3-AC-35, CR3-AC-48, CR3-AC-55, CR3-AC-59 (Stop part), CR3-AC-67 (`/resume` and U12 parts), CR3-BA-14, CR3-BA-15 (chat-turn wiring, album and test part), CR3-BA-22, CR3-F6-2, CR3-M2, CR3-V-2, CR3-V-3, CR3-V-7, CR3-V-8, CR3-V-13, CR3-V-16, CR3-IH-9, CR3-IH-10.
       What: drafts with Stop (`sendRichMessageDraft`/`sendMessageDraft`, `can_stop`), `ALLOWED_UPDATES` gains `stopped_message_generation` authorized by `auth.authorized_chat_only()`; `chat/{stream,drafts,md2blocks,followups,answer_view}.py` (flat mode and Reviews wrap drafts too); sources and footer; follow-ups; albums (1.5 s grouping) and reactions; `/new /title /memory`; feature cards and Hermes notifications (U12); assistant-unavailable states; PDF and voice UX of §14.12.5 on the item 37 backend. Every stream runs as a spawned `chat_turn`.
       Tests: new `tests/telegram/{test_stream_drafts.py,test_stop.py,test_md2blocks.py,test_followups.py,test_albums.py,test_answer_view.py,test_assistant_unavailable.py,test_pdf_voice_ux.py}`; `test_handlers_nonblocking.py` extended with Stop during a stream (`stopped_message_generation` ends it within 2 s, AC 59) and the AC 67 / BA-15 cases on real `chat_turns` rows (`chat/turns.py: finalize_turn(conn, turn_id)` as the chat turn's `on_done`; message + `/kill` in one batch → row `stopped`, the next message after `/resume` answered; an older task's callback leaves a newer turn's `_sessions` entry; album + `/kill` → buffer empty); new `tests/telegram/test_hermes_routing.py` (U12 answers 409 for a row `reset_streaming` failed and for a `streaming` row older than 30 min).
       Verify: `DEV pytest -m "unit or telegram"` green.
 
-- [ ] 50. Rich views and status.
+- [x] 50. Rich views and status.
       Rows: CR3-AC-42, CR3-AC-64, CR3-BA-9, CR3-M3, CR4-3c, CR3-IH-1, CR3-IH-2, CR3-IH-3.
       What: rich explorer/file/interdiff/tests/assistant views behind `auto` with classic fallback; S10/S11 live status card with own-PR activity and drafted replies; reminders (`/remind`, `ossbot_reminder_create`); daily and weekly digest with merge rate by size class and the §14.19 item 1 stats (followers, stars, merges, streak) from gatekeeper GitHub reads; migration `0006_telegram_m2.sql` (`digest_runs`, `reminders`, `review_mirror`, `telegraph_pages`).
       Tests: new `tests/telegram/{test_rich_fallback.py,test_status_card.py,test_reminders.py,test_digest.py}`, `tests/unit/gatekeeper/test_outcomes_digest.py`.
       Verify: `DEV pytest -m "unit or telegram"` green.
 
-- [ ] 51. Review mirror, opt-in, off by default.
+- [x] 51. Review mirror, opt-in, off by default.
       Rows: ADR-0019 (C part), CR3-AC-24, CR3-U5, CR3-U9 (mirror part), CR3-M4, CR3-V-9.
       What: `gatekeeper/review_mirror.py`, `gatekeeper/review_mirror_writer.py` (own import-linter contract), `ossctl review-mirror enable|disable|status|purge`, optional key in `setup-secrets`. No live mirror write during the build (zero live GitHub writes); tested against `fake_github`.
       Tests: new `tests/unit/gatekeeper/{test_review_mirror.py,test_review_mirror_writer.py}`; `test_import_contracts.py` updated.
       Verify: `DEV pytest -m unit` green; `DEV lint-imports` green.
 
-- [ ] 52. Telegraph articles, off by default.
+- [x] 52. Telegraph articles, off by default.
       Rows: CR3-D17, CR3-U9, CR3-U11, CR3-AC-27, CR3-AC-28, CR3-AC-65, CR3-AC-68, CR3-BA-10, CR3-BA-19, CR3-BA-20, CR3-F6-3, CR3-F6-4, CR3-V-11, CR3-v1.x, CHAT-36, CR3-IH-18.
       What: `gatekeeper/telegraph.py`, `gatekeeper/telegraph_writer.py` (own contract), gatekeeper-only `telegraph` egress category rendered only while `telegraph.enabled: true` (every other caller keeps the always-denied entries from item 23), `ossctl telegraph setup|rotate`, `/articles`; opt-in assistant articles only. No live Telegraph publish during the build unless the user enables it.
       Tests: new `tests/unit/gatekeeper/{test_telegraph.py,test_telegraph_writer.py}`, `tests/unit/ctl/test_render.py` case for the enabled category, `tests/telegram/test_articles.py`.
