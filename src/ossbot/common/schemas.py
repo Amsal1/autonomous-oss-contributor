@@ -155,13 +155,13 @@ class DryRunRequest(ApiModel):
 class EgressModeRequest(ApiModel):
     """§11.5: ossctl egress mode <m> (TTY-confirmed); Telegram /egress is FEAT-009."""
 
-    mode: Literal["allowlist", "research", "open"]
+    mode: Literal["allowlist", "research", "open", "sandbox_open"]
 
 
 class EgressModeView(ApiModel):
-    mode: Literal["allowlist", "research", "open"]
-    default: Literal["allowlist", "research", "open"]
-    previous: Literal["allowlist", "research", "open"] | None = None
+    mode: Literal["allowlist", "research", "open", "sandbox_open"]
+    default: Literal["allowlist", "research", "open", "sandbox_open"]
+    previous: Literal["allowlist", "research", "open", "sandbox_open"] | None = None
 
 
 class HermesTierRequest(ApiModel):

@@ -172,9 +172,10 @@ def require_up(control_dir: Path, what: str) -> None:
 # ``egress-mode`` in the control dir: JSON {mode, actor, ts}, written by the gatekeeper after a human
 # confirm; applied by root (ossbot-egress.path -> ossbot-egress-apply). Absent = the snapshot's
 # ``egress.mode_default``; unparseable, oversize, a symlink or an unknown mode = ``allowlist`` (fail
-# closed: the narrowest mode).
-EgressMode = Literal["allowlist", "research", "open"]
-EGRESS_MODES: tuple[EgressMode, ...] = ("allowlist", "research", "open")
+# closed: the narrowest mode). The order is narrow to wide: ``sandbox_open`` (ADR-0023) also gives
+# fetch/validate web_public, guarded by the per-job anomaly limits.
+EgressMode = Literal["allowlist", "research", "open", "sandbox_open"]
+EGRESS_MODES: tuple[EgressMode, ...] = ("allowlist", "research", "open", "sandbox_open")
 EGRESS_MODE_FILE = "egress-mode"
 
 

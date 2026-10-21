@@ -346,6 +346,7 @@ class RetentionPolicy(Strict):
     contributions_days: Annotated[int, Field(ge=7, le=3650)] = 30
     telegram_rows_days: Annotated[int, Field(ge=30, le=3650)] = 90  # closed tg_outbox, tg_views, ui_tokens
     run_logs_days: Annotated[int, Field(ge=7, le=3650)] = 30  # /srv/ossbot/logs/runs/*.log
+    proxy_logs_days: Annotated[int, Field(ge=30, le=3650)] = 30  # rotated squid access.log.* (design §13.5)
     hermes_sessions_days: Annotated[int, Field(ge=7, le=3650)] = 90  # /home/hermes/.hermes/sessions/* (idle)
     tmp_days: Annotated[int, Field(ge=1, le=365)] = 7  # /tmp top-level leftovers
     docker_build_cache_hours: Annotated[int, Field(ge=24, le=8760)] = 168  # unused Docker build cache
@@ -622,10 +623,22 @@ class AlwaysDenied(Strict):
 
 
 # Egress modes (§11.5, decision B3): a mode only ADDS categories, and only to this closed set of
-# grantees. fetch, validate, runner and gatekeeper are not keys, so data can never widen what
-# untrusted code (or the trusted writers) can reach; the renderer asserts the invariants on top.
-ModeGrantee = Literal["research", "hermes", "agent-llm", "catalog"]
+# grantees. runner and gatekeeper are not keys, so data can never widen what the trusted writers can
+# reach. fetch and validate (repo code) are keys only for the owner's mode sandbox_open (ADR-0023):
+# the validator below admits them there only, with web_public only, and the same list for both (they
+# share the fetch pool); strict repos keep the base list in every mode. The renderer asserts the rest.
+ModeGrantee = Literal["research", "hermes", "agent-llm", "catalog", "fetch", "validate"]
+REPO_CODE_GRANTEES = ("fetch", "validate")
+REPO_CODE_GRANT_MODE = "sandbox_open"
 TELEGRAPH_CATEGORY = "telegraph"  # DESIGN §14.12.8: the gatekeeper's opt-in Telegraph egress
+
+
+class EgressAnomaly(Strict):
+    """Per-job egress limits of fetch/validate jobs (design §13.4); config-only, never Telegram-tunable."""
+
+    max_hosts: Annotated[int, Field(ge=5, le=1000)] = 60
+    max_upload_mb: Annotated[int, Field(ge=1, le=10_240)] = 50
+    max_download_mb: Annotated[int, Field(ge=64, le=102_400)] = 6144
 
 
 class EgressConfig(Strict):
@@ -637,12 +650,23 @@ class EgressConfig(Strict):
     always_denied: AlwaysDenied
     mode_default: EgressMode = "open"
     modes: dict[EgressMode, dict[ModeGrantee, list[str]]] = Field(default_factory=dict)
+    anomaly: EgressAnomaly = EgressAnomaly()
 
     @model_validator(mode="after")
     def _references_exist(self) -> EgressConfig:
         missing_modes = [m for m in EGRESS_MODES if m not in self.modes]
         if missing_modes:
             raise ValueError(f"modes must define every egress mode; missing {missing_modes}")
+        for mode, grants in self.modes.items():
+            code = {g: grants[g] for g in REPO_CODE_GRANTEES if g in grants}
+            if not code:
+                continue
+            if mode != REPO_CODE_GRANT_MODE:
+                raise ValueError(f"fetch/validate get grants only in egress mode {REPO_CODE_GRANT_MODE} (not {mode})")
+            if any(cats != ["web_public"] for cats in code.values()):
+                raise ValueError("fetch/validate may be granted web_public only")
+            if len(code) != len(REPO_CODE_GRANTEES):
+                raise ValueError("fetch and validate share a squid pool: grant both the same list")
         known = set(self.categories) | {"web_public", "kiro_idc_login", "pkg_helm"}
         refs = [*self.denied_by_default]
         for cats in self.sandbox_profiles.values():

@@ -44,13 +44,13 @@ def test_symlinked_hermes_tier_is_locked(tmp_path: Path) -> None:
     assert read_hermes_tier(tmp_path, "self_improve") == "locked"
 
 
-@pytest.mark.parametrize("mode", ["allowlist", "research", "open"])
+@pytest.mark.parametrize("mode", ["allowlist", "research", "open", "sandbox_open"])
 def test_egress_mode_from_the_flag(tmp_path: Path, mode: str) -> None:
     write_flag(tmp_path / EGRESS_MODE_FILE, {"mode": mode, "actor": "t", "ts": "x"})
     assert read_egress_mode(tmp_path, "open") == mode
 
 
-@pytest.mark.parametrize("default", ["allowlist", "research", "open"])
+@pytest.mark.parametrize("default", ["allowlist", "research", "open", "sandbox_open"])
 def test_missing_flag_means_the_snapshot_default(tmp_path: Path, default: str) -> None:
     assert read_egress_mode(tmp_path, default) == default  # type: ignore[arg-type]
 
@@ -65,6 +65,8 @@ def test_missing_flag_means_the_snapshot_default(tmp_path: Path, default: str) -
         b"{}",
         b'{"mode": "OPEN"}',
         b'{"mode": "web"}',
+        b'{"mode": "SANDBOX_OPEN"}',
+        b'{"mode": "sandbox-open"}',
         b'{"mode": ["open"]}',
         b'{"mode": null}',
         b"\xff\xfe",

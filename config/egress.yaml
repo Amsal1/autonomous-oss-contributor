@@ -39,12 +39,20 @@ host_callers:
 # Egress modes (DESIGN §11.5). The active mode is the control flag /var/lib/ossbot/control/egress-mode
 # (`ossctl egress mode <m>`); absent = mode_default, unparseable = allowlist (fail closed).
 # Grants only ADD categories, and only to research, hermes, agent-llm and catalog (schema keys);
-# agent-llm and catalog share the llm pool, so they always get the same list.
+# agent-llm and catalog share the llm pool, so they always get the same list. fetch and validate
+# (repo code) may be granted web_public only in sandbox_open (ADR-0023, owner decision 2026-10-21),
+# both the same list; repos with `egress: strict` keep the base list in every mode (pool_strict).
+# mode_default stays open: the owner switches to sandbox_open himself with /egress (two-tap, audited).
 mode_default: open
 modes:
   allowlist: {}
   research: {research: [web_public], hermes: [web_public]}
   open: {research: [web_public], hermes: [web_public], agent-llm: [web_public], catalog: [web_public]}
+  sandbox_open: {research: [web_public], hermes: [web_public], agent-llm: [web_public], catalog: [web_public],
+                 fetch: [web_public], validate: [web_public]}
+# Per-job egress limits of fetch/validate jobs (sandboxd meter, design §13); config-only, /reload.
+# Unrelated to policy.yaml `anomaly`, which isn't enforced yet.
+anomaly: {max_hosts: 60, max_upload_mb: 50, max_download_mb: 6144}
 always_denied:
   # Every address deny is a §11.5 network invariant (the renderer also asserts a floor of them):
   # RFC1918, 100.64.0.0/10 (CGNAT), 169.254.0.0/16 (link-local, cloud metadata), 127.0.0.0/8 (loopback).

@@ -47,7 +47,7 @@ secrets:
   gitleaks: true
   extra_patterns: ["ksk_[A-Za-z0-9_\\-]{16,}", "gh[pousr]_[A-Za-z0-9]{36,}", "github_pat_[A-Za-z0-9_]{60,}", "\\d{6,12}:[A-Za-z0-9_-]{30,}"]
   kiro_key_hash_check: true
-anomaly:
+anomaly:                           # not enforced yet; the per-job egress limits are egress.yaml `anomaly`
   max_consecutive_stage_failures: 5
   max_proxy_denies_per_task: 50
   max_kiro_invocations_per_hour: 120
@@ -119,6 +119,7 @@ retention:                         # §18.10: time-based only, no size caps; jou
   contributions_days: 30           # terminal contributions' mirrors, derived, imports, work bundles, artifacts; unused cache repos
   telegram_rows_days: 90           # closed tg_outbox, tg_views and ui_tokens rows
   run_logs_days: 30                # /srv/ossbot/logs/runs/*.log
+  proxy_logs_days: 30              # rotated squid access.log.* (>= 30: per-job egress evidence)
   hermes_sessions_days: 90         # /home/hermes/.hermes/sessions/* files idle this long
   tmp_days: 7                      # /tmp top-level leftovers
   docker_build_cache_hours: 168    # Docker build cache unused this long

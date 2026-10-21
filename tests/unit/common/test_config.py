@@ -85,6 +85,7 @@ def test_retention_defaults() -> None:
     assert (shipped.contributions_days, shipped.telegram_rows_days, shipped.run_logs_days) == (30, 90, 30)
     assert (shipped.hermes_sessions_days, shipped.tmp_days) == (90, 7)
     assert (shipped.docker_build_cache_hours, shipped.disk_warn_gib) == (168, 40)
+    assert shipped.proxy_logs_days == 30
 
 
 def test_retention_rejects_unknown_keys() -> None:
@@ -98,7 +99,8 @@ def test_retention_rejects_unknown_keys() -> None:
         ("contributions_days", 6), ("contributions_days", 3651), ("telegram_rows_days", 29),
         ("run_logs_days", 6), ("hermes_sessions_days", 6), ("tmp_days", 0), ("tmp_days", 366),
         ("docker_build_cache_hours", 23), ("docker_build_cache_hours", 8761), ("disk_warn_gib", 4),
-        ("disk_warn_gib", 1025), ("contributions_days", "30"),
+        ("disk_warn_gib", 1025), ("contributions_days", "30"), ("proxy_logs_days", 29),
+        ("proxy_logs_days", 3651),
     ],
 )  # fmt: skip
 def test_retention_bounds(key: str, bad: object) -> None:
@@ -279,6 +281,65 @@ def test_egress_rejects_unknown_category() -> None:
     text = load("egress.yaml").decode().replace("agent-llm: [kiro_core]", "agent-llm: [kiro_cor]")
     with pytest.raises(ConfigError, match="kiro_cor"):
         parse_yaml_model(EgressConfig, "egress.yaml", text.encode())
+
+
+def test_shipped_egress_keeps_mode_default_open() -> None:
+    """O7 guard: this run ships sandbox_open selectable only; the owner switches with /egress."""
+    egress = parse_yaml_model(EgressConfig, "egress.yaml", load("egress.yaml"))
+    assert egress.mode_default == "open"
+    assert list(egress.modes) == ["allowlist", "research", "open", "sandbox_open"]
+    grants = egress.modes["sandbox_open"]
+    assert grants["fetch"] == grants["validate"] == ["web_public"]
+    for mode in ("allowlist", "research", "open"):
+        assert "fetch" not in egress.modes[mode] and "validate" not in egress.modes[mode]
+    assert (egress.anomaly.max_hosts, egress.anomaly.max_upload_mb, egress.anomaly.max_download_mb) == (60, 50, 6144)
+
+
+SANDBOX_OPEN_LINE = (
+    "  sandbox_open: {research: [web_public], hermes: [web_public], agent-llm: [web_public], catalog: [web_public],\n"
+    "                 fetch: [web_public], validate: [web_public]}\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "match"),
+    [
+        ("  open: {research: [web_public],",
+         "  open: {fetch: [web_public], validate: [web_public], research: [web_public],",
+         "only in egress mode sandbox_open"),
+        (SANDBOX_OPEN_LINE, SANDBOX_OPEN_LINE.replace("fetch: [web_public]", "fetch: [pkg_python]"), "web_public only"),
+        (SANDBOX_OPEN_LINE,
+         SANDBOX_OPEN_LINE.replace("fetch: [web_public], validate", "fetch: [web_public, pkg_python], validate"),
+         "web_public only"),
+        (SANDBOX_OPEN_LINE, SANDBOX_OPEN_LINE.replace(", validate: [web_public]", ""), "same list"),
+        (SANDBOX_OPEN_LINE, SANDBOX_OPEN_LINE.replace("validate: [web_public]", "validate: []"), "web_public only"),
+        ("  allowlist: {}", "  allowlist: {validate: [web_public], fetch: [web_public]}", "not allowlist"),
+    ],
+)  # fmt: skip
+def test_egress_repo_code_grants_only_web_public_in_sandbox_open(old: str, new: str, match: str) -> None:
+    text = load("egress.yaml").decode()
+    assert old in text
+    with pytest.raises(ConfigError, match=match):
+        parse_yaml_model(EgressConfig, "egress.yaml", text.replace(old, new, 1).encode())
+
+
+def test_egress_requires_the_sandbox_open_mode() -> None:
+    text = load("egress.yaml").decode().replace(SANDBOX_OPEN_LINE, "")
+    with pytest.raises(ConfigError, match="sandbox_open"):
+        parse_yaml_model(EgressConfig, "egress.yaml", text.encode())
+
+
+@pytest.mark.parametrize(
+    ("key", "bad"),
+    [("max_hosts", 4), ("max_hosts", 1001), ("max_upload_mb", 0), ("max_upload_mb", 10_241),
+     ("max_download_mb", 63), ("max_download_mb", 102_401), ("bogus", 1)],
+)  # fmt: skip
+def test_egress_anomaly_bounds(key: str, bad: int) -> None:
+    text = load("egress.yaml").decode()
+    old = "anomaly: {max_hosts: 60, max_upload_mb: 50, max_download_mb: 6144}"
+    assert old in text
+    with pytest.raises(ConfigError, match=key):
+        parse_yaml_model(EgressConfig, "egress.yaml", text.replace(old, f"anomaly: {{{key}: {bad}}}").encode())
 
 
 def test_bundle_collects_errors_per_file() -> None:
