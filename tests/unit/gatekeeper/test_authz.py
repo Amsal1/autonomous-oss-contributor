@@ -93,6 +93,12 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/chat/sandbox-jobs"): frozenset({R}),  # Hermes code jobs (F007-R1-2 owner decision)
     ("GET", "/v1/chat/sandbox-jobs/{job_id}"): frozenset({R}),
     ("GET", "/v1/audit/verify"): frozenset({O}),
+    # post-v1 open discovery (design §8.4)
+    ("GET", "/v1/discovered-targets"): frozenset({W, O}),
+    ("GET", "/v1/discovered-targets/excluded"): frozenset({W}),
+    ("POST", "/v1/discovered-targets"): frozenset({W}),
+    ("POST", "/v1/discovered-targets/decision"): frozenset({O}),
+    ("GET", "/v1/targets/resolve"): frozenset({W}),
 }
 UIDS = {O: UID_OPERATOR, W: UID_WORKER, S: UID_SANDBOX, R: UID_REQUESTER}
 

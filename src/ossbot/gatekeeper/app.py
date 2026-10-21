@@ -28,6 +28,7 @@ from ossbot.gatekeeper.api import (
     config,
     contributions,
     control,
+    discovered,
     features,
     models,
     notify,
@@ -44,6 +45,7 @@ from ossbot.gatekeeper.config_snapshot import ReloadConflict
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.contributions import ContributionRefused
 from ossbot.gatekeeper.control import ControlConflict
+from ossbot.gatekeeper.discovered_targets import DiscoveredRefused
 from ossbot.gatekeeper.discovery_prefs import PrefsRefused
 from ossbot.gatekeeper.models_admin import ModelSetError
 from ossbot.gatekeeper.packaging import prune_retention
@@ -116,6 +118,7 @@ def _install_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(ProposalRefused)
     @app.exception_handler(PrefsRefused)
+    @app.exception_handler(DiscoveredRefused)
     @app.exception_handler(StageRunRefused)
     async def _cr004(request: Request, exc: Exception) -> JSONResponse:
         return _error(getattr(exc, "status", 400), getattr(exc, "code", "refused"), getattr(exc, "detail", ""))
@@ -205,6 +208,6 @@ def create_app(ctx: AppContext, *, housekeeping: bool = True, services: Sequence
     _install_handlers(app)
     feature_registry.load(ctx.config.telegram.features.enabled)  # §14.18.3: entry points, enabled ones only
     for module in (control, config, contributions, actions, models, audit, notify, work, prefs, stage_runs, chat,
-                   features, reminders, review_mirror, retention):  # fmt: skip
+                   features, reminders, review_mirror, retention, discovered):  # fmt: skip
         app.include_router(module.router)
     return app
