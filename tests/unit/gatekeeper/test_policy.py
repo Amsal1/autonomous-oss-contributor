@@ -11,7 +11,7 @@ from ossbot.gatekeeper import policy
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.policy import DiffEntry, RepoState, Violation
 
-DISCLOSURE = "\n---\n<details><summary>🤖 AI assistance disclosure</summary>...</details>\n<!-- ossbot:cid=c_X -->"
+DISCLOSURE = "\n<sub>🤖 AI assistance disclosure: prepared with a tool; reviewed.</sub>\n<!-- ossbot:cid=c_X -->"
 
 
 def codes(violations: list[Violation]) -> set[str]:

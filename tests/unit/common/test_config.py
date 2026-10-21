@@ -19,6 +19,7 @@ from ossbot.common.config import (
     parse_yaml_model,
     resolve_target,
 )
+from ossbot.common.project import PROJECT_URL
 from tests.conftest import FIXTURES, REPO_ROOT
 
 CONFIG = REPO_ROOT / "config"
@@ -94,6 +95,17 @@ def test_vet_ai_policy_defaults() -> None:
     shipped = parse_bundle(bundle_files()).policy.vet.ai_policy
     assert shipped == PolicyConfig(version=1).vet.ai_policy == AiPolicyRules()
     assert (shipped.unstated, shipped.unclear, shipped.banned) == ("allow", "allow", "skip")
+
+
+def test_project_url_default_and_validation() -> None:
+    """§12.3 (post-v1): the PR footer link; an https URL without quotes or markup (it lands in an href)."""
+    assert PolicyConfig(version=1).text.project_url == PROJECT_URL
+    assert PROJECT_URL.startswith("https://github.com/") and PROJECT_URL.endswith("/autonomous-oss-contributor")
+    fork = parse_yaml_model(PolicyConfig, "policy.yaml", b"version: 1\ntext: {project_url: 'https://example.org/f'}\n")
+    assert fork.text.project_url == "https://example.org/f"
+    for bad in ('https://x.org/"onclick', "http://x.org/a", "javascript:alert(1)", "https://x.org/<b>"):
+        with pytest.raises(ConfigError):
+            parse_yaml_model(PolicyConfig, "policy.yaml", f"version: 1\ntext: {{project_url: '{bad}'}}\n".encode())
 
 
 @pytest.mark.parametrize(

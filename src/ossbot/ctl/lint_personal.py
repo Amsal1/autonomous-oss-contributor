@@ -38,6 +38,7 @@ ATTRIBUTION_FILES = frozenset({
     "CODE_OF_CONDUCT.md",
     "SECURITY.md",
     ".github/ISSUE_TEMPLATE/config.yml",
+    "src/ossbot/common/project.py",  # the repo URL linked from the PR disclosure footer (DESIGN §12.3)
 })  # fmt: skip
 MIN_LEN = 4  # shorter values ("me", "AK") would match everywhere and carry no identity
 MAX_FILE_BYTES = 2_000_000

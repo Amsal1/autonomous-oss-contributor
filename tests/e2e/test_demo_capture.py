@@ -50,6 +50,7 @@ pytestmark = pytest.mark.timeout(300)
 
 DEMO_REPO = "acme/widgets"  # fictional: the demo never shows a made-up contribution to a real project
 DEMO_DATE = "2026-10-17T12:00:00Z"
+DEMO_PROJECT_URL = "https://example.org/autonomous-oss-contributor"
 DEMO_ROOT = Path(__file__).resolve().parents[2] / "scripts" / "dev" / "demo"
 QUESTION = "How do the two approval gates work?"
 ANSWER = (
@@ -71,6 +72,11 @@ def paths(tmp_path: Path) -> Paths:
     text = targets.read_text(encoding="utf-8")
     assert "\ndenylist:" in text
     targets.write_text(text.replace("\ndenylist:", "\n" + TARGET + "denylist:", 1), encoding="utf-8")
+    # the PR footer links a fictional URL: the media carry no owner value, not even the project URL's login
+    policy = repo / "config" / "policy.yaml"
+    ptext = policy.read_text(encoding="utf-8")
+    assert "\ntext:\n" in ptext
+    policy.write_text(ptext.replace("\ntext:\n", f"\ntext:\n  project_url: {DEMO_PROJECT_URL}\n", 1), encoding="utf-8")
     p = Paths.under(tmp_path, repo=repo)
     for d in (p.control_dir, p.logs_dir, p.snapshot_root, p.gatekeeper_dir, p.run):
         d.mkdir(parents=True, exist_ok=True)

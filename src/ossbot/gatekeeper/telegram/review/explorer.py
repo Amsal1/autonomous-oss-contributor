@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper.policy import DISCLOSURE_MARKER, DISCLOSURE_PHRASE
 from ossbot.gatekeeper.telegram.review import patchview
 from ossbot.gatekeeper.telegram.review.patchview import FilePatch
 from ossbot.gatekeeper.telegram.ui import kit as k
@@ -159,7 +160,8 @@ def _section_lines(s: Subject, section: int, page: int) -> SectionOut:
         if c["pr_body_override"] is not None:
             flags.append("body edited by you")
         lines.append(k.line(" · ".join(flags) or "not edited"))
-        lines.append(k.line("Disclosure ✅" if "AI" in (body or "") else "Disclosure ⚠️ not found"))
+        has_disclosure = DISCLOSURE_MARKER in (body or "") and DISCLOSURE_PHRASE in (body or "")  # §12.3 footer
+        lines.append(k.line("Disclosure ✅" if has_disclosure else "Disclosure ⚠️ not found"))
         lines.append(k.line("The body parts are the messages under the card."))
         if title:
             buttons.append([k.copy_button("📋 Copy title", title), k.button("📄 pr_body.md", "nav",

@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from ossbot.common.control_flags import EGRESS_MODES, EgressMode, HermesTier
+from ossbot.common.project import PROJECT_URL
 from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
 from ossbot.common.yamlio import YamlError, safe_load
 
@@ -105,6 +106,10 @@ class TextPolicy(Strict):
     commit_subject_max: PosInt = 100
     confidentiality_denylist: list[str] = Field(default_factory=list)
     require_disclosure: bool = True
+    # §12.3: the repo the PR disclosure footer links (an https URL without quotes or markup; forks set their own)
+    project_url: Annotated[str, Field(max_length=200, pattern=r"^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?$")] = (
+        PROJECT_URL
+    )
 
 
 class SecretsPolicy(Strict):

@@ -1537,16 +1537,15 @@ Operator "go" visibility: every successful operator resume, dry-run off, config 
 PR body = repo-template-following summary + `Fixes #N` + "How this was validated" + disclosure block (exact template `prompts/pr_disclosure.md`):
 
 ```markdown
----
-<details><summary>🤖 AI assistance disclosure</summary>
-
-This contribution was prepared with an AI coding agent (Kiro CLI; models: coder `<coder model>`, reviewer `<reviewer model>`) running in an isolated sandbox. I (@{{ profile.github_login }}) reviewed and approved this change before it was opened, and every follow-up comment from this account is reviewed by me before posting.
 Validation run locally: <summary>.
-</details>
+
+<sub>🤖 AI assistance disclosure: prepared with <a href="{{ policy.text.project_url }}">autonomous-oss-contributor</a>; reviewed and approved by @{{ profile.github_login }} before submission.</sub>
 <!-- ossbot:cid=<cid> -->
 ```
 
 (N7: the v1 wording "reviewed the full diff" claimed something the system does not enforce; the wording now states what is enforced, namely review and approval.)
+
+Post-v1 (owner, 2026-10-21): the disclosure is one small `<sub>` line that links the project, no longer a `<details>` block behind a `---` rule. It names no tool and no model; a repo whose AI policy requires that (`tool_named`, §9.5) gets the "AI policy checklist" above it, which names the tool and both models, and every other recorded condition is listed there in full as before. The validation summary stays directly above the footer. `policy.text.project_url` (an https URL without quotes or markup; default the project's GitHub repo, `common/project.py`) lets a fork link its own repo. The gatekeeper's `check_text` marker and phrase are unchanged, and the S2 explorer's "Disclosure ✅" checks the same two strings.
 
 Repos whose policy demands a specific disclosure format get a per-repo `disclosure_template:` in targets.yaml. After any user edit the gatekeeper checks the marker `<!-- ossbot:cid=` and the phrase "AI assistance disclosure"; if missing it re-appends the block and the refreshed card says so.
 

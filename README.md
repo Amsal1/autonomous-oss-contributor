@@ -298,7 +298,9 @@ forbidden paths, the repo's AI policy, a CLA check, the one-open-PR-per-repo rul
 README and maintainer comments, and skips only repos that explicitly ban AI-assisted contributions.
 Silent repos are allowed and the cards say `AI policy: not stated`; when a repo allows AI with
 conditions (disclosure, a label, a title tag, a human-review statement), the PR gets an
-"AI policy checklist" that follows them. Every PR keeps its AI disclosure. The rule lives in
+"AI policy checklist" that follows them. Every PR keeps its AI disclosure: one small footer line
+that links this project and says the owner reviewed and approved the change before submission (no
+tool or model names unless a repo's policy asks for them; `policy.text.project_url` changes the link). The rule lives in
 `config/policy.yaml` `vet.ai_policy` (a per-repo `ai_policy:` override goes in `targets.yaml`); a ban
 always skips.
 

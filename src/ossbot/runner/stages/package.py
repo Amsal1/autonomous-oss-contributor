@@ -16,6 +16,7 @@ from typing import Any
 
 from ossbot.common import ai_policy
 from ossbot.common.ai_policy import AiCondition
+from ossbot.common.project import PROJECT_NAME, PROJECT_URL
 from ossbot.runner import prompts
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.llm import StageFailed
@@ -49,7 +50,7 @@ def pr_title(draft: PrDraft, conditions: Sequence[AiCondition] = ()) -> str:
 
 
 def pr_body(draft: PrDraft, c: dict[str, Any], *, validation: dict[str, Any], models: dict[str, str],
-            login: str, conditions: Sequence[AiCondition] = ()) -> str:  # fmt: skip
+            login: str, conditions: Sequence[AiCondition] = (), project_url: str = PROJECT_URL) -> str:  # fmt: skip
     lines = [draft.pr_body.strip()]
     if c.get("issue_number"):
         lines.append(f"Fixes #{c['issue_number']}")
@@ -59,9 +60,10 @@ def pr_body(draft: PrDraft, c: dict[str, Any], *, validation: dict[str, Any], mo
     # the repo's AI-policy conditions, as fixed sentences (the gatekeeper checks them at /package)
     lines.append(ai_policy.checklist_block(conditions, login=login, coder_model=models.get("coder", "?"),
                                            reviewer_model=models.get("reviewer", "?")))  # fmt: skip
-    lines.append(prompts.disclosure(coder_model=models.get("coder", "?"), reviewer_model=models.get("reviewer", "?"),
-                                    github_login=login, validation_summary=validation_summary(validation),
-                                    cid=c["id"]).strip())  # fmt: skip
+    # the one-line footer names no tool or model; a repo that requires that gets the tool_named checklist line
+    footer = prompts.disclosure(project_url=project_url, project_name=PROJECT_NAME, github_login=login,
+                                validation_summary=validation_summary(validation), cid=c["id"])  # fmt: skip
+    lines.append(footer.strip())
     return "\n\n".join(part for part in lines if part)[:60_000]
 
 
@@ -111,7 +113,8 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         body.update(
             pr_title=pr_title(draft, conditions),
             pr_body=pr_body(draft, c, validation=notes.get("validation", {}), models=models,
-                            login=profile.github_login, conditions=conditions),
+                            login=profile.github_login, conditions=conditions,
+                            project_url=sc.config().policy.text.project_url),
         )  # fmt: skip
     sc.save(cid, package_body=body)
     _post(sc, c, body)

@@ -28,9 +28,7 @@ NAME = "Test Person"
 EMAIL = "test.person@example.org"
 IDENTITY = f"{NAME} <{EMAIL}>"
 PACKAGE_TS = "2026-10-17T10:00:00Z"
-DISCLOSURE = (
-    "\n\n---\n<details><summary>🤖 AI assistance disclosure</summary>\n\nPrepared with an AI agent.\n</details>\n"
-)
+DISCLOSURE = "\n\n<sub>🤖 AI assistance disclosure: prepared with an AI agent; reviewed and approved by @x.</sub>\n"
 
 
 def harness_env(home: Path) -> dict[str, str]:

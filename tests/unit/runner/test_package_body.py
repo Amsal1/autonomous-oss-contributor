@@ -8,6 +8,7 @@ from typing import Any
 import pytest
 
 from ossbot.common.ai_policy import CHECKLIST_HEADER, AiCondition, missing_conditions
+from ossbot.common.project import PROJECT_URL
 from ossbot.runner.outputs import PrDraft
 from ossbot.runner.stages import package
 
@@ -51,6 +52,33 @@ def test_conditions_are_applied_and_verifiable() -> None:
     assert missing_conditions(title, body, parsed) == []
     again = package.pr_title(PrDraft(commit_message="x", pr_title=title, pr_body="b"), parsed)
     assert again.count("[AI]") == 1  # tagged once
+
+
+def test_footer_is_one_line_without_tool_or_model_names() -> None:
+    """§12.3 (owner, post-v1): the validation summary, then one <sub> line linking the project, then the marker."""
+    _, body = build(row())
+    assert body.splitlines()[-4:] == [
+        "Validation run locally: 1/1 commands passed (unit).",
+        "",
+        f'<sub>🤖 AI assistance disclosure: prepared with <a href="{PROJECT_URL}">autonomous-oss-contributor</a>; '
+        "reviewed and approved by @test-bot-login before submission.</sub>",
+        "<!-- ossbot:cid=c_0000000001 -->",
+    ]
+    assert body.index("### How this was validated") < body.index("AI assistance disclosure")
+    for absent in ("Kiro", "model-c", "model-r", "<details>", "\n---\n"):
+        assert absent not in body, absent
+    fork = package.pr_body(DRAFT, row(), validation=VALIDATION, models=MODELS, login="x",
+                           project_url="https://example.org/fork")  # fmt: skip
+    assert '<a href="https://example.org/fork">autonomous-oss-contributor</a>' in fork
+
+
+def test_tool_named_condition_still_names_the_models() -> None:
+    """A repo that requires naming the tool gets it in the checklist, never in the footer."""
+    _, body = build(row([{"kind": "tool_named"}, {"kind": "human_review"}]))
+    checklist = body[body.index(CHECKLIST_HEADER) : body.index("Validation run locally")]
+    assert "Tools used: Kiro CLI (coder model `model-c`, reviewer model `model-r`)." in checklist
+    assert "- [x] A human (@test-bot-login) reviewed this change" in checklist
+    assert "Kiro" not in body[body.index("<sub>") :]
 
 
 def test_invalid_stored_conditions_are_dropped() -> None:
