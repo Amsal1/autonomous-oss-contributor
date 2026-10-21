@@ -120,7 +120,10 @@ key in `scripts/setup-secrets.ps1` and an egress category in `config/egress.yaml
 7. Docs and tests: one line in README's feature list; run `pytest -m "unit or telegram"`.
 
 **Add a target.** An entry in `config/targets.yaml` (category, priority, AI policy), then
-`ossctl targets verify` (read-only, as ossrunner) and `/reload` (human-confirmed).
+`ossctl targets verify` (read-only, as ossrunner) and `/reload` (human-confirmed). The AI policy is
+read by vet (`common/ai_policy.py`); an optional `ai_policy: {unstated: skip, unclear: skip}` on the
+entry overrides `policy.vet.ai_policy` (default: allow both). An explicit ban always skips and can't be
+configured away.
 
 **Add a pipeline stage.** A state in the gatekeeper state enum and its `ALLOWED` edges with actors
 (`gatekeeper/state_machine.py`), a stage module in `src/ossbot/runner/stages/`, the sandbox profile

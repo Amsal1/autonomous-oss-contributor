@@ -294,6 +294,14 @@ preference. It applies to everything, including your own requests, and changes o
 ranking, caps, the size preference and the filters, may be any size, and still passes both gates, the
 forbidden paths, the repo's AI policy, a CLA check, the one-open-PR-per-repo rule and the ceiling.
 
+**AI policy.** Vet reads CONTRIBUTING, the AI policy file, the code of conduct, the PR template, the
+README and maintainer comments, and skips only repos that explicitly ban AI-assisted contributions.
+Silent repos are allowed and the cards say `AI policy: not stated`; when a repo allows AI with
+conditions (disclosure, a label, a title tag, a human-review statement), the PR gets an
+"AI policy checklist" that follows them. Every PR keeps its AI disclosure. The rule lives in
+`config/policy.yaml` `vet.ai_policy` (a per-repo `ai_policy:` override goes in `targets.yaml`); a ban
+always skips.
+
 Tests are expected: when the repo has a suite, the coder adds or updates tests for the change, and the
 preview card shows code and test lines separately.
 

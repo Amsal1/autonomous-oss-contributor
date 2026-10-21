@@ -735,6 +735,17 @@ At 84334be, then one fix, 515a25b (`test_retention_units.sh` captured `systemd-a
 
 The logical length is a high-water mark of the sparse VHD and does not shrink without compaction (ADR-0016 V4); the space Windows actually holds fell by 5.7 GiB. Baseline at 503b28b: 23,962,058,752 B logical.
 
+## Post-v1 vet rules (AI policy, CI on PRs)
+
+Part A (PV1-V1, AI policy "allowed unless explicitly banned", 2026-10-21): commits 6410db5 (config), 2bd22a9 (classifier), 483c083 (vet), 4287acc (gatekeeper, M6), 7c0dd81 (PR checklist, cards) and the docs commit on `main`. Hermetic only, no redeploy (the close-out's). Dry-run is OFF (owner); no GitHub write, no live stage, no Telegram message; GitHub use in tests is `tests/fakes/fake_github.py` only.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate (7c0dd81 + docs) | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 534 files formatted, mypy 252 files, 14 contracts kept, 0 broken |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 3971 passed in 48 s (`.ossbot-local/logs/postv1-aipolicy-hermetic.log`) |
+| Hygiene | `ossctl lint personal`; `ossctl docs commands --check`; `tests/unit/test_repo_meta.py`, `test_no_tunnels.py` | 0 hits over 919 files; command table current; 17 passed |
+| S1 goldens | `tests/telegram/test_card_goldens.py` | the ten existing S1 goldens unchanged; new `s1_open_pr_ai_conditions_live.html` reviewed |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
