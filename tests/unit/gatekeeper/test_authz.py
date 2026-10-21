@@ -71,6 +71,7 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/review-mirror/enable"): frozenset({O}),
     ("POST", "/v1/review-mirror/disable"): frozenset({O}),
     ("POST", "/v1/review-mirror/purge"): frozenset({O}),
+    ("POST", "/v1/retention/run"): frozenset({O}),  # DESIGN §18.10: ossctl gc (gatekeeper-owned data)
     ("GET", "/v1/models"): frozenset({O}),
     ("PUT", "/v1/models/{role}"): frozenset({O}),
     ("POST", "/v1/models/refresh"): frozenset({O}),

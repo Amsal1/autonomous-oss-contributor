@@ -405,6 +405,28 @@ class ModelSetRequest(ApiModel):
     force: bool = False
 
 
+# --------------------------------------------------------------------------- retention
+RETENTION_MAX_CIDS = 5000
+
+
+class RetentionRunRequest(ApiModel):
+    """``POST /v1/retention/run`` (DESIGN §18.10): operator only; ``dry_run`` deletes nothing."""
+
+    dry_run: bool
+
+
+class RetentionReport(ApiModel):
+    """What the gatekeeper deleted (or would delete) and the cids whose artifacts root may delete."""
+
+    dry_run: bool
+    snapshot_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    counts: dict[Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")], Annotated[int, Field(ge=0)]]
+    bytes: dict[Annotated[str, Field(pattern=r"^[a-z_]{1,32}$")], Annotated[int, Field(ge=0)]]
+    eligible_cids: Annotated[
+        list[Annotated[str, Field(pattern=r"^c_[0-9A-Z]{10}$")]], Field(max_length=RETENTION_MAX_CIDS)
+    ]
+
+
 # ------------------------------------------------------------------------ misc requests
 DISCOVERY_URL_RE = r"^https://github\.com/[\w.-]+/[\w.-]+/issues/\d+$"
 

@@ -182,6 +182,17 @@ forbidden_modules = ["ossbot.gatekeeper.telegraph_writer"]
 allow_indirect_imports = false
 
 [[tool.importlinter.contracts]]
+# DESIGN §18.10, plan D8: the gatekeeper's retention deleter runs only through the operator API.
+name = "Only ossbot.gatekeeper.api.retention imports ossbot.gatekeeper.retention"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.**"]
+ignore_imports = ["ossbot.gatekeeper.api.retention -> ossbot.gatekeeper.retention"]
+unmatched_ignore_imports_alerting = "error"
+forbidden_modules = ["ossbot.gatekeeper.retention"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
 name = "Untrusted-side components never import the gatekeeper"
 type = "forbidden"
 source_modules = ["ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools"]
