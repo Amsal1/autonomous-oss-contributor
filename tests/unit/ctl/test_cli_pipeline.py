@@ -73,6 +73,36 @@ def test_targets_verify_rows() -> None:
     assert rows[1]["detail"].startswith("no push for")
 
 
+def test_targets_facts_rows() -> None:
+    """``ossctl targets facts`` (post-v1): AI policy and CI on PRs per repo, GETs only, no gatekeeper call."""
+    gh = FakeGitHub()
+    for repo in ("ban/repo", "silent/repo", "ci/repo"):
+        gh.add_repo(repo)
+    gh.files[("ban/repo", "CONTRIBUTING.md")] = "Hi.\nWe do not accept AI-generated pull requests.\n"
+    gh.add_pull("ci/repo", state="closed", merged_at="2026-10-01T00:00:00Z", head={"sha": "s1", "label": "x:s1"})
+    gh.check_runs[("ci/repo", "s1")] = [{"name": "pytest", "status": "completed", "conclusion": "success"}]
+    rows = verify_targets.facts(GitHubRead(gh.sync_client()), ["ban/repo", "silent/repo", "ci/repo", "no/such"])
+    by = {r["repo"]: r for r in rows}
+    assert by["ban/repo"]["ai_policy"] == "banned" and by["ban/repo"]["ai_source"] == "CONTRIBUTING.md"
+    assert by["ban/repo"]["ai_line"] == "We do not accept AI-generated pull requests."
+    assert by["silent/repo"]["ai_display"] == "not stated" and by["silent/repo"]["ci_on_pr"] == "unknown"
+    assert by["ci/repo"]["ci_on_pr"] == "yes" and by["ci/repo"]["ci_display"] == "✅ tests (1/1 merged PRs)"
+    assert by["no/such"]["status"] == "FAIL" and by["no/such"]["detail"].startswith("not found")
+    assert gh.writes == [] and {r.method for r in gh.requests} == {"GET"}
+    assert not any(r.path.startswith("/v1/") for r in gh.requests)
+    assert len(verify_targets.facts(GitHubRead(gh.sync_client()), [f"o/r{i}" for i in range(9)])) == 5
+
+
+def test_targets_facts_refuses_more_than_five_repos(monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[list[str]] = []
+    monkeypatch.setattr(cli, "_require_root", lambda what: None)
+    monkeypatch.setattr(cli.subprocess, "run", lambda argv, **kw: ran.append(argv))
+    result = CliRunner().invoke(cli.app, ["targets", "facts", *[f"o/r{i}" for i in range(6)]])
+    assert result.exit_code != 0 and "1 to 5 repos" in result.output and ran == []
+    bad = CliRunner().invoke(cli.app, ["targets", "facts", "not a repo"])
+    assert bad.exit_code != 0 and "owner/name" in bad.output and ran == []
+
+
 def test_targets_verify_unit_has_the_runner_hardening() -> None:
     """F006-R2-9: the transient ossrunner unit carries every hardening line of ossbot-runner.service."""
     unit = (Path(__file__).resolve().parents[3] / "systemd" / "ossbot-runner.service").read_text(encoding="utf-8")

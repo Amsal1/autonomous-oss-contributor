@@ -2,7 +2,8 @@
 
 Per enabled target with discovery on, no open PR of ours and no cooldown: open issues per configured
 label, drop PRs, assigned/locked issues, ``skip_labels``, stale or crowded issues; rank with
-``scoring`` (size fit first, filters from ``discovery_prefs``); check the top ones for an open linked
+``scoring`` (size fit first, filters from ``discovery_prefs``, the ``ci_on_pr_weight`` boost for a repo
+whose CI ran on merged PRs, ``ci_detect`` cached per repo); check the top ones for an open linked
 PR; create at most ``discovery.proposals_per_cycle`` contributions. The gatekeeper applies the
 re-discovery rules (409 refusals are cached for one cycle). Reads only; nothing is posted. A cycle
 reads for minutes, so a service stop (SIGTERM), kill, pause or drain ends it between targets.
@@ -22,7 +23,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ossbot.common.config import DiscoveryFilters, all_targets
-from ossbot.runner import scoring
+from ossbot.runner import ci_detect, scoring
 from ossbot.runner.errors import Deferred
 from ossbot.runner.github_read import UNAVAILABLE, GitHubReadError
 from ossbot.runner.gk_client import GkError
@@ -120,10 +121,23 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
     for cand in candidates:
         by_repo.setdefault(cand.repo, []).append(cand)
     ranked: list[scoring.Ranked] = []
+    disc = bundle.policy.discovery
     for repo, cands in by_repo.items():
-        kept, _dropped = scoring.rank(cands, filters=filters, max_class=per_repo_max[repo],
-                                      preferred=list(prefs["preferred_classes"]), signals={}, now=now,
-                                      interests=bundle.profile.interests.categories_priority)  # fmt: skip
+        rank_args: dict[str, Any] = {"filters": filters, "max_class": per_repo_max[repo], "now": now,
+                                     "preferred": list(prefs["preferred_classes"]),
+                                     "interests": bundle.profile.interests.categories_priority}  # fmt: skip
+        kept, _dropped = scoring.rank(cands, signals={}, **rank_args)
+        if not kept:
+            continue
+        _check(sc)  # CI detection reads (cached per repo): a stop, kill, pause or drain ends the cycle here
+        try:
+            ci = ci_detect.cached(sc, repo, disc.ci_facts_ttl_hours).status
+        except GitHubReadError as exc:
+            log.warning("CI detection failed for %s: %s", repo, exc, extra={"event": "discover_ci_failed"})
+            _end_if_unavailable(exc)
+            ci = "unknown"
+        kept, _dropped = scoring.rank(cands, signals={repo: scoring.RepoSignals(ci_on_pr=ci)},
+                                      ci_weight=disc.ci_on_pr_weight, **rank_args)  # fmt: skip
         ranked += kept
     ranked.sort(key=lambda r: -r.score)
     for item in ranked:

@@ -4,7 +4,8 @@ User-directed (👤) work never passes through here: it skips ranking, caps, the
 the filters. Size estimates from issue text are coarse; the scout's estimate is the real gate, so a
 candidate is dropped here only when it is *clearly* above the autonomous maximum (two classes).
 Rank score prefers the smallest class that solves the issue, then maintainer responsiveness,
-outside merge rate, inviting labels, freshness and clarity, the owner's interests and history.
+outside merge rate, inviting labels, freshness and clarity, the owner's interests and history, and a
+repo whose CI ran tests/lint on merged PRs (``ci_on_pr_weight``; a boost, never a filter).
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 
 from ossbot.common.config import DiscoveryFilters
 from ossbot.common.size import SIZE_CLASSES
@@ -55,6 +56,7 @@ class RepoSignals:
     last_maintainer_activity: datetime | None = None
     owner_merged: int = 0  # the owner's merged PRs here (outcomes)
     owner_closed_recent: bool = False  # closed unmerged within the cooldown
+    ci_on_pr: Literal["yes", "no", "unknown"] = "unknown"  # ci_detect: CI ran tests/lint on merged PRs
 
 
 @dataclass(frozen=True)
@@ -117,8 +119,10 @@ def filter_reason(
 
 def score(
     c: Candidate, signals: RepoSignals, now: datetime, *, est_class: str, preferred: Sequence[str],
-    interests: Iterable[str] = (),
+    interests: Iterable[str] = (), ci_weight: float = 0.0,
 ) -> tuple[float, dict[str, float]]:  # fmt: skip
+    """``ci_weight`` (``policy.discovery.ci_on_pr_weight``) is added only when CI ran on merged PRs
+    (``ci_on_pr == "yes"``, gated or not): a boost, never a filter or a penalty."""
     idx = SIZE_CLASSES.index(est_class)  # type: ignore[arg-type]
     parts: dict[str, float] = {
         "priority": 10.0 * (6 - max(1, min(5, c.priority))),
@@ -133,6 +137,8 @@ def score(
     if signals.outside_merge_rate is not None:
         parts["merge_rate"] = 10.0 * max(0.0, min(1.0, signals.outside_merge_rate))
     parts["history"] = min(5.0, 2.0 * signals.owner_merged) - (10.0 if signals.owner_closed_recent else 0.0)
+    if signals.ci_on_pr == "yes" and ci_weight > 0:
+        parts["ci_on_pr"] = ci_weight
     if c.comments > 30:
         parts["crowded"] = -10.0
     return sum(parts.values()), parts
@@ -140,7 +146,7 @@ def score(
 
 def rank(
     candidates: Iterable[Candidate], *, filters: DiscoveryFilters, max_class: str, preferred: Sequence[str],
-    signals: dict[str, RepoSignals], now: datetime, interests: Iterable[str] = (),
+    signals: dict[str, RepoSignals], now: datetime, interests: Iterable[str] = (), ci_weight: float = 0.0,
 ) -> tuple[list[Ranked], dict[str, str]]:  # fmt: skip
     """Kept candidates best first (ties: smaller class, then older issue), and the drop reasons."""
     kept: list[Ranked] = []
@@ -152,7 +158,8 @@ def rank(
         if reason is not None:
             dropped[f"{c.repo}#{c.number}"] = reason
             continue
-        total, parts = score(c, sig, now, est_class=est, preferred=preferred, interests=interests)
+        total, parts = score(c, sig, now, est_class=est, preferred=preferred, interests=interests,
+                             ci_weight=ci_weight)  # fmt: skip
         kept.append(Ranked(c, total, est, kind, parts))
     kept.sort(key=lambda r: (-r.score, SIZE_CLASSES.index(r.est_class), r.candidate.created_at))  # type: ignore[arg-type]
     return kept, dropped

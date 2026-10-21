@@ -61,6 +61,16 @@ def test_shipped_policy_size_blocks() -> None:
     assert p.proposal == PolicyConfig(version=1).proposal
 
 
+def test_ci_on_pr_ranking_keys() -> None:
+    """Post-v1 (§9.4): the CI boost and the facts TTL are config-only, bounded, and shipped at the defaults."""
+    shipped = parse_bundle(bundle_files()).policy.discovery
+    assert (shipped.ci_on_pr_weight, shipped.ci_facts_ttl_hours) == (6.0, 168)
+    assert shipped == PolicyConfig(version=1).discovery
+    for bad in ("ci_on_pr_weight: 31", "ci_on_pr_weight: -1", "ci_facts_ttl_hours: 0", "ci_facts_ttl_hours: 721"):
+        with pytest.raises(ConfigError):
+            parse_yaml_model(PolicyConfig, "policy.yaml", f"version: 1\ndiscovery: {{{bad}}}\n".encode())
+
+
 def test_retention_defaults() -> None:
     """§18.10: the shipped retention block equals the model defaults (time-based only, no size caps)."""
     shipped = parse_bundle(bundle_files()).policy.retention

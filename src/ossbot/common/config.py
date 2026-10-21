@@ -196,6 +196,10 @@ class DiscoveryPolicy(Strict):
     interval_hours: PosInt = 6
     top_n: PosInt = 5
     proposals_per_cycle: PosInt = 3  # §9.14: proposal cards per discovery cycle
+    # §9.4 (post-v1): a ranking boost for repos whose CI ran tests/lint on merged PRs; never a filter.
+    # Config-only (/reload), not a Telegram-tunable discovery preference.
+    ci_on_pr_weight: Annotated[float, Field(ge=0.0, le=30.0)] = 6.0
+    ci_facts_ttl_hours: Annotated[int, Field(ge=1, le=720)] = 168
 
 
 AiRule = Literal["allow", "skip"]

@@ -199,6 +199,12 @@ class GitHubRead:
         runs = doc.get("check_runs") if isinstance(doc, dict) else None
         return [r for r in runs if isinstance(r, dict)] if isinstance(runs, list) else []
 
+    def commit_status(self, repo: str, sha: str) -> list[dict[str, Any]]:
+        """The commit statuses (``context``, ``state``, ``creator``) of the combined status of a commit."""
+        doc = self._get(f"/repos/{repo}/commits/{sha}/status", {"per_page": 100})
+        statuses = doc.get("statuses") if isinstance(doc, dict) else None
+        return [s for s in statuses if isinstance(s, dict)] if isinstance(statuses, list) else []
+
     # ----------------------------------------------------------------- search
     def open_prs_mentioning(self, repo: str, number: int) -> int:
         """Open PRs that mention the issue (``repo:{r} is:pr is:open {n}``), rate-limited."""

@@ -41,6 +41,9 @@ class FakeGitHub:
     pulls: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     refs: dict[tuple[str, str], str] = field(default_factory=dict)
     files: dict[tuple[str, str], str] = field(default_factory=dict)  # (repo lower, path) -> text
+    # (repo lower, sha) -> check runs (``name``, ``status``, ``conclusion``) / commit statuses (``context``, ``state``)
+    check_runs: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
+    statuses: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
     requests: list[Recorded] = field(default_factory=list)
     failures: dict[str, list[int]] = field(default_factory=dict)  # "POST /repos/x/y/pulls" -> statuses to return first
     fork_visible_after: int = 0  # GETs of a new fork that still 404
@@ -187,6 +190,16 @@ class FakeGitHub:
                 return httpx.Response(200, json=entries)
             encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
             return httpx.Response(200, json={"type": "file", "encoding": "base64", "content": encoded})
+        m8 = re.fullmatch(r"/commits/([^/]+)/(check-runs|status)", rest)
+        if m8 and method == "GET":  # CI-on-PR detection (runner) and the status card (gatekeeper)
+            sha = m8.group(1)
+            if m8.group(2) == "check-runs":
+                runs = self.check_runs.get((repo, sha), [])
+                return httpx.Response(200, json={"total_count": len(runs), "check_runs": runs})
+            statuses = self.statuses.get((repo, sha), [])
+            state = "success" if statuses else "pending"
+            return httpx.Response(200, json={"state": state, "sha": sha, "total_count": len(statuses),
+                                             "statuses": statuses})  # fmt: skip
         m3 = re.fullmatch(r"/pulls/(\d+)", rest)
         if m3:
             pr = next((p for p in self.pulls.get(repo, []) if p["number"] == int(m3.group(1))), None)

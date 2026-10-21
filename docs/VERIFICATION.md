@@ -746,6 +746,16 @@ Part A (PV1-V1, AI policy "allowed unless explicitly banned", 2026-10-21): commi
 | Hygiene | `ossctl lint personal`; `ossctl docs commands --check`; `tests/unit/test_repo_meta.py`, `test_no_tunnels.py` | 0 hits over 919 files; command table current; 17 passed |
 | S1 goldens | `tests/telegram/test_card_goldens.py` | the ten existing S1 goldens unchanged; new `s1_open_pr_ai_conditions_live.html` reviewed |
 
+Part B (PV1-V2, PV1-V4, CI on PRs and `ossctl targets facts`; PV1-V3 watcher finding deferred, 2026-10-21): one commit on `main` after 1dfdc18. Hermetic only, no redeploy (the close-out's); no live GitHub read or write; detection is tested on `tests/fakes/fake_github.py` (new check-runs and combined-status routes). [VERIFY] results (check-runs, combined status without `creator`, contents listing) are in the ADR-0003 addendum item 13.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 540 files formatted, mypy 255 files, 14 contracts kept, 0 broken |
+| Part B tests | `pytest tests/unit/runner/test_ci_detect.py tests/unit/common/test_ci_facts.py tests/unit/runner/test_scoring.py tests/unit/common/test_config.py tests/unit/runner/test_stage_flow.py tests/unit/ctl/test_cli_pipeline.py tests/unit/runner/test_github_read.py tests/telegram/test_proposal_card.py tests/telegram/test_s1_cards.py tests/telegram/test_card_goldens.py tests/telegram/test_status_card.py tests/unit/test_repo_meta.py` | 197 passed |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4029 passed in 51 s (`.ossbot-local/logs/postv1-cionpr-hermetic.log`) |
+| Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits over 921 files; command table current |
+| S1 goldens | `tests/telegram/test_card_goldens.py` | only `s1_open_pr_ai_conditions_live.html` changed (the line gains `· CI on PRs: ✅ tests, lint (8/10 merged PRs) · runs after maintainer approval`), reviewed |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

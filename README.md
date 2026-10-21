@@ -276,8 +276,11 @@ what each role resolves to.
 
 Autonomous discovery ranks open issues on the enabled targets (`config/targets.yaml`) by size fit,
 maintainer responsiveness, outside-contributor merge rate, labels that invite help, issue freshness and
-clarity, your interest categories and your history in that repo. The top few per cycle become proposal
-cards (at most five a day).
+clarity, your interest categories and your history in that repo. Repos whose CI ran tests or lint on
+recently merged PRs rank higher (`policy.discovery.ci_on_pr_weight`; a boost, never a filter), and the
+proposal and preview cards say so: `CI on PRs: ✅ tests, lint (8/10 merged PRs)`, plus
+`runs after maintainer approval` when a maintainer has to start CI for outside PRs. The top few per
+cycle become proposal cards (at most five a day).
 
 Size is a **preference** for what the bot picks on its own. Classes count non-test changed lines,
 excluding lockfiles, generated and vendored files: `xs` ≤ 20, `s` ≤ 80, `m` ≤ 250, `l` ≤ 500,

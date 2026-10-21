@@ -100,6 +100,26 @@ def test_silent_repo_is_vetted_as_not_stated(sc: StageContext, ctx: AppContext, 
     assert "/repos/langfuse/langfuse/contents/.github/PULL_REQUEST_TEMPLATE.md" in paths
 
 
+def test_vet_records_ci_on_pr_facts(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub) -> None:
+    """Post-v1 (§9.5): a VETTED item carries the repo's CI-on-PR facts for the cards (never a skip)."""
+    github.add_issue("langfuse/langfuse", 814, title="Bug", body="b")
+    github.add_pull("langfuse/langfuse", state="closed", merged_at="2026-10-01T00:00:00Z",
+                    head={"sha": "m1", "label": "x:m1"}, author_association="CONTRIBUTOR")  # fmt: skip
+    github.check_runs[("langfuse/langfuse", "m1")] = [
+        {"name": "test", "status": "completed", "conclusion": "success"},
+        {"name": "eslint", "status": "completed", "conclusion": "failure"},
+    ]
+    st, _, stored = _vet(sc, ctx, sbx, 814, VETTING)
+    assert st == "VETTED"
+    assert (stored["ci_on_pr"], stored["ci_kinds"], stored["ci_checks"]) == (
+        "yes",
+        ["tests", "lint"],
+        ["test", "eslint"],
+    )
+    assert (stored["ci_sampled"], stored["ci_with_checks"], stored["ci_gating"]) == (1, 1, "auto")
+    assert github.writes == []
+
+
 def test_allowed_with_conditions_records_them(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
                                               github: FakeGitHub) -> None:  # fmt: skip
     github.add_issue("langfuse/langfuse", 812, title="Bug", body="b")
@@ -143,6 +163,23 @@ def test_discovery_honours_max_open_prs_by_me_per_repo(sc: StageContext, ctx: Ap
     assert discover.run(sc, repos=["langfuse/langfuse"], now=ctx.clock.now()) == []
     ctx.discovery_prefs.update(PrefsUpdate(filters={"max_open_prs_by_me_per_repo": 2}), "tg:4242")
     assert len(discover.run(sc, repos=["langfuse/langfuse"], now=ctx.clock.now())) == 1
+
+
+@pytest.mark.parametrize("ci_repo", ["langfuse/langfuse", "langfuse/langfuse-python"])
+def test_discovery_ranks_the_repo_with_ci_on_prs_first(sc: StageContext, ctx: AppContext, github: FakeGitHub,
+                                                       ci_repo: str) -> None:  # fmt: skip
+    """Post-v1 (§9.4): equal candidates in two repos; the one whose merged PRs ran tests goes first."""
+    repos = ["langfuse/langfuse", "langfuse/langfuse-python"]
+    github.add_repo("langfuse/langfuse-python", default_branch="main", language="TypeScript")
+    for i, repo in enumerate(repos):
+        github.add_issue(repo, 700 + i, title="Crash when spans are empty", body="steps", labels=[{"name": "bug"}],
+                         updated_at=to_iso(ctx.clock.now()), created_at=to_iso(ctx.clock.now()))  # fmt: skip
+    github.add_pull(ci_repo, state="closed", merged_at="2026-10-01T00:00:00Z", head={"sha": "c1", "label": "x:c1"})
+    github.check_runs[(ci_repo.lower(), "c1")] = [{"name": "pytest", "status": "completed", "conclusion": "success"}]
+    created = discover.run(sc, repos=repos, now=ctx.clock.now())
+    upstreams = [str(sc.gk.contribution(cid)["upstream"]) for cid in created]
+    assert upstreams == [ci_repo, *[r for r in repos if r != ci_repo]]
+    assert github.writes == []  # detection reads only
 
 
 def test_a_cut_cycle_rerun_spends_only_the_rest_of_the_budget(sc: StageContext, ctx: AppContext,

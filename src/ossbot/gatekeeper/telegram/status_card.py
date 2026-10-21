@@ -5,6 +5,8 @@ from the gatekeeper's read-only GitHub client (PR, reviews, check runs, comments
 ``github_read`` task, polled every ``POLL_S`` per PR (and on ``🔄 Refresh``); the card is edited in place
 at most once per ``telegram.status_card.min_edit_interval_s`` (60 s) and only when its content changes.
 
+* **CI line**: ``CI: ✅ n · ⏳ n · ❌ n``; with no checks yet on a repo whose vetted ``ci_gating`` is
+  ``approval_required`` or ``label_or_comment``, ``⏳ CI waits for maintainer approval`` instead.
 * **P1 events** (a maintainer review, a comment mentioning the owner's login, a ❌ check) are new loud
   messages replying to the status card, once per event id.
 * **Merged**: the card becomes ``🎉 Merged by @x · <time>`` with only the PR link, then a summary (time to
@@ -28,6 +30,7 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ossbot.common import ci_facts
 from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db, outcomes
@@ -122,6 +125,19 @@ def _time(iso: str, fallback: str = "") -> k.Span:
     return k.Time(int(at.timestamp()), at.strftime("%Y-%m-%d %H:%M"))
 
 
+def _ci_line(c: dict[str, Any], f: Facts, ok: int, pending: int, failed: int) -> k.Line:
+    """No checks yet on a repo whose CI starts only after a maintainer approves it or adds a label
+    (vetted ``ci_gating``): neither passing nor failing, so the card says it waits."""
+    if not f.checks:
+        try:
+            vet = json.loads(c.get("vetting_json") or "{}")
+        except ValueError:
+            vet = {}
+        if isinstance(vet, dict) and ci_facts.from_stored(vet).gating in ci_facts.GATED:
+            return k.line(ci_facts.WAITS_FOR_APPROVAL)
+    return k.line(f"CI: {OK} {ok} · {PENDING} {pending} · {FAILED} {failed}")
+
+
 def view(ctx: AppContext, c: dict[str, Any], f: Facts) -> k.View:
     repo = str(c["upstream"])
     ok = sum(1 for _, i in f.checks if i == OK)
@@ -145,7 +161,7 @@ def view(ctx: AppContext, c: dict[str, Any], f: Facts) -> k.View:
         (k.Const("🚀 "), k.Bold(k.Const(f"PR #{f.number} open")), k.Const(" · "), k.Text(repo, 100), k.Const(" · "),
          k.mode_badge(False)),
         (k.Bold(k.Text(f.title, 200)),),
-        k.line(f"CI: {OK} {ok} · {PENDING} {pending} · {FAILED} {failed}"),
+        _ci_line(c, f, ok, pending, failed),
         (k.Const("Reviews: "), k.Text(", ".join(f"👀 @{w} requested changes" for w in f.changes_by) or "none yet",
                                       200), k.Const(f" · {f.approvals} approvals")),
         (k.Const(f"Comments: {f.maintainer_comments} from maintainers"),

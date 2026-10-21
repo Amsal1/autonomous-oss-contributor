@@ -10,6 +10,8 @@ a deterministic ban, and its allow claim counts only with a verbatim quote from 
 recorded (``ai_conditions``) and applied by the package stage. CLA without ``cla_signed``: SKIPPED for
 autonomous items; 👤 items continue and the Start-work confirm says so. ``requires_assignment`` comes
 from CONTRIBUTING (``ASSIGNMENT_RE``) or the vetter; the claim is created only after gate 1 (§9.2).
+A VETTED item also records the repo's CI-on-PR facts (``ci_on_pr``, ``ci_kinds``, ``ci_checks``,
+``ci_gating``, …; ``runner/ci_detect.py``, shared cache with discovery) for the cards; never a skip.
 """
 
 from __future__ import annotations
@@ -21,7 +23,7 @@ from typing import Any
 from ossbot.common import ai_policy
 from ossbot.common.ai_policy import AI_SECTION_RE, Classification
 from ossbot.common.config import AiPolicyRules, effective_ai_rules
-from ossbot.runner import prompts
+from ossbot.runner import ci_detect, prompts
 from ossbot.runner.outputs import SCHEMA_HINTS, IssueVetting
 from ossbot.runner.pipeline import StageContext, StageRun
 from ossbot.runner.repo_docs import fetch_policy_docs, maintainer_docs
@@ -124,6 +126,9 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         reason, stored = merge(result.value, facts, user=user, ai_allowed=tgt.ai_policy_override == "allowed",
                                cla_signed=tgt.cla_signed,
                                rules=effective_ai_rules(sc.config().policy, tgt))  # fmt: skip
+        if reason is None:  # CI on PRs (cached with discovery): shown on the cards, never a skip reason
+            ttl = sc.config().policy.discovery.ci_facts_ttl_hours
+            stored.update(ci_detect.cached(sc, repo, ttl, contributing=facts["contributing"]).stored())
     if reason is not None:
         evidence: dict[str, Any] = {"reason": reason}
         if reason == "ai_policy_banned":  # quoted on the gatekeeper's refusal card (§14.11.19)

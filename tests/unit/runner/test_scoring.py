@@ -51,3 +51,19 @@ def test_signals_raise_the_score() -> None:
     kept, _ = rank([a, b], filters=DiscoveryFilters(), max_class="s", preferred=["s"], signals=signals, now=NOW)
     assert kept[0].reasons["responsiveness"] > 9 and kept[0].reasons["merge_rate"] == 8.0
     assert estimate_class(cand(9, "x", body="y" * 7000)) == "m"
+
+
+def test_ci_on_pr_is_a_boost_not_a_filter() -> None:
+    """Post-v1 (§9.4): ``ci_on_pr_weight`` only for ``yes``; ``no``/``unknown`` neither drop nor penalize."""
+    with_ci = Candidate("ci/repo", 1, "Crash", "", ("bug",), NOW - timedelta(days=2), NOW - timedelta(days=30))
+    without = Candidate("no/repo", 2, "Crash", "", ("bug",), NOW - timedelta(days=2), NOW - timedelta(days=60))
+    unknown = Candidate("un/repo", 3, "Crash", "", ("bug",), NOW - timedelta(days=2), NOW - timedelta(days=90))
+    signals = {"ci/repo": RepoSignals(ci_on_pr="yes"), "no/repo": RepoSignals(ci_on_pr="no"),
+               "un/repo": RepoSignals()}  # fmt: skip
+    args = {"filters": DiscoveryFilters(), "max_class": "s", "preferred": ["s"], "signals": signals, "now": NOW}
+    kept, dropped = rank([unknown, without, with_ci], ci_weight=6.0, **args)  # type: ignore[arg-type]
+    assert kept[0].candidate.number == 1 and dropped == {}
+    assert kept[0].reasons["ci_on_pr"] == 6.0 and kept[0].score - kept[1].score == 6.0
+    assert kept[1].score == kept[2].score and "ci_on_pr" not in kept[1].reasons  # no penalty for no/unknown
+    flat, _ = rank([unknown, without, with_ci], ci_weight=0.0, **args)  # type: ignore[arg-type]
+    assert len({r.score for r in flat}) == 1

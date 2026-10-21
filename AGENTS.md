@@ -123,7 +123,10 @@ key in `scripts/setup-secrets.ps1` and an egress category in `config/egress.yaml
 `ossctl targets verify` (read-only, as ossrunner) and `/reload` (human-confirmed). The AI policy is
 read by vet (`common/ai_policy.py`); an optional `ai_policy: {unstated: skip, unclear: skip}` on the
 entry overrides `policy.vet.ai_policy` (default: allow both). An explicit ban always skips and can't be
-configured away.
+configured away. `ossctl targets facts <repo>…` (≤ 5, read-only, no LLM, no contribution row) prints
+the deterministic AI-policy status and the CI-on-PR facts (`runner/ci_detect.py`) that vet and
+discovery would see; CI that ran on merged PRs is a ranking boost (`policy.discovery.ci_on_pr_weight`),
+never a filter.
 
 **Add a pipeline stage.** A state in the gatekeeper state enum and its `ALLOWED` edges with actors
 (`gatekeeper/state_machine.py`), a stage module in `src/ossbot/runner/stages/`, the sandbox profile

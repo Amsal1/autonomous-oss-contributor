@@ -82,6 +82,23 @@ async def test_card_is_sent_then_edited_only_on_change_and_at_most_once_a_minute
     assert "CI: ✅ 2 · ⏳ 0" in json.dumps(rig.req.last("editMessageText"), ensure_ascii=False)
 
 
+@pytest.mark.parametrize("gating", ["approval_required", "label_or_comment", "auto", None])
+async def test_no_checks_on_a_gated_repo_waits_for_approval(rig: TgRig, gating: str | None) -> None:
+    """Post-v1 (§9.12, §14.11.11): no checks yet on a repo whose CI starts after a maintainer approves it
+    (or adds a label) is neither passing nor failing."""
+    vetting = {"ci_on_pr": "yes", "ci_gating": gating} if gating else {}
+    cid = insert_contribution(rig.ctx, State.WATCHING, pr_number=5678, pr_url="https://github.com/o/r/pull/5678",
+                              vetting_json=json.dumps(vetting))  # fmt: skip
+    reader = Reader()
+    reader.checks = []
+    assert await status_card.refresh(rig.ctx, reader, cid)
+    await rig.flush()
+    doc = json.dumps(rig.req.calls[-1][1], ensure_ascii=False)
+    waits = gating in {"approval_required", "label_or_comment"}
+    assert ("⏳ CI waits for maintainer approval" in doc) is waits
+    assert ("CI: ✅ 0 · ⏳ 0 · ❌ 0" in doc) is not waits
+
+
 async def test_p1_events_reply_to_the_status_card_once(rig: TgRig) -> None:
     cid, reader = _pr(rig.ctx), Reader()
     await status_card.refresh(rig.ctx, reader, cid)

@@ -19,7 +19,7 @@ import sqlite3
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
-from ossbot.common import ai_policy
+from ossbot.common import ai_policy, ci_facts
 from ossbot.common.clock import from_iso
 from ossbot.common.size import SIZE_CLASSES
 from ossbot.gatekeeper import db
@@ -247,13 +247,15 @@ def _signals(vet: dict[str, Any]) -> list[str]:
 
 
 def policy_line(vet: dict[str, Any]) -> k.Line | None:
-    """``✅ AI policy: not stated`` (§9.5, §14.11.15): the gatekeeper's fixed wording for the stored
-    status and condition kinds (closed sets, never repo text); None for a row that was never vetted.
-    Part B appends ``· CI on PRs: …`` to the same line."""
+    """``✅ AI policy: not stated · CI on PRs: ✅ tests, lint (8/10 merged PRs)`` (§9.4, §9.5, §14.11.15):
+    the gatekeeper's fixed wording for the stored status, condition kinds and CI facts (closed sets and
+    counts, never repo text; check names are in 🧭 Details · Validation); None for a never-vetted row."""
     if not vet:
         return None
     text = ai_policy.display(vet.get("ai_policy"), ai_policy.parse_conditions(vet.get("ai_conditions")))
-    return (k.Const("✅ "), k.Bold(k.Const("AI policy")), k.Const(f": {text}"))
+    ci = ci_facts.display(ci_facts.from_stored(vet))
+    return (k.Const("✅ "), k.Bold(k.Const("AI policy")), k.Const(f": {text} · "), k.Bold(k.Const("CI on PRs")),
+            k.Const(f": {ci}"))  # fmt: skip
 
 
 def _warnings(ctx: AppContext, contrib: sqlite3.Row, vet: dict[str, Any], areas: list[str],
@@ -349,6 +351,23 @@ DETAIL_SECTIONS = ("Problem & approach", "Files & tests", "Validation", "Risks &
                    "Version diff")  # fmt: skip
 
 
+def _ci_details(ctx: AppContext, cid: str) -> list[k.Element]:
+    """``✅ CI on PRs`` with the check names seen (repo text: escaped ``Text`` ≤ 40 each)."""
+    contrib = db.one(ctx.conn, "SELECT vetting_json FROM contributions WHERE id = ?", (cid,))
+    vet = _json(contrib["vetting_json"]) if contrib is not None else {}
+    if not vet:
+        return []
+    facts = ci_facts.from_stored(vet)
+    lines: list[k.Line] = [(k.Const("✅ "), k.Bold(k.Const("CI on PRs")), k.Const(f": {ci_facts.display(facts)}"))]
+    if facts.checks:
+        label = "Checks seen on merged PRs" if facts.source == "merged_prs" else "Workflow jobs"
+        names: list[k.Span] = [k.Const(f"{label}: ")]
+        for i, name in enumerate(facts.checks):
+            names += [k.Const(" · ") if i else k.Const(""), k.Code(k.Text(name, ci_facts.CHECK_NAME_MAX))]
+        lines.append(tuple(names))
+    return [k.Lines(tuple(lines))]
+
+
 def details_view(ctx: AppContext, cid: str, version: int, section: int = 1) -> k.View:
     """``🧭 Details`` (kind ``proposal_details``): section navigation and no decision buttons."""
     prop = load(ctx.conn, cid, version) or {}
@@ -367,6 +386,7 @@ def details_view(ctx: AppContext, cid: str, version: int, section: int = 1) -> k
             elements.append(k.claim("No suite", str(prop["no_suite_reason"]), max_len=300))
     elif section == 3:
         elements.append(k.claim("Validation plan", str(prop.get("validation_plan") or "—"), max_len=1000))
+        elements += _ci_details(ctx, cid)
     elif section == 4:
         elements += [k.claim("Risk", r, max_len=200) for r in (prop.get("risks") or [])[:10]]
         elements += [k.claim("Alternative", str(a.get("summary", "")), max_len=200)

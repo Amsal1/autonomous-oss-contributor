@@ -12,6 +12,7 @@ import pytest
 from ossbot.gatekeeper import action_requests, db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram import proposal_cards
+from ossbot.gatekeeper.telegram.ui import classic
 from ossbot.runner.stages import fetch
 from tests.telegram.proposalkit import proposal_card, state
 from tests.telegram.reviewkit import labels, latest, text, toast, token, view_message
@@ -81,6 +82,38 @@ async def test_ai_policy_fact_line(rig: TgRig, vetting: dict[str, object], line:
     card = await proposal_card(rig, vetting={"claim_status": "unclaimed", **vetting})
     body = text(rig, card.message_id)
     assert line in body and "AI contributions" not in body
+
+
+CI_YES = {"ci_on_pr": "yes", "ci_kinds": ["tests", "lint"], "ci_checks": ["unit-tests-zz", "<b>@x</b> /kill"],
+          "ci_sampled": 10, "ci_with_checks": 8, "ci_gating": "auto", "ci_source": "merged_prs"}  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("ci", "line"),
+    [
+        ({}, "✅ <b>AI policy</b>: not stated · <b>CI on PRs</b>: ❔ unknown"),  # legacy vetting: no CI keys
+        (CI_YES, "✅ <b>AI policy</b>: not stated · <b>CI on PRs</b>: ✅ tests, lint (8/10 merged PRs)"),
+        ({**CI_YES, "ci_gating": "approval_required"},
+         "<b>CI on PRs</b>: ✅ tests, lint (8/10 merged PRs) · runs after maintainer approval"),
+        ({"ci_on_pr": "no", "ci_source": "merged_prs"}, "<b>CI on PRs</b>: ❌ none found"),
+    ],
+)  # fmt: skip
+async def test_ci_on_prs_on_the_policy_line(rig: TgRig, ci: dict[str, object], line: str) -> None:
+    """Post-v1 (§9.4, §14.11.15): CI facts on the same line, closed sets and counts only."""
+    card = await proposal_card(rig, vetting={"claim_status": "unclaimed", "ai_policy": "unstated", **ci})
+    body = text(rig, card.message_id)
+    assert line in body and "unit-tests-zz" not in body  # check names only in Details
+
+
+async def test_ci_check_names_in_details_are_escaped(rig: TgRig) -> None:
+    card = await proposal_card(rig, vetting={"ai_policy": "unstated", **CI_YES})
+    out = classic.render(proposal_cards.details_view(rig.ctx, card.cid, 1, 3), surface="card").text
+    assert "✅ <b>CI on PRs</b>: ✅ tests, lint (8/10 merged PRs)" in out
+    assert (
+        "Checks seen on merged PRs: <code>unit-tests-zz</code> · <code>&lt;b&gt;@x&lt;/\u2060b&gt; /\u2060kill</code>"
+        in out
+    )
+    assert "<b>@x</b>" not in out
 
 
 async def test_untrusted_fields_are_escaped_and_defused(rig: TgRig) -> None:

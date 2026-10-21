@@ -77,9 +77,13 @@ def test_golden_s1_open_pr_with_ai_conditions() -> None:
     """§14.11.1 (post-v1): the AI-policy line with the checklist computed on the card's own title/body."""
     conds = [AiCondition(kind="disclosure"), AiCondition(kind="label", value="ai-assisted")]
     body = "Body\n\n" + checklist_block(conds[:1], login="bot", coder_model="a", reviewer_model="b")
-    vetting = {"ai_policy": "allowed_with_conditions", "ai_conditions": [c.model_dump() for c in conds]}
+    vetting = {"ai_policy": "allowed_with_conditions", "ai_conditions": [c.model_dump() for c in conds],
+               "ci_on_pr": "yes", "ci_kinds": ["tests", "lint"], "ci_checks": ["pytest"], "ci_sampled": 10,
+               "ci_with_checks": 8, "ci_gating": "approval_required", "ci_source": "merged_prs"}  # fmt: skip
     out = cards.render(view("open_pr", False, body=body + "\n\nAI assistance disclosure", vetting=vetting))
     assert "⚠️ AI policy: allowed with conditions (disclosure, label) · checklist ⚠️ missing: label" in out.card
+    assert ("· CI on PRs: ✅ tests, lint (8/10 merged PRs) · runs after maintainer approval" in out.card
+            and "pytest" not in out.card)  # fmt: skip
     text = "\n\n----- part -----\n".join([out.card, *out.parts]) + "\n"
     golden.check("s1_open_pr_ai_conditions_live.html", text)
     full = "Body\n\n" + checklist_block(conds, login="bot", coder_model="a", reviewer_model="b")

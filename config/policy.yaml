@@ -79,6 +79,8 @@ discovery:
   interval_hours: 6
   top_n: 5
   proposals_per_cycle: 3           # proposal cards per discovery cycle
+  ci_on_pr_weight: 6.0             # 0..30: ranking boost for repos whose CI runs tests/lint on PRs; never a filter
+  ci_facts_ttl_hours: 168          # 1..720: how long a repo's CI-on-PR facts are reused
 vet:
   ai_policy:                       # §9.5: skip only on an explicit ban; banned is fixed
     unstated: allow                # allow | skip: no AI wording in any repo doc

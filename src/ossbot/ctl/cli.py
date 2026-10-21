@@ -967,6 +967,39 @@ def targets_verify() -> None:
     raise typer.Exit(0 if doc["ok"] else 1)
 
 
+@targets_app.command("facts")
+def targets_facts(repos: list[str]) -> None:
+    """Read-only dry vet of up to 5 repos: AI policy and CI on PRs (root; runs as ossrunner via 3140).
+
+    The deterministic rules only (no LLM); no gatekeeper call, no contribution row, nothing written."""
+    _require_root("targets facts")
+    if not repos or len(repos) > 5:
+        _fail("give 1 to 5 repos (owner/name)")
+    if any(not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", r) for r in repos):
+        _fail("repos must look like owner/name")
+    check = subprocess.run([FIREWALL_CHECK, "--check"], capture_output=True, text=True, timeout=60, check=False)
+    if check.returncode != 0:  # the runner unit's ExecStartPre: no read with the token while egress is open
+        _fail(f"firewall check failed (exit {check.returncode}): {check.stderr.strip()[-300:]}")
+    req = json.dumps({"mode": "facts", "repos": repos})
+    proc = subprocess.run(targets_verify_argv(), input=req, capture_output=True, text=True, timeout=900, check=False)
+    try:
+        doc = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _fail(f"targets facts failed (exit {proc.returncode}): {proc.stderr.strip()[-500:]}")
+    if doc.get("error"):
+        _fail(str(doc["error"]))
+    for row in doc["rows"]:
+        if row["status"] == "FAIL":
+            typer.echo(f"FAIL  {row['repo']} · {row['detail']}")
+            continue
+        quote = f' ({row["ai_source"]}: "{row["ai_line"]}")' if row.get("ai_line") else ""
+        conds = f" · conditions: {', '.join(row['conditions'])}" if row.get("conditions") else ""
+        checks = f" [{', '.join(row['ci_checks'])}]" if row.get("ci_checks") else ""
+        typer.echo(f"{row['repo']} · AI policy: {row['ai_display']}{quote}{conds} · CI on PRs: {row['ci_display']}"
+                   f"{checks}")  # fmt: skip
+    raise typer.Exit(0 if doc["ok"] else 1)
+
+
 def _prefs_show(repo: str | None) -> None:
     code, data = api("GET", "/v1/discovery-prefs" + (f"?repo={repo}" if repo else ""))
     if code != 200:

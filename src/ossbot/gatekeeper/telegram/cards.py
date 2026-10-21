@@ -26,7 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ossbot.common import ai_policy
+from ossbot.common import ai_policy, ci_facts
 from ossbot.common.clock import from_iso
 from ossbot.common.gitcmd import NumstatEntry
 from ossbot.common.schemas import OutboundKind
@@ -409,9 +409,10 @@ def view_for_action(conn: sqlite3.Connection, action_id: str, dry_run: bool,
 
 
 def _repo_policy_block(view: CardView) -> k.Block | None:
-    """``✅ AI policy: allowed with conditions (label) · checklist ⚠️ missing: label`` (§14.11.1): the
-    status in fixed wording and the conditions checked by the gatekeeper on the card's own title/body
-    (a human edit may remove a line; that is shown, not blocked)."""
+    """``✅ AI policy: allowed with conditions (label) · checklist ⚠️ missing: label · CI on PRs: ✅ tests``
+    (§14.11.1): the status in fixed wording, the conditions checked by the gatekeeper on the card's own
+    title/body (a human edit may remove a line; that is shown, not blocked) and the vetted CI-on-PR facts
+    (closed sets and counts only)."""
     if view.kind != "open_pr" or not view.vetting:
         return None
     conditions = ai_policy.parse_conditions(view.vetting.get("ai_conditions"))
@@ -425,6 +426,7 @@ def _repo_policy_block(view: CardView) -> k.Block | None:
             text += " · checklist ⚠️ missing: " + ", ".join(ai_policy.KIND_LABELS[m] for m in missing)
         else:
             text += f" · checklist ✅ {len(kinds)}/{len(kinds)}"
+    text += f" · CI on PRs: {ci_facts.display(ci_facts.from_stored(view.vetting))}"
     warn = bool(missing) or ai_policy.normalize_status(view.vetting.get("ai_policy")) == "banned"
     line: k.Line = (k.Const("⚠️ " if warn else "✅ "), k.Const(text))
     return k.Block((k.Lines((line,)),), required=False, priority=8, name="repo_policy")

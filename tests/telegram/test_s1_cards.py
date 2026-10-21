@@ -111,6 +111,18 @@ def test_ai_policy_line_on_the_open_pr_card() -> None:
     assert "AI policy" not in cards.render(view(kind="push_update", pr_number=1, vetting=vetting)).card
 
 
+def test_ci_on_prs_on_the_open_pr_card() -> None:
+    """Post-v1 (§14.11.1): the vetted CI facts close the repo-policy line; legacy rows read unknown."""
+    assert (
+        "✅ AI policy: not stated · CI on PRs: ❔ unknown" in cards.render(view(vetting={"ai_policy": "unstated"})).card
+    )
+    gated = {"ai_policy": "allowed", "ci_on_pr": "unknown", "ci_gating": "label_or_comment", "ci_source": "workflows",
+             "ci_checks": ["<b>@x</b>"]}  # fmt: skip
+    out = cards.render(view(vetting=gated)).card
+    assert "CI on PRs: ❔ unknown (workflow files only) · runs after a maintainer label or /ok-to-test" in out
+    assert "@x" not in out  # check names are not on the card
+
+
 def test_user_directed_marker_and_notes() -> None:
     out = cards.render(view(user_directed=True, notes="keep it small"))
     assert '👤 <b>requested by you</b> · Notes: "keep it small"' in out.card
