@@ -44,7 +44,7 @@ DIFF_MAX = 2500
 # ----------------------------------------------------------------------------------- /egress
 class ModeArg(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["allowlist", "research", "open"]
+    mode: Literal["allowlist", "research", "open", "sandbox_open"]
 
 
 def _egress_now(app: AppContext) -> str:
@@ -57,8 +57,9 @@ def egress_picker(app: AppContext) -> k.View:
         k.button(m + (" ✅" if m == cur else ""), "egress_pick", {"mode": m}, single_use=True) for m in EGRESS_MODES
     ]
     return k.plain("picker", (k.Const("🌐 "), k.Bold(k.Const("Egress mode")), k.Const(f" · now {cur}")),
-                   k.line("Applies to research, Hermes, agent LLM and catalog traffic; fetch and validate never"
-                          " change."), rows=picker_rows(opts))  # fmt: skip
+                   k.line("Applies to research, Hermes, agent LLM and catalog traffic; only sandbox_open also"
+                          " gives fetch and validate web_public (strict repos keep the allowlist)."),
+                   rows=picker_rows(opts))  # fmt: skip
 
 
 def egress_changes(app: AppContext, cur: str, new: str) -> list[str]:
@@ -76,13 +77,26 @@ def egress_changes(app: AppContext, cur: str, new: str) -> list[str]:
 def egress_confirm_view(app: AppContext, mode: str) -> k.View:
     cur = _egress_now(app)
     widens = EGRESS_MODES.index(mode) > EGRESS_MODES.index(cur)
-    lines = [k.line(f"🌐 Egress mode {cur} → {mode}. Root re-renders the proxy; fetch and validate are unchanged.")]
+    egress = app.config.egress
+    lines = [k.line(f"🌐 Egress mode {cur} → {mode}. Root re-renders the proxy.")]
     lines += [k.line(f"• {c}") for c in egress_changes(app, cur, mode)[:8]] or [k.line("No category changes.")]
+    code = egress.repo_code_change(cur, mode)
+    if code == "+web_public":
+        a = egress.anomaly
+        lines.append(k.line(f"Repo code (fetch/validate) gets web_public, guarded by the per-job anomaly limits"
+                            f" (≤ {a.max_hosts} hosts, ↑ {a.max_upload_mb} MB, ↓ {a.max_download_mb} MB);"
+                            " strict repos keep the allowlist."))  # fmt: skip
+    elif code == "−web_public":
+        lines.append(k.line("Repo code (fetch/validate) goes back to its package allowlist."))
+    else:
+        lines.append(k.line("Fetch and validate are unchanged."))
     return confirm_panel(lines, confirm_button(f"✅ Switch to {mode}", "egress_confirm", mode,
                                                style="danger" if widens else "primary"))  # fmt: skip
 
 
-@command("egress", help="Egress mode allowlist / research / open (asks for confirmation)", safety="config")
+@command(
+    "egress", help="Egress mode allowlist / research / open / sandbox_open (asks for confirmation)", safety="config"
+)
 async def egress(ctx: CommandContext, args: list[str]) -> Reply:
     if args and args[0] in EGRESS_MODES and args[0] != _egress_now(ctx.app):
         return Reply("", view=egress_confirm_view(ctx.app, args[0]))
@@ -102,7 +116,8 @@ async def egress_pick(tap: Tap) -> str:
 async def egress_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
     if arg not in EGRESS_MODES:
         return Reply("This button is no longer valid.")
-    previous = ctx.app.control.set_egress_mode(arg, ctx.actor, ctx.app.config.egress.mode_default)
+    egress = ctx.app.config.egress
+    previous = ctx.app.control.set_egress_mode(arg, ctx.actor, egress.mode_default, egress=egress)
     return Reply(f"🌐 {b('Egress mode')} {esc(previous)} → {b(arg)}. Root applies it to the proxy now.")
 
 

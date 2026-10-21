@@ -17,6 +17,7 @@ from ossbot.common.schemas import (
     SANDBOX_JOB_ENTRYPOINTS,
     STAGE_ENTRYPOINTS,
     SUBMISSION_CHECKPOINTS,
+    PrefsUpdate,
     State,
 )
 from ossbot.gatekeeper.context import AppContext
@@ -132,13 +133,61 @@ def test_set_egress_mode_writes_flag_audits_and_fyis(ctx: AppContext) -> None:
     """§11.5: the default comes from the snapshot (open); a switch writes {mode, actor, ts}."""
     default = ctx.config.egress.mode_default
     assert default == "open" and ctx.control.egress_mode(default) == "open"
-    previous = ctx.control.set_egress_mode("allowlist", "uid:1000/operator", default)
+    previous = ctx.control.set_egress_mode("allowlist", "uid:1000/operator", default, egress=ctx.config.egress)
     assert previous == "open" and ctx.control.egress_mode(default) == "allowlist"
     flag = json.loads((ctx.paths.control_dir / "egress-mode").read_text())
     assert flag["mode"] == "allowlist" and flag["actor"] == "uid:1000/operator" and flag["ts"]
     assert (ctx.paths.control_dir / "egress-mode").stat().st_mode & 0o777 == 0o640
     assert _audits(ctx, "egress_mode_changed") == [{"from": "open", "to": "allowlist"}]
-    assert any("Egress mode open → allowlist" in t for t in outbox_texts(ctx))
+    assert any("Egress mode open → allowlist" in t and "(fetch/validate unchanged)" in t for t in outbox_texts(ctx))
+
+
+_UNTOUCHED_TABLES = (
+    "approvals", "proposal_approvals", "skill_approvals", "contribution_holds", "discovery_prefs",
+    "discovered_targets", "ui_tokens",
+)  # fmt: skip
+
+
+def _rows(ctx: AppContext) -> dict[str, list[tuple[object, ...]]]:
+    return {t: [tuple(r) for r in ctx.conn.execute(f"SELECT * FROM {t} ORDER BY rowid")] for t in _UNTOUCHED_TABLES}
+
+
+def test_switch_to_and_from_sandbox_open_invalidates_nothing(ctx: AppContext) -> None:
+    """Design §12.2 / E7: the FYI names fetch/validate +/-web_public; approvals, holds, prefs and
+    discovered_targets rows are byte-identical before and after (a mode switch invalidates nothing)."""
+    install_sources(ctx)
+    skill_card(ctx)
+    cid, action = packaged_contribution(ctx)
+    ctx.create_approval(action, "system")
+    now = "2026-10-21T00:00:00Z"
+    ctx.conn.execute(
+        "INSERT INTO discovered_targets (repo, source, status, first_seen, updated_at)"
+        " VALUES ('acme/tool', 'owner', 'kept', ?, ?)",
+        (now, now),
+    )
+    ctx.conn.execute(
+        "INSERT INTO contribution_holds (id, cid, reason, detail_json, held_by, held_at)"
+        " VALUES ('h_1', ?, 'egress_anomaly', '{}', 'sandbox', ?)",
+        (cid, now),
+    )
+    ctx.conn.commit()
+    ctx.discovery_prefs.update(PrefsUpdate(autonomous_max_class="xs"), "tg:4242")
+    before = _rows(ctx)
+    for table in ("approvals", "skill_approvals", "contribution_holds", "discovery_prefs", "discovered_targets"):
+        assert before[table], table
+    default, egress = ctx.config.egress.mode_default, ctx.config.egress
+    assert ctx.control.set_egress_mode("sandbox_open", "tg:4242", default, egress=egress) == "open"
+    assert ctx.control.egress_mode(default) == "sandbox_open"
+    assert _rows(ctx) == before
+    assert ctx.control.set_egress_mode("allowlist", "tg:4242", default, egress=egress) == "sandbox_open"
+    assert _rows(ctx) == before
+    assert _audits(ctx, "egress_mode_changed") == [
+        {"from": "open", "to": "sandbox_open"},
+        {"from": "sandbox_open", "to": "allowlist"},
+    ]
+    texts = outbox_texts(ctx)
+    assert any("Egress mode open → sandbox_open" in t and "(fetch/validate +web_public)" in t for t in texts)
+    assert any("Egress mode sandbox_open → allowlist" in t and "(fetch/validate −web_public)" in t for t in texts)
 
 
 async def test_egress_mode_api_is_operator_only(ctx: AppContext) -> None:

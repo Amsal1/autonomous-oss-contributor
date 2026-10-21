@@ -122,7 +122,7 @@ async def set_egress_mode(
     """§11.5: ossctl asks for the TTY confirm first; root re-renders squid from the flag."""
     c = ctx(request)
     default = c.config.egress.mode_default
-    previous = c.control.set_egress_mode(body.mode, caller.actor, default)  # audits and FYIs
+    previous = c.control.set_egress_mode(body.mode, caller.actor, default, egress=c.config.egress)  # audits, FYIs
     return EgressModeView(mode=c.control.egress_mode(default), default=default, previous=previous)
 
 

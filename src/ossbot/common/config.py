@@ -628,7 +628,7 @@ class AlwaysDenied(Strict):
 # the validator below admits them there only, with web_public only, and the same list for both (they
 # share the fetch pool); strict repos keep the base list in every mode. The renderer asserts the rest.
 ModeGrantee = Literal["research", "hermes", "agent-llm", "catalog", "fetch", "validate"]
-REPO_CODE_GRANTEES = ("fetch", "validate")
+REPO_CODE_GRANTEES: tuple[ModeGrantee, ...] = ("fetch", "validate")
 REPO_CODE_GRANT_MODE = "sandbox_open"
 TELEGRAPH_CATEGORY = "telegraph"  # DESIGN §14.12.8: the gatekeeper's opt-in Telegraph egress
 
@@ -651,6 +651,20 @@ class EgressConfig(Strict):
     mode_default: EgressMode = "open"
     modes: dict[EgressMode, dict[ModeGrantee, list[str]]] = Field(default_factory=dict)
     anomaly: EgressAnomaly = EgressAnomaly()
+
+    def repo_code_web(self, mode: str) -> bool:
+        """Whether ``mode`` grants fetch/validate web_public (the validator allows it in sandbox_open only)."""
+        return any(
+            m == mode and "web_public" in grants.get(g, [])
+            for m, grants in self.modes.items()
+            for g in REPO_CODE_GRANTEES
+        )
+
+    def repo_code_change(self, before: str, after: str) -> str:
+        """``+web_public`` / ``-web_public`` (a minus sign, U+2212, like egress_changes) when a switch changes
+        what repo code reaches, else ``unchanged``."""
+        was, now = self.repo_code_web(before), self.repo_code_web(after)
+        return "unchanged" if was == now else "+web_public" if now else "−web_public"
 
     @model_validator(mode="after")
     def _references_exist(self) -> EgressConfig:

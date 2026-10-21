@@ -189,7 +189,7 @@ and `request` never touch an approval or the ceiling. The command table below is
 | `/down` | Down (workers): stop the workers, keep the gatekeeper up | stop |
 | `/drain` | Drain: no new work, running work may finish (immediate) | stop |
 | `/dryrun` | /dryrun on (immediate) or /dryrun off (asks for confirmation) | go |
-| `/egress` | Egress mode allowlist / research / open (asks for confirmation) | config |
+| `/egress` | Egress mode allowlist / research / open / sandbox_open (asks for confirmation) | config |
 | `/filters` | Autonomous discovery filters and open discovery (5 pages; /work ignores them) | tune |
 | `/help` | List commands | read |
 | `/hermes` | Hermes capability tier: /hermes tier (asks for confirmation) | config |

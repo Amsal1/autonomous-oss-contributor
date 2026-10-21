@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from ossbot.common.clock import Clock, to_iso
+from ossbot.common.config import EgressConfig
 from ossbot.common.control_flags import (
     EGRESS_MODE_FILE,
     HERMES_TIER_FILE,
@@ -318,11 +319,13 @@ class ControlService:
         """The active mode: the flag, else the snapshot's ``mode_default``; unparseable = allowlist."""
         return read_egress_mode(self.paths.control_dir, default)
 
-    def set_egress_mode(self, mode: EgressMode, actor: str, default: EgressMode) -> EgressMode:
-        """Human-confirmed (ossctl TTY, Telegram /egress later): write the flag, audit, FYI.
+    def set_egress_mode(self, mode: EgressMode, actor: str, default: EgressMode, *, egress: EgressConfig) -> EgressMode:
+        """Human-confirmed (ossctl TTY, Telegram /egress): write the flag, audit, FYI.
 
         Root applies it (ossbot-egress.path -> ossbot-egress-apply re-renders squid and restarts the
-        proxy). Returns the previous mode. The code-running profiles never change (§11.5)."""
+        proxy). Returns the previous mode. Only sandbox_open changes what fetch/validate reach
+        (web_public; strict repos never), and the FYI says so. A switch invalidates nothing: approvals
+        don't bind the egress mode, and holds, prefs and discovered targets are untouched (design §12.2)."""
         with db.transaction(self.conn):
             previous = self.egress_mode(default)
             write_flag(
@@ -330,7 +333,9 @@ class ControlService:
                 {"mode": mode, "actor": actor, "ts": to_iso(self.clock.now())},
             )
             self.audit.append(actor, "egress_mode_changed", {"from": previous, "to": mode})
-        self.notify(f"🌐 Egress mode {previous} → {mode} by {actor} (fetch/validate unchanged)")
+        self.notify(
+            f"🌐 Egress mode {previous} → {mode} by {actor} (fetch/validate {egress.repo_code_change(previous, mode)})"
+        )
         return previous
 
     # ------------------------------------------------------ Hermes tier (§15.5, PLAN 23a)

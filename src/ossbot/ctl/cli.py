@@ -43,7 +43,7 @@ from ossbot.common.uds import uds_client
 app = typer.Typer(add_completion=False, no_args_is_help=True, help="ossbot operator CLI")
 config_app = typer.Typer(no_args_is_help=True, help="config snapshot")
 audit_app = typer.Typer(no_args_is_help=True, help="audit log")
-egress_app = typer.Typer(no_args_is_help=True, help="egress mode (allowlist | research | open)")
+egress_app = typer.Typer(no_args_is_help=True, help="egress mode (allowlist | research | open | sandbox_open)")
 hermes_app = typer.Typer(no_args_is_help=True, help="Hermes (capability tier)")
 app.add_typer(config_app, name="config")
 app.add_typer(audit_app, name="audit")
@@ -422,9 +422,10 @@ def dryrun(mode: Annotated[str, typer.Argument(help="on | off")]) -> None:
 
 
 @egress_app.command("mode")
-def egress_mode(mode: Annotated[str, typer.Argument(help="allowlist | research | open")]) -> None:
+def egress_mode(mode: Annotated[str, typer.Argument(help="allowlist | research | open | sandbox_open")]) -> None:
     """Switch the egress mode (TTY confirm; DESIGN §11.5). Root re-renders squid and restarts the
-    proxy (ossbot-egress.path); fetch/validate, runner and gatekeeper egress never change."""
+    proxy (ossbot-egress.path). sandbox_open also gives fetch/validate web_public, guarded by the per-job
+    anomaly limits (strict repos keep the allowlist); runner and gatekeeper egress never change."""
     if mode not in EGRESS_MODES:
         _fail(f"usage: ossctl egress mode {'|'.join(EGRESS_MODES)}", 2)
     _confirm(f"EGRESS {mode.upper()}")
