@@ -18,11 +18,13 @@ import pytest
 from ossbot.common.config import ResolvedTarget, TargetsConfig, resolve_target
 from ossbot.common.schemas import State
 from ossbot.gatekeeper.context import AppContext
-from ossbot.runner.errors import StageFailed
+from ossbot.runner.errors import ContributionHeld, Interrupted, StageFailed, sandbox_run
 from ossbot.runner.pipeline import StageContext
+from ossbot.runner.sbx_client import SbxError
 from ossbot.runner.stages import common, fetch, scout, validate
 from tests.conftest import insert_contribution
 from tests.fakes.fake_github import FakeGitHub
+from tests.fakes.holds import hold_request
 from tests.unit.gatekeeper.test_proposals import sample
 from tests.unit.runner.conftest import FakeSbx, fenced
 
@@ -111,6 +113,59 @@ def test_discovered_target_sends_its_egress(
     _discovered(ctx, DISCOVERED_REPO, strict=strict)
     _run(stage, sc, ctx, sbx, DISCOVERED_REPO)
     assert _egress_of(sbx) == ["strict" if strict else "mode"]
+
+
+def _stage_runs(ctx: AppContext, cid: str) -> list[tuple[str, str, str | None]]:
+    sql = "SELECT stage, status, error_class FROM stage_runs WHERE cid = ? ORDER BY started_at, rowid"
+    return [(r["stage"], r["status"], r["error_class"]) for r in ctx.conn.execute(sql, (cid,))]
+
+
+@pytest.mark.parametrize("how", ["job_error", "sandboxd_pending", "gatekeeper_held"])
+def test_egress_anomaly_maps_to_contribution_held(sc: StageContext, ctx: AppContext, sbx: FakeSbx, how: str) -> None:
+    """Open-discovery §13.2/§13.3 (review-2 finding 6, review-3 L1): the meter's job error, sandboxd's 423
+    while the hold isn't recorded and the gatekeeper's 423 at stage open each become ContributionHeld;
+    no stage failure is counted and the contribution keeps its state."""
+    cid = insert_contribution(ctx, State.VALIDATING, upstream=CONFIG_REPO, base_sha="1" * 40)
+    if how == "job_error":
+        sbx.handlers["validate"] = lambda spec, out: 1
+        sbx.error_class["validate"] = "egress_anomaly"
+    elif how == "sandboxd_pending":
+        sbx.refuse["validate"] = (423, "egress_anomaly_pending")
+    else:
+        ctx.holds.hold(cid, hold_request(), "uid:2002/sandbox")
+    with pytest.raises(ContributionHeld):
+        validate.run(sc, sc.gk.contribution(cid))
+    runs = _stage_runs(ctx, cid)
+    assert [r for r in runs if r[1] == "failed"] == []
+    assert runs == ([] if how == "gatekeeper_held" else [("validate", "cancelled", "contribution_held")])
+    assert sc.gk.contribution(cid)["state"] == "VALIDATING"
+    if how == "gatekeeper_held":
+        assert sbx.jobs == []  # nothing was submitted to sandboxd
+
+
+def test_other_job_errors_still_fail_the_stage(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
+    cid = insert_contribution(ctx, State.VALIDATING, upstream=CONFIG_REPO, base_sha="1" * 40)
+    sbx.handlers["validate"] = lambda spec, out: 1
+    sbx.error_class["validate"] = "secret_in_output"
+    with pytest.raises(StageFailed) as info:
+        validate.run(sc, sc.gk.contribution(cid))
+    assert info.value.error_class == "secret_in_output"
+
+
+def test_sandbox_run_maps_only_the_anomaly_codes() -> None:
+    class Refusing:
+        def __init__(self, status: int, code: str) -> None:
+            self.status, self.code = status, code
+
+        def run(self, spec: dict[str, Any], *, tick: Any = None) -> dict[str, Any]:
+            raise SbxError(self.status, self.code)
+
+    with pytest.raises(ContributionHeld):
+        sandbox_run(Refusing(423, "egress_anomaly_pending"), {"run_id": "r"}, None)
+    with pytest.raises(Interrupted):
+        sandbox_run(Refusing(423, "paused"), {"run_id": "r"}, None)
+    with pytest.raises(SbxError):
+        sandbox_run(Refusing(400, "egress_anomaly_pending"), {"run_id": "r"}, None)
 
 
 @pytest.mark.parametrize("stage", STAGES)

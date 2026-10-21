@@ -38,7 +38,7 @@ from typing import Any
 from ossbot.common.clock import from_iso
 from ossbot.common.models import LIVE_TEST_ROLE, Catalog, ModelUnavailable
 from ossbot.runner import stages
-from ossbot.runner.errors import CapReached, Deferred, Interrupted, ProbesNotReady, StageFailed
+from ossbot.runner.errors import CapReached, ContributionHeld, Deferred, Interrupted, ProbesNotReady, StageFailed
 from ossbot.runner.github_read import GitHubRateLimited
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.pipeline import StageContext
@@ -313,6 +313,8 @@ class Scheduler:
             cid, state = str(c["id"]), str(c.get("state"))
             if state in TERMINAL or cid in self.running:
                 continue
+            if c.get("held"):
+                continue  # an egress-anomaly hold (open-discovery §13.3): only the owner's Resume releases it
             if self._waiting(cid, state):
                 continue  # backing off (stage errors in a gate-owned state) or GitHub rate limit
             stage = stages.stage_for(c)
@@ -373,6 +375,8 @@ class Scheduler:
                 self.delayed[cid] = (str(c.get("state")), until)
             log.info("stage delayed for %s until %s: %s", cid, until, exc,
                      extra={"event": "stage_delayed", "cid": cid})  # fmt: skip
+        except ContributionHeld as exc:  # not a failure: the owner resumes the hold (open-discovery §13.3)
+            log.warning("stage held for %s: %s", cid, exc, extra={"event": "stage_held", "cid": cid})
         except (Interrupted, Deferred) as exc:
             log.info("stage stopped for %s: %s", cid, exc, extra={"event": "stage_stopped", "cid": cid})
         except StageFailed as exc:

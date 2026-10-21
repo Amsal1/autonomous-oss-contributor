@@ -4,8 +4,8 @@
 * ``Interrupted``: stop now, re-queue later (kill, pause, drain, down, host sleep, a sandbox job
   cut by a drain timeout or a sandboxd crash, sandboxd unreachable). Stage run ``interrupted``;
   the gatekeeper allows 3 re-queues per stage (§9.3, CR-001).
-* ``Deferred``: not now and not counted (daily cap, waiting for a claim, the probe gate); stage run
-  ``cancelled``.
+* ``Deferred``: not now and not counted (daily cap, waiting for a claim, the probe gate, an egress-anomaly
+  hold); stage run ``cancelled``.
 """
 
 from __future__ import annotations
@@ -18,6 +18,10 @@ from ossbot.runner.sbx_client import SbxError
 
 INTERRUPTED = "interrupted"  # sandboxd's job error_class after a drain timeout or crash recovery
 PROBE_GATE = "safety_probe_missing"  # sandboxd's 423 for a Kiro job before the probes passed (§10.9)
+# open-discovery design §13.2/§13.3: the egress meter stopped the job / a hold isn't recorded yet / is open
+EGRESS_ANOMALY = "egress_anomaly"
+EGRESS_ANOMALY_PENDING = "egress_anomaly_pending"
+CONTRIBUTION_HELD = "contribution_held"
 
 
 class StageFailed(RuntimeError):
@@ -52,6 +56,12 @@ class CapReached(Deferred):
         self.until = until
 
 
+class ContributionHeld(Deferred):
+    """The contribution is held for an egress anomaly (open-discovery design §13.2, §13.3): the gatekeeper's
+    423 ``contribution_held``, sandboxd's 423 ``egress_anomaly_pending`` or a job stopped by the meter
+    (``egress_anomaly``). Not a stage failure: the run is cancelled until the owner resumes the hold."""
+
+
 class JobRunner(Protocol):
     def run(self, spec: dict[str, Any], *, tick: Callable[[], None] | None = None) -> dict[str, Any]: ...
 
@@ -67,9 +77,13 @@ def sandbox_run(sbx: JobRunner, spec: dict[str, Any], tick: Callable[[], None] |
     except SbxError as exc:
         if exc.status == 423 and exc.code == PROBE_GATE:
             raise ProbesNotReady(PROBE_GATE) from exc
+        if exc.status == 423 and exc.code == EGRESS_ANOMALY_PENDING:  # the hold isn't recorded yet (fail closed)
+            raise ContributionHeld(f"sandboxd {exc.status} {exc.code}") from exc
         if exc.status in {423, 503}:  # paused/killed/draining/down, or sandboxd restarting
             raise Interrupted(f"sandboxd {exc.status} {exc.code}") from exc
         raise
     if done.get("state") == "failed" and done.get("error_class") == INTERRUPTED:
         raise Interrupted(f"sandbox job {spec.get('run_id')} interrupted")
+    if done.get("state") == "failed" and done.get("error_class") == EGRESS_ANOMALY:
+        raise ContributionHeld(f"sandbox job {spec.get('run_id')} stopped: egress anomaly")
     return done

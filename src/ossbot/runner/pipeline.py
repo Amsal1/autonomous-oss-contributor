@@ -28,7 +28,7 @@ from ossbot.common.control_flags import Blocked, NotUp, require_running, require
 from ossbot.common.models import ModelsFile, ModelUnavailable
 from ossbot.common.schemas import STAGE_ENTRYPOINTS
 from ossbot.runner.backends import select_backend
-from ossbot.runner.errors import Deferred, Interrupted, StageFailed
+from ossbot.runner.errors import CONTRIBUTION_HELD, ContributionHeld, Deferred, Interrupted, StageFailed
 from ossbot.runner.github_read import GitHubRead
 from ossbot.runner.gk_client import Gatekeeper, GkError
 from ossbot.runner.llm import Kiro
@@ -170,6 +170,8 @@ class StageRun:
         try:
             doc = self.sc.gk.stage_open(self.cid, self.stage, **self.fields)
         except GkError as exc:
+            if exc.status == 423 and exc.code == CONTRIBUTION_HELD:  # review-3 L1: a hold, not a stop or failure
+                raise ContributionHeld(f"gatekeeper refused stage {self.stage}: {exc.code}") from exc
             if exc.status == 423:
                 raise Interrupted(f"gatekeeper refused stage {self.stage}: {exc.code}") from exc
             raise StageFailed(f"stage_open_{exc.code}"[:64]) from exc
@@ -204,6 +206,8 @@ class StageRun:
             status, error_class = "succeeded", None
         elif isinstance(exc, Interrupted):
             status, error_class = "interrupted", "interrupted"
+        elif isinstance(exc, ContributionHeld):
+            status, error_class = "cancelled", CONTRIBUTION_HELD
         elif isinstance(exc, Deferred):
             status, error_class = "cancelled", "deferred"
         elif isinstance(exc, StageFailed):

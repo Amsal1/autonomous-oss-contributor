@@ -26,6 +26,7 @@ from ossbot.runner.scheduler import Scheduler
 from ossbot.runner.stages import common, fetch, review, scout
 from tests.conftest import insert_contribution
 from tests.fakes.fake_github import FakeGitHub
+from tests.fakes.holds import hold_request
 from tests.unit.gatekeeper.test_proposals import sample, start
 from tests.unit.runner.conftest import MODELS, FakeSbx, fenced, fetch_json
 
@@ -74,6 +75,33 @@ def test_a_sandbox_interruption_requeues_instead_of_failing(
     ready(sc, ctx).tick()  # re-queued on the next tick, attempt 2
     assert state(ctx, cid) == "PROPOSED"
     assert runs(ctx, cid) == [("scout", "interrupted"), ("scout", "succeeded")]
+
+
+def test_held_rows_are_not_dispatched_until_released(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
+    """Open-discovery §13.3: an active row with held: true is skipped; others still run; Resume frees it."""
+    held = insert_contribution(ctx, State.VETTED)
+    free = insert_contribution(ctx, State.VETTED)
+    ctx.holds.hold(held, hold_request(stage="fetch", run_id="fetch-abc"), "uid:2002/sandbox")
+    sbx.kiro("scout", fenced(sample()))
+    started = ready(sc, ctx).tick().started
+    assert held not in started and free in started
+    assert runs(ctx, held) == [] and state(ctx, held) == "VETTED"
+    ctx.holds.release(held, "tg:4242")
+    assert held in ready(sc, ctx).tick().started
+    assert runs(ctx, held) == [("scout", "succeeded")]
+
+
+@pytest.mark.parametrize("how", ["job_error", "sandboxd_pending"])
+def test_an_egress_anomaly_is_not_a_stage_failure(sc: StageContext, ctx: AppContext, sbx: FakeSbx, how: str) -> None:
+    cid = insert_contribution(ctx, State.VETTED)
+    if how == "job_error":  # the scout's depth-1 clone is a fetch job, metered like any fetch
+        sbx.handlers["fetch"] = lambda spec, out: 1
+        sbx.error_class["fetch"] = "egress_anomaly"
+    else:
+        sbx.refuse["fetch"] = (423, "egress_anomaly_pending")
+    ready(sc, ctx).tick()
+    assert state(ctx, cid) == "SCOUTING"  # not FAILED
+    assert runs(ctx, cid) == [("scout", "cancelled")]
 
 
 def test_the_kiro_job_interrupted_by_sandboxd_requeues(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
