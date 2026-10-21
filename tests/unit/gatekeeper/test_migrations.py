@@ -14,8 +14,11 @@ CR004_TABLES = {"runner_requests"}
 HERMES_TABLES = {"skill_reviews", "chat_turns", "chat_sessions"}  # 0004_hermes.sql (FEAT-007)
 UX_TABLES = {"tg_topics", "pending_input", "review_comments", "ux_prefs"}  # 0005_telegram_ux.sql (FEAT-009)
 UX_OUTBOX_COLUMNS = {"priority", "thread_key", "coalesce_key", "merged_into"}
-LATEST = 6
+LATEST = 7
 M2_TABLES = {"digest_runs", "reminders", "review_mirror", "telegraph_pages"}  # 0006_telegram_m2.sql (FEAT-010)
+OPEN_TABLES = {"discovered_targets", "contribution_holds"}  # 0007_open_discovery.sql (post-v1)
+MIGRATIONS = ((1, "0001_init.sql"), (2, "0002_decisions.sql"), (3, "0003_cr004.sql"), (4, "0004_hermes.sql"),
+              (5, "0005_telegram_ux.sql"), (6, "0006_telegram_m2.sql"))  # fmt: skip
 
 
 def _tables(conn: sqlite3.Connection) -> set[str]:
@@ -29,7 +32,8 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 def test_from_empty(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "a.db")
     assert db.migrate(conn) == LATEST
-    assert _tables(conn) >= DECISION_TABLES | CR004_TABLES | HERMES_TABLES | UX_TABLES | M2_TABLES
+    assert _tables(conn) >= DECISION_TABLES | CR004_TABLES | HERMES_TABLES | UX_TABLES | M2_TABLES | OPEN_TABLES
+    assert "pending_input_v7" not in _tables(conn)
     assert _columns(conn, "tg_outbox") >= OUTBOX_COLUMNS | UX_OUTBOX_COLUMNS
     assert "comments_json" in _columns(conn, "change_requests")
     assert db.migrate(conn) == LATEST  # idempotent
@@ -103,3 +107,82 @@ def test_from_version_2_rebuilds_contributions_and_keeps_references(tmp_path: Pa
         pass
     else:  # pragma: no cover - the foreign key must still be enforced on the rebuilt table
         raise AssertionError("foreign key onto contributions not enforced after the rebuild")
+
+
+def _at_version_6(path: Path) -> sqlite3.Connection:
+    conn = db.connect(path)
+    files = resources.files("ossbot.gatekeeper.migrations")
+    for number, name in MIGRATIONS:
+        sql = (files / name).read_text(encoding="utf-8")
+        conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = {number};\nCOMMIT;")
+    return conn
+
+
+def _insert_prompt(conn: sqlite3.Connection, pid: str, kind: str) -> None:
+    conn.execute(
+        "INSERT INTO pending_input (id, kind, cid, prompt_message_id, chat_id, created_at, expires_at)"
+        " VALUES (?, ?, 'c_0000000001', 77, 4242, 't', 'z')",
+        (pid, kind),
+    )
+
+
+def test_from_version_6_rebuilds_pending_input_and_adds_open_discovery(tmp_path: Path) -> None:
+    """0007 (post-v1 open discovery): an open prompt survives the rebuild; the new kind and CHECKs hold."""
+    conn = _at_version_6(tmp_path / "e.db")
+    _insert_prompt(conn, "p1", "proposal_adjust")
+    assert db.migrate(conn) == LATEST
+    row = conn.execute("SELECT id, kind, cid, prompt_message_id, consumed_at FROM pending_input").fetchone()
+    assert tuple(row) == ("p1", "proposal_adjust", "c_0000000001", 77, None)
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert _tables(conn) >= OPEN_TABLES and "pending_input_v7" not in _tables(conn)
+    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert {"pending_input_open", "discovered_targets_status", "contribution_holds_open"} <= indexes
+    _insert_prompt(conn, "p2", "open_topic_add")
+    try:
+        _insert_prompt(conn, "p3", "open_topic_remove")
+    except sqlite3.IntegrityError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("unknown pending_input kind accepted")
+
+
+def _discovered(conn: sqlite3.Connection, repo: str, **cols: object) -> None:
+    row: dict[str, object] = {"repo": repo, "source": "search", "status": "candidate", "first_seen": "t",
+                              "updated_at": "t", **cols}  # fmt: skip
+    names = ", ".join(row)
+    conn.execute(f"INSERT INTO discovered_targets ({names}) VALUES ({', '.join('?' * len(row))})", tuple(row.values()))
+
+
+def test_open_discovery_checks(tmp_path: Path) -> None:
+    conn = db.connect(tmp_path / "f.db")
+    db.migrate(conn)
+    _discovered(conn, "argoproj/argo-cd", ci_on_pr="yes", egress_strict=1)
+    for bad in ({"status": "approved"}, {"source": "llm"}, {"ci_on_pr": "maybe"}, {"egress_strict": 2}):
+        try:
+            _discovered(conn, "o/bad", **bad)
+        except sqlite3.IntegrityError:
+            continue
+        raise AssertionError(f"CHECK not enforced for {bad}")  # pragma: no cover
+    try:  # repo is the key, case-insensitively
+        _discovered(conn, "ArgoProj/Argo-CD")
+    except sqlite3.IntegrityError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("repo key is not NOCASE")
+    conn.execute(
+        "INSERT INTO contributions (id, upstream, issue_number, source, state, created_at, updated_at)"
+        " VALUES ('c_0000000001', 'o/r', 5, 'discover', 'FETCHING', 't', 't')"
+    )
+    hold = (
+        "INSERT INTO contribution_holds (id, cid, reason, detail_json, held_by, held_at)"
+        " VALUES (?, ?, ?, '{}', 'x', 't')"
+    )
+    conn.execute(hold, ("h1", "c_0000000001", "egress_anomaly"))
+    for args in (("h2", "c_0000000001", "egress_anomaly"), ("h3", "c_0000000001", "other")):
+        try:  # one open hold per cid; the reason is a closed set
+            conn.execute(hold, args)
+        except sqlite3.IntegrityError:
+            continue
+        raise AssertionError(f"contribution_holds accepted {args}")  # pragma: no cover
+    conn.execute("UPDATE contribution_holds SET released_at = 't2', released_by = 'op' WHERE id = 'h1'")
+    conn.execute(hold, ("h4", "c_0000000001", "egress_anomaly"))  # a new hold after the release

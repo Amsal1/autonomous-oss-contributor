@@ -22,10 +22,10 @@ from ossbot.gatekeeper import db
 TTL = timedelta(minutes=15)
 InputKind = Literal["changes", "edit_title", "edit_body", "reject_other", "edit_comment", "comment", "line_pick",
                     "review_send_text", "body_file", "feature_fix", "proposal_adjust",
-                    "proposal_snooze_days"]  # fmt: skip
+                    "proposal_snooze_days", "open_topic_add"]  # fmt: skip
 INPUT_KINDS: tuple[str, ...] = ("changes", "edit_title", "edit_body", "reject_other", "edit_comment", "comment",
                                 "line_pick", "review_send_text", "body_file", "feature_fix", "proposal_adjust",
-                                "proposal_snooze_days")  # fmt: skip
+                                "proposal_snooze_days", "open_topic_add")  # fmt: skip
 COLUMNS = ("cid", "approval_id", "action_id", "proposal_id", "rev", "path", "side", "hunk")
 
 
