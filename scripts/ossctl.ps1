@@ -137,6 +137,12 @@ $marker = Join-Path (Get-OssRepoRoot) '.ossbot-local\KILL'
 if (Test-Path -LiteralPath $marker) { Add-Check 'WARN' 'kill marker' '.ossbot-local\KILL present (killed at level full)' 'powershell -File scripts\resume.ps1' }
 else { Add-Check 'PASS' 'kill marker' 'absent' }
 
+# The distro's virtual disk (DESIGN 18.10), informational: the WARN threshold is the distro's disk-usage line.
+$vhd = Get-OssVhdSize
+if (-not $vhd) { Add-Check 'WARN' 'vhd' '.wsl\ossbot\ext4.vhdx not found' 'powershell -File scripts\bootstrap.ps1' }
+elseif ($null -eq $vhd.OnDisk) { Add-Check 'PASS' 'vhd' ('{0} {1:N1} GiB logical (on-disk size unavailable)' -f $vhd.Path, ($vhd.Length / 1GB)) }
+else { Add-Check 'PASS' 'vhd' ('{0} {1:N1} GiB on disk ({2:N1} GiB logical)' -f $vhd.Path, ($vhd.OnDisk / 1GB), ($vhd.Length / 1GB)) }
+
 Write-Host '== Windows part'
 foreach ($r in $results) {
     $line = '{0,-15} {1}: {2}' -f $r.Status, $r.Name, $r.Detail

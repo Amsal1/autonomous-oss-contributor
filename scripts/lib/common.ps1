@@ -320,6 +320,25 @@ function Add-OssWin32 {
 '@
 }
 
+function Get-OssVhdSize {
+    # The distro's ext4.vhdx (DESIGN 18.10): logical Length and the bytes it really takes on the host disk
+    # (sparseVhd: GetCompressedFileSizeW reports the allocated size). $null when the file is missing.
+    param([string]$Path = (Join-Path $script:OssRepo '.wsl\ossbot\ext4.vhdx'))
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if (-not $item) { return $null }
+    if (-not ('OssbotWin32.Disk' -as [type])) {
+        Add-Type -Namespace OssbotWin32 -Name Disk -MemberDefinition @'
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] public static extern uint GetCompressedFileSizeW(string lpFileName, out uint lpFileSizeHigh);
+'@
+    }
+    $high = [uint32]0
+    $low = [OssbotWin32.Disk]::GetCompressedFileSizeW($item.FullName, [ref]$high)
+    $err = [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+    $onDisk = $null
+    if (-not ($low -eq [uint32]::MaxValue -and $err -ne 0)) { $onDisk = ([uint64]$high * 4294967296) + [uint64]$low }
+    return [pscustomobject]@{ Path = $item.FullName; Length = [uint64]$item.Length; OnDisk = $onDisk }
+}
+
 function Find-OssBlockerWindow {
     Add-OssWin32
     return [OssbotWin32.Native]::FindWindow([NullString]::Value, $script:OssBlockerTitle)

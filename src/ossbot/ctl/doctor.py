@@ -23,9 +23,12 @@ from typing import Any
 import httpx
 
 from ossbot.common.backends import KIRO_HEADLESS
+from ossbot.common.config import PolicyConfig, RetentionPolicy
 from ossbot.common.images import load_image_pins
 from ossbot.common.paths import Paths
+from ossbot.common.snapshot import read_current
 from ossbot.common.uds import uds_client
+from ossbot.common.yamlio import safe_load
 
 PASS, WARN, FAIL, SKIP = "PASS", "WARN", "FAIL", "SKIP"
 AWAITING = "AWAITING SECRET"
@@ -849,6 +852,33 @@ def check_disk() -> Result:
     return Result(PASS if free >= 20 else FAIL, "disk /srv", f"{free:.0f} GB free")
 
 
+def _disk_warn_gib(snapshot_root: Path) -> int:
+    """``retention.disk_warn_gib`` of the current snapshot; the schema default when it is unreadable."""
+    try:
+        _, files = read_current(snapshot_root)
+        return PolicyConfig.model_validate(safe_load(files["policy.yaml"])).retention.disk_warn_gib
+    except (OSError, KeyError, ValueError):  # YamlError and pydantic's ValidationError are ValueErrors
+        return RetentionPolicy().disk_warn_gib
+
+
+def _last_gc(path: Path) -> str:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        return f"{doc['ts']}{' (dry run)' if doc.get('dry_run') else ''}{' (stopped)' if doc.get('stopped') else ''}"
+    except (OSError, ValueError, KeyError, TypeError):
+        return "never"
+
+
+def check_disk_usage(root: str = "/", snapshot_root: Path | None = None, last: Path | None = None) -> Result:
+    """Used space of ``/`` against ``retention.disk_warn_gib`` (DESIGN §18.10), with the last ``ossctl gc``."""
+    paths = Paths.default()
+    st = os.statvfs(root)
+    used = (st.f_blocks - st.f_bfree) * st.f_frsize / 1024**3
+    warn = _disk_warn_gib(snapshot_root or paths.snapshot_root)
+    detail = f"{root} uses {used:.1f} GiB (WARN at {warn} GiB); last gc {_last_gc(last or paths.gc_last)}"
+    return Result(PASS if used < warn else WARN, "disk usage", detail, "sudo ossctl gc --dry-run")
+
+
 def check_lock_drift() -> Result:
     try:
         same = LOCK_COPY.read_bytes() == (Paths.default().config_dir / "versions.lock.yaml").read_bytes()
@@ -879,7 +909,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
         lambda: check_github(quick),
         lambda: check_github_mcp(quick),
         lambda: check_telegram(quick),
-        check_identity_snapshot, check_audit, check_disk, check_lock_drift,
+        check_identity_snapshot, check_audit, check_disk, check_disk_usage, check_lock_drift,
     ]  # fmt: skip
     results: list[Result] = []
     for step in steps:
