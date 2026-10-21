@@ -786,6 +786,17 @@ FEAT-001 (config, schemas and gatekeeper data for discovered targets; plan items
 
 Two tests failed on the start commit 680959d, independent of this FEAT: `test_package_verify.py::test_repo_rejections[cla_required]` and `test_policy.py::test_repo_checks` assert a `cla_required` refusal for a shipped target, which `defaults.cla_signed: true` now signs. Both now use an unsigned copy of the target (4c6449c, 35c8b37); the refusal itself is unchanged.
 
+FEAT-002 (runner: repo search, open phase, dry run and ossctl controls; plan items 10-15 plus the runner part of the owner addition "default-branch activity gate"): commits b96b862, 75db8d4, 0a977a5, 2fdff31, 230a5d7, 0a253f0 on `main`, start 8dcc9b4 with a clean tree. Hermetic only, no redeploy. Dry-run is OFF (owner); no GitHub write, no live stage, no Telegram message, no `/work`, `ossctl discover`, `ossctl targets add|block|unblock|strict|search` against the live gatekeeper, no `/reload` or egress switch; GitHub use in tests is `tests/fakes/fake_github.py` only (new: `/search/repositories`, label-list issue searches, community profiles, commit dates, mention counts, queued `answers`, the root contents listing). No web check was needed: the GitHub facts used (search qualifiers, `incomplete_results`, secondary limits, community profile) are the ones design §15 verified on 2026-10-21.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate (0a253f0) | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all clean; 555 files formatted; mypy 260 files no issues; 15 contracts kept, 0 broken |
+| FEAT targeted tests | `DEV pytest tests/unit/runner tests/unit/ctl/test_cli_pipeline.py -x -q --timeout=120` | 310 passed |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4302 passed in 142 s (`.ossbot-local/logs/open-discovery-feat002.log`) |
+| Docs | `DEV ossctl docs commands --check` | command table current (no Telegram command changed) |
+
+Acceptance points pinned by tests: the exact repo query and the quoted OR label list, no `advanced_search`/`search_type` (`test_github_read.py`, `test_open_discovery.py`); a search limit sets only the search bucket, secondary limits 60/120/240/480/900/900 s and reset on success; rules 3-12 write no row, 13 and the activity gate record `skipped` with a cooldown; M2 for a search hit, a carry-over row, a suggestion and a named issue (rows byte-identical); M3 `schema_error` → ERROR `open_facts_invalid`, `denied` → INFO `open_repo_refused`, 5xx re-raised; L3 the open candidate's score has the part `repo` = 0.5 · repo score (CI inside) and no `ci_on_pr` part; a search limit saves `_open.search_until`, defers with no contribution and keeps earlier cids (`test_discover_open.py`); `targets search` GET-only with no `/v1/` request, rate limit exit 1, and `add|block|unblock|strict --off` refuse without a TTY (`test_cli_pipeline.py`).
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
