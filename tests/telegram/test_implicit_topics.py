@@ -16,9 +16,11 @@ from ossbot.gatekeeper.telegram.implicit_topics import (
     CommandSeen,
     ImplicitTopics,
     Match,
+    TextSeen,
     TopicSeen,
     command_key,
     name_matches,
+    text_prefix_matches,
 )
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from tests.fakes.fake_telegram import message_update, topic_created_update
@@ -238,3 +240,77 @@ def test_bounded_and_replay_safe() -> None:
     assert c.on_command(_cmd()) is None and c.on_topic(_topic()) is None  # replays
     assert c.on_topic(_topic(mid=N + 10)) is None and c.on_command(_cmd(mid=N + 11)) is None  # thread done
     assert c.pending() == (0, 1)
+
+
+# ------------------------------------------------------------------ the text side (plan D10)
+TYPED = "hello there, how does it work"
+
+
+def _text(mid: int = N + 1, at: float = 0.3, **kw: Any) -> TextSeen:
+    base: dict[str, Any] = {"chat_id": 1, "user_id": 1, "message_id": mid, "text": TYPED, "at": at}
+    return TextSeen(**{**base, **kw})
+
+
+def test_text_prefix_rule() -> None:
+    assert text_prefix_matches(TYPED[:16] + "...", TYPED)  # Android
+    assert text_prefix_matches(TYPED[:16] + "…", TYPED) and text_prefix_matches(TYPED[:16], TYPED)  # iOS
+    assert text_prefix_matches("probe two", "probe two")  # a short text in full
+    assert text_prefix_matches("hello  there...", "hello there\nfriend")  # whitespace collapsed
+    assert not text_prefix_matches("My notes", TYPED) and not text_prefix_matches("", TYPED)
+    assert not text_prefix_matches("...", TYPED) and not text_prefix_matches(TYPED + " more", TYPED)
+
+
+def test_text_pairs_like_a_command_and_is_adopted() -> None:
+    for text in (_text(chat_id=2), _text(user_id=2), _text(mid=N + 2), _text(at=2.5), _text(text="other")):
+        c = ImplicitTopics()
+        c.on_topic(_topic(name=TYPED[:16] + "..."))
+        assert c.on_text(text) is None and not c.adopted(1, NEW)
+    c = ImplicitTopics()
+    c.on_topic(_topic(name=TYPED[:16] + "..."))
+    match = c.on_text(_text())
+    assert match == Match(NEW, "topic_first", 300, True, False, "text")
+    assert c.adopted(1, NEW) and c.pending() == (0, 0) and c.pending_texts() == 0
+    c = ImplicitTopics()
+    c.on_topic(_topic(name="New topic", implicit=True))  # the implicit flag pairs whatever the name
+    assert c.on_text(_text()) is not None
+
+
+def test_a_text_match_never_yields_a_command_match() -> None:
+    c = ImplicitTopics()
+    c.on_topic(_topic(name=TYPED[:16] + "..."))
+    assert c.on_text(_text()) is not None
+    assert c.on_command(_cmd()) is None and c.on_topic(_topic()) is None  # replay; the thread is done
+    assert c.on_topic(_topic(mid=N + 20)) is None  # a second A for the same thread
+    assert c.on_command(_cmd(mid=N + 21)) is None and c.adopted(1, NEW)
+    assert c.text_seen(1, N + 1) and c.on_text(_text()) is None  # a replayed text
+
+
+def test_texts_are_bounded_and_expire() -> None:
+    c = ImplicitTopics(cap=4)
+    for i in range(10):
+        c.on_text(_text(mid=100 + i * 10))
+    assert c.pending_texts() == 4
+    c = ImplicitTopics()
+    assert c.on_text(_text(at=0.0)) is None
+    assert c.on_topic(_topic(at=3.0, implicit=True)) is None  # too late: the text expired unpaired
+    assert c.pending_texts() == 0 and not c.adopted(1, NEW)
+
+
+async def test_waiter_is_resolved_with_the_thread_or_none() -> None:
+    c = ImplicitTopics()
+    assert c.on_text(_text(at=0.0)) is None
+    wait = c.wait_topic(1, N + 1)
+    assert not wait.done()
+    match = c.on_topic(_topic(at=0.4, implicit=True))
+    assert match is not None and match.kind == "text" and match.order == "text_first" and match.gap_ms == 400
+    assert wait.done() and wait.result() == NEW
+    # expiry, an explicit drop, eviction by CAP and an unknown message all resolve with None
+    c = ImplicitTopics(cap=1)
+    c.on_text(_text(mid=200, at=0.0))
+    expired = c.wait_topic(1, 200)
+    c.on_text(_text(mid=300, at=5.0))  # the purge drops 200 (and CAP would too)
+    assert expired.done() and expired.result() is None
+    dropped = c.wait_topic(1, 300)
+    c.drop_text(1, 300)
+    assert dropped.result() is None and c.pending_texts() == 0
+    assert c.wait_topic(1, 999).result() is None

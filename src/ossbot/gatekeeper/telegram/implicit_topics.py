@@ -14,10 +14,18 @@ Either order is handled: whichever side arrives first waits here (bounded, ``CAP
 ``TTL_S`` lifetime) and the second one completes the pair. Nothing ever waits on this: the command is
 answered first and the delete is queued when the pair completes, or the pending side is dropped on
 expiry. A replayed update or a second pair for the same thread never yields a second match.
+
+Typed plain text (``telegram.all_text_mode: topic_session``, plan D10) has its own side: the same pair
+rule, except that A's name must be a prefix of the text (clients name the topic after the first 16
+characters, Android adding "...") unless ``is_name_implicit``. A text match is a ``kind="text"`` match:
+the handler adopts the thread as the conversation's own session and it is never deleted (``adopted``).
+When the text arrives first, the handler's spawned task waits on ``wait_topic`` (resolved by
+``on_topic``, or with None on expiry or ``drop_text``).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -28,8 +36,10 @@ log = logging.getLogger(__name__)
 TTL_S = 2.0  # the live gap is ~300 ms; anything slower is not proven
 CAP = 64  # per pending side, and the replay and done guards hold CAP * 4
 NAME_MAX = 128  # ForumTopicCreated.name is at most 128 characters
+ELLIPSES = ("...", "…")  # Android names a text topic text[:16] + "..." (all-research.md row 14)
 
-Order = Literal["topic_first", "command_first"]
+Order = Literal["topic_first", "command_first", "text_first"]
+MatchKind = Literal["command", "text"]
 
 
 @dataclass(frozen=True)
@@ -57,12 +67,24 @@ class CommandSeen:
 
 
 @dataclass(frozen=True)
+class TextSeen:
+    """Update B of plain text typed in "All" (no ``message_thread_id``, not a topic message, no reply)."""
+
+    chat_id: int
+    user_id: int
+    message_id: int
+    text: str
+    at: float
+
+
+@dataclass(frozen=True)
 class Match:
     thread_id: int
     order: Order
     gap_ms: int
-    name_matches_command: bool
+    name_matches_command: bool  # for a text match: A's name is a prefix of the text
     is_name_implicit: bool
+    kind: MatchKind = "command"  # "text": adopt the thread (never delete it)
 
 
 def command_key(text: str) -> str:
@@ -82,17 +104,43 @@ def name_matches(name: str, text: str) -> bool:
     return key.startswith("/") and key == command_key(text)
 
 
+def text_prefix_matches(name: str, text: str) -> bool:
+    """A's name is the start of the typed text: Android ``text[:16] + "..."``, iOS ``text.prefix(16)``,
+    a short text in full (V9). A trailing "..."/"…" is stripped; whitespace is collapsed on both sides."""
+    core = name.strip()
+    for ellipsis in ELLIPSES:
+        if core.endswith(ellipsis):
+            core = core[: -len(ellipsis)]
+            break
+    key = " ".join(core.split())
+    return bool(key) and " ".join(text.split()).startswith(key)
+
+
 class ImplicitTopics:
     def __init__(self, *, ttl_s: float = TTL_S, cap: int = CAP) -> None:
         self.ttl_s = ttl_s
         self.cap = cap
         self._topics: OrderedDict[tuple[int, int], TopicSeen] = OrderedDict()  # (chat, message_id)
         self._commands: OrderedDict[tuple[int, int], CommandSeen] = OrderedDict()
+        self._texts: OrderedDict[tuple[int, int], TextSeen] = OrderedDict()  # (chat, message_id)
         self._seen: OrderedDict[tuple[str, int, int], None] = OrderedDict()  # replay guard
         self._done: OrderedDict[tuple[int, int], None] = OrderedDict()  # (chat, thread) already matched
+        self._adopted: OrderedDict[tuple[int, int], None] = OrderedDict()  # (chat, thread) of a text match
+        self._waiters: dict[tuple[int, int], asyncio.Future[int | None]] = {}  # (chat, text message_id)
 
     def pending(self) -> tuple[int, int]:
         return len(self._topics), len(self._commands)
+
+    def pending_texts(self) -> int:
+        return len(self._texts)
+
+    def text_seen(self, chat_id: int, message_id: int) -> bool:
+        """``on_text`` already ran for this message (a replayed update)."""
+        return ("text", chat_id, message_id) in self._seen
+
+    def adopted(self, chat_id: int, thread_id: int) -> bool:
+        """The thread was adopted for typed text: it must never be deleted."""
+        return (chat_id, thread_id) in self._adopted
 
     def on_topic(self, ev: TopicSeen) -> Match | None:
         self._purge(ev.at)
@@ -102,8 +150,45 @@ class ImplicitTopics:
         if cmd is not None and self._pairs(ev, cmd):
             del self._commands[(cmd.chat_id, cmd.message_id)]
             return self._match(ev, cmd, "command_first")
+        text = self._texts.get((ev.chat_id, ev.message_id + 1))
+        if text is not None and self._pairs(ev, text):
+            del self._texts[(text.chat_id, text.message_id)]
+            match = self._match(ev, text, "text_first")
+            self._resolve((text.chat_id, text.message_id), ev.thread_id)
+            return match
         self._put(self._topics, (ev.chat_id, ev.message_id), ev)
         return None
+
+    def on_text(self, ev: TextSeen) -> Match | None:
+        """Update B of typed text: a ``kind="text"`` match when A is already pending, else B waits here
+        (the caller then awaits ``wait_topic``)."""
+        self._purge(ev.at)
+        if not self._first("text", ev.chat_id, ev.message_id):
+            return None
+        topic = self._topics.get((ev.chat_id, ev.message_id - 1))
+        if topic is not None and self._pairs(topic, ev) and (topic.chat_id, topic.thread_id) not in self._done:
+            del self._topics[(topic.chat_id, topic.message_id)]
+            return self._match(topic, ev, "topic_first")
+        self._put(self._texts, (ev.chat_id, ev.message_id), ev)
+        self._settle_waiters()
+        return None
+
+    def wait_topic(self, chat_id: int, message_id: int) -> asyncio.Future[int | None]:
+        """Resolved with A's thread when ``on_topic`` pairs this pending text, or with None once it
+        expired or was dropped (already None when it is not pending)."""
+        key = (chat_id, message_id)
+        fut = self._waiters.get(key)
+        if fut is None:
+            fut = asyncio.get_running_loop().create_future()
+            self._waiters[key] = fut
+            if key not in self._texts:
+                self._resolve(key, None)
+        return fut
+
+    def drop_text(self, chat_id: int, message_id: int) -> None:
+        """The caller stopped waiting (timeout or cancel): a late A must not adopt this text."""
+        self._texts.pop((chat_id, message_id), None)
+        self._resolve((chat_id, message_id), None)
 
     def on_command(self, ev: CommandSeen) -> Match | None:
         self._purge(ev.at)
@@ -117,15 +202,35 @@ class ImplicitTopics:
         return None
 
     # ------------------------------------------------------------------ internals
-    def _pairs(self, topic: TopicSeen, cmd: CommandSeen) -> bool:
-        return (topic.chat_id == cmd.chat_id and topic.user_id == cmd.user_id
-                and cmd.message_id == topic.message_id + 1 and abs(cmd.at - topic.at) <= self.ttl_s
-                and (topic.implicit or name_matches(topic.name, cmd.text)))  # fmt: skip
+    @staticmethod
+    def _names(topic: TopicSeen, other: CommandSeen | TextSeen) -> bool:
+        if isinstance(other, TextSeen):
+            return text_prefix_matches(topic.name, other.text)
+        return name_matches(topic.name, other.text)
 
-    def _match(self, topic: TopicSeen, cmd: CommandSeen, order: Order) -> Match:
-        self._put(self._done, (topic.chat_id, topic.thread_id), None, cap=self.cap * 4)
-        return Match(topic.thread_id, order, round(abs(cmd.at - topic.at) * 1000),
-                     name_matches(topic.name, cmd.text), topic.implicit)  # fmt: skip
+    def _pairs(self, topic: TopicSeen, other: CommandSeen | TextSeen) -> bool:
+        return (topic.chat_id == other.chat_id and topic.user_id == other.user_id
+                and other.message_id == topic.message_id + 1 and abs(other.at - topic.at) <= self.ttl_s
+                and (topic.implicit or self._names(topic, other)))  # fmt: skip
+
+    def _match(self, topic: TopicSeen, other: CommandSeen | TextSeen, order: Order) -> Match:
+        key = (topic.chat_id, topic.thread_id)
+        self._put(self._done, key, None, cap=self.cap * 4)
+        kind: MatchKind = "text" if isinstance(other, TextSeen) else "command"
+        if kind == "text":
+            self._put(self._adopted, key, None, cap=self.cap * 4)
+        return Match(topic.thread_id, order, round(abs(other.at - topic.at) * 1000),
+                     self._names(topic, other), topic.implicit, kind)  # fmt: skip
+
+    def _resolve(self, key: tuple[int, int], thread_id: int | None) -> None:
+        fut = self._waiters.pop(key, None)
+        if fut is not None and not fut.done():
+            fut.set_result(thread_id)
+
+    def _settle_waiters(self) -> None:
+        """A waiter whose text is no longer pending (expired or evicted by ``CAP``) gets None."""
+        for key in [k for k in self._waiters if k not in self._texts]:
+            self._resolve(key, None)
 
     def _first(self, kind: str, chat_id: int, message_id: int) -> bool:
         key = (kind, chat_id, message_id)
@@ -142,11 +247,15 @@ class ImplicitTopics:
     def _purge(self, now: float) -> None:
         old_topics = [k for k, v in self._topics.items() if now - v.at > self.ttl_s]
         old_commands = [k for k, c in self._commands.items() if now - c.at > self.ttl_s]
+        old_texts = [k for k, t in self._texts.items() if now - t.at > self.ttl_s]
         for key in old_topics:
             del self._topics[key]
         for key in old_commands:
             del self._commands[key]
-        expired = len(old_topics) + len(old_commands)
+        for key in old_texts:
+            del self._texts[key]
+        self._settle_waiters()
+        expired = len(old_topics) + len(old_commands) + len(old_texts)
         if expired:
             log.info("implicit topic correlation: %d pending side(s) expired", expired,
                      extra={"event": "implicit_topic_expired", "count": expired})  # fmt: skip

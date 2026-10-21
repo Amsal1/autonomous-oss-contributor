@@ -18,6 +18,7 @@ and the update routing table (§14.10.4, ``telegram/routing.py``).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import functools
 import json
 import logging
@@ -140,7 +141,8 @@ class Handlers:
         self.application: Application[Any, Any, Any, Any, Any, Any] | None = None
         # the gatekeeper's GitHub reader (GET only): /work and link-card facts, always in a github_read task
         self.reader: Any = None
-        self.implicit = implicit_topics.ImplicitTopics()  # topic created for a command typed in All
+        self.implicit = implicit_topics.ImplicitTopics()  # topic created for a command or text typed in All
+        self._album_waits: dict[str, asyncio.Task[Any]] = {}  # media_group_id -> its first item's wait
 
     def register(self, application: Application[Any, Any, Any, Any, Any, Any]) -> None:
         self.application = application
@@ -896,6 +898,105 @@ class Handlers:
         self._count_message(inc)
         if message.forum_topic_created is not None:
             self._on_topic_created(message, inc, user_id, thread_seen)
+        if self._text_in_all(message, inc, route):
+            group = message.media_group_id
+            first = self._album_waits.get(group) if group else None
+            if group and (first is not None or group in self.albums):
+                # a later album item follows its first item (the album's thread is decided once)
+                self.spawn(self._follow_album(first, message, inc, user_id, typed, stale_s), "chat_turn")
+                return
+            if self.implicit.text_seen(inc.chat_id, message.message_id):  # a replayed update: handled once
+                log.info("implicit_topic_ignored message=%s reason=replay", message.message_id,
+                         extra={"event": "implicit_topic_ignored", "message_id": message.message_id,
+                                "reason": "replay"})  # fmt: skip
+                return
+            match = self.implicit.on_text(implicit_topics.TextSeen(inc.chat_id, user_id, message.message_id,
+                                                                   inc.text, self._now_s()))  # fmt: skip
+            if match is None:  # B before A: wait (bounded) outside the update slot, never here
+                log.info("implicit_topic_pending side=text message=%s", message.message_id,
+                         extra={"event": "implicit_topic_pending", "side": "text",
+                                "message_id": message.message_id})  # fmt: skip
+                wait = self.implicit.wait_topic(inc.chat_id, message.message_id)
+                task = self.spawn(self._adopt_later(wait, message, inc, user_id, typed, stale_s), "chat_turn")
+                if group:
+                    self._album_waits[group] = task
+                    task.add_done_callback(lambda _t: self._album_waits.pop(group, None))
+                return
+            self._log_adopt(match)
+            inc, route = self._adopt(inc, typed, match.thread_id)
+        await self._dispatch_message(message, inc, user_id, typed, route, stale_s)
+
+    def _text_in_all(self, message: Any, inc: routing.Incoming, route: routing.Route) -> bool:
+        """Plan D10: owner text (or media) typed in All while users may create topics, not a command,
+        reply or service message. ``all_text_mode: legacy`` and flat mode never get here."""
+        topics = ui_of(self.ctx).topics
+        return (topics.mode == "topics" and topics.allows_user_topics
+                and self.ctx.config.telegram.all_text_mode == "topic_session"
+                and inc.raw_thread_id is None and not inc.is_topic_message and inc.reply_to_message_id is None
+                and message.forum_topic_created is None and route.kind in ("chat", "link_card"))  # fmt: skip
+
+    def _adopt(self, inc: routing.Incoming, typed: inputs.Typed, thread: int) -> tuple[routing.Incoming,
+                                                                                      routing.Route]:  # fmt: skip
+        """Re-point B at A's thread: a message in a user topic (session ``tg-<uid>-t<thread>``). It is
+        counted under the thread, so a later command there is answered in place and never deletes it."""
+        inc = dataclasses.replace(inc, thread_id=thread, raw_thread_id=thread)
+        self._count_message(inc)
+        typed.thread_id = thread
+        ui = ui_of(self.ctx)
+        return inc, routing.classify(self.ctx.conn, ui.topics, ui.pending, inc)
+
+    @staticmethod
+    def _log_adopt(match: implicit_topics.Match) -> None:
+        log.info("implicit_topic_match kind=text thread=%s order=%s gap_ms=%s action=adopt", match.thread_id,
+                 match.order, match.gap_ms,
+                 extra={"event": "implicit_topic_match", "kind": "text", "thread_id": match.thread_id,
+                        "order": match.order, "gap_ms": match.gap_ms,
+                        "name_matches_command": match.name_matches_command,
+                        "is_name_implicit": match.is_name_implicit, "action": "adopt"})  # fmt: skip
+
+    async def _adopt_later(self, wait: asyncio.Future[int | None], message: Any, inc: routing.Incoming,
+                           user_id: int, typed: inputs.Typed, stale_s: int) -> int | None:  # fmt: skip
+        """B arrived before A: wait at most ``ttl_s`` for A (``on_topic`` resolves ``wait``), then
+        continue adopted, or in All exactly as in legacy mode."""
+        try:
+            thread = await asyncio.wait_for(asyncio.shield(wait), self.implicit.ttl_s)
+        except TimeoutError:
+            thread = None
+        finally:
+            self.implicit.drop_text(inc.chat_id, message.message_id)  # no-op once paired
+        if thread is None:
+            log.info("implicit_topic_expired kind=text fallback=all message=%s", message.message_id,
+                     extra={"event": "implicit_topic_expired", "kind": "text", "fallback": "all",
+                            "message_id": message.message_id})  # fmt: skip
+            ui = ui_of(self.ctx)
+            route = routing.classify(self.ctx.conn, ui.topics, ui.pending, inc)
+            await self._dispatch_message(message, inc, user_id, typed, route, stale_s)
+            return None
+        inc, route = self._adopt(inc, typed, thread)
+        await self._dispatch_message(message, inc, user_id, typed, route, stale_s)
+        return thread
+
+    async def _follow_album(self, first: asyncio.Task[Any] | None, message: Any, inc: routing.Incoming,
+                            user_id: int, typed: inputs.Typed, stale_s: int) -> None:  # fmt: skip
+        """A later item of an album typed in All: wait for the first item's decision, then join it."""
+        thread: int | None = None
+        if first is not None:
+            await asyncio.wait({first})
+            thread = first.result() if not first.cancelled() and first.exception() is None else None
+        else:
+            album = self.albums.get(message.media_group_id)
+            thread = album.where.thread_id if album is not None else None
+        ui = ui_of(self.ctx)
+        if thread is not None:
+            inc, route = self._adopt(inc, typed, thread)
+        else:
+            route = routing.classify(self.ctx.conn, ui.topics, ui.pending, inc)
+        await self._dispatch_message(message, inc, user_id, typed, route, stale_s)
+
+    async def _dispatch_message(self, message: Any, inc: routing.Incoming, user_id: int, typed: inputs.Typed,
+                                route: routing.Route, stale_s: int) -> None:  # fmt: skip
+        """The routing table from rule 3 on (§14.10.4) for one owner message."""
+        ui = ui_of(self.ctx)
         if route.kind == "pending_input":
             prompt = ui.pending.consume(inc.chat_id, inc.reply_to_message_id)
             handler = inputs.INPUTS.get(prompt.kind) if prompt is not None else None
@@ -1021,6 +1122,9 @@ class Handlers:
                      extra={"event": "implicit_topic_pending", "side": "topic", "message_id": message.message_id,
                             "thread_id": thread})  # fmt: skip
             return
+        if match.kind == "text":  # on_topic resolved the waiting text's task; that topic is kept
+            self._log_adopt(match)
+            return
         self._delete_implicit(match, inc.chat_id)
 
     def _now_s(self) -> float:
@@ -1041,7 +1145,8 @@ class Handlers:
         """A proven pair: delete the auto-created thread, re-checking it is no system topic and holds
         nothing the bot sent. The log carries ids and flags only (never the name or the text)."""
         thread = match.thread_id
-        action = ("refused_system" if self._is_system_thread(thread)
+        action = ("refused_text_topic" if match.kind == "text" or self.implicit.adopted(chat_id, thread)
+                  else "refused_system" if self._is_system_thread(thread)
                   else "refused_bot_posted" if self._bot_posted_in(chat_id, thread) else "delete")  # fmt: skip
         log.info("implicit_topic_match thread=%s order=%s gap_ms=%s name_matches_command=%s implicit=%s action=%s",
                  thread, match.order, match.gap_ms, match.name_matches_command, match.is_name_implicit, action,

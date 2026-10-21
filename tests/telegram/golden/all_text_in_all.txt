@@ -1,0 +1,4 @@
+["sendRichMessageDraft", {"can_stop": true, "chat_id": 4242, "draft_id": 0, "keep_on_stop": false, "rich_message": {"blocks": [{"text": "Thinking…", "type": "thinking"}], "skip_entity_detection": true}}]
+["setMessageReaction", {"chat_id": 4242, "message_id": 7001, "reaction": [{"emoji": "👀", "type": "emoji"}]}]
+["sendRichMessage", {"chat_id": 4242, "disable_notification": true, "reply_parameters": {"allow_sending_without_reply": true, "message_id": 7001}, "rich_message": {"blocks": [{"text": "ok", "type": "paragraph"}, {"text": "🧠 claude-sonnet-5.5 · 0 s", "type": "footer"}], "skip_entity_detection": true}}]
+["setMessageReaction", {"chat_id": 4242, "message_id": 7001, "reaction": [{"emoji": "👌", "type": "emoji"}]}]
