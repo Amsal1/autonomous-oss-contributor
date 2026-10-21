@@ -1,0 +1,12 @@
+# Weekly build cache prune + fstrim (DESIGN §18.10). Enabled by provisioning (OSSBOT_ENABLE_UNITS); a
+# missed run happens at the next boot (Persistent=true, after the random delay; V6).
+[Unit]
+Description=ossbot weekly Docker build cache prune timer
+
+[Timer]
+OnCalendar=Sun *-*-* 05:00:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

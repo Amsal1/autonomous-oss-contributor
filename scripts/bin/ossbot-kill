@@ -4,8 +4,8 @@
 #   ossbot-kill --full|--soft [--reason R] [--actor A]   write the flag (levels only escalate), enforce
 #   ossbot-kill --enforce                                enforce the current flag (ossbot-enforce-kill)
 # Enforcement: kill every ossbot.sandbox=1 container, detach the proxy from and remove every
-# ossbot-t-* network, compose down ossbot-* projects, delete ossbot-* kind clusters, stop runner,
-# sandboxd and hermes; at level full also gatekeeper and proxy. The Docker filter and both firewall
+# ossbot-t-* network, compose down ossbot-* projects, delete ossbot-* kind clusters, stop the retention
+# jobs (ossbot-gc, ossbot-docker-prune), runner, sandboxd and hermes; at level full also gatekeeper and proxy. The Docker filter and both firewall
 # units stay up. Exit 0 done, 3 partial (what failed is listed), 2 usage.
 # Test hook (tests/system/test_kill.ps1): --test-hang N sleeps N s before doing anything (N8).
 set -uo pipefail
@@ -103,6 +103,8 @@ enforce() {
       kind delete cluster --name "$k" >/dev/null 2>&1 || failed+=("kind delete $k")
     done
   fi
+  # A running retention job stops at both levels (DESIGN §18.10); its units are gated on the flag too.
+  stop_units ossbot-gc.service ossbot-docker-prune.service
   stop_units ossbot-runner.service ossbot-sandboxd.service ossbot-hermes.service
   if [[ $level == full ]]; then
     stop_units ossbot-gatekeeper.service ossbot-proxy.service

@@ -120,6 +120,46 @@ def test_runner_unit_is_wired_everywhere() -> None:
     assert "ossbot-runner" in lib.split("PHASE1_UNITS=(", 1)[1].split(")", 1)[0]
 
 
+def test_gc_units_are_wired_everywhere() -> None:
+    """DESIGN §18.10 (plan D6): both retention jobs are root oneshots skipped while killed or paused, their
+    timers are persistent and enabled and started by provisioning, and the kill stops both services."""
+    root = UNITS.parent
+    services_sh = (root / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    enable = services_sh.split("OSSBOT_ENABLE_UNITS=(", 1)[1].split(")", 1)[0].split()
+    start = services_sh.split("step_enable_start()", 1)[1].split("case $level", 1)[0]
+    kill = (root / "scripts" / "bin" / "ossbot-kill").read_text(encoding="utf-8")
+    assert "stop_units ossbot-gc.service ossbot-docker-prune.service" in kill
+    assert kill.index("stop_units ossbot-gc.service") < kill.index("stop_units ossbot-runner.service")
+    ossctl = "/opt/ossbot/app/.venv/bin/ossctl gc"
+    for name, exec_start in (
+        ("ossbot-gc", ossctl),
+        ("ossbot-docker-prune", f"{ossctl} --only build-cache --only fstrim"),
+    ):
+        text = (UNITS / f"{name}.service").read_text(encoding="utf-8")
+        service = _unit(UNITS / f"{name}.service")["Service"]
+        assert "ConditionPathExists=!/var/lib/ossbot/control/killed" in text.splitlines()
+        assert "ConditionPathExists=!/var/lib/ossbot/control/paused" in text.splitlines()
+        assert service["Type"] == "oneshot" and "User" not in service and service["ExecStart"] == exec_start
+        assert _seconds(service["TimeoutStartSec"]) == 1800 and service["IOSchedulingClass"] == "idle"
+        timer = _unit(UNITS / f"{name}.timer")
+        assert timer["Timer"]["Persistent"] == "true" and timer["Timer"]["RandomizedDelaySec"] == "30min"
+        assert timer["Install"]["WantedBy"] == "timers.target"
+        assert f"{name}.timer" in enable and f"{name}.timer" in start
+    assert _unit(UNITS / "ossbot-gc.timer")["Timer"]["OnCalendar"] == "*-*-* 04:30:00"
+    assert _unit(UNITS / "ossbot-docker-prune.timer")["Timer"]["OnCalendar"] == "Sun *-*-* 05:00:00"
+
+
+def test_journald_dropin_is_time_based_only() -> None:
+    """Plan D5: 30 days of journal, no size cap (owner decision); provisioning installs it and restarts journald."""
+    path = UNITS / "journald.conf.d" / "ossbot.conf"
+    journal = _unit(path)["Journal"]
+    assert journal["MaxRetentionSec"] == "30d" and journal["MaxFileSec"] == "1week"
+    assert not [k for k in journal if k.endswith(("MaxUse", "KeepFree", "MaxFileSize", "MaxFiles"))]
+    services_sh = (UNITS.parent / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    assert "/etc/systemd/journald.conf.d/60-ossbot.conf root root 0644" in services_sh
+    assert "systemctl restart systemd-journald" in services_sh
+
+
 @pytest.mark.parametrize("path", NON_ROOT, ids=lambda p: p.name)
 def test_non_root_units_restrict_address_families(path: Path) -> None:
     """P1-13: AF_VSOCK reaches the Windows host (WSL init, the drvfs Plan 9 server) past every IP

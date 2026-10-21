@@ -1,0 +1,20 @@
+# Daily retention and housekeeping (DESIGN §18.10, ADR-0016 addendum post-v1): `ossctl gc` as root.
+# The gatekeeper deletes its own closed rows and old terminal contributions' repos (POST
+# /v1/retention/run); root deletes /tmp leftovers, their artifacts, run logs, idle Hermes session
+# files and dangling images outside the keep set, then fstrim. Never the audit log or anything open or
+# awaiting approval. Skipped while killed or paused (plan D6); ossctl gc re-checks before every store.
+[Unit]
+Description=ossbot retention and housekeeping (ossctl gc)
+After=ossbot-boot-gate.service ossbot-gatekeeper.service docker.service
+ConditionPathExists=!/var/lib/ossbot/control/killed
+ConditionPathExists=!/var/lib/ossbot/control/paused
+
+[Service]
+Type=oneshot
+WorkingDirectory=/
+ExecStart=/opt/ossbot/app/.venv/bin/ossctl gc
+TimeoutStartSec=1800
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
+Nice=10
+IOSchedulingClass=idle

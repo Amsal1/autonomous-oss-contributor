@@ -1,0 +1,18 @@
+# Weekly Docker build cache prune and fstrim (DESIGN §18.10, ADR-0016 addendum post-v1): build cache
+# records unused for retention.docker_build_cache_hours (default 7 d) go, then `fstrim -v /` hands the
+# freed blocks back to the sparse ext4.vhdx. Skipped while killed or paused (plan D6).
+[Unit]
+Description=ossbot weekly Docker build cache prune (ossctl gc --only build-cache --only fstrim)
+After=docker.service ossbot-boot-gate.service
+ConditionPathExists=!/var/lib/ossbot/control/killed
+ConditionPathExists=!/var/lib/ossbot/control/paused
+
+[Service]
+Type=oneshot
+WorkingDirectory=/
+ExecStart=/opt/ossbot/app/.venv/bin/ossctl gc --only build-cache --only fstrim
+TimeoutStartSec=1800
+# CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.
+TimeoutStopSec=150
+Nice=10
+IOSchedulingClass=idle

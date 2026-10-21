@@ -1,0 +1,12 @@
+# Daily `ossctl gc` (DESIGN §18.10). Enabled by provisioning (OSSBOT_ENABLE_UNITS); a run missed while
+# the distro was off happens at the next boot (Persistent=true, still after the random delay; V6).
+[Unit]
+Description=ossbot daily retention timer
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

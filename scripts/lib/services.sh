@@ -14,7 +14,7 @@ OSSBOT_ENABLE_UNITS=(
   ossbot-runner.service ossbot-hermes.service ossbot-hermes-probe.socket
   ossbot-anchor.socket ossbot-killswitch.path ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer
   ossbot-hermes-tier.path ossbot-hermes-tier.timer ossbot-skills.path ossbot-skills-scan.timer
-  ossbot-lifecycle.path
+  ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer
 )
 OSSBOT_BINS=(ossbot-firewall ossbot-boot-gate ossbot-kill ossbot-resume ossbot-proxy-run ossbot-egress-apply
   ossbot-hermes-tier ossbot-lifecycle)
@@ -110,6 +110,18 @@ step_systemd() {
   if ((OSSBOT_UNITS_CHANGED)); then
     systemctl daemon-reload
     mark_changed "systemctl daemon-reload"
+  fi
+  # Journal retention (DESIGN §18.10): time-based only; journald reads its drop-ins at start.
+  ensure_dir /etc/systemd/journald.conf.d root root 0755
+  before=$OSSBOT_STEP_CHANGED
+  OSSBOT_STEP_CHANGED=0
+  ensure_file /etc/systemd/journald.conf.d/60-ossbot.conf root root 0644 \
+    <"$OSSBOT_REPO/systemd/journald.conf.d/ossbot.conf"
+  local journald_changed=$OSSBOT_STEP_CHANGED
+  ((before)) && OSSBOT_STEP_CHANGED=1
+  if ((journald_changed)); then
+    systemctl restart systemd-journald || die "restart systemd-journald failed"
+    mark_changed "restarted systemd-journald (retention drop-in)"
   fi
   local u
   for u in "${OSSBOT_ENABLE_UNITS[@]}"; do
@@ -211,7 +223,7 @@ step_enable_start() {
   local -a units=(ossbot-boot-gate.service ossbot-nointerop.service ossbot-firewall.service docker.service
     ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-anchor.socket ossbot-killswitch.path
     ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer ossbot-hermes-tier.path ossbot-hermes-tier.timer
-    ossbot-skills.path ossbot-skills-scan.timer ossbot-lifecycle.path)
+    ossbot-skills.path ossbot-skills-scan.timer ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer)
   case $level in
     none) units+=(ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service ossbot-runner.service
       ossbot-hermes.service ossbot-hermes-probe.socket) ;;
