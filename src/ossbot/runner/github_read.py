@@ -138,9 +138,9 @@ class GitHubRead:
         doc = self._get(f"/repos/{repo}")
         return doc if isinstance(doc, dict) else None
 
-    def file_text(self, repo: str, path: str) -> str | None:
-        """Raw text of one file on the default branch (CONTRIBUTING, AI policy, PR template)."""
-        doc = self._get(f"/repos/{repo}/contents/{path}")
+    @staticmethod
+    def _decode_file(doc: Any) -> str | None:
+        """A contents-API file document -> text (None for a directory, a > 1 MB file or bad base64)."""
         if not isinstance(doc, dict) or doc.get("type") != "file" or doc.get("encoding") != "base64":
             return None
         import base64  # noqa: PLC0415 - only here
@@ -149,6 +149,18 @@ class GitHubRead:
             return base64.b64decode(str(doc.get("content", ""))).decode("utf-8", "replace")[:200_000]
         except ValueError:
             return None
+
+    def file_text(self, repo: str, path: str) -> str | None:
+        """Raw text of one file on the default branch (CONTRIBUTING, AI policy, PR template)."""
+        return self._decode_file(self._get(f"/repos/{repo}/contents/{path}"))
+
+    def readme(self, repo: str) -> str | None:
+        """The repo's README (whatever its name or folder), as GitHub picks it."""
+        return self._decode_file(self._get(f"/repos/{repo}/readme"))
+
+    def dir_entries(self, repo: str, path: str) -> list[dict[str, Any]]:
+        """The entries (``type``, ``name``, ``path``) of a directory; [] for a file or a 404."""
+        return self._list(f"/repos/{repo}/contents/{path}")
 
     # ----------------------------------------------------------------- issues
     def issues(self, repo: str, label: str | None = None, per_page: int = 50) -> list[dict[str, Any]]:

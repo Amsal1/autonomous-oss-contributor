@@ -14,6 +14,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ossbot.common.ai_policy import POLICY_DOC_PATHS
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
@@ -169,8 +170,7 @@ async def cancel(tap: Tap) -> str:
 
 
 # ------------------------------------------------------------------------------ refusal card
-POLICY_PATHS = frozenset({"AI_POLICY.md", ".github/AI_POLICY.md", "CONTRIBUTING.md", ".github/CONTRIBUTING.md",
-                          "docs/CONTRIBUTING.md"})  # fmt: skip
+POLICY_PATHS = POLICY_DOC_PATHS  # the repo docs vet reads (common.ai_policy); a maintainer comment gets no link
 
 
 def refusal_view(upstream: str, evidence: dict[str, Any]) -> k.View:

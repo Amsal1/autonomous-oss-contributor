@@ -165,11 +165,26 @@ class FakeGitHub:
             if label:
                 items = [i for i in items if label in {lbl.get("name") for lbl in i.get("labels", [])}]
             return httpx.Response(200, json=items)
-        m5 = re.fullmatch(r"/contents/(.+)", rest)
-        if m5 and method == "GET":  # CONTRIBUTING, AI policy (runner vet)
-            text = self.files.get((repo, m5.group(1)))
+        if rest == "/readme" and method == "GET":  # runner vet (README AI wording)
+            text = self.files.get((repo, "README.md"))
             if text is None:
                 return httpx.Response(404, json={"message": "Not Found"})
+            encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+            return httpx.Response(200, json={"type": "file", "encoding": "base64", "content": encoded,
+                                             "path": "README.md"})  # fmt: skip
+        m5 = re.fullmatch(r"/contents/(.+)", rest)
+        if m5 and method == "GET":  # CONTRIBUTING, AI policy, PR template (runner vet); directory listings
+            wanted = m5.group(1).rstrip("/")
+            text = self.files.get((repo, wanted))
+            if text is None:
+                prefix = wanted + "/"
+                names = sorted({p[len(prefix):].split("/", 1)[0] for (r, p) in self.files
+                                if r == repo and p.startswith(prefix)})  # fmt: skip
+                if not names:
+                    return httpx.Response(404, json={"message": "Not Found"})
+                entries = [{"type": "file" if (repo, prefix + n) in self.files else "dir", "name": n,
+                            "path": prefix + n} for n in names]  # fmt: skip
+                return httpx.Response(200, json=entries)
             encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
             return httpx.Response(200, json={"type": "file", "encoding": "base64", "content": encoded})
         m3 = re.fullmatch(r"/pulls/(\d+)", rest)

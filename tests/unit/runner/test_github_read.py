@@ -21,6 +21,7 @@ from ossbot.runner.pipeline import StageContext
 from ossbot.runner.scheduler import DISCOVER_UNAVAILABLE_RETRY, Scheduler
 from ossbot.runner.stages import discover
 from tests.conftest import insert_contribution
+from tests.fakes.fake_github import FakeGitHub
 
 T0 = 1_790_000_000.0
 Answer = Callable[[httpx.Request], httpx.Response]
@@ -259,3 +260,24 @@ def test_targets_verify_stops_reading_once_github_is_unavailable() -> None:
     gh403, _, seen403 = reader([status(403)])  # a plain 4xx is per repo
     verify_targets.verify(gh403, ["a/one", "b/two"], 60, datetime.now(UTC))
     assert repos_read(seen403) == {"a/one", "b/two"}
+
+
+def test_readme_and_directory_listing_on_the_fake() -> None:
+    """Post-v1 vet reads (README, ``.github`` listing): GET only, 404 -> None / []."""
+    fake = FakeGitHub()
+    fake.add_repo("acme/widgets")
+    fake.files[("acme/widgets", "README.md")] = "# Widgets\n"
+    fake.files[("acme/widgets", ".github/PULL_REQUEST_TEMPLATE.md")] = "- [ ] tests\n"
+    fake.files[("acme/widgets", ".github/workflows/ci.yml")] = "on: [pull_request]\n"
+    gh = GitHubRead(fake.sync_client())
+    assert gh.readme("acme/widgets") == "# Widgets\n"
+    assert gh.readme("acme/other") is None
+    entries = gh.dir_entries("acme/widgets", ".github")
+    assert [(e["type"], e["name"], e["path"]) for e in entries] == [
+        ("file", "PULL_REQUEST_TEMPLATE.md", ".github/PULL_REQUEST_TEMPLATE.md"),
+        ("dir", "workflows", ".github/workflows"),
+    ]
+    assert gh.dir_entries("acme/widgets", "README.md") == []  # a file is not a directory
+    assert gh.dir_entries("acme/widgets", "nope") == []
+    assert gh.file_text("acme/widgets", ".github") is None  # a directory is not a file
+    assert fake.writes == [] and {r.method for r in fake.requests} == {"GET"}

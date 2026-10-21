@@ -9,6 +9,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ossbot.common.ai_policy import ConditionKind
+
 Short = Annotated[str, Field(max_length=500)]
 Line = Annotated[str, Field(max_length=300)]
 
@@ -23,8 +25,10 @@ class Evidence(Out):
 
 
 class IssueVetting(Out):
-    ai_policy: Literal["allowed", "disclosure_required", "banned", "unclear"]
+    # untrusted claim, merged by common.ai_policy.merge_claim (a ban counts; an allow needs a doc quote)
+    ai_policy: Literal["allowed", "disclosure_required", "banned", "unclear", "unstated"]
     ai_policy_evidence: Annotated[list[Evidence], Field(max_length=20)] = Field(default_factory=list)
+    ai_conditions: Annotated[list[ConditionKind], Field(max_length=6)] = Field(default_factory=list)
     claim_status: Literal["unclaimed", "claimed_by_other", "claim_required", "stale_claim"]
     requires_claim_comment: bool = False
     requires_assignment: bool = False
@@ -107,7 +111,7 @@ class WatchDecision(Out):
 
 
 SCHEMA_HINTS: dict[str, str] = {
-    "vetter": '{"ai_policy": "...", "claim_status": "...", "suitability": 0.0, ...}',
+    "vetter": '{"ai_policy": "...", "ai_conditions": [...], "claim_status": "...", "suitability": 0.0, ...}',
     "scout": '{"problem": "...", "approach": [...], "areas": [...], "kind": "bug", "estimate": {...}, ...}',
     "planner": '{"feasible": true, "summary": "...", "validation_commands": [...], ...}',
     "coder": '{"files_changed": [...], "tests_changed": [...], "rationale": "...", ...}',

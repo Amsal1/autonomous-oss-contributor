@@ -31,6 +31,16 @@ RANK: dict[str, int] = {"unstated": 0, "unclear": 1, "allowed": 2, "allowed_with
 MAX_CONDITIONS = 6
 CHECKLIST_HEADER = "### AI policy checklist"
 MAINTAINER_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+# The repo docs vet reads (first existing path per group, plus the README); the refusal card links these.
+POLICY_DOC_GROUPS: dict[str, tuple[str, ...]] = {
+    "contributing": ("CONTRIBUTING.md", ".github/CONTRIBUTING.md", "docs/CONTRIBUTING.md"),
+    "ai_policy": ("AI_POLICY.md", ".github/AI_POLICY.md", "AI-POLICY.md", "docs/AI_POLICY.md"),
+    "code_of_conduct": ("CODE_OF_CONDUCT.md", ".github/CODE_OF_CONDUCT.md"),
+    "pr_template": (".github/PULL_REQUEST_TEMPLATE.md", ".github/pull_request_template.md",
+                    "PULL_REQUEST_TEMPLATE.md", "docs/pull_request_template.md"),
+    "support": (".github/SUPPORT.md",),
+}  # fmt: skip
+POLICY_DOC_PATHS: frozenset[str] = frozenset(p for paths in POLICY_DOC_GROUPS.values() for p in paths)
 
 
 class AiCondition(BaseModel):

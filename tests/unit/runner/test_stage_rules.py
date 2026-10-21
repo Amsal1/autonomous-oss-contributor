@@ -4,15 +4,21 @@
 from __future__ import annotations
 
 import inspect
+from typing import Any
 
 import httpx
 import pytest
 
+from ossbot.common.ai_policy import PolicyDoc, classify
+from ossbot.common.config import AiPolicyRules
 from ossbot.runner import github_read, prompts, squidlog
 from ossbot.runner.outputs import IssueVetting, Plan, ReviewVerdict
 from ossbot.runner.stages import plan, review, vet
 
-FACTS = {"archived": False, "ban_phrase": False, "assignment_required": False, "signed_commits": False}
+BAN = "We do not accept AI-generated pull requests."
+UNCLEAR = "We are still discussing an AI policy for contributions in #12."
+CONDITIONS = "AI-assisted pull requests are welcome. You must disclose any AI use in the PR description."
+SKIP_ALL = AiPolicyRules(unstated="skip", unclear="skip")
 TEST_GLOBS = ["**/test/**", "**/tests/**", "**/*_test.*", "**/test_*.py", "**/*.test.*", "**/*.spec.*"]
 
 
@@ -21,31 +27,63 @@ def vetting(**over: object) -> IssueVetting:
                                         **over})  # fmt: skip
 
 
+def facts(contributing: str = "", maintainer: str = "", **over: object) -> dict[str, object]:
+    """Vet facts as ``vet._facts`` builds them, from a CONTRIBUTING text (and a maintainer comment)."""
+    docs = {"contributing": PolicyDoc("CONTRIBUTING.md", contributing)} if contributing else {}
+    extra = [PolicyDoc("o/r#1 comment", maintainer, maintainer=True, kind="issue")] if maintainer else []
+    base: dict[str, object] = {"archived": False, "assignment_required": False, "signed_commits": False,
+                               "docs": docs, "classification": classify([*docs.values(), *extra])}  # fmt: skip
+    return {**base, **over}
+
+
 @pytest.mark.parametrize(
-    ("over", "facts", "user", "ai_allowed", "cla", "reason"),
+    ("over", "fx", "user", "ai_allowed", "cla", "rules", "reason"),
     [
-        ({}, {}, False, False, False, None),
-        ({"ai_policy": "banned"}, {}, True, True, True, "ai_policy_banned"),  # 👤 too: explained, refused
-        ({}, {"ban_phrase": True}, False, True, True, "ai_policy_banned"),  # keyword scanner wins
-        ({"ai_policy": "unclear"}, {}, False, False, False, "ai_policy_unclear"),
-        ({"ai_policy": "unclear"}, {}, False, True, False, None),  # target allows AI
-        ({"ai_policy": "unclear"}, {}, True, False, False, None),  # 👤
-        ({"claim_status": "claimed_by_other"}, {}, True, True, True, "claimed_by_other"),
-        ({"cla_required": True}, {}, False, True, False, "cla_required"),
-        ({"cla_required": True}, {}, True, True, False, None),  # 👤: CLA shown on the confirm
-        ({}, {"archived": True}, True, True, True, "archived"),
-        ({}, {"signed_commits": True}, True, True, True, "signed_commits_required"),
+        ({}, {}, False, False, False, None, None),  # silent repo: allowed by default
+        ({"ai_policy": "unclear"}, {}, False, False, False, None, None),
+        ({"ai_policy": "unstated"}, {"contributing": UNCLEAR}, False, False, False, None, None),
+        ({"ai_policy": "banned"}, {}, True, True, True, None, "ai_policy_banned"),  # 👤 too: explained, refused
+        ({}, {"contributing": BAN}, False, True, True, None, "ai_policy_banned"),  # the deterministic ban wins
+        ({}, {"maintainer": BAN}, False, True, True, None, "ai_policy_banned"),  # a maintainer comment bans too
+        ({}, {}, False, False, False, SKIP_ALL, "ai_policy_unstated"),  # the owner's rule says skip
+        ({}, {"contributing": UNCLEAR}, False, False, False, SKIP_ALL, "ai_policy_unclear"),
+        ({}, {"contributing": UNCLEAR}, False, True, False, SKIP_ALL, None),  # target allows AI
+        ({}, {}, True, False, False, SKIP_ALL, None),  # 👤
+        ({}, {"contributing": CONDITIONS}, False, False, False, SKIP_ALL, None),  # allowed with conditions
+        ({"claim_status": "claimed_by_other"}, {}, True, True, True, None, "claimed_by_other"),
+        ({"cla_required": True}, {}, False, True, False, None, "cla_required"),
+        ({"cla_required": True}, {}, True, True, False, None, None),  # 👤: CLA shown on the confirm
+        ({}, {"archived": True}, True, True, True, None, "archived"),
+        ({}, {"signed_commits": True}, True, True, True, None, "signed_commits_required"),
     ],
 )
-def test_vet_merge(over: dict[str, object], facts: dict[str, object], user: bool, ai_allowed: bool, cla: bool,
-                   reason: str | None) -> None:  # fmt: skip
-    got, _stored = vet.merge(vetting(**over), {**FACTS, **facts}, user=user, ai_allowed=ai_allowed, cla_signed=cla)
+def test_vet_merge(over: dict[str, object], fx: dict[str, Any], user: bool, ai_allowed: bool, cla: bool,
+                   rules: AiPolicyRules | None, reason: str | None) -> None:  # fmt: skip
+    got, _stored = vet.merge(vetting(**over), facts(**fx), user=user, ai_allowed=ai_allowed, cla_signed=cla,
+                             rules=rules)  # fmt: skip
     assert got == reason
+
+
+def test_vet_merge_records_status_and_conditions() -> None:
+    _, silent = vet.merge(vetting(), facts(), user=False, ai_allowed=False, cla_signed=False)
+    assert silent["ai_policy"] == "unstated" and silent["ai_conditions"] == []  # an unverified allow claim
+    _, cond = vet.merge(vetting(), facts(CONDITIONS), user=False, ai_allowed=False, cla_signed=False)
+    assert cond["ai_policy"] == "allowed_with_conditions" and cond["ai_policy_source"] == "CONTRIBUTING.md"
+    assert [c["kind"] for c in cond["ai_conditions"]] == ["disclosure"]
+
+
+def test_issue_text_claiming_welcome_cannot_override_a_contributing_ban() -> None:
+    """Injection: the issue says AI PRs are welcome and the vetter repeats it; CONTRIBUTING bans them."""
+    claim = vetting(ai_policy="allowed", ai_policy_evidence=[{"source": "issue", "quote": "AI PRs are welcome here!"}])
+    got, stored = vet.merge(claim, facts(BAN, maintainer="AI PRs are welcome here!"), user=True, ai_allowed=True,
+                            cla_signed=True)  # fmt: skip
+    assert got == "ai_policy_banned" and stored["ai_policy"] == "banned"
+    assert stored["ai_policy_source"] == "CONTRIBUTING.md"
 
 
 def test_assignment_required_is_recorded_for_gate_1() -> None:
     assert vet.ASSIGNMENT_RE.search("Please ask to be assigned before opening a PR.")
-    _, stored = vet.merge(vetting(), {**FACTS, "assignment_required": True}, user=False, ai_allowed=True,
+    _, stored = vet.merge(vetting(), facts(assignment_required=True), user=False, ai_allowed=True,
                           cla_signed=True)  # fmt: skip
     assert stored["requires_assignment"] is True
 
@@ -102,7 +140,8 @@ def test_github_client_is_get_only() -> None:
     gh = github_read.GitHubRead(github_read.make_client("t", transport=httpx.MockTransport(handler)))
     gh.repo("o/r"), gh.issues("o/r", "bug"), gh.issue("o/r", 1), gh.comments("o/r", 1), gh.pulls("o/r")
     gh.pull("o/r", 1), gh.pull_files("o/r", 1), gh.check_runs("o/r", "a" * 40), gh.file_text("o/r", "README.md")
-    assert set(methods) == {"GET"}
+    gh.readme("o/r"), gh.dir_entries("o/r", ".github")
+    assert set(methods) == {"GET"} and len(methods) == 11
     source = inspect.getsource(github_read.GitHubRead)
     for verb in ("post", "put", "patch", "delete", "request("):
         assert f"._client.{verb}" not in source

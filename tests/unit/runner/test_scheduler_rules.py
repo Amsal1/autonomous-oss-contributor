@@ -300,7 +300,7 @@ def test_items_that_only_ran_kiro_jobs_get_their_networks_released(
 ) -> None:
     """Live finding: vetted-and-skipped items kept their per-task research networks (the /28 pool
     leaks). Every cid that ran a sandbox job is noted; the sweep destroys it once terminal."""
-    sbx.kiro("vetter", fenced({**VETTING, "ai_policy": "unclear"}))
+    sbx.kiro("vetter", fenced({**VETTING, "ai_policy": "banned"}))  # a skip (unclear is allowed post-v1)
     cid = insert_contribution(ctx, State.DISCOVERED)
     scheduler = ready(sc, ctx)
     scheduler.tick()

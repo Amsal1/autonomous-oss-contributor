@@ -110,24 +110,39 @@ def write_inputs(sc: StageContext, cid: str, tag: str, files: dict[str, str | by
     return out
 
 
-def issue_text(sc: StageContext, c: dict[str, Any]) -> tuple[str, str]:
-    """Issue (or PR/repo for 👤 work) and its comments as untrusted prompt sections."""
+def fetch_issue(sc: StageContext, c: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]], int | None]:
+    """The raw issue (or PR for 👤 work), its last 40 comments and its number; (None, [], None) without one."""
     repo, number = str(c["upstream"]), c.get("issue_number")
     if number is None and c.get("work_ref") == "pull" and c.get("work_url"):
         number = int(str(c["work_url"]).rsplit("/", 1)[1])
     if number is None:
-        return prompts.untrusted(f"github:{repo}", f"Repository {repo} (no issue: owner-directed work)"), ""
+        return None, [], None
     issue = sc.gh.issue(repo, int(number)) or {}
+    return issue, sc.gh.comments(repo, int(number))[-40:], int(number)
+
+
+def render_issue(repo: str, number: int | None, issue: dict[str, Any] | None,
+                 comments: list[dict[str, Any]]) -> tuple[str, str]:  # fmt: skip
+    """Issue and comments as untrusted prompt sections."""
+    if number is None:
+        return prompts.untrusted(f"github:{repo}", f"Repository {repo} (no issue: owner-directed work)"), ""
+    issue = issue or {}
     labels = ", ".join(str(lbl.get("name")) for lbl in issue.get("labels") or [] if isinstance(lbl, dict))
     body = (
         f"# {issue.get('title', '')}\nLabels: {labels}\nState: {issue.get('state', '?')}\n\n{issue.get('body') or ''}"
     )
-    comments = "\n\n".join(
+    text = "\n\n".join(
         f"## {(cm.get('user') or {}).get('login', '?')} at {cm.get('created_at', '')}\n{cm.get('body') or ''}"
-        for cm in sc.gh.comments(repo, int(number))[-40:]
+        for cm in comments
     )
     return (prompts.untrusted(f"github:{repo}#{number}", body),
-            prompts.untrusted(f"github:{repo}#{number} comments", comments or "(no comments)"))  # fmt: skip
+            prompts.untrusted(f"github:{repo}#{number} comments", text or "(no comments)"))  # fmt: skip
+
+
+def issue_text(sc: StageContext, c: dict[str, Any]) -> tuple[str, str]:
+    """Issue (or PR/repo for 👤 work) and its comments as untrusted prompt sections."""
+    issue, comments, number = fetch_issue(sc, c)
+    return render_issue(str(c["upstream"]), number, issue, comments)
 
 
 def owner_notes(c: dict[str, Any]) -> list[str]:
