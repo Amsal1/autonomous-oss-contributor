@@ -42,10 +42,10 @@ def _age(path: Path, days: float) -> None:
 def _roots(tmp_path: Path) -> gc.Roots:
     roots = gc.Roots(
         tmp=tmp_path / "tmp", artifacts=tmp_path / "artifacts", run_logs=tmp_path / "runs",
-        hermes_sessions=tmp_path / "hermes" / "sessions", state_file=tmp_path / "var" / "gc" / "last.json",
-        lock=tmp_path / "versions.lock.yaml",
+        proxy_logs=tmp_path / "proxy", hermes_sessions=tmp_path / "hermes" / "sessions",
+        state_file=tmp_path / "var" / "gc" / "last.json", lock=tmp_path / "versions.lock.yaml",
     )  # fmt: skip
-    for d in (roots.tmp, roots.artifacts, roots.run_logs, roots.hermes_sessions):
+    for d in (roots.tmp, roots.artifacts, roots.run_logs, roots.proxy_logs, roots.hermes_sessions):
         d.mkdir(parents=True)
     roots.lock.write_text(
         f'base_images:\n  ubuntu_24_04: "{BASE}"\nimages:\n  proxy:\n    digest: "{PIN}"\n', encoding="utf-8"
@@ -191,6 +191,36 @@ def test_run_logs_by_mtime(tmp_path: Path) -> None:
     assert sorted(p.name for p in r.iterdir()) == ["dir.log", "new.log", "old.txt"]
 
 
+def test_run_logs_include_old_egress_summaries(tmp_path: Path) -> None:
+    """Open-discovery §13.2 (review-2 finding 7): old ``*.egress.json`` next to old ``*.log``, nothing else."""
+    r = _roots(tmp_path).run_logs
+    for name in ("r1.log", "r1.egress.json", "r2.egress.json", "r3.egress.jsonl", "r4.json", "egress.json.bak"):
+        (r / name).write_text("{}")
+        _age(r / name, 31)
+    _age(r / "r2.egress.json", 29)
+    assert [e.name for e in gc.select_run_logs(r, 30, NOW)] == ["r1.egress.json", "r1.log"]
+
+
+def test_proxy_logs_keep_recent_rotations_and_never_the_live_file(tmp_path: Path) -> None:
+    """Open-discovery §13.5: rotated ``access.log.<stamp>`` older than ``proxy_logs_days`` (default 30)."""
+    roots = _roots(tmp_path)
+    p = roots.proxy_logs
+    names = ("access.log", "access.log.20260901T001000Z", "access.log.20261020T001000Z", "cache.log",
+             "cache.log.20260901T001000Z")  # fmt: skip
+    for name in names:
+        (p / name).write_text("line\n")
+        _age(p / name, 400)
+    _age(p / "access.log.20261020T001000Z", 29)
+    (p / "access.log.dir").mkdir()
+    _age(p / "access.log.dir", 400)
+    assert RetentionPolicy().proxy_logs_days == 30
+    assert [e.name for e in gc.select_proxy_logs(p, 30, NOW)] == ["access.log.20260901T001000Z"]
+    report = _run(roots, ["proxy-logs"])
+    assert _store(report, "proxy-logs").count == 1
+    assert sorted(x.name for x in p.iterdir()) == ["access.log", "access.log.20261020T001000Z", "access.log.dir",
+                                                   "cache.log", "cache.log.20260901T001000Z"]  # fmt: skip
+
+
 def test_hermes_sessions_only_regular_files_in_sessions_dir(tmp_path: Path) -> None:
     roots = _roots(tmp_path)
     s = roots.hermes_sessions
@@ -308,7 +338,7 @@ def test_dry_run_deletes_nothing(tmp_path: Path) -> None:
     assert (roots.artifacts / "c_AAAAAAAAAA").exists()
     assert {s.name: s.status for s in report.deleting()} == {
         "tmp": "WOULD DELETE", "gatekeeper": "WOULD DELETE", "artifacts": "WOULD DELETE", "run-logs": "WOULD DELETE",
-        "hermes-sessions": "WOULD DELETE", "images": "WOULD DELETE",
+        "proxy-logs": "WOULD DELETE", "hermes-sessions": "WOULD DELETE", "images": "WOULD DELETE",
     }  # fmt: skip
 
 
@@ -365,6 +395,7 @@ def _example() -> gc.Report:
         gc.StoreResult("gatekeeper", "WOULD DELETE", 41, 12 * mib, "outbox 30, views 6, tokens 3, dirs 2"),
         gc.StoreResult("artifacts", "WOULD DELETE", 2, round(40.1 * mib), "terminal >= 30 d"),
         gc.StoreResult("run-logs", "WOULD DELETE", 5, round(1.2 * mib), "older than 30 d"),
+        gc.StoreResult("proxy-logs", "WOULD DELETE", 1, round(3.5 * mib), "rotated, older than 30 d"),
         gc.StoreResult("hermes-sessions", "WOULD DELETE", 0, 0, "idle >= 90 d"),
         gc.StoreResult("images", "WOULD DELETE", 1, 310 * mib, "dangling, keep set 6 refs intact"),
         gc.StoreResult("build-cache", "SKIP", detail=gc.WEEKLY),
@@ -381,7 +412,7 @@ def test_json_report_shape() -> None:
     assert set(doc) == {"dry_run", "snapshot", "ts", "stopped", "exit_code", "stores", "total"}
     assert list(doc["stores"]) == sorted(gc.STORES)
     assert set(doc["stores"]["tmp"]) == {"status", "count", "bytes", "detail", "items"}
-    assert doc["total"]["count"] == 52 and doc["exit_code"] == 0 and doc["stopped"] is None
+    assert doc["total"]["count"] == 53 and doc["exit_code"] == 0 and doc["stopped"] is None
 
 
 def test_last_json_written(tmp_path: Path) -> None:

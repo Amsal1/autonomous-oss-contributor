@@ -3,9 +3,10 @@ WOULD DELETE  tmp               3 entries    812.4 MiB  older than 7 d
 WOULD DELETE  gatekeeper       41 rows/dirs   12.0 MiB  outbox 30, views 6, tokens 3, dirs 2
 WOULD DELETE  artifacts         2 dirs        40.1 MiB  terminal >= 30 d
 WOULD DELETE  run-logs          5 files        1.2 MiB  older than 30 d
+WOULD DELETE  proxy-logs        1 file         3.5 MiB  rotated, older than 30 d
 WOULD DELETE  hermes-sessions   0 files            0 B  idle >= 90 d
 WOULD DELETE  images            1 image      310.0 MiB  dangling, keep set 6 refs intact
 SKIP          build-cache       weekly (ossctl gc --only build-cache)
 SKIP          fstrim            dry run
 KEEP          audit log, open contributions, pending approvals: never selected
-TOTAL         52 items, 1.1 GiB
+TOTAL         53 items, 1.2 GiB

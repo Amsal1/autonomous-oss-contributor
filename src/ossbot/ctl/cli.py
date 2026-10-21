@@ -444,6 +444,77 @@ def egress_status() -> None:
     _show(data)
 
 
+EGRESS_SUMMARIES = Path("/srv/ossbot/logs/runs")  # <run_id>.egress.json, sandboxd's meter (design §13.2)
+CID_ARG_RE = r"^c_[0-9A-HJKMNP-TV-Z]{10}$"
+
+
+def _sandboxd_status(method: str, path: str) -> tuple[int, Any]:
+    """(status, body) of a sandboxd call; (0, reason) when the socket isn't reachable as this user."""
+    try:
+        return 200, _sandboxd(method, path)
+    except httpx.HTTPStatusError as exc:
+        try:
+            return exc.response.status_code, exc.response.json()
+        except ValueError:
+            return exc.response.status_code, exc.response.text
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        return 0, f"sandboxd unreachable ({type(exc).__name__}; sudo ossctl ...)"
+
+
+@egress_app.command("holds")
+def egress_holds() -> None:
+    """Open egress-anomaly holds (gatekeeper) and sandboxd's pending hold requests, incl. a rejected_code
+    (a 4xx answer: the cid stays blocked until ``ossctl egress release``; open-discovery design §13.2)."""
+    code, data = api("GET", "/v1/holds?open=true")
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
+    _, pending = _sandboxd_status("GET", "/v1/egress/pending")
+    _show({"holds": data, "sandboxd_pending": pending})
+
+
+@egress_app.command("release")
+def egress_release(cid: Annotated[str, typer.Argument(help="the held contribution (c_...)")]) -> None:
+    """Resume a contribution held for an egress anomaly (root, TTY confirm RESUME): releases the
+    gatekeeper's hold and clears sandboxd's pending hold request (design §13.3, review-3 M3)."""
+    if os.geteuid() != 0:
+        _fail("egress release runs as root (sudo ossctl egress release <cid>)", 2)
+    if re.fullmatch(CID_ARG_RE, cid) is None:
+        _fail("usage: ossctl egress release c_XXXXXXXXXX", 2)
+    _confirm("RESUME")
+    code, data = api("POST", f"/v1/contributions/{cid}/hold/release", {})
+    if code not in (200, 404):
+        _fail(f"hold release refused ({code}): {data}")
+    pcode, pending = _sandboxd_status("DELETE", f"/v1/egress/pending/{cid}")
+    if pcode not in (200, 404):
+        _fail(f"sandboxd refused to clear the pending hold ({pcode}): {pending}")
+    if code == 404 and pcode == 404:
+        _fail(f"nothing to release: {cid} has no open hold and no pending hold request")
+    _show({"gatekeeper": data if code == 200 else "no open hold", "sandboxd": pending if pcode == 200 else "none"})
+
+
+@egress_app.command("jobs")
+def egress_jobs(
+    days: Annotated[int, typer.Option(min=1, max=365, help="summaries of the last N days")] = 7,
+    cid: Annotated[str | None, typer.Option(help="only this contribution")] = None,
+) -> None:
+    """Per-job egress summaries of fetch/validate jobs (root, read-only; tune ``egress.anomaly``, design §13.4)."""
+    if os.geteuid() != 0:
+        _fail("egress jobs runs as root (sudo ossctl egress jobs)", 2)
+    cutoff = time.time() - days * 86400
+    out: list[dict[str, Any]] = []
+    for path in sorted(EGRESS_SUMMARIES.glob("*.egress.json")):
+        try:
+            if path.stat().st_mtime < cutoff:
+                continue
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(doc, dict) and (cid is None or doc.get("cid") == cid):
+            out.append(doc)
+    out.sort(key=lambda d: (d.get("window") or {}).get("start") or 0)
+    _show(out)
+
+
 @mirror_app.command("enable")
 def review_mirror_enable() -> None:
     """Run the enable-time probes (identity, private repo, Actions off, foreign-write probe, classic token
@@ -1584,7 +1655,8 @@ def restore(
 
 
 # ------------------------------------------------------------- retention (DESIGN §18.10)
-GC_STORE_HELP = "store (repeatable): tmp, gatekeeper, artifacts, run-logs, hermes-sessions, images, build-cache, fstrim"
+GC_STORE_HELP = ("store (repeatable): tmp, gatekeeper, artifacts, run-logs, proxy-logs, hermes-sessions, images,"
+                 " build-cache, fstrim")  # fmt: skip
 
 
 @app.command("gc")

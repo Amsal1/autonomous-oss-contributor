@@ -2,7 +2,8 @@
 
 Who deletes what (plan D1): the gatekeeper deletes its own DB rows and repos itself, triggered here
 through the operator-only ``POST /v1/retention/run``. Root deletes the root-reachable stores: ``/tmp``
-leftovers, the artifacts of the cids the gatekeeper reports eligible, sandbox run logs, idle files in
+leftovers, the artifacts of the cids the gatekeeper reports eligible, sandbox run logs and egress summaries,
+rotated squid access logs (``retention.proxy_logs_days``, never the live ``access.log``), idle files in
 Hermes' ``sessions/`` dir, dangling Docker images outside the keep set, unused build cache (weekly) and
 ``fstrim`` last. Never touched: the audit log and its anchors, the control dir, secrets, the gatekeeper's
 own dirs, Hermes' ``state.db``/memories/skills, anything open or awaiting approval.
@@ -43,8 +44,10 @@ log = logging.getLogger(__name__)
 
 Status = Literal["WOULD DELETE", "DELETED", "DONE", "SKIP", "KEEP", "FAIL"]
 STORES: tuple[str, ...] = (
-    "tmp", "gatekeeper", "artifacts", "run-logs", "hermes-sessions", "images", "build-cache", "fstrim",
+    "tmp", "gatekeeper", "artifacts", "run-logs", "proxy-logs", "hermes-sessions", "images", "build-cache",
+    "fstrim",
 )  # fmt: skip
+PROXY_LOG_LIVE = "access.log"  # squid writes it: never selected (rotated ones are access.log.<UTC stamp>)
 DEFAULT_STORES: tuple[str, ...] = tuple(s for s in STORES if s != "build-cache")  # build cache: weekly unit
 EXIT_OK, EXIT_FAIL, EXIT_CONFIG, EXIT_STOPPED = 0, 1, 2, 3
 DOCKER = "/usr/bin/docker"
@@ -68,7 +71,8 @@ WEEKLY = "weekly (ossctl gc --only build-cache)"
 ITEMS_MAX = 200  # names listed per store in --json (never for hermes-sessions)
 UNITS: dict[str, tuple[str, str]] = {
     "tmp": ("entry", "entries"), "gatekeeper": ("rows/dirs", "rows/dirs"), "artifacts": ("dir", "dirs"),
-    "run-logs": ("file", "files"), "hermes-sessions": ("file", "files"), "images": ("image", "images"),
+    "run-logs": ("file", "files"), "proxy-logs": ("file", "files"), "hermes-sessions": ("file", "files"),
+    "images": ("image", "images"),
     "build-cache": ("record", "records"), "fstrim": ("", ""),
 }  # fmt: skip
 
@@ -95,6 +99,7 @@ class Roots:
     tmp: Path = Path("/tmp")  # noqa: S108 - the store itself
     artifacts: Path = Path("/srv/ossbot/artifacts")
     run_logs: Path = Path("/srv/ossbot/logs/runs")
+    proxy_logs: Path = Path("/srv/ossbot/logs/proxy")  # open-discovery §13.5: rotated squid access logs
     hermes_sessions: Path = Path("/home/hermes/.hermes/sessions")
     state_file: Path = Path("/var/lib/ossbot/gc/last.json")
     lock: Path = Path("/etc/ossbot/versions.lock.yaml")
@@ -237,8 +242,15 @@ def _select_files(root: Path, days: int, now: float, accept: Callable[[str], boo
 
 
 def select_run_logs(root: Path, days: int, now: float) -> list[Entry]:
-    """``/srv/ossbot/logs/runs/*.log``: regular files older than ``days``."""
-    return _select_files(root, days, now, lambda name: name.endswith(".log"))
+    """``/srv/ossbot/logs/runs/*.log`` and the egress meter's ``*.egress.json`` summaries (open-discovery
+    §13.2): regular files older than ``days``."""
+    return _select_files(root, days, now, lambda name: name.endswith((".log", ".egress.json")))
+
+
+def select_proxy_logs(root: Path, days: int, now: float) -> list[Entry]:
+    """``/srv/ossbot/logs/proxy/access.log.*`` (renamed by ``ossbot-proxy-rotate``): regular files older than
+    ``days`` (``retention.proxy_logs_days``, >= 30); never the live ``access.log`` squid writes."""
+    return _select_files(root, days, now, lambda name: name.startswith(PROXY_LOG_LIVE + "."))
 
 
 def select_hermes_sessions(root: Path, days: int, now: float) -> list[Entry]:
@@ -485,6 +497,12 @@ def run_gc(
         return files_store("run-logs", entries, roots.run_logs, f"older than {policy.run_logs_days} d",
                            mtime_old(now - policy.run_logs_days * DAY_S))  # fmt: skip
 
+    def do_proxy_logs() -> StoreResult:
+        days = policy.proxy_logs_days
+        entries = select_proxy_logs(roots.proxy_logs, days, now)
+        return files_store("proxy-logs", entries, roots.proxy_logs, f"rotated, older than {days} d",
+                           mtime_old(now - days * DAY_S))  # fmt: skip
+
     def do_hermes() -> StoreResult:
         entries = select_hermes_sessions(roots.hermes_sessions, policy.hermes_sessions_days, now)
         return files_store("hermes-sessions", entries, roots.hermes_sessions,
@@ -537,7 +555,8 @@ def run_gc(
 
     handlers: dict[str, Callable[[], StoreResult]] = {
         "tmp": do_tmp, "gatekeeper": do_gatekeeper, "artifacts": do_artifacts, "run-logs": do_run_logs,
-        "hermes-sessions": do_hermes, "images": do_images, "build-cache": do_build_cache, "fstrim": do_fstrim,
+        "proxy-logs": do_proxy_logs, "hermes-sessions": do_hermes, "images": do_images,
+        "build-cache": do_build_cache, "fstrim": do_fstrim,
     }  # fmt: skip
     for name in STORES:
         if name not in selected:
