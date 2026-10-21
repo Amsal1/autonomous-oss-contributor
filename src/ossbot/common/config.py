@@ -229,6 +229,22 @@ class BackupPolicy(Strict):
     keep: PosInt = 8
 
 
+class RetentionPolicy(Strict):
+    """Time-based retention (DESIGN §18.10); no size caps. Journal retention is the journald drop-in.
+
+    The gatekeeper deletes its own DB rows and repos (``gatekeeper/retention.py``); root deletes the
+    root-reachable stores (``ossctl gc``)."""
+
+    # terminal contributions' mirrors, derived, imports, work bundles, artifacts; unused cache repos
+    contributions_days: Annotated[int, Field(ge=7, le=3650)] = 30
+    telegram_rows_days: Annotated[int, Field(ge=30, le=3650)] = 90  # closed tg_outbox, tg_views, ui_tokens
+    run_logs_days: Annotated[int, Field(ge=7, le=3650)] = 30  # /srv/ossbot/logs/runs/*.log
+    hermes_sessions_days: Annotated[int, Field(ge=7, le=3650)] = 90  # /home/hermes/.hermes/sessions/* (idle)
+    tmp_days: Annotated[int, Field(ge=1, le=365)] = 7  # /tmp top-level leftovers
+    docker_build_cache_hours: Annotated[int, Field(ge=24, le=8760)] = 168  # unused Docker build cache
+    disk_warn_gib: Annotated[int, Field(ge=5, le=1024)] = 40  # doctor WARN when / uses more
+
+
 class LifecyclePolicy(Strict):
     """CR-001 graceful down: running work gets ``drain_timeout_s``; ``up`` waits for health.
 
@@ -261,6 +277,7 @@ class PolicyConfig(Strict):
     hermes: HermesPolicy = HermesPolicy()
     chat: ChatPolicy = ChatPolicy()
     backup: BackupPolicy = BackupPolicy()
+    retention: RetentionPolicy = RetentionPolicy()
 
     @model_validator(mode="after")
     def _size_class_within_ceiling(self) -> PolicyConfig:

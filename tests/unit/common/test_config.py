@@ -10,6 +10,7 @@ from ossbot.common.config import (
     ModelsConfig,
     PolicyConfig,
     ProfileConfig,
+    RetentionPolicy,
     TargetsConfig,
     parse_bundle,
     parse_models,
@@ -55,6 +56,35 @@ def test_shipped_policy_size_blocks() -> None:
     assert p.size == PolicyConfig(version=1).size
     assert p.discovery_filters == PolicyConfig(version=1).discovery_filters
     assert p.proposal == PolicyConfig(version=1).proposal
+
+
+def test_retention_defaults() -> None:
+    """§18.10: the shipped retention block equals the model defaults (time-based only, no size caps)."""
+    shipped = parse_bundle(bundle_files()).policy.retention
+    assert shipped == PolicyConfig(version=1).retention == RetentionPolicy()
+    assert (shipped.contributions_days, shipped.telegram_rows_days, shipped.run_logs_days) == (30, 90, 30)
+    assert (shipped.hermes_sessions_days, shipped.tmp_days) == (90, 7)
+    assert (shipped.docker_build_cache_hours, shipped.disk_warn_gib) == (168, 40)
+
+
+def test_retention_rejects_unknown_keys() -> None:
+    with pytest.raises(ConfigError, match="journal_max_mb"):
+        parse_yaml_model(PolicyConfig, "policy.yaml", b"version: 1\nretention: {journal_max_mb: 500}\n")
+
+
+@pytest.mark.parametrize(
+    ("key", "bad"),
+    [
+        ("contributions_days", 6), ("contributions_days", 3651), ("telegram_rows_days", 29),
+        ("run_logs_days", 6), ("hermes_sessions_days", 6), ("tmp_days", 0), ("tmp_days", 366),
+        ("docker_build_cache_hours", 23), ("docker_build_cache_hours", 8761), ("disk_warn_gib", 4),
+        ("disk_warn_gib", 1025), ("contributions_days", "30"),
+    ],
+)  # fmt: skip
+def test_retention_bounds(key: str, bad: object) -> None:
+    text = f"version: 1\nretention: {{{key}: {bad!r}}}\n".replace("'", '"')
+    with pytest.raises(ConfigError, match=key):
+        parse_yaml_model(PolicyConfig, "policy.yaml", text.encode())
 
 
 def test_xl_fits_the_default_ceiling() -> None:

@@ -94,3 +94,11 @@ chat:                               # §15.6: files the owner sends the assistan
 backup:
   include_secrets: false
   keep: 8
+retention:                         # §18.10: time-based only, no size caps; journal retention is the journald drop-in
+  contributions_days: 30           # terminal contributions' mirrors, derived, imports, work bundles, artifacts; unused cache repos
+  telegram_rows_days: 90           # closed tg_outbox, tg_views and ui_tokens rows
+  run_logs_days: 30                # /srv/ossbot/logs/runs/*.log
+  hermes_sessions_days: 90         # /home/hermes/.hermes/sessions/* files idle this long
+  tmp_days: 7                      # /tmp top-level leftovers
+  docker_build_cache_hours: 168    # Docker build cache unused this long
+  disk_warn_gib: 40                # doctor WARNs when / uses more than this
