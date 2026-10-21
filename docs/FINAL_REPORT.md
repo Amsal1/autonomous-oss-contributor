@@ -240,8 +240,11 @@ showing the deleted topic until the chat is reopened ("Known limitations").
 probed live and does not work (ForceReply did not open the reply bar; ADR-0020 addendum). What changed
 instead (DESIGN §14.10.5): inline shortcut buttons on the dashboard, `/help` and button-less replies
 in All (3544da9 flags, 46677cf), and plain text typed in All kept in its own topic as a Hermes session
-(364f6fe). Typed commands keep the 9884df9 delete. It reaches the bot at the close-out redeploy.
-- Re-check, after the redeploy:
+(364f6fe). Typed commands keep the 9884df9 delete. **Deployed 2026-10-21** by the retention and All
+close-out redeploy (`bootstrap.ps1 -Only provision` at 84334be, exit 0; deployed files identical to
+HEAD, `all_text_mode: topic_session`, `command_shortcuts: true`). **Pending your re-check** (steps below);
+nothing in the build waits for it.
+- Re-check (the bot is already running the new code):
   1. Tap shortcuts in All (dashboard copy from `/status`, the `/help` menu, the row under a reply).
      Expected: the command runs and no topic is created.
   2. Type plain text in All. Expected: the answer arrives inside the new topic named after your text;

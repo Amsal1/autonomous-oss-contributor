@@ -94,7 +94,11 @@ dashboard in Control. The Bot API cannot change that (ADR-0020 addendum).
 
 Commands typed in "All" are answered in All, and the topic Telegram creates for them (named after the
 command) is removed. If an empty topic stays (some mobile clients don't tell the bot its id), send
-commands in 🚦 Control.
+commands in 🚦 Control. The buttons under the dashboard, `/help` and replies in All run a command
+without creating any topic. Plain text typed in All is answered inside the topic Telegram creates for
+it, which stays as that conversation's own Hermes session. To turn either off, set
+`all_text_mode: legacy` or `command_shortcuts: false` in `config/telegram.yaml`, then `/reload`
+(DESIGN §14.10.5).
 
 ## 7. Or restore instead of steps 4 and 6
 

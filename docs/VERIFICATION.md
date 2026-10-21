@@ -702,6 +702,39 @@ Cross-FEAT check of FEAT-001..005 (PV1-R1..R4, PV1-T1..T3) at 687a3f7; one fix, 
 | Hygiene (687a3f7) | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits over 914 files; command table current |
 | Seams reviewed | gc ↔ `POST /v1/retention/run` (root = operator, 409 → SKIP/FAIL, report schema); kill/pause ↔ gc units, `ossbot-kill`, restore (`--soft` kill first) and backup (pause); timers in `OSSBOT_ENABLE_UNITS` and `step_enable_start`; `command_shortcuts` / `all_text_mode` ↔ dashboard, /help, handlers; topic sessions ↔ Hermes `sessions/` retention (V5: state.db rows, never touched) | no further change needed |
 
+## Post-v1 retention and All close-out (2026-10-21)
+
+At 84334be, then one fix, 515a25b (`test_retention_units.sh` captured `systemd-analyze` and `list-timers` output before `grep -q`: with `pipefail`, an early `grep -q` exit can SIGPIPE the producer and fail the check). One hermetic run, one redeploy. Dry-run stayed ON, no GitHub write, no Telegram message from the close-out; WSL not shut down, the VHD not compacted, sparse settings unchanged. Commits are local; `origin/main` is 02b11a1 (reflog "update by push" 2026-10-21 09:55 +07, same pattern as the owner's earlier pushes; no agent log records a push). Details: `.ossbot-local/postv1/retention-all/closeout.md`, not tracked.
+
+| Check | Command | Result |
+|---|---|---|
+| Hermetic suite (84334be) | `pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 3888 passed in 48 s |
+| Lint gate (84334be) | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 530 files formatted, mypy 250 files, 14 contracts kept, 0 broken |
+| shellcheck | `shellcheck -x scripts/bin/ossbot-kill scripts/lib/services.sh tests/system/test_retention_units.sh` (84334be; the test again at 515a25b) | clean |
+| Hygiene | `ossctl lint personal`; `ossctl docs commands --check`; `ROOT gitleaks git --redact --config .gitleaks.toml .` | 0 hits over 914 files; command table current; 254 commits, no leaks |
+| Redeploy (once) | `scripts\bootstrap.ps1 -Only provision` | exit 0; `app-deploy: changed`, `enable-start: changed`, `systemd: unchanged` (units installed at 75a4b10); doctor PASS 41, WARN 1 (Hermes surface ConnectError right after the restart; PASS in the later doctor runs). Deployed `shortcuts.py`, `implicit_topics.py`, `handlers.py`, `retention.py`, `gc.py` identical to HEAD; snapshot `telegram.yaml` (`all_text_mode: topic_session`, `command_shortcuts: true`) and `policy.yaml` identical; no `probe_all.py` under `/opt/ossbot/app` |
+| Timers and units | `ROOT systemctl is-enabled`, `is-active`, `list-timers --all ossbot-gc.timer ossbot-docker-prune.timer`; `systemctl cat` of both services | enabled, active; next Thu 2026-10-22 04:40 +07 (gc) and Sun 2026-10-25 05:09 +07 (docker-prune); both services carry both `ConditionPathExists=!` lines and `TimeoutStopSec=150` |
+| journald drop-in | `ROOT ls -l /etc/systemd/journald.conf.d/`; `systemd-analyze cat-config systemd/journald.conf` | `60-ossbot.conf` root 0644; `MaxRetentionSec=30d`, `MaxFileSec=1week` in effect, no size key; journald active since 10:27 +07 (the 75a4b10 restart) |
+| System: retention units | `ROOT bash tests/system/test_retention_units.sh` | first run at 84334be: 1 FAIL ("journald drop-in missing", the pipefail race; the key was present); fixed in 515a25b; re-run all checks passed (PASS 21) |
+| gc dry run | `ROOT ossctl gc --dry-run` | exit 0; every store 0 items, gatekeeper `outbox 0, views 0, tokens 0, dirs 0`, images `keep set 8 refs intact`, build-cache SKIP weekly, fstrim SKIP dry run, `KEEP audit log, open contributions, pending approvals: never selected`. (A run right after the test's resume got 409 from the gatekeeper, which still reported paused for about 4 s; re-run once it reported running) |
+| gc live | `ROOT systemctl start ossbot-gc.service` | Result success, exit 0; every store DELETED 0 (nothing past its age yet), fstrim DONE; `/var/lib/ossbot/gc/last.json` written |
+| Build cache | `ROOT systemctl start ossbot-docker-prune.service`, then the one-off `ROOT ossctl gc --only build-cache --build-cache-until-hours 0` | the unit (unused ≥ 168 h) removed 0 records: all 146 were last used 16 h to 3 days ago; the one-off removed 146 records, 8.8 GiB; Build Cache 0 B |
+| Images kept | `ROOT docker image ls`; `docker image inspect` of the keep set | 0 dangling; present: `ubuntu@sha256:68ee2200…` (base_images.ubuntu_24_04), `ossbot/sandbox-full@sha256:fc2bda9f…`, `ossbot/sandbox-llm@sha256:18e4502b…`, `ossbot/proxy@sha256:24c46953…` and the tags `sandbox-full-base:in-a75a107dbc54`, `sandbox-full:in-bacc5e948acb`, `sandbox-llm:in-aa21a31f0466`, `proxy:in-1e72e3bb829c` |
+| Journal | `ROOT journalctl --vacuum-time=30d` | freed 0 B; 775.7 MiB, all younger than 30 d |
+| Host logs | delete `.ossbot-local\logs\*` older than 7 d after `git ls-files .ossbot-local/logs` (empty) | 162 files, 0 older than 7 d, nothing deleted |
+| fstrim | `ROOT fstrim -v /` (last) | 7.1 GiB trimmed |
+| Doctor | `ROOT ossctl doctor`; `scripts\ossctl.ps1 doctor` | PASS 46; `disk usage: / uses 20.4 GiB (WARN at 40 GiB); last gc …`; Windows `vhd: … 22.0 GiB on disk (22.5 GiB logical)` (before the build-cache one-off) |
+| Audit chain | `ROOT ossctl audit verify` | ok, 1927 rows, 944 anchors, no errors |
+
+| VHD and df | before (11:43 +07) | after (11:52 +07) |
+|---|---|---|
+| `ext4.vhdx` logical Length | 24,029,167,616 B (22.38 GiB) | 24,196,939,776 B (22.54 GiB) |
+| `ext4.vhdx` on disk (`GetCompressedFileSizeW`) | 22,777,036,800 B (21.21 GiB) | 16,654,401,536 B (15.51 GiB) |
+| `df -B1 /` used | 20,726,861,824 B | 14,064,201,728 B |
+| `df -h /` used / avail | 20G / 937G (3 %) | 14G / 943G (2 %) |
+
+The logical length is a high-water mark of the sparse VHD and does not shrink without compaction (ADR-0016 V4); the space Windows actually holds fell by 5.7 GiB. Baseline at 503b28b: 23,962,058,752 B logical.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
