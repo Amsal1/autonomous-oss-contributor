@@ -1,0 +1,24 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🧰 ",
+    {
+     "text": "Discovery filters",
+     "type": "bold"
+    },
+    " · autonomous only · 5/5 Open"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "🏷 Topics: 15 on · 1/2",
+   "type": "paragraph"
+  },
+  {
+   "text": "Repos are searched by these GitHub topics, a few per cycle in turn.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

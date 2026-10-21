@@ -9,6 +9,7 @@ import pytest
 
 from ossbot.common.clock import FakeClock
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.telegram import inputs, size_pickers
 from ossbot.gatekeeper.telegram.pending_input import INPUT_KINDS, PendingInputs
 
 OWNER = 4242
@@ -41,6 +42,15 @@ def test_expires_after_15_minutes(ctx: AppContext, clock: FakeClock) -> None:
     assert pending.consume(OWNER, 90) is None
     clock.advance(timedelta(days=2))
     assert pending.gc() == 1
+
+
+def test_open_topic_add_prompt_needs_no_contribution(ctx: AppContext) -> None:
+    """Post-v1 open discovery (design §3.2): /filters "Add topic…" opens a prompt without a cid."""
+    pending = PendingInputs(ctx.conn, ctx.clock)
+    pending.open("open_topic_add", chat_id=OWNER, prompt_message_id=95)
+    prompt = pending.consume(OWNER, 95)
+    assert prompt is not None and prompt.kind == "open_topic_add" and prompt.cid is None
+    assert inputs.INPUTS["open_topic_add"] is size_pickers.on_open_topic_add
 
 
 def test_kind_set_matches_the_migration(ctx: AppContext) -> None:

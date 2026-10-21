@@ -1,0 +1,24 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🧰 ",
+    {
+     "text": "Discovery filters",
+     "type": "bold"
+    },
+    " · autonomous only · 5/5 Open"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "🔎 Open discovery · repos found by topic search, not only targets.yaml",
+   "type": "paragraph"
+  },
+  {
+   "text": "★ ≥ 1000 · pushed ≤ 60 d · 5 repos/cycle · budget 10 searches (config only)",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

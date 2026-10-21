@@ -4,22 +4,34 @@ each, edited in place, reading and writing only through ``gatekeeper/discovery_p
 Autonomous discovery only: 👤 ``/work`` ignores both. ``xxl`` is never offered and the hard ceiling is shown
 read-only (U13): no button or typed value can raise it. Each change applies at once and arms
 ``[↩️ Undo]`` for 60 s (``DiscoveryPrefs.undo``).
+
+``/filters`` page 5 "Open" (post-v1 open discovery, design §3.2) toggles open discovery and edits its
+topics (``Add topic…`` opens an ``open_topic_add`` prompt) and preferred languages; the counts and
+the search budget are shown read-only (config only).
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ossbot.common.config import DiscoveryFilters, resolve_target
+from ossbot.common.config import (
+    DEFAULT_OPEN_TOPICS,
+    DEFAULT_PREFERRED_LANGUAGES,
+    TOPIC_RE,
+    DiscoveryFilters,
+    resolve_target,
+)
 from ossbot.common.schemas import PrefsUpdate
 from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.discovery_prefs import UNDO_SECONDS, PrefsRefused
+from ossbot.gatekeeper.discovery_prefs import UNDO_SECONDS, OpenPrefs, PrefsRefused
 from ossbot.gatekeeper.telegram.actions import Tap, action
 from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Reply, command
 from ossbot.gatekeeper.telegram.escape import esc
+from ossbot.gatekeeper.telegram.inputs import Typed, input_handler
 from ossbot.gatekeeper.telegram.proposal_cards import KIND_NAMES
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -33,8 +45,14 @@ AGES = ((30, "Age 30 d"), (90, "Age 90 d"), (180, "Age 180 d"), (365, "Age 365 d
 ACTIVE = ((36500, "Active any"), (30, "Active 30 d"), (90, "Active 90 d"))
 LANGS = ("Python", "TypeScript", "JavaScript", "Go", "Rust", "Java")
 OPEN_PRS = ((1, "1 open PR"), (2, "2 open PRs"), (3, "3 open PRs"))
-PAGES = ("Kinds", "Labels", "Age", "PRs")
+PAGES = ("Kinds", "Labels", "Age", "PRs", "Open")
 XXL = "xxl can't be a preference; user-directed work has no size limit below the ceiling"
+# Post-v1 open discovery (design §3.2): page 5 tunes only open on/off, topics and preferred languages.
+OPEN_PER_PAGE = 8
+LAST_TOPIC = "Keep at least one topic"
+BAD_TOPIC = "Not added: topics use a-z, 0-9 and -, at most 50 characters."
+TOPIC_PLACEHOLDER = "Topic, e.g. gitops (a-z, 0-9, -)"
+_TOPIC = re.compile(TOPIC_RE)
 
 
 class SizeArg(BaseModel):
@@ -48,9 +66,11 @@ class SizeArg(BaseModel):
 
 class FilterArg(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    page: int = Field(default=1, ge=1, le=4)
+    page: int = Field(default=1, ge=1, le=5)
+    view: Literal["main", "topics", "langs"] = "main"  # page 5 only
+    sub: int = Field(default=1, ge=1, le=10)  # the page of a topics/langs list
     key: str | None = Field(default=None, max_length=40)
-    value: str | None = Field(default=None, max_length=40)
+    value: str | None = Field(default=None, max_length=50)
     undo: str | None = Field(default=None, max_length=40)
 
 
@@ -195,13 +215,95 @@ def _all_kinds() -> list[str]:
     return list(dict.fromkeys([*defaults.allowed_kinds, *defaults.excluded_kinds]))
 
 
-def filters_view(ctx: AppContext, page: int = 1, *, undo: str | None = None) -> k.View:
+def _open(ctx: AppContext) -> OpenPrefs:
+    found = ctx.discovery_prefs.effective().open
+    assert found is not None  # effective() always sets it
+    return found
+
+
+def topic_choices(ctx: AppContext) -> list[str]:
+    """The defaults, policy.yaml's topics and the ones added from Telegram (sorted)."""
+    return sorted({*DEFAULT_OPEN_TOPICS, *ctx.config.policy.discovery.open.topics, *_open(ctx).topics})
+
+
+def language_choices(ctx: AppContext) -> list[str]:
+    """The defaults, policy.yaml's and the preferred ones, de-duplicated case-insensitively."""
+    out: dict[str, str] = {}
+    for lang in (*DEFAULT_PREFERRED_LANGUAGES, *ctx.config.policy.discovery.open.languages_preferred,
+                 *_open(ctx).languages_preferred):  # fmt: skip
+        out.setdefault(lang.lower(), lang)
+    return sorted(out.values(), key=str.lower)
+
+
+def _sub_nav(view: str, sub: int, pages: int, undo: str | None) -> list[k.ButtonSpec]:
+    """``[◀] [↩️ Undo] [▶]`` of a topics/langs list (the ends only when it has more than one page)."""
+    base = {"page": 5, "view": view}
+    row: list[k.ButtonSpec] = []
+    if pages > 1:
+        row.append(k.button("◀", "filters_set", {**base, "sub": sub - 1}) if sub > 1 else k.disabled_button("◀"))
+    row += _undo_row("filters_set", {**base, "sub": sub}, undo)
+    if pages > 1:
+        row.append(k.button("▶", "filters_set", {**base, "sub": sub + 1}) if sub < pages
+                   else k.disabled_button("▶"))  # fmt: skip
+    return row
+
+
+def _open_page(ctx: AppContext, view: str, sub: int, undo: str | None, lines: list[k.Line]) -> tuple[k.Rows, bool]:
+    """Page 5 "Open" (design §3.2): (rows, whether the filters pager follows)."""
+    o = _open(ctx)
+    if view in ("topics", "langs"):
+        topics = view == "topics"
+        choices = topic_choices(ctx) if topics else language_choices(ctx)
+        on = set(o.topics) if topics else {x.lower() for x in o.languages_preferred}
+        shown, sub, pages = k.list_view([k.line(c) for c in choices], sub, OPEN_PER_PAGE)
+        first = (sub - 1) * OPEN_PER_PAGE
+        names = choices[first : first + len(shown)]
+        what = "Topics" if topics else "Preferred languages"
+        count = len(o.topics) if topics else len(o.languages_preferred)
+        where = f" · {sub}/{pages}" if pages > 1 else ""
+        lines.append(k.line(f"{'🏷' if topics else '💬'} {what}: {count} on{where}"))
+        if topics:
+            lines.append(k.line("Repos are searched by these GitHub topics, a few per cycle in turn."))
+        else:
+            lines.append(k.line("A preference, not a filter: other languages are still found."))
+        key = "topic" if topics else "olang"
+        btns = [k.button(f"{'✅' if (c if topics else c.lower()) in on else '⬜'} {middle_cut(c, 20)}", "filters_set",
+                         {"page": 5, "view": view, "sub": sub, "key": key, "value": c}) for c in names]  # fmt: skip
+        rows: k.Rows = [btns[i : i + 2] for i in range(0, len(btns), 2)]
+        nav = _sub_nav(view, sub, pages, undo)
+        if nav:
+            rows.append(nav)
+        last = [k.button("↩️ Back", "filters_set", {"page": 5})]
+        rows.append([k.button("➕ Add topic…", "filters_topic_add"), *last] if topics else last)
+        return rows, False
+    p = ctx.config.policy.discovery.open
+    lines.append(k.line("🔎 Open discovery · repos found by topic search, not only targets.yaml"))
+    lines.append(k.line(f"★ ≥ {p.min_stars} · pushed ≤ {p.pushed_within_days} d · {p.new_repos_per_cycle} repos/cycle"
+                        f" · budget {p.search_budget} searches (config only)"))  # fmt: skip
+    toggle = k.button("✅ On" if o.enabled else "⬜ Off", "filters_set",
+                      {"page": 5, "key": "open", "value": "off" if o.enabled else "on"})  # fmt: skip
+    rows = [[toggle], [k.button(f"🏷 Topics ({len(o.topics)})…", "filters_set", {"page": 5, "view": "topics"}),
+                       k.button(f"💬 Languages ({len(o.languages_preferred)})…", "filters_set",
+                                {"page": 5, "view": "langs"})]]  # fmt: skip
+    return rows, True
+
+
+def filters_view(ctx: AppContext, page: int = 1, *, view: str = "main", sub: int = 1, undo: str | None = None,
+                 note: k.Line | None = None) -> k.View:  # fmt: skip
     f = ctx.discovery_prefs.effective().filters
-    page = (page - 1) % 4 + 1
+    n = len(PAGES)
+    page = (page - 1) % n + 1
     lines: list[k.Line] = [(k.Const("🧰 "), k.Bold(k.Const("Discovery filters")),
-                            k.Const(f" · autonomous only · {page}/4 {PAGES[page - 1]}"))]  # fmt: skip
+                            k.Const(f" · autonomous only · {page}/{n} {PAGES[page - 1]}"))]  # fmt: skip
+    if note is not None:
+        lines.append(note)
     rows: k.Rows = []
-    if page == 1:
+    if page == 5:
+        rows, paged = _open_page(ctx, view, sub, undo, lines)
+        if not paged:
+            return k.View(kind="picker", blocks=[k.Block((k.Lines(tuple(lines)),))], rows=rows[:6],
+                          state={"picker": "filters", "page": page, "view": view})  # fmt: skip
+    elif page == 1:
         lines.append(k.line("✅ = the bot may propose this kind. 👤 /work ignores filters."))
         allowed = set(f.allowed_kinds)
         btns = [k.button(f"{'✅' if kind in allowed else '⬜'} {KIND_NAMES.get(kind, kind)[:16]}", "filters_set",
@@ -223,7 +325,7 @@ def filters_view(ctx: AppContext, page: int = 1, *, undo: str | None = None) -> 
         act = [k.button(("✅ " if f.min_maintainer_activity_days == d else "") + label, "filters_set",
                         {"page": 3, "key": "active", "value": str(d)}) for d, label in ACTIVE]  # fmt: skip
         rows = [ages[:3], ages[3:], act[:2], act[2:]]
-    else:
+    elif page == 4:
         on = set(f.languages)
         lines.append(k.line("Languages: none ✅ = any language."))
         btns = [k.button(f"{'✅' if lang in on else '⬜'} {middle_cut(lang, 22)}", "filters_set",
@@ -236,10 +338,10 @@ def filters_view(ctx: AppContext, page: int = 1, *, undo: str | None = None) -> 
         lines.append(k.line(f"PRs: skip a repo with this many of our PRs open (hard limit {cap}, policy.yaml)."))
         rows.append([k.button(("✅ " if f.max_open_prs_by_me_per_repo == n else "") + label, "filters_set",
                               {"page": 4, "key": "prs", "value": str(n)}) for n, label in OPEN_PRS])  # fmt: skip
-    prev_name, next_name = PAGES[(page - 2) % 4], PAGES[page % 4]
-    pager = [k.button(f"◀ {prev_name}", "filters_set", {"page": (page - 2) % 4 + 1})]
+    prev_name, next_name = PAGES[(page - 2) % n], PAGES[page % n]
+    pager = [k.button(f"◀ {prev_name}", "filters_set", {"page": (page - 2) % n + 1})]
     pager += _undo_row("filters_set", {"page": page}, undo) or []
-    pager.append(k.button(f"{next_name} ▶", "filters_set", {"page": page % 4 + 1}))
+    pager.append(k.button(f"{next_name} ▶", "filters_set", {"page": page % n + 1}))
     rows.append(pager)
     return k.View(kind="picker", blocks=[k.Block((k.Lines(tuple(lines)),))], rows=rows[:6],
                   state={"picker": "filters", "page": page})  # fmt: skip
@@ -266,10 +368,19 @@ def filter_change(ctx: AppContext, key: str, value: str) -> dict[str, Any] | Non
         return {"max_open_prs_by_me_per_repo": int(value)}
     if key == "lang" and value in LANGS:
         return {"languages": _toggle(list(f.languages), value)}
+    o = _open(ctx)
+    if key == "open" and value in ("on", "off"):
+        return {"open_enabled": value == "on"}
+    if key == "topic" and value in topic_choices(ctx):
+        return {"open_topics": _toggle(list(o.topics), value)}
+    if key == "olang" and value.lower() in {x.lower() for x in language_choices(ctx)}:
+        kept = [x for x in o.languages_preferred if x.lower() != value.lower()]
+        return {"open_languages_preferred": kept if len(kept) < len(o.languages_preferred) else [*kept, value]}
     return None
 
 
-@command("filters", help="Autonomous discovery filters (4 pages; /work ignores them)", safety="tune")
+@command("filters", help="Autonomous discovery filters and open discovery (5 pages; /work ignores them)",
+         safety="tune")  # fmt: skip
 async def filters_cmd(ctx: CommandContext, args: list[str]) -> Reply:
     return Reply("", view=filters_view(ctx.app))
 
@@ -290,9 +401,48 @@ async def filters_set(tap: Tap) -> str:
         change = filter_change(ctx, a.key, a.value)
         if change is None:
             return "Unknown option."
+        if change.get("open_topics") == []:
+            return LAST_TOPIC
         undo, error = _change(ctx, PrefsUpdate(filters=change), tap.actor)
         if undo is None:
             return error
         toast = f"Saved. Undo within {UNDO_SECONDS} s."
-    ui_send.edit(ctx, filters_view(ctx, a.page, undo=undo), message_id=tap.message_id)
+    ui_send.edit(ctx, filters_view(ctx, a.page, view=a.view, sub=a.sub, undo=undo), message_id=tap.message_id)
     return toast
+
+
+@action("filters_topic_add")
+async def filters_topic_add(tap: Tap) -> str:
+    """Add topic… on page 5: a ForceReply prompt of kind ``open_topic_add`` (15 min, single use)."""
+    view = k.plain("confirm_prompt", k.line("🏷 Reply with a GitHub topic to search for repos (a-z, 0-9 and -)."))
+    view.placeholder = TOPIC_PLACEHOLDER
+    view.state = {"prompt": {"kind": "open_topic_add"}}
+    ui_send.deliver(tap.app, view, thread_id=tap.thread_id, reply_to=tap.message_id)
+    return "Reply with the topic."
+
+
+def _say(t: Typed, text: str) -> None:
+    ui_send.deliver(t.app, k.plain("fyi", (k.Const(text),)), thread_id=t.thread_id, reply_to=t.message_id)
+
+
+@input_handler("open_topic_add")
+async def on_open_topic_add(t: Typed) -> None:
+    """The typed topic: stripped and lower-cased; anything that isn't a GitHub topic is refused with a
+    fixed text and nothing is stored. A valid one is added (undoable 60 s) and the topics list follows."""
+    topic = t.text.strip().lower()
+    if not _TOPIC.fullmatch(topic):
+        _say(t, BAD_TOPIC)
+        return
+    topics = list(_open(t.app).topics)
+    undo: str | None = None
+    if topic in topics:
+        note: k.Line = (k.Const("🏷 Already searched: "), k.Code(k.Text(topic, 50)))
+    else:
+        undo, error = _change(t.app, PrefsUpdate(filters={"open_topics": [*topics, topic]}), t.actor)
+        if undo is None:
+            _say(t, f"Not added: {error.removeprefix('Refused: ')}")
+            return
+        note = (k.Const("🏷 Added topic: "), k.Code(k.Text(topic, 50)))
+    sub = topic_choices(t.app).index(topic) // OPEN_PER_PAGE + 1
+    ui_send.deliver(t.app, filters_view(t.app, 5, view="topics", sub=sub, undo=undo, note=note),
+                    thread_id=t.thread_id, reply_to=t.message_id)  # fmt: skip

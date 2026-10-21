@@ -1,0 +1,24 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🧰 ",
+    {
+     "text": "Discovery filters",
+     "type": "bold"
+    },
+    " · autonomous only · 5/5 Open"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "💬 Preferred languages: 8 on",
+   "type": "paragraph"
+  },
+  {
+   "text": "A preference, not a filter: other languages are still found.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

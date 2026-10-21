@@ -190,7 +190,7 @@ and `request` never touch an approval or the ceiling. The command table below is
 | `/drain` | Drain: no new work, running work may finish (immediate) | stop |
 | `/dryrun` | /dryrun on (immediate) or /dryrun off (asks for confirmation) | go |
 | `/egress` | Egress mode allowlist / research / open (asks for confirmation) | config |
-| `/filters` | Autonomous discovery filters (4 pages; /work ignores them) | tune |
+| `/filters` | Autonomous discovery filters and open discovery (5 pages; /work ignores them) | tune |
 | `/help` | List commands | read |
 | `/hermes` | Hermes capability tier: /hermes tier (asks for confirmation) | config |
 | `/kill` | Soft kill: stop all work and outbound actions (immediate) | stop |

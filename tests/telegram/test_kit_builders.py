@@ -191,7 +191,8 @@ def size_views(ctx: AppContext, text: str) -> Out:
     return [rescope_cards.view(ctx, cid, 1, "overrun", report), rescope_cards.view(ctx, cid, 1, "ceiling", report),
             work_links.working_view(ctx, cid, ref, {"title": text[:200], "state": "open"}),
             size_pickers.size_view(ctx), size_pickers.size_view(ctx, "repos"),
-            *(size_pickers.filters_view(ctx, p) for p in range(1, 5))]  # fmt: skip
+            *(size_pickers.filters_view(ctx, p) for p in range(1, 6)),
+            *(size_pickers.filters_view(ctx, 5, view=v) for v in ("topics", "langs"))]  # fmt: skip
 
 
 def review_views(ctx: AppContext, text: str) -> Out:
