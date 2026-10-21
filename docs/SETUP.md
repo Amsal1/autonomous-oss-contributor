@@ -75,10 +75,33 @@ token fails with `invalid format`.
 | `KIRO_API_KEY_HERMES` | Kiro console, key "ossbot-hermes" | Hermes only |
 | `GITHUB_REVIEW_MIRROR_TOKEN` | optional fine-grained PAT, only your private mirror repo | ADR-0019 C, off by default |
 | `REVERSE_IMAGE_SEARCH_KEY` | optional; no provider wired in v1 | leave empty |
+| `GITHUB_COMMIT_SIGNING_KEY` | optional SSH signing key file (below); the script asks for its path | gatekeeper only; signs packaged commits |
 
 Also: verify the commit email on your GitHub account (Settings → Emails), and create the backup
 identity with `age-keygen` (keep the `AGE-SECRET-KEY-…` line in your password manager; put the
 `age1…` public key into `profile.yaml`). Apply profile changes with `ossctl config reload`.
+
+### Commit signing (optional)
+
+Some projects (for example grafana/loki) reject unsigned commits. With a signing key the gatekeeper
+SSH-signs every packaged commit before you see the preview, so the SHA you approve is the signed one
+(ADR-0006 addendum, DESIGN §12.5b). Without one, such repos are skipped at vetting.
+
+1. Create a dedicated key without a passphrase (the gatekeeper signs unattended), in a Windows
+   PowerShell: `ssh-keygen -t ed25519 -N '""' -C "ossbot commit signing" -f $HOME\.ssh\ossbot_signing`.
+2. On GitHub: Settings → SSH and GPG keys → New SSH key → Key type **Signing Key**, paste the
+   contents of `ossbot_signing.pub`.
+3. Run `scripts\setup-secrets.ps1`, press Enter on the other prompts (keeps them), and give the
+   path of the private key file (`…\.ssh\ossbot_signing`) when asked. The key is streamed to
+   `gatekeeper.env` and checked there (ed25519, no passphrase); delete the Windows copy afterwards
+   if you like (keep the `.pub`).
+4. `scripts\ossctl.ps1 doctor`: "commit signing (SSH)" signs and verifies a test commit, and
+   "commit signing key on GitHub" finds the key on your account. Preview cards then say
+   `🔏 Commit signed (SSH, key SHA256:…)`.
+
+`policy.yaml commit.signing` is `auto` (sign when the key is set); `required` makes packaging refuse
+without a key, `off` never signs. A contribution packaged before the key was set stays unsigned:
+use ✏️ Request changes on its card to get a signed rev.
 
 ### Telegram Threaded mode (recommended)
 
