@@ -623,6 +623,47 @@ def test_squid_drift_bounds_the_rejected_snapshot_window(tmp_path: Path) -> None
     assert render.squid_snapshot_rejected(conf, root) is None
 
 
+def _rejected(root: Path, marker: bytes) -> str:
+    """Write a snapshot the installed schema rejects (an old schema key), distinct per ``marker``."""
+    files = {p.name: p.read_bytes() for p in (root / "current").iterdir()}
+    files["targets.yaml"] = files["targets.yaml"].replace(b"  size_class: null", b"  max_changed_lines: 400")
+    files["targets.yaml"] += b"# " + marker + b"\n"
+    return write_snapshot(root, files)
+
+
+def _point_current(root: Path, digest: str, mtime: float) -> None:
+    (root / "current").unlink()
+    os.symlink(digest, root / "current")
+    os.utime(root / "current", (mtime, mtime), follow_symlinks=False)
+
+
+def test_squid_drift_tolerates_stale_rejected_snapshots_until_the_gatekeeper_starts(tmp_path: Path) -> None:
+    """Close-out redeploy: the conf names an old rejected snapshot and the current one (older than
+    the grace) is rejected too, so the gatekeeper has not started on the deployed code: tolerated.
+    Once it writes a valid snapshot, the check is strict again."""
+    conf, root, template, resolv = _snapshot_env(tmp_path, None)
+    good = (root / "current").readlink().name
+    older, newer = _rejected(root, b"older"), _rejected(root, b"newer")
+    text = conf.read_text()
+    conf.write_text(text.replace(text.split("# Config snapshot: ")[1][:64], older))
+    stale = time.time() - render.MODE_APPLY_GRACE_S - 600
+    _point_current(root, newer, stale)
+    assert _drift(conf, root, template, resolv, tmp_path / "control") == []
+    _point_current(root, good, stale)  # the gatekeeper started on the new code and wrote a valid one
+    [problem] = _drift(conf, root, template, resolv, tmp_path / "control")
+    assert problem.startswith("firewall_drift:squid_mode") and "rejects" in problem
+
+
+def test_squid_drift_rejected_current_snapshot_does_not_hide_a_tampered_conf(tmp_path: Path) -> None:
+    """A conf naming a snapshot the schema accepts is always compared with its render, whatever
+    state the current snapshot is in."""
+    conf, root, template, resolv = _snapshot_env(tmp_path, None)
+    _point_current(root, _rejected(root, b"current"), time.time() - render.MODE_APPLY_GRACE_S - 600)
+    conf.write_text(conf.read_text().replace("http_access deny ip_literal\n", ""))
+    [problem] = _drift(conf, root, template, resolv, tmp_path / "control")
+    assert problem.startswith("firewall_drift:squid_mode") and "differs from the render" in problem
+
+
 def test_squid_listeners_and_classes() -> None:
     text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode="research")
     assert "http_port 3128 name=sandbox\n" in text

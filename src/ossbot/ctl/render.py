@@ -341,14 +341,25 @@ _SNAPSHOT_LINE_RE = re.compile(r"^# Config snapshot: ([0-9a-f]{64})$", re.MULTIL
 
 def _snapshot_rejection_pending(snapshot_root: Path, digest: str, now: float | None) -> bool:
     """A conf whose snapshot the schema rejects is tolerated while that snapshot is still current,
-    or while the newer current one is younger than MODE_APPLY_GRACE_S (proxy restart pending)."""
+    while the newer current one is younger than MODE_APPLY_GRACE_S (proxy restart pending), or while
+    the current one is rejected too: the gatekeeper validates every snapshot it writes, so a rejected
+    current snapshot means it has not started on the deployed code yet. Once it has written a valid
+    one, only the grace applies."""
     link = snapshot_root / "current"
     try:
-        if os.readlink(link) == digest:
+        current = os.readlink(link)
+        if current == digest:
             return True
-        return (now or time.time()) - link.lstat().st_mtime < MODE_APPLY_GRACE_S
-    except OSError:
+        if (now or time.time()) - link.lstat().st_mtime < MODE_APPLY_GRACE_S:
+            return True
+        files = read_snapshot(snapshot_root, current)
+    except (OSError, ValueError):
         return False
+    try:
+        parse_bundle(files)
+    except ConfigError:
+        return True  # gatekeeper restart pending (deploy of a schema change)
+    return False
 
 
 def squid_snapshot_rejected(conf: Path = DEFAULT_SQUID_OUT, snapshot_root: Path = DEFAULT_SNAPSHOT_ROOT) -> str | None:
@@ -407,8 +418,9 @@ def squid_drift(
         # gatekeeper-written) snapshot the live conf came from. The gatekeeper writes a new snapshot
         # at its next start and the proxy re-renders at its restart; refusing here would block the
         # very gatekeeper start that fixes it (every unit runs --check first). Not verifiable yet,
-        # but only while that snapshot is still the current one (doctor WARNs meanwhile) or a newer
-        # one is younger than the proxy-restart grace; after that the proxy missed its re-render.
+        # but only while that snapshot is still the current one (doctor WARNs meanwhile), a newer
+        # one is younger than the proxy-restart grace, or the current one is rejected too (the
+        # gatekeeper has not started on the new code); after that the proxy missed its re-render.
         if _snapshot_rejection_pending(snapshot_root, digest, now):
             return []
         return [f"{tag} {conf} names snapshot {digest[:12]}, which the installed schema rejects, and a "
