@@ -2,7 +2,7 @@
 # DESIGN §18.10 test_retention_units.sh: both retention timers are enabled and scheduled, journald keeps
 # 30 days, `ossctl gc` lists and deletes only old /tmp entries, and pause gates the unit (ConditionResult
 # no) and the CLI (exit 3). Leaves the system running with no flags.
-# shellcheck source=tests/system/lib.sh disable=SC1091
+# shellcheck source=tests/system/lib.sh disable=SC1091,SC2317
 source "$(dirname "$0")/lib.sh"
 require_running
 
