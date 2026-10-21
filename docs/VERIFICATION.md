@@ -687,6 +687,21 @@ Commit 91ab0b0 (README caption under the demo GIF removed, `test_readme_media` n
 | Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits over 914 files; command table current |
 | Deployed probe | `ls /opt/ossbot/app/src/ossbot/gatekeeper/telegram/` (as ossadmin) | no `probe_all.py`: removed by the 75a4b10 redeploy; shortcuts and topic sessions are not deployed yet (close-out) |
 
+## Post-v1 retention and All: convergence, iteration 1 (2026-10-21)
+
+Cross-FEAT check of FEAT-001..005 (PV1-R1..R4, PV1-T1..T3) at 687a3f7; one fix, f02994a. Hermetic only, no redeploy, no live gc, Docker or journal action (the close-out's). Dry-run stayed ON, no GitHub write, no Telegram message.
+
+| Check | Command | Result |
+|---|---|---|
+| FEAT status | the five FEAT JSONs of the run | all `completed` |
+| Lint gate (687a3f7) | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 530 files formatted, mypy 250 files, 14 contracts kept, 0 broken |
+| Hermetic suite (687a3f7) | `pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 3888 passed in 49 s (`.ossbot-local/logs/converge1-suite.log`) |
+| shellcheck (687a3f7) | `shellcheck -x scripts/bin/ossbot-kill scripts/lib/services.sh tests/system/test_retention_units.sh` (0.9.0, every severity) | one info, SC2317 on the EXIT-trap `cleanup` of `test_retention_units.sh`; fixed in f02994a (`disable=SC1091,SC2317`, as the other system tests); re-run clean. CI form `git ls-files '*.sh' … \| xargs shellcheck -S warning` clean |
+| PowerShell (687a3f7) | PS 5.1.26100 `Parser.ParseFile` on `scripts/lib/common.ps1`, `scripts/ossctl.ps1`; `scripts\dev\psscriptanalyzer.ps1` | 0 parse errors, CRLF only; PSScriptAnalyzer 1.25.0, 28 files, 0 errors |
+| Demo media (687a3f7) | `scripts\dev\make-demo.ps1 -Check` | PASS, render digest e072077e0d5a equals the manifest (35 pages, assert_faithful, personal_check 0 hits) |
+| Hygiene (687a3f7) | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits over 914 files; command table current |
+| Seams reviewed | gc ↔ `POST /v1/retention/run` (root = operator, 409 → SKIP/FAIL, report schema); kill/pause ↔ gc units, `ossbot-kill`, restore (`--soft` kill first) and backup (pause); timers in `OSSBOT_ENABLE_UNITS` and `step_enable_start`; `command_shortcuts` / `all_text_mode` ↔ dashboard, /help, handlers; topic sessions ↔ Hermes `sessions/` retention (V5: state.db rows, never touched) | no further change needed |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
