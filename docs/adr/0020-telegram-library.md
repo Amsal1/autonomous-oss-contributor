@@ -185,25 +185,50 @@ Live result (2026-10-21, after `bootstrap.ps1 -Only provision`): the owner sent 
 
 The owner asked for prevention, not delete-afterwards. `/chat <subject>`, and extending the cleanup to plain text, were to be built only if prevention exists for **commands and plain text typed in All** (`.ossbot-local/postv1/followups.md`).
 
-**Research (sources, 2026-10-21).** Client source was read at pinned commits, and none of it was run:
-- tdesktop `78ceaa54`: `HistoryWidget::prepareSendAction`, `HistoryItem::topicRootId`, `Data::Histories::sendCreateTopicRequest`.
-- Telegram-Android `0aae9598`: `BotForumHelper.beforeSendingFinalRequest`, `ChatActivity.checkBotKeyboard`.
-- Telegram-iOS `f1dd7a2d`: `ChatControllerNode`, `MessageUtils.requestsSetupReply`.
-- TDLib `175048b6`: `telegram_api.tl`, `title_missing`, `bot_forum_can_manage_topics`.
+**Research (2026-10-21).** Client source was read at pinned commits (tdesktop `78ceaa54`, Telegram-Android `0aae9598`, Telegram-iOS `f1dd7a2d`, TDLib `175048b6`, hermes-agent `5a282c6c`, openclaw `bead2a8e`). Everything fetched was treated as untrusted data and nothing was run. Findings are paraphrased.
 
-What the source shows:
-- The topic is created by the **client** (`messages.createForumTopic` with `title_missing`), and only for an outgoing message that is **not a reply**.
-- A reply to an off-thread message goes out off-thread.
-- `ForceReply` (https://core.telegram.org/bots/api#forcereply) should open that reply state on its own.
+Sources checked (all on 2026-10-21 unless noted):
 
-Other projects and trackers handle All without prevention:
-- Bot API changelog 9.3-10.3: no send parameter or bot setting stops implicit creation while users may create topics.
-- OpenClaw #169443/#169969 keep the topic, the opposite of our goal.
-- Hermes `gateway/run_topics.py` treats the root DM as a lobby.
-- PTB, aiogram, grammY, telegraf and pyTelegramBotAPI only type the fields.
-- bugs.telegram.org #58238 and #59731.
+| # | Source | Finding |
+|---|---|---|
+| 1 | Repo: the owner's follow-up note for this run | `/chat` and "nothing in All creates a topic" only if prevention exists and is proven live; otherwise keep 9884df9. |
+| 2 | Repo: `git show 9884df9`, `telegram/implicit_topics.py`, `handlers.py` | Live shape: update A (message N) is `forum_topic_created` with `is_name_implicit` in a new thread; update B (N+1) is the command without `message_thread_id`; paired within 2 s and the thread deleted. |
+| 3 | Repo: this ADR, addenda of 2026-10-20 and 2026-10-21 | Bot API 9.3/9.4 topic fields, `deleteForumTopic` in private chats, close/hide supergroup-only. Refinement: the bot cannot stop the client creating a topic for a non-reply message, but it can try to make the next message a reply. |
+| 4 | Repo: `telegram/ui/send.py`, `telegram/rawapi.py` `ForceReply` and `InlineKeyboardMarkup.force_reply` | ossbot already sends ForceReply and inline + `force_reply` (10.3) for prompts; no new API surface needed. |
+| 5 | https://core.telegram.org/bots/api-changelog (9.3, 9.4, 10.1-10.3) | 9.3 private-chat topics and `is_name_implicit`; 9.4 bot-side `createForumTopic` and the @BotFather setting behind `User.allows_users_to_create_topics`; 10.3 `force_reply` on inline and reply keyboards; 10.2 ephemeral messages are group-only. No setting or send parameter stops implicit creation while users may create topics. |
+| 6 | https://core.telegram.org/bots/api#forcereply | ForceReply asks the client to show a reply interface to the bot's message; it has `input_field_placeholder` (1-64 chars) and `selective`; valid in private chats. |
+| 7 | https://core.telegram.org/bots/api#sendmessage | Only `reply_markup` (ForceReply or a keyboard) can influence the user's next send; `message_thread_id` and `reply_parameters` only place the bot's own message. |
+| 8 | tdesktop `history_widget.cpp` `HistoryWidget::prepareSendAction` | In a bot forum where users create topics, a reply uses the replied item's topic; only a non-reply reserves a new bot topic. |
+| 9 | tdesktop `history_item.cpp` `topicRootId`, `apiwrap.cpp` | An off-thread item maps to the general id, sent as `top_msg_id = 0`: a reply to an off-thread bot message stays off-thread. |
+| 10 | tdesktop `history_widget.cpp` `replyTo()` and the force-reply keyboard branch | A pending ForceReply makes the composer a reply by default; dismissing the reply bar clears it. |
+| 11 | tdesktop `history_item.cpp` `definesReplyKeyboard`, `bot_keyboard.cpp` | Inline markup with `force_reply` counts as a reply keyboard on Desktop. |
+| 12 | tdesktop `data_histories.cpp` `sendCreateTopicRequest`, `data_peer.cpp` `IsBotUserCreatesTopics` | The client creates the topic (`messages.createForumTopic` with `title_missing`) and sends into it; with `bot_forum_can_manage_topics` off it shows "Off-thread message" and creates none. |
+| 13 | tdesktop `history_widget.cpp` `sendBotCommand` | Command links and reply-keyboard taps overwrite the prepared reply target; from reading alone unclear whether a topic is created (not relied on). |
+| 14 | Telegram-Android `BotForumHelper.java` `beforeSendingFinalRequest` | Intercepts only when the bot forum view is on and users may manage topics; a request carrying a reply is sent unchanged; otherwise it creates a topic titled `text[:16]+"..."` (`title_missing`) and re-points the message. Matches the A-then-B journal shape. |
+| 15 | Telegram-Android `ChatActivity.java` `checkBotKeyboard`, `TLKeyboardHelper.isForceReply` | ForceReply (plain or keyboard with `force_reply`) opens the reply panel; Android remembers an answered ForceReply per dialog. |
+| 16 | Telegram-Android `ChatActivityEnterView.java` | A reply-keyboard press in a bot forum is a reply only if the user is already replying: a plain ReplyKeyboard does not prevent a topic. |
+| 17 | Telegram-iOS `ChatControllerNode.swift` | With a reply target the message goes to the replied message's thread (off-thread for All); without one it goes to a new topic created with `isTitleMissing` and title `text.prefix(16)`. |
+| 18 | Telegram-iOS `MessageUtils.swift` `requestsSetupReply`, `UpdateChatPresentationInterfaceState.swift` | Plain ForceReply sets the reply subject; inline markup with `force_reply` does not on iOS at this commit. |
+| 19 | TDLib `telegram_api.tl`, `UserManager.h` | `user.bot_forum_view`, `bot_forum_can_manage_topics`, `title_missing` on topic creation: the server only records what the client asked for; no server-side "auto topic" flag. |
+| 20 | https://github.com/openclaw/openclaw/issues/169443 (and PR #169444) | Same two-update shape from Android; OpenClaw adopts the root message into the new topic within 3 s (keeps the topic). No prevention. |
+| 21 | https://github.com/openclaw/openclaw/issues/169969 (issue of 2026-10-12) | Asks for commands in the root DM and topics for chat; calls the All view Telegram behaviour; open. No prevention. |
+| 22 | openclaw #7352, #19144, #6417, #6597 (web search results) | Threaded DM mode makes each new message a new thread; the rest is reply routing. No prevention. |
+| 23 | NousResearch/hermes-agent `gateway/run_topics.py`, `gateway/slash_commands_session.py` | Root DM treated as a lobby (reminder, recovery to the last topic, optional auto-transfer); `/topic` refuses when users may not create topics. No prevention. |
+| 24 | NousResearch/hermes-agent #22022, #2598 (web search results) | "Message thread not found" fallback to All, and the feature request. No prevention. |
+| 25 | MaksBloxX/Telegram-Thread-Vault README (web search result) | Recommends Threaded mode on with user topic creation off: the only prevention seen in the wild (the @BotFather toggle). |
+| 26 | python-telegram-bot, aiogram, grammY, telegraf, pyTelegramBotAPI issue trackers and code | Nothing about implicit topics in private chats; the frameworks only type `is_name_implicit` and `allows_users_to_create_topics`. |
+| 27 | GitHub code search `force_reply allows_users_to_create_topics` | Only Bot API type definitions; no project uses ForceReply to keep All free of topics. |
+| 28 | https://bugs.telegram.org/c/58238, https://bugs.telegram.org/c/59731 (search snippets) | 58238: mobile clients omit `message_thread_id` on the first message of a new topic (our update B); 59731: on iOS a new bot-DM topic sometimes misses the sidebar. No avoiding setting. Card bodies seen as snippets only. |
+| 29 | Coding-agent Telegram bridges (pavel-molyanov/telegram-ai-agent, chatopic, a topic-per-agent gist; web search) | Use forum supergroups or one topic per conversation; none handles All in bot DMs. |
+| — | Not checked | Telegram Web K/A (`morethanwords/tweb`, `Ajaxy/telegram-tt`): `bot_forum_view` seen but not traced; unofficial clients not traced; full bugs.telegram.org card text not fetchable. |
 
-The only prevention used in production elsewhere is turning off "allow users to create topics" in @BotFather (e.g. Telegram-Thread-Vault). The owner keeps that setting ON.
+Candidates, ranked:
+1. **ForceReply "reply-anchored All".** Every bot message in All carries ForceReply, so the owner's next message is a reply and the client skips topic creation (rows 6, 8-10, 14-15, 17-18). Caveats: iOS honours only plain ForceReply, not inline + `force_reply`, so a card with buttons would need a separate anchor; the reply is consumed once used and must be re-armed; dismissing the bar or typing before the anchor arrives still creates a topic; owner messages show a reply quote. No production use found (row 27).
+2. **"Allow users to create topics" OFF in @BotFather.** Clients then never create a topic from All, and `/chat` could use bot-side `createForumTopic` (rows 5, 12, 14, 17, 25). Cost: the owner can no longer create or delete topics in the client; Hermes's `/topic` refuses this mode (row 23). The only approach used in production; rejected because the owner keeps the setting ON.
+3. **Manual reply.** The owner replies to a bot message before typing; same mechanism as 1, zero code, relies on habit. Used as the probe control.
+4. **Desktop command links and reply-keyboard taps** (row 13). Speculative and Desktop only (Android creates a topic for keyboard taps, row 16).
+
+Rejected: `message_thread_id` 0 or 1 on bot sends (places only the bot's message); `hideGeneralForumTopic` and `closeForumTopic` (supergroup-only); a plain ReplyKeyboard (Android still creates a topic, row 16); ephemeral messages (group-only, row 5); Mini App or Web App input (no-exposure invariant); OpenClaw-style adoption (the opposite of the goal at the time; see the owner decision below, which later adopted it for plain text only).
 
 **Live probe (2026-10-21, 01:30-01:35Z).**
 - **Setup:** a temporary, flag-guarded `/probe_all` in the gatekeeper, deployed with one `bootstrap.ps1 -Only provision`. It sent a 7-step chain of `ForceReply` messages to All and logged `reply_to_message_id` (ids and flags only). Replies to probe messages skipped the delete, so created topics stayed visible.
@@ -229,7 +254,23 @@ The only prevention used in production elsewhere is turning off "allow users to 
 - **Typed text:** a message typed in All without a reply always creates an implicit topic, whether it is a command or plain text, and ForceReply is not a reliable way to turn it into a reply.
 - **What does prevent a topic:** actions started from the bot's own UI. These are inline-keyboard buttons (a callback sends no message) and `/command` links inside bot messages, which the client sends as replies (msg 610).
 
-**Consequence under the owner decision of 2026-10-21:**
-- Behaviour stays as it is. Typed commands in All keep 9884df9's delete-and-answer, plain text in All is unchanged, and no `/chat` topics are added.
-- Proposal for the next plan step, not built: make the common commands tappable in All (buttons and command links on the dashboard, `/help` and All replies). Treat the implicit topic of typed plain text as that conversation's own resumable Hermes session, with no deletion.
-- The probe code was removed from the working tree after the run. The next redeploy restores the deployed copy.
+**Immediate consequence (before the owner decision below):**
+- Typed commands in All keep 9884df9's delete-and-answer and no `/chat` topics are added.
+- Proposal for the plan step: make the common commands tappable in All, and treat the implicit topic of typed plain text as that conversation's own resumable Hermes session, with no deletion.
+- The probe code was removed from the working tree after the run.
+
+### Owner decision (2026-10-21, after the probe)
+
+The owner approved the proposal. Built on main (not pushed), DESIGN §14.10.5:
+- **Shortcuts (3544da9 flags, 46677cf shortcuts).** Inline buttons send no message, so they create no topic; a tapped `/command` link is sent as a reply and creates none either (msg 610 above). New actions `sc_status`, `sc_work`, `sc_size`, `sc_filters`, `sc_model`, `sc_help` (`telegram/shortcuts.py`) plus the existing `dash_queue`, `dash_pause` and `dash_resume`. They run the same command functions as typing. Placement: two extra dashboard rows `[🛠 Work][📏 Size][🔎 Filters]` / `[🤖 Model][❓ Help]` (pinned card and `/status` copies), a button menu on `/help`, and a compact `[🚦 Status][📥 Queue][❓ Help]` row on command replies sent to All that have no rows of their own (so `/queue`, which has its sort row, gets none). Kill keeps its two-tap and stays on the dashboard cards only; Resume and Model open their existing confirm.
+- **Typed commands in All:** unchanged (9884df9: answered in All, their implicit topic deleted).
+- **Typed plain text in All (364f6fe).** The message is paired with its update A (`forum_topic_created`, B = A + 1, gap ≤ 2 s, same chat and sender, `is_name_implicit` or A's name a prefix of the text after stripping a trailing `...`/`…`). It is re-pointed at A's thread and answered there as a user topic with session `tg-<uid>-t<thread>`, so the owner can come back later and continue. Adopted topics are never deleted (`_delete_implicit` refuses them). If B arrives first, the rest of the handling runs in a spawned task that waits at most 2 s; without A in time the message is answered in All exactly as before. Albums follow their first item. The path runs only in topics mode and only when `getMe` reports `allows_users_to_create_topics` (read at start: with it off the client creates no topic, row 12, so B would only time out). Links and photos typed in All follow the same path.
+- **Flags** (`config/telegram.yaml`, `TelegramConfig`): `all_text_mode: topic_session | legacy` (default `topic_session`) and `command_shortcuts: true | false` (default `true`). **Revert:** set `all_text_mode: legacy` and/or `command_shortcuts: false`, then a human-confirmed `/reload`; or `git revert 364f6fe 46677cf` (the flags commit 3544da9 can stay). With both flags off every golden equals the previous output.
+- **Why `/chat <subject>` was not built.** Typing `/chat x` in All would itself create an implicit topic that then has to be deleted, the create-then-delete UX the owner rejected. Typing the subject as plain text already gives a topic named after it with its own session.
+- **VERIFY V7** (https://core.telegram.org/bots/api#replyparameters, #sendmessagedraft): `sendMessageDraft` takes `message_thread_id`; `allow_sending_without_reply` is documented as always false for replies in another forum topic; the docs do not say whether B (delivered without `message_thread_id`) counts as inside A's thread. Every reply already sends `allow_sending_without_reply` true (`ui/send.py`), so no code change. Docs checked; live confirmation is the owner's O1 re-check.
+- **VERIFY V8** (https://core.telegram.org/bots/api#inlinekeyboardmarkup): `callback_data` is 1-64 bytes (ours: 24); the Bot API sets no per-row or per-message button count. `ui/limits.py` (3 per row, 6 rows) is stricter and is kept, hence the dashboard's two shortcut rows instead of one.
+- **VERIFY V9** (rows 12, 14, 17 and the probe's `name_len` 9 and 10): Android titles `text[:16]+"..."`, iOS the first 16 characters, short texts in full, Desktop `title_missing` (pairing relies on `is_name_implicit` there, as for commands). This fixes the prefix rule.
+- No design assumption turned out false.
+- **Stray probe topics** 125097 and 125103 are left for the owner; they are deleted once, only after he confirms.
+- **Deployed probe:** `/probe_all` is gone from the deployed copy (`/opt/ossbot/app`) since the retention redeploy at 75a4b10, which shipped the tree without it. Shortcuts and topic sessions reach the live bot at the close-out redeploy.
+- Tests: `tests/telegram/test_shortcuts.py`, `tests/telegram/test_all_topic_sessions.py`, `tests/telegram/test_implicit_topics.py` (text side), `tests/unit/common/test_telegram_config.py`.

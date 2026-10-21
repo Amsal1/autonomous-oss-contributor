@@ -2274,6 +2274,7 @@ Models: chat sonnet-5.5 · coder opus-5 · vision sonnet-5.5
   - Row 1: `[🔄 Refresh] [📥 Approvals (2)]`
   - Row 2: `[⏸ Pause]` or `[▶️ Resume…]`, then `[🌙 Quiet 1h]`
   - Row 3: `[⬇️ Down…] [🛑 Kill]` (Kill styled `danger`; two taps, D14)
+  - Post-v1: with `telegram.command_shortcuts` on, two shortcut rows sit between rows 2 and 3 (§14.10.5).
 - Edits happen at most once per 30 s, only when the rendered content's sha256 changes, and are skipped while the outbox has due P0/P1 rows.
 - If the message was deleted (edit returns "message to edit not found"), a new dashboard is sent and pinned, and the row is updated.
 - `/dashboard` re-sends and re-pins it.
@@ -2320,6 +2321,24 @@ Models: chat sonnet-5.5 · coder opus-5 · vision sonnet-5.5
 - assistant messages are answered with a "↪️ replying to your message from <tg-time r>" header.
 
 Updates older than 24 h are dropped by Telegram itself, which is documented in §14.16.
+
+**Amendment (post-v1 2026-10-21): messages typed in "All".** In topics mode a message typed in "All" (no `message_thread_id`) is preceded by a `forum_topic_created` service message (update A, message N, `is_name_implicit`) for a topic the **client** created; the message itself is update B (N+1). The bot cannot prevent this for typed input (ADR-0020 addendum "can the bot prevent the implicit topic in All?", live probe 2026-10-21), so the routing above runs after the pairing of §14.10.5.
+
+#### 14.10.5 "All", implicit topics and shortcuts (post-v1 2026-10-21; ADR-0020 addenda of 2026-10-21)
+Applies only in topics mode; flat mode is unchanged.
+- **Pairing.** `telegram/implicit_topics.py` pairs A and B: same chat and sender, B = A + 1, a gap of at most `TTL_S` (2 s), and A's name equal to the command (commands) or a prefix of the text after a trailing `...`/`…` is stripped (plain text), or `is_name_implicit`. A is offered only for a thread the gatekeeper never counted and never a system topic. Pending sides live in memory only (at most 64 each, replay and done guards). Logs carry ids and flags only.
+- **Typed commands** (rule 4): answered in All; the implicit topic is deleted through the outbox (`deleteForumTopic`, at most once, a failure is logged and never retried). This is the 9884df9 behaviour, unchanged by both flags.
+- **Typed plain text, links and media**, `telegram.all_text_mode`:
+  - `topic_session` (default): when users may create topics (`getMe.allows_users_to_create_topics`, read at start), the message is re-pointed at A's thread and routed as a message in a 💬 user topic (rules 6 and 9): Hermes answers inside that topic with session `tg-<uid>-t<thread>`, which the owner can resume later. An adopted topic is **never deleted**. If B arrives before A, the rest of the handling runs in a spawned task that waits at most `TTL_S` (the update handler never waits); **TTL fallback:** without A in time the message is answered in All exactly as in `legacy`. An album follows its first item.
+  - `legacy`: the previous behaviour (answered in All; the implicit topic stays).
+- **Shortcuts**, `telegram.command_shortcuts` (default `true`): inline buttons, which send no message and so open no topic. They run the same command functions as typing (`telegram/shortcuts.py`: `sc_status`, `sc_work`, `sc_size`, `sc_filters`, `sc_model`, `sc_help`, plus `dash_queue`, `dash_pause`, `dash_resume`):
+  - the dashboard (§14.10.3, pinned card and `/status` copies) gains the rows `[🛠 Work] [📏 Size] [🔎 Filters]` and `[🤖 Model] [❓ Help]` between the Pause/Quiet row and the Down/Kill row;
+  - `/help` carries a button menu `[🚦 Status] [📥 Queue] [🛠 Work]` / `[📏 Size] [🔎 Filters] [🤖 Model]` / `[⏸ Pause] [▶️ Resume…]`;
+  - a command reply sent to All without rows of its own (not `/status` or `/help`) gets `[🚦 Status] [📥 Queue] [❓ Help]`;
+  - **Kill stays two-tap (D14) and only on the dashboard cards**; Resume and Model open their existing confirm; killed mode applies the typed-command rules.
+  - With `false`, rows and replies are exactly the previous ones.
+- **Revert:** `all_text_mode: legacy` and/or `command_shortcuts: false`, then a human-confirmed `/reload` (§14.20.3).
+- `/chat <subject>` is not provided: typing it in All would itself open a topic that has to be deleted. Plain text already opens a topic named after it with its own session.
 
 ### 14.11 PR review flow (normative; ADR-0019 states S1–S12)
 Two state models run side by side. The **approval lifecycle** (§12.4: `pending → armed → confirmed → consumed`, or `invalidated|expired|rejected`) is unchanged and authoritative. A per-approval **review UI state** lives in `tg_views.state_json` and is presentation only: `delivering, ready, exploring, commenting, changes_requested, armed, submitting, live, stale`. A UI state never gates an approval transition.
@@ -3903,7 +3922,10 @@ Expiry: proposal approvals use `proposal.ttl_hours` (CR-004, 72 h by default); s
   review_mirror: {enabled: false, poll_pending_s: 60, poll_other_s: 600}
   telegraph: {enabled: false, offer_min_chars: 1500, max_content_kb: 60, author_name: ""}   # §14.12.8; never automatic
   features: {enabled: []}
+  all_text_mode: topic_session # topic_session | legacy (post-v1, §14.10.5)
+  command_shortcuts: true      # true | false (post-v1, §14.10.5)
   ```
+- **`all_text_mode` and `command_shortcuts`** (post-v1 2026-10-21) are presentation only; they cannot approve, publish or change a limit. `legacy` and `false` restore the previous behaviour after `/reload` (§14.10.5).
 - **`config/profile.yaml`** (personal, gitignored): `telegram.timezone`, `telegram.quiet_hours`, `review_mirror.repo`.
 - **Secrets:** `GITHUB_REVIEW_MIRROR_TOKEN` and `TELEGRAPH_ACCESS_TOKEN` (both optional) in `gatekeeper.env`.
 

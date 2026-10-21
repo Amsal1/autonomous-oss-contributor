@@ -677,6 +677,16 @@ Commit 364f6fe (`telegram/implicit_topics.py` text side, `handlers.py` adoption 
 | Targeted tests | `pytest tests/telegram/test_all_topic_sessions.py tests/telegram/test_implicit_topics.py tests/telegram/test_status_is_dashboard.py -x --timeout=120` | 71 passed: topic first and text first adopted (session `tg-<uid>-t<thread>`, no deleteForumTopic), no A within TTL answered in All, follow-ups and a later command answered in the topic, commands in All still deleted, link card and photo and album in the topic, system topics never adopted, replays adopt once, logs without text; correlator unit cases (prefix rule, CAP, expiry, waiter) |
 | Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120` | 3888 passed in 48 s (`.ossbot-local/logs/feat004-suite.log`) |
 
+## Post-v1 All docs and README caption (PV1-T3, 2026-10-21)
+
+Commit 91ab0b0 (README caption under the demo GIF removed, `test_readme_media` no longer needs the MP4 link) and the docs commit (ADR-0020 addendum "can the bot prevent the implicit topic in All?" with sources 1-29, candidates, probe and "Owner decision"; DESIGN §14.10.5 and the §14.10.3, §14.10.4 and §14.20.3 notes; FINAL_REPORT O1 re-check and revert). Docs only, no redeploy, no Telegram message, dry-run ON.
+
+| Check | Command | Result |
+|---|---|---|
+| README media | `pytest tests/unit/test_readme_media.py -x --timeout=120` | 7 passed; the GIF stays, `docs/media/demo.mp4` still checked for size; CONTRIBUTING still documents `make-demo.ps1` |
+| Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits over 914 files; command table current |
+| Deployed probe | `ls /opt/ossbot/app/src/ossbot/gatekeeper/telegram/` (as ossadmin) | no `probe_all.py`: removed by the 75a4b10 redeploy; shortcuts and topic sessions are not deployed yet (close-out) |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

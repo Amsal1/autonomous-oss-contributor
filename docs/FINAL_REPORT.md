@@ -164,7 +164,11 @@ The first live PR candidate is the V3 ACP adapter for
   the other system topics and topics you named it answers in place. Client cache: the Telegram client
   may keep showing the deleted topic until you leave and reopen the chat; it is gone on the server.
   If a topic ever stays (no pair within 2 s, or Telegram refuses the delete), send commands in
-  🚦 Control.
+  🚦 Control. The bot cannot prevent the topic for typed input (live probe 2026-10-21, ADR-0020
+  addendum). Since then (built, not yet deployed, owner re-check pending): tap the shortcut buttons
+  on the dashboard, `/help` and replies in All instead of typing, since buttons open no topic
+  (46677cf). Plain text typed in All is answered inside the topic Telegram opened for it, which
+  stays as that conversation's resumable session (364f6fe, DESIGN §14.10.5).
 - **Telegram on real clients.** Rich views and photo albums are covered by hermetic tests only (O2, O4,
   O6). Streaming and Stop were checked live (O3, O5). Voice notes answer "Voice isn't supported yet".
 - **Cancelled shutdown.** After a cancelled Windows shutdown ossbot stays down until `up`.
@@ -231,6 +235,25 @@ showing the deleted topic until the chat is reopened ("Known limitations").
   `implicit_topic_pending` with no `implicit_topic_match` means the pair did not complete (no partner
   within 2 s); `stray_topic_delete_failed` gives Telegram's reason. Send commands in 🚦 Control then.
 - If the pin also shows in "All", note the client: that is the client's view of a Control pin.
+
+**Shortcuts and topic sessions, post-v1 2026-10-21 (re-check open).** Prevention for typed input was
+probed live and does not work (ForceReply did not open the reply bar; ADR-0020 addendum). What changed
+instead (DESIGN §14.10.5): inline shortcut buttons on the dashboard, `/help` and button-less replies
+in All (3544da9 flags, 46677cf), and plain text typed in All kept in its own topic as a Hermes session
+(364f6fe). Typed commands keep the 9884df9 delete. It reaches the bot at the close-out redeploy.
+- Re-check, after the redeploy:
+  1. Tap shortcuts in All (dashboard copy from `/status`, the `/help` menu, the row under a reply).
+     Expected: the command runs and no topic is created.
+  2. Type plain text in All. Expected: the answer arrives inside the new topic named after your text;
+     come back later, write in that topic and the same conversation continues; the topic stays.
+  3. Type `/status` in All. Expected: answered in All and its topic deleted within about 2 s.
+  4. Note whether the first answer in the new topic shows the reply quote of your message (V7).
+- If plain text is answered in All instead: `scripts\ossctl.ps1 logs gatekeeper -Since 30m -Grep "implicit_topic"`;
+  `implicit_topic_expired kind=text fallback=all` means no topic arrived within 2 s.
+- How to revert: set `all_text_mode: legacy` and/or `command_shortcuts: false` in
+  `config/telegram.yaml`, then `/reload`; or `git revert 364f6fe 46677cf`.
+- Stray probe topics 125097 and 125103 are still there; they are deleted only after you confirm.
+- Record the result with `record-owner-check.ps1 -Check O1 -Rows CR3-V-4,PV1-A3,PV1-T1,PV1-T2 -Result "what you saw"`.
 
 **O2 Rich views on each client** (CR3-V-1, CR3-V-14, CR3-V-15, CR3-V-16).
 - Steps, on Android, iOS and desktop:
