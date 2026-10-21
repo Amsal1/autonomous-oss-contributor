@@ -33,6 +33,7 @@ from ossbot.gatekeeper.contributions import ContributionService
 from ossbot.gatekeeper.control import ControlService
 from ossbot.gatekeeper.decisions import DecisionServices
 from ossbot.gatekeeper.derive import GitArtifacts
+from ossbot.gatekeeper.discovered_targets import DiscoveredTargets
 from ossbot.gatekeeper.discovery_prefs import DiscoveryPrefs
 from ossbot.gatekeeper.gitops import GitOps
 from ossbot.gatekeeper.models_admin import ModelsAdmin
@@ -75,6 +76,8 @@ class AppContext:
     poll_stats: PollStats = field(default_factory=PollStats)  # Telegram long-poll health (CR-001)
     decisions: DecisionServices = field(default=None)  # type: ignore[assignment]  # set by build_context
     discovery_prefs: DiscoveryPrefs = field(default=None)  # type: ignore[assignment]  # set by build_context
+    # post-v1 open discovery (design §8): repos found outside targets.yaml, set by build_context
+    discovered: DiscoveredTargets = field(default=None)  # type: ignore[assignment]
     stage_runs: StageRuns = field(default=None)  # type: ignore[assignment]  # set by build_context
     skill_reviews: SkillReviews = field(default=None)  # type: ignore[assignment]  # set by build_context
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
@@ -283,6 +286,8 @@ def build_context(
     control_ref["control"] = control
     snapshots = SnapshotManager(conn, paths, clock, audit, control, approvals, notify, decisions=decisions)
     holder["snap"] = snapshots
+    prefs = DiscoveryPrefs(conn, clock, audit, lambda: snapshots.current.bundle, notify)
+    discovered = DiscoveredTargets(conn, clock, audit, lambda: snapshots.current.bundle, prefs, notify)
     ctx = AppContext(
         paths=paths,
         clock=clock,
@@ -311,7 +316,8 @@ def build_context(
         kiro_key_sha256=os.environ.get("KIRO_KEY_SHA256") or None,
         poll_stats=PollStats(clock),
         decisions=decisions,
-        discovery_prefs=DiscoveryPrefs(conn, clock, audit, lambda: snapshots.current.bundle, notify),
+        discovery_prefs=prefs,
+        discovered=discovered,
         stage_runs=StageRuns(conn, clock, audit, control),
     )
     ctx_ref["ctx"] = ctx

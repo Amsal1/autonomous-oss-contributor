@@ -55,6 +55,13 @@ def test_only_telegraph_imports_its_writer() -> None:
     assert importers == ["ossbot.gatekeeper.telegraph"]
 
 
+def test_only_discovered_targets_imports_its_writer() -> None:
+    """Post-v1 open discovery (design §8.2): only the service imports discovered_targets_writer."""
+    name = "ossbot.gatekeeper.discovered_targets_writer"
+    importers = sorted(_module(p) for p in SRC.rglob("*.py") if any(i == name for i in _imports(p)))
+    assert importers == ["ossbot.gatekeeper.discovered_targets"]
+
+
 def test_untrusted_side_never_imports_gatekeeper() -> None:
     for package in ("runner", "sandboxd", "sandbox_tools"):
         for path in (SRC / package).rglob("*.py"):
