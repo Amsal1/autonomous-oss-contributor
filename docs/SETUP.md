@@ -143,7 +143,10 @@ Only when you trust the previews: `/dryrun off` and confirm. Every toggle invali
 - **Stop.** `/pause` (no new stages), `/kill` or `scripts\kill.ps1` (everything stops, survives
   reboot). Undo only with `/resume` or `scripts\resume.ps1` (typed confirm).
 - **Work selection.** `/size`, `/filters` and `/repos` tune autonomous discovery; `/work <url>` asks for
-  something specific. The ceiling in `config/policy.yaml` changes only by editing the file plus `/reload`.
+  something specific, on any public repo (one outside `targets.yaml` is added to your kept targets).
+  Open discovery also finds repos outside `targets.yaml` (`/filters` page 5; ⭐ Keep / 🚫 Never on their
+  cards; `ossctl targets search|discovered|add|block|unblock|strict`). The ceiling in
+  `config/policy.yaml` changes only by editing the file plus `/reload`.
 - **Egress and tiers.** `/egress allowlist|research|open` and `/hermes tier locked|research|self_improve`
   (both confirmed); `ossctl egress status`, `ossctl hermes tier` show the active values.
 - **Models.** `/model` or `ossctl model set <role> <id>`; `ossctl model list`.
