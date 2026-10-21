@@ -636,6 +636,22 @@ Commits 23c9520 (`retention:` block in policy.yaml) and 9107f3e (`gatekeeper/ret
 | Targeted tests | `pytest tests/unit/gatekeeper/test_retention.py tests/unit/gatekeeper/test_authz.py tests/unit/common/test_config.py -x --timeout=120` | 122 passed: selection (every non-terminal state, 29 days, open action or approval, shared cache), Telegram rows (closed outbox, current dashboard, open approval, open ForceReply prompt, tokens), safety (audit chain verifies and grows by one, never-touched tables unchanged, dry run deletes nothing and reports the same counts, 409 `blocked` while killed or paused, symlinks not followed), route table |
 | Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120` | 3803 passed in 50 s |
 
+## Post-v1 retention, root side (PV1-R2..R4, 2026-10-21)
+
+Commits 8d3fb14 (`ctl/gc.py`, `ossctl gc`, contract "only `ctl.cli` imports `ctl.gc`"), 30c2a01 (`ossbot-gc` and `ossbot-docker-prune` units and timers, journald drop-in, provisioning, `ossbot-kill`), 75a4b10 (doctor disk-usage line, Windows `vhd` line), then the docs commit (README and SETUP "Housekeeping", DESIGN §18.10 and the §7.3, §7.5, §12.5, §18.3 amendments, ADR-0016 addendum with V1-V6 and V10). Dry-run stayed ON, no GitHub write, no Telegram message; no `fstrim`, no live deletion beyond the system test's own `/tmp` entry (the one-offs are the close-out's).
+
+| Check | Command | Result |
+|---|---|---|
+| [VERIFY] V1-V6, V10 | docs.docker.com, freedesktop.org, learn.microsoft.com; `docker builder prune --help`, `docker buildx du --verbose`, `docker info`, `docker image ls --filter dangling=true --digests`, `systemd-analyze cat-config systemd/journald.conf`, `journalctl --disk-usage`, `lsblk --discard`, `fstrim --help`, hermes-agent source at `d923a5e`, `ls -la` of `/home/hermes/.hermes/sessions` and `/tmp` (names only) | no design assumption false; recorded in the ADR-0016 addendum. V5 refinement: `sessions.json` and `*.jsonl` are kept as well |
+| Lint gate | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 527 files formatted, mypy 249 files, 14 contracts kept, 0 broken |
+| Targeted tests | `pytest tests/unit/ctl tests/unit/test_systemd_units.py -x --timeout=120` | 286 passed (test_gc: /tmp skip list, symlinked store root, run logs, Hermes files, artifacts containment and bad cids, keep set and post-check, builder argv, fstrim last, dry run, kill/pause stop, non-root, unreachable gatekeeper, golden text, JSON, last.json; test_doctor_disk; gc units and journald drop-in) |
+| Shell and PowerShell lint | `ROOT shellcheck scripts/lib/services.sh scripts/bin/ossbot-kill tests/system/test_retention_units.sh`; `scripts\dev\psscriptanalyzer.ps1` | clean; PSScriptAnalyzer 1.25.0, 28 files, 0 errors |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120` (75a4b10 tree) | 3831 passed in 59 s (`.ossbot-local/logs/feat002-suite.log`) |
+| Redeploy (once) | `scripts\bootstrap.ps1 -Only provision` | `systemd: changed` (four units, `ossbot-kill`, the journald drop-in, journald restarted, both timers enabled), `enable-start: changed` (restarts, both timers started); doctor PASS 41, WARN 1 (Hermes surface ConnectError right after the restart); new line `PASS disk usage: / uses 19.3 GiB (WARN at 40 GiB); last gc never` (`.ossbot-local/logs/feat002-redeploy.log`) |
+| System: retention units | `ROOT bash tests/system/test_retention_units.sh` | all checks passed, PASS 21: both timers enabled, active, listed; `MaxRetentionSec=30d` in effect; dry run lists only the old `/tmp` entry and deletes nothing; KEEP line; `--only tmp` deletes the old entry and keeps the fresh one; paused: `ossbot-gc.service` ConditionResult `no`, `ossctl gc` exit 3, nothing deleted; resumed, no flags (`.ossbot-local/logs/feat002-sys-retention.log`) |
+| Live dry run | `ROOT ossctl gc --dry-run`; `systemctl list-timers` | every store 0 items (the gatekeeper's dry run included), `keep set 8 refs intact`, build-cache SKIP weekly, fstrim SKIP dry run; next runs Thu 04:40 (gc) and Sun 05:09 (docker-prune) local time |
+| Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits; command table current |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

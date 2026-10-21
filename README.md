@@ -140,6 +140,26 @@ else, including restore from a backup, is in [`docs/SETUP.md`](docs/SETUP.md).
 - **Logs.** `scripts\ossctl.ps1 logs <gatekeeper|hermes|runner|sandboxd> [-Since 15m] [-Grep <regex>]`
   reads one service's journal from Windows (read-only; `|` in the regex is safe).
 
+## Housekeeping
+
+Retention is time-based, with no size caps:
+
+| What | Kept for |
+|---|---|
+| systemd journal | 30 days (journald drop-in) |
+| Docker build cache | records unused for 7 days, pruned weekly; dangling images outside the pinned set, daily |
+| `/tmp` leftovers | 7 days |
+| Mirrors, bundles, imports and artifacts of finished contributions; unused cache repos | 30 days after they finished |
+| Closed Telegram rows (outbox, views, button tokens) | 90 days |
+| Sandbox run logs | 30 days |
+| Idle files in Hermes' `sessions/` dir | 90 days (the sessions themselves live in Hermes' `state.db` and stay resumable) |
+
+Never selected: the audit log, open contributions and anything awaiting approval.
+`ossbot-gc.timer` runs daily and `ossbot-docker-prune.timer` weekly; both skip while ossbot is killed
+or paused. See what would go with `sudo ossctl gc --dry-run` in the distro. `fstrim` runs after each
+pass, so the sparse `ext4.vhdx` gives the freed space back to Windows. Change the periods in
+`config/policy.yaml` `retention:`, then `/reload`. Details: [`docs/SETUP.md`](docs/SETUP.md#housekeeping).
+
 ## Telegram tour
 
 With **Threaded mode** on in @BotFather (recommended, see SETUP.md), the bot creates four system threads

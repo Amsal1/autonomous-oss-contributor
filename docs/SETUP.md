@@ -173,6 +173,36 @@ Only when you trust the previews: `/dryrun off` and confirm. Every toggle invali
 | `.wslconfig` backups, kill marker | `.ossbot-local\` | not backed up |
 | Windows registrations (Scheduled Tasks, Hyper-V rules, `.wslconfig`) | Windows | re-created by bootstrap |
 
+## Housekeeping
+
+Retention is time-based only (DESIGN §18.10). The periods are the `retention:` block of
+`config/policy.yaml`; edit it, then `/reload` (or `ossctl config reload`).
+
+| Store | Kept for | Who deletes |
+|---|---|---|
+| systemd journal | 30 days (`MaxRetentionSec=30d`, `/etc/systemd/journald.conf.d/60-ossbot.conf`) | journald itself, also while killed |
+| Docker build cache | records unused for `docker_build_cache_hours` (168 h), weekly | `ossbot-docker-prune.timer` (Sun 05:00) |
+| Dangling Docker images | removed daily, except every `ossbot/*` tag, the pinned digests and the pinned `ubuntu` base | `ossbot-gc.timer` (04:30) |
+| `/tmp` top-level entries | `tmp_days` (7) since the entry and everything in it was last modified | `ossbot-gc.timer` |
+| Mirrors, derived files, imports, work bundles and artifacts of finished contributions; unused cache repos | `contributions_days` (30) after the contribution finished | the gatekeeper (its own data) and root (artifacts) |
+| Closed Telegram outbox rows, views and button tokens | `telegram_rows_days` (90) | the gatekeeper |
+| Sandbox run logs (`/srv/ossbot/logs/runs`) | `run_logs_days` (30) | `ossbot-gc.timer` |
+| Idle files in `/home/hermes/.hermes/sessions/` (debug dumps, legacy snapshots) | `hermes_sessions_days` (90) | `ossbot-gc.timer` |
+
+Never selected: the audit log and its anchors, open contributions, anything awaiting approval, the
+current dashboard and open prompts, Hermes' `state.db` (the sessions stay resumable), memories and skills,
+`sessions/sessions.json` and `*.jsonl`, the control dir and secrets. Both timers skip while ossbot is
+killed or paused, and `ossctl gc` stops (exit 3) when a kill or pause arrives; `/kill` stops a running pass.
+
+- `sudo ossctl gc --dry-run` (in the distro) prints what would go, store by store; `--json` lists the
+  names (never Hermes file names). `sudo ossctl gc` runs the daily pass by hand; `--only <store>` picks
+  stores (`tmp`, `gatekeeper`, `artifacts`, `run-logs`, `hermes-sessions`, `images`, `build-cache`,
+  `fstrim`); `--only build-cache --build-cache-until-hours 0` drops every unused cache record once.
+- `fstrim -v /` runs last in each pass. With `sparseVhd=true` (`config/wsl/wslconfig`) the freed blocks
+  go back to Windows: `scripts\ossctl.ps1 doctor` shows the `ext4.vhdx` size on disk next to its logical
+  size, which never shrinks.
+- `ossctl doctor` warns when `/` uses `disk_warn_gib` (40) GiB or more and shows the last gc run.
+
 ## 12. Uninstall
 
 `powershell -NoProfile -File scripts\uninstall-host.ps1` (or `scripts\bootstrap.ps1 -Uninstall`)
