@@ -56,6 +56,14 @@ class FakeGitHub:
     review_comments: dict[tuple[str, int], list[dict[str, Any]]] = field(default_factory=dict)
     create_ref_status: int = 403
     token_expiration: str | None = None
+    # post-v1 open discovery: queued answers per "METHOD path" (status, headers, JSON) served before the
+    # normal handler (rate-limit injection, plan D3); community profiles (repo lower -> doc, else derived
+    # from files["CONTRIBUTING.md"]); default-branch commit dates (repo lower -> ISO, else 404); open PRs
+    # mentioning an issue for the mention-check search ((repo lower, n) -> count)
+    answers: dict[str, list[tuple[int, dict[str, str], Any]]] = field(default_factory=dict)
+    community: dict[str, dict[str, Any]] = field(default_factory=dict)
+    commit_dates: dict[str, str] = field(default_factory=dict)
+    mentions: dict[tuple[str, int], int] = field(default_factory=dict)
     router: respx.MockRouter = field(init=False)
 
     def __post_init__(self) -> None:
@@ -99,10 +107,39 @@ class FakeGitHub:
         if self.failures.get(key):
             status = self.failures[key].pop(0)
             return httpx.Response(status, json={"message": "injected failure"})
+        if self.answers.get(key):
+            status, headers, doc = self.answers[key].pop(0)
+            return httpx.Response(status, json=doc, headers=headers)
         response = self._dispatch(request.method, path, params, body)
         if request.method != "GET" and response.status_code < 300 and self.on_write is not None:
             self.on_write(key)
         return response
+
+    def _search_repos(self, q: str) -> httpx.Response:
+        """``topic:T stars:>=N …``: repos carrying topic T with at least N stars, most stars first (the
+        other qualifiers are post-filtered by the runner anyway)."""
+        topic = re.search(r"\btopic:(\S+)", q)
+        stars = re.search(r"\bstars:>=(\d+)", q)
+        items = [d for d in self.repos.values()
+                 if (topic is None or topic.group(1) in d.get("topics", []))
+                 and int(d.get("stargazers_count") or 0) >= (int(stars.group(1)) if stars else 0)]  # fmt: skip
+        items.sort(key=lambda d: -int(d.get("stargazers_count") or 0))
+        return httpx.Response(200, json={"total_count": len(items), "incomplete_results": False, "items": items[:50]})
+
+    def _search_issues(self, q: str) -> httpx.Response:
+        """The mention check (``repo:R is:pr is:open N`` -> ``mentions``) or an open-discovery issue
+        search (``repo:R is:issue … label:a,"b c"`` -> open issues of R with any of the labels)."""
+        repo_m = re.search(r"\brepo:(\S+)", q)
+        repo = repo_m.group(1).lower() if repo_m else ""
+        if "is:pr" in q:
+            number = re.search(r"\s(\d+)\s*$", q)
+            count = self.mentions.get((repo, int(number.group(1))), 0) if number else 0
+            return httpx.Response(200, json={"total_count": count, "items": []})
+        label_m = re.search(r"\blabel:(.+)$", q)
+        wanted = {w.strip('"') for w in re.findall(r'"[^"]*"|[^,]+', label_m.group(1))} if label_m else set()
+        items = [i for (r, _), i in sorted(self.issues.items()) if r == repo and i.get("state") == "open"
+                 and (not wanted or wanted & {lbl.get("name") for lbl in i.get("labels", [])})]  # fmt: skip
+        return httpx.Response(200, json={"total_count": len(items), "incomplete_results": False, "items": items})
 
     def _dispatch(self, method: str, path: str, params: dict[str, str], body: Any) -> httpx.Response:
         if path == "/user":
@@ -111,7 +148,9 @@ class FakeGitHub:
                 headers["github-authentication-token-expiration"] = self.token_expiration
             return httpx.Response(200, json={"login": self.login}, headers=headers)
         if path == "/search/issues":
-            return httpx.Response(200, json={"total_count": 0, "items": []})
+            return self._search_issues(params.get("q", ""))
+        if path == "/search/repositories":
+            return self._search_repos(params.get("q", ""))
         mu = re.fullmatch(r"/users/([^/]+)/repos", path)
         if mu:
             owner = mu.group(1).lower()
@@ -168,6 +207,19 @@ class FakeGitHub:
             if label:
                 items = [i for i in items if label in {lbl.get("name") for lbl in i.get("labels", [])}]
             return httpx.Response(200, json=items)
+        if rest == "/community/profile" and method == "GET":  # open discovery rule 13
+            if repo not in self.repos:
+                return httpx.Response(404, json={"message": "Not Found"})
+            if repo in self.community:
+                return httpx.Response(200, json=self.community[repo])
+            has = (repo, "CONTRIBUTING.md") in self.files
+            contributing = {"url": f"{API}/repos/{repo}/contents/CONTRIBUTING.md"} if has else None
+            return httpx.Response(200, json={"health_percentage": 50, "files": {"contributing": contributing}})
+        if rest == "/commits" and method == "GET":  # the default-branch activity gate
+            date = self.commit_dates.get(repo)
+            if date is None:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json=[{"sha": "c" * 40, "commit": {"committer": {"date": date}}}])
         if rest == "/readme" and method == "GET":  # runner vet (README AI wording)
             text = self.files.get((repo, "README.md"))
             if text is None:

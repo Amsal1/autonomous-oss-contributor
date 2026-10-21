@@ -262,6 +262,152 @@ def test_targets_verify_stops_reading_once_github_is_unavailable() -> None:
     assert repos_read(seen403) == {"a/one", "b/two"}
 
 
+# ------------------------------------------- post-v1 open discovery: search methods and buckets (§7.4)
+def recording(answer: Answer) -> tuple[GitHubRead, list[httpx.Request], list[float], Wall]:
+    seen: list[httpx.Request] = []
+    slept: list[float] = []
+    wall = Wall()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return answer(request)
+
+    client = github_read.make_client("t", transport=httpx.MockTransport(handler))
+    return GitHubRead(client, sleep=slept.append, wall=wall, monotonic=wall), seen, slept, wall
+
+
+def test_search_methods_are_get_only_with_exact_params() -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/search/"):
+            return httpx.Response(200, json={"total_count": 1, "items": [{"full_name": "o/r"}, "junk"]})
+        if request.url.path.endswith("/commits"):
+            return httpx.Response(200, json=[{"commit": {"committer": {"date": "2026-10-01T00:00:00Z"}}}])
+        return httpx.Response(200, json={"files": {"contributing": None}})
+
+    gh, seen, _, _ = recording(answer)
+    q = "topic:gitops stars:>=1000 pushed:>=2026-08-22 archived:false mirror:false is:public"
+    assert gh.search_repos(q) == [{"full_name": "o/r"}]
+    assert gh.search_issues("repo:o/r is:issue") == [{"full_name": "o/r"}]
+    assert gh.community_profile("o/r") == {"files": {"contributing": None}}
+    assert gh.default_branch_commit_at("o/r", "main") == "2026-10-01T00:00:00Z"
+    assert {r.method for r in seen} == {"GET"}
+    params = [dict(r.url.params) for r in seen]
+    assert params[0] == {"q": q, "sort": "stars", "order": "desc", "per_page": "50"}
+    assert params[1] == {"q": "repo:o/r is:issue", "sort": "updated", "order": "desc", "per_page": "30"}
+    assert [r.url.path for r in seen[2:]] == ["/repos/o/r/community/profile", "/repos/o/r/commits"]
+    assert params[3] == {"sha": "main", "per_page": "1"}
+    for p in params:
+        assert "advanced_search" not in p and "search_type" not in p
+
+
+def test_community_profile_and_commit_date_404_read_as_none() -> None:
+    gh, _, _, _ = recording(status(404))
+    assert gh.community_profile("o/r") is None and gh.default_branch_commit_at("o/r", "main") is None
+
+
+def test_a_search_limit_sets_only_the_search_bucket() -> None:
+    limited = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(T0) + 300)}
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/search/"):
+            return httpx.Response(403, json={"message": "API rate limit exceeded"}, headers=limited)
+        return httpx.Response(200, json={"full_name": "o/r"})
+
+    gh, seen, _, wall = recording(answer)
+    with pytest.raises(GitHubRateLimited) as info:
+        gh.search_repos("topic:x")
+    assert info.value.until == T0 + 300 and gh.search_limited_until == T0 + 300 and gh.limited_until == 0.0
+    with pytest.raises(GitHubRateLimited):
+        gh.open_prs_mentioning("o/r", 1)  # every search waits, without a request
+    assert len(seen) == 1
+    assert gh.repo("o/r") == {"full_name": "o/r"} and len(seen) == 2  # core reads go on
+    wall.t = T0 + 300
+    with pytest.raises(GitHubRateLimited):
+        gh.search_issues("repo:o/r")  # the reset passed: a request again (still limited here)
+    assert len(seen) == 3
+
+
+def test_x_ratelimit_resource_search_picks_the_search_bucket() -> None:
+    headers = {"x-ratelimit-resource": "search", "retry-after": "30"}
+    gh, _, _, _ = recording(lambda r: httpx.Response(429, json={"message": "x"}, headers=headers))
+    with pytest.raises(GitHubRateLimited):
+        gh.repo("o/r")
+    assert (gh.search_limited_until, gh.limited_until) == (T0 + 30, 0.0)
+
+
+def test_a_core_limit_does_not_block_searches() -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/search/"):
+            return httpx.Response(200, json={"total_count": 0, "items": []})
+        return httpx.Response(429, json={"message": "x"}, headers={"retry-after": "60"})
+
+    gh, seen, _, _ = recording(answer)
+    with pytest.raises(GitHubRateLimited):
+        gh.repo("o/r")
+    assert gh.search_repos("topic:x") == [] and gh.limited_until == T0 + 60 and gh.search_limited_until == 0.0
+    assert len(seen) == 2
+
+
+def test_secondary_limit_backs_off_60_120_240_capped_at_900_and_resets() -> None:
+    queue: list[int] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        if queue and queue.pop(0) == 200:
+            return httpx.Response(200, json={"total_count": 0, "items": []})
+        return httpx.Response(403, json={"message": "You have exceeded a Secondary Rate Limit. Please wait."})
+
+    gh, _, _, wall = recording(answer)
+    waits: list[float] = []
+    for _ in range(6):
+        queue.append(403)
+        with pytest.raises(GitHubRateLimited) as info:
+            gh.search_repos("topic:x")
+        waits.append(info.value.until - wall.t)
+        wall.t = info.value.until
+    assert waits == [60.0, 120.0, 240.0, 480.0, 900.0, 900.0]
+    queue.append(200)
+    assert gh.search_repos("topic:x") == []  # a success resets the count
+    queue.append(403)
+    with pytest.raises(GitHubRateLimited) as info:
+        gh.search_repos("topic:x")
+    assert info.value.until - wall.t == 60.0
+
+
+def test_retry_after_wins_over_the_secondary_backoff() -> None:
+    gh, _, _, _ = recording(
+        lambda r: httpx.Response(403, json={"message": "secondary rate limit"}, headers={"retry-after": "17"})
+    )
+    with pytest.raises(GitHubRateLimited) as info:
+        gh.search_issues("repo:o/r")
+    assert info.value.until == T0 + 17
+
+
+def test_a_plain_403_on_a_search_is_not_a_limit() -> None:
+    gh, _, _, _ = recording(status(403))
+    with pytest.raises(GitHubReadError) as info:
+        gh.search_repos("topic:x")
+    assert info.value.error_class == "github_http_403" and gh.search_limited_until == 0.0
+
+
+def test_incomplete_results_are_used_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+    doc = {"total_count": 9, "incomplete_results": True, "items": [{"full_name": "o/r"}]}
+    gh, _, _, _ = recording(lambda r: httpx.Response(200, json=doc))
+    with caplog.at_level("INFO", logger="ossbot.runner.github_read"):
+        assert gh.search_repos("topic:x") == [{"full_name": "o/r"}]
+    assert [r for r in caplog.records if getattr(r, "event", "") == "github_search_incomplete"]
+
+
+def test_every_search_method_shares_the_gap() -> None:
+    gh, seen, slept, wall = recording(lambda r: httpx.Response(200, json={"total_count": 0, "items": []}))
+    gh.search_repos("topic:x")
+    wall.t += 0.5
+    gh.search_issues("repo:o/r")
+    wall.t += 3.0
+    gh.open_prs_mentioning("o/r", 1)
+    gh.search_repos("topic:y")
+    assert len(seen) == 4 and slept == [pytest.approx(1.6), pytest.approx(2.1)]
+
+
 def test_readme_and_directory_listing_on_the_fake() -> None:
     """Post-v1 vet reads (README, ``.github`` listing): GET only, 404 -> None / []."""
     fake = FakeGitHub()
