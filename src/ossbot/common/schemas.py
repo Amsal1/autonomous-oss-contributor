@@ -7,12 +7,13 @@ the same kill/pause parametrization.
 
 from __future__ import annotations
 
+import dataclasses
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort
+from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort, Language, ResolvedTarget, Topic
 
 
 class State(StrEnum):
@@ -428,11 +429,127 @@ class RetentionReport(ApiModel):
 
 
 # ------------------------------------------------------------------------ misc requests
-DISCOVERY_URL_RE = r"^https://github\.com/[\w.-]+/[\w.-]+/issues/\d+$"
+# Post-v1 open discovery (design §11): a repo URL or an issue URL; a PR URL or anything else fails the
+# schema (400 schema_error, no echo). Only the slug and the issue number are ever stored.
+DISCOVERY_URL_RE = (
+    r"^https://github\.com/(?P<owner>[A-Za-z0-9-]{1,39})/(?P<repo>[A-Za-z0-9._-]{1,100})"
+    r"(?:/issues/(?P<n>[1-9][0-9]{0,9}))?/?$"
+)
 
 
 class DiscoveryRequest(ApiModel):
     url: Annotated[str, Field(pattern=DISCOVERY_URL_RE, max_length=300)]
+
+
+# ------------------------------------------------------------- post-v1 open discovery (§8.4)
+DiscoveredStatus = Literal["suggested", "candidate", "kept", "never", "skipped"]
+DISCOVERED_STATUSES: tuple[DiscoveredStatus, ...] = ("suggested", "candidate", "kept", "never", "skipped")
+DiscoveredSource = Literal["search", "hermes", "owner"]
+DiscoveredDecisionName = Literal["keep", "never", "unblock", "unkeep", "strict", "unstrict"]
+CiOnPr = Literal["yes", "no", "unknown"]
+SKIP_REASON_RE = r"^[a-z_]{1,40}(:[a-z0-9.,-]{1,120})?$"
+SPDX_ID_RE = r"^[A-Za-z0-9.+-]{1,64}$"
+ISO_TS_RE = r"^[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,9})?)?(Z|[+-][0-9]{2}:[0-9]{2})?)?$"
+RepoSlug = Annotated[str, Field(pattern=REPO_RE)]
+SkipReason = Annotated[str, Field(pattern=SKIP_REASON_RE)]
+IsoTs = Annotated[str, Field(pattern=ISO_TS_RE, max_length=40)]
+
+
+class DiscoveredFacts(ApiModel):
+    """``POST /v1/discovered-targets`` (worker): what the runner found for one repo (design §8.3, §8.4).
+
+    Values come from GitHub through the runner (not LLM output); bounded and only rendered escaped.
+    With ``kept_check`` the status is the pass/fail of a kept repo's re-check and ``source`` is ignored."""
+
+    repo: RepoSlug
+    source: Literal["search", "hermes"]
+    status: Literal["candidate", "skipped"]
+    kept_check: bool = False
+    topic: Topic | None = None
+    stars: Annotated[int, Field(ge=0, le=10_000_000)] | None = None
+    language: Language | None = None
+    license_spdx: Annotated[str, Field(pattern=SPDX_ID_RE)] | None = None
+    pushed_at: IsoTs | None = None
+    ci_on_pr: CiOnPr | None = None
+    repo_score: Annotated[float, Field(ge=0.0, le=200.0)] | None = None
+    skip_reason: SkipReason | None = None
+    tried: bool = False
+
+    @model_validator(mode="after")
+    def _skip_reason_iff_skipped(self) -> DiscoveredFacts:
+        if (self.status == "skipped") != (self.skip_reason is not None):
+            raise ValueError("skip_reason is required for status skipped and only then")
+        return self
+
+
+class DiscoveredDecision(ApiModel):
+    """``POST /v1/discovered-targets/decision`` (operator; the Telegram Keep/Never call the service)."""
+
+    repo: RepoSlug
+    decision: DiscoveredDecisionName
+
+
+class DiscoveredView(ApiModel):
+    """One ``discovered_targets`` row."""
+
+    repo: str
+    source: DiscoveredSource
+    status: DiscoveredStatus
+    topic: str | None = None
+    stars: int | None = None
+    language: str | None = None
+    license_spdx: str | None = None
+    pushed_at: str | None = None
+    ci_on_pr: CiOnPr | None = None
+    repo_score: float | None = None
+    skip_reason: str | None = None
+    suggested_issue: int | None = None
+    egress_strict: bool = False
+    first_seen: str
+    updated_at: str
+    tried_at: str | None = None
+    checked_at: str | None = None
+    cooldown_until: str | None = None
+    decided_by: str | None = None
+    decided_at: str | None = None
+
+
+ShortText = Annotated[str, Field(max_length=200)]
+
+
+class ResolvedTargetView(ApiModel):
+    """``GET /v1/targets/resolve``: a ``common.config.ResolvedTarget`` on the wire (round-trips)."""
+
+    repo: RepoSlug
+    category: Annotated[str, Field(min_length=1, max_length=40)]
+    priority: Annotated[int, Field(ge=1, le=5)]
+    enabled: bool
+    discovery: bool
+    labels: Annotated[list[ShortText], Field(max_length=200)]
+    skip_labels: Annotated[list[ShortText], Field(max_length=200)]
+    clone_depth: Annotated[int, Field(ge=1)]
+    size_class: Literal["xs", "s", "m", "l", "xl"] | None
+    validation: Annotated[list[Literal["static", "unit", "smoke"]], Field(max_length=3)]
+    cla_signed: bool
+    ai_policy_override: Literal["allowed"] | None
+    egress_extra: Annotated[list[Annotated[str, Field(max_length=253)]], Field(max_length=200)]
+    disclosure_template: Annotated[str, Field(max_length=20000)] | None
+    ai_unstated: Literal["allow", "skip"] | None = None
+    ai_unclear: Literal["allow", "skip"] | None = None
+    egress: Literal["mode", "strict"] = "mode"
+
+    @classmethod
+    def from_target(cls, t: ResolvedTarget) -> ResolvedTargetView:
+        data = dataclasses.asdict(t)
+        for key in ("labels", "skip_labels", "validation", "egress_extra"):
+            data[key] = list(data[key])
+        return cls.model_validate(data)
+
+    def to_target(self) -> ResolvedTarget:
+        data = self.model_dump()
+        for key in ("labels", "skip_labels", "validation", "egress_extra"):
+            data[key] = tuple(data[key])
+        return ResolvedTarget(**data)
 
 
 class NotifyRequest(ApiModel):
