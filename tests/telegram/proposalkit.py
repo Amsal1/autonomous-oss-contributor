@@ -29,10 +29,11 @@ def card_of(ctx: AppContext, approval: str) -> PCard:
 
 async def proposal_card(rig: TgRig, *, source: str = "discover", vetting: dict[str, Any] | None = None,
                         notes: str | None = None, issue_title: str = "Fix trace export when spans are empty",
-                        **over: Any) -> PCard:  # fmt: skip
-    """A scouting contribution, its v1 proposal stored and the card delivered."""
-    cols: dict[str, Any] = {"issue_title": issue_title,
-                            "issue_url": "https://github.com/langfuse/langfuse/issues/1234"}  # fmt: skip
+                        contrib: dict[str, Any] | None = None, **over: Any) -> PCard:  # fmt: skip
+    """A scouting contribution, its v1 proposal stored and the card delivered (``contrib``: extra
+    contribution columns, e.g. a discovered ``upstream`` and ``category``)."""
+    cols: dict[str, Any] = {"issue_title": issue_title, "issue_url": "https://github.com/langfuse/langfuse/issues/1234",
+                            **(contrib or {})}  # fmt: skip
     if vetting is not None:
         cols["vetting_json"] = json.dumps(vetting)
     if notes is not None:

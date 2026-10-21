@@ -1,5 +1,6 @@
 """Gate 1 kit buttons and replies (DESIGN §14.11.15; PLAN item 46): Skip, Later, Never, Undo, Adjust,
-Make it smaller, Details and Ask maintainers first.
+Make it smaller, Details and Ask maintainers first; post-v1 open discovery (design §9.3) adds Keep as
+target for a discovered candidate repo.
 
 Every kit token carries ``{cid, version}`` (``approval_id`` NULL) and resolves the open ``p_`` approval of
 that version at tap time; a tap on an older version answers "Superseded…". The decisions themselves run
@@ -15,12 +16,14 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from ossbot.common.clock import from_iso
+from ossbot.common.config import resolve_target
 from ossbot.common.control_flags import Blocked
 from ossbot.common.ids import new_token
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.action_requests import ActionRefused, claim_body, request_action
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.discovered_targets import DiscoveredRefused
 from ossbot.gatekeeper.proposals import SNOOZE_DAYS_MAX, ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import TransitionError
 from ossbot.gatekeeper.telegram import keyboards, proposal_cards
@@ -32,6 +35,9 @@ from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
 
 UNDO_TTL = timedelta(minutes=10)
+KEEP_TEXT = ("Keep {repo} as a target? It will be scanned every cycle like a seed target. Stored in the"
+             " gatekeeper DB, not targets.yaml; undo with ossctl targets unblock --unkeep {repo}.")  # fmt: skip
+NOT_KEEPABLE = "Not kept: this repo is no longer a discovered candidate."
 TOO_LATE = "Too late to undo; re-request with /work <issue url>"
 ADJUST_PLACEHOLDER = "What should change in the plan? (≤ 2000)"
 LATER_DAYS = (1, 3, 7, 14)
@@ -203,7 +209,12 @@ async def never_pick(tap: Tap) -> str:
     aid = str(approval["id"])
     c = _row(tap.app, "SELECT upstream, kind FROM contributions WHERE id = ?", (a.cid,))
     base = {"cid": a.cid, "version": a.version, "target": a.target}
-    if a.target == "repo":
+    if a.target == "repo" and resolve_target(tap.app.config.targets, str(c["upstream"])) is None:
+        # design §9.4 (finding 17): a discovered repo's Never is undone with ossctl, not in /repos
+        text = (f"Never propose work from {c['upstream']} again? It won't be searched again. Undo with ossctl"
+                f" targets unblock {c['upstream']} (there is no Telegram undo for discovered repos).")  # fmt: skip
+        label = "🚫 Never this repo"
+    elif a.target == "repo":
         text = f"Never propose work from {c['upstream']} again? Undo in /repos."
         label = "🚫 Never this repo"
     else:
@@ -229,6 +240,46 @@ async def never_confirm(tap: Tap) -> str:
     what = "this repo" if a.target == "repo" else proposal_cards.kind_name(c["kind"])
     edit_card(tap.app, str(approval["id"]), f"🚫 {b('Never: ' + what)}", None)
     return f"Never: {what}."
+
+
+@action("proposal_keep", arg=ProposalArg)
+async def keep(tap: Tap) -> str:
+    """⭐ Keep as target (design §9.3), tap 1: the confirm panel on the card."""
+    a: ProposalArg = tap.arg
+    approval, refused = _current(tap.app, a)
+    if refused:
+        return refused
+    aid = str(approval["id"])
+    repo = str(_row(tap.app, "SELECT upstream FROM contributions WHERE id = ?", (a.cid,))["upstream"])
+    if not proposal_cards.keepable(proposal_cards.discovered_of(tap.app, repo)):
+        return NOT_KEEPABLE
+    base = {"cid": a.cid, "version": a.version}
+    ttl = timedelta(seconds=tap.app.config.policy.limits.confirm_ttl_seconds)
+    rows: keyboards.Rows = [[("⭐ Keep this repo", _kit(tap.app, aid, "proposal_keep_confirm", base, single_use=True,
+                                                        ttl=ttl), "primary"),
+                             ("↩️ Cancel", _kit(tap.app, aid, "proposal_back", base))]]  # fmt: skip
+    edit_card(tap.app, aid, b(KEEP_TEXT.format(repo=repo)), keyboards.to_json(rows))
+    return ""
+
+
+@action("proposal_keep_confirm", arg=ProposalArg)
+async def keep_confirm(tap: Tap) -> str:
+    """Tap 2: re-checks the card, reads the repo from the contribution (never from the token) and keeps it
+    in the gatekeeper DB only; the proposal itself stays open, its keyboard without the Keep row."""
+    a: ProposalArg = tap.arg
+    approval, refused = _current(tap.app, a)
+    if refused:
+        return refused
+    repo = str(_row(tap.app, "SELECT upstream FROM contributions WHERE id = ?", (a.cid,))["upstream"])
+    if not proposal_cards.keepable(proposal_cards.discovered_of(tap.app, repo)):
+        _restore(tap.app, str(approval["id"]))
+        return NOT_KEEPABLE
+    try:
+        tap.app.discovered.decide(repo, "keep", tap.actor)
+    except DiscoveredRefused as exc:
+        return f"Not kept: {exc.code}"
+    _restore(tap.app, str(approval["id"]))
+    return "⭐ Kept: scanned every cycle."
 
 
 @action("proposal_back", arg=ProposalArg)

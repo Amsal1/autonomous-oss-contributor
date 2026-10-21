@@ -16,11 +16,13 @@ from __future__ import annotations
 import fnmatch
 import json
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from ossbot.common import ai_policy, ci_facts
 from ossbot.common.clock import from_iso
+from ossbot.common.config import resolve_target
+from ossbot.common.schemas import DiscoveredView
 from ossbot.common.size import SIZE_CLASSES
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.telegram import keyboards
@@ -113,6 +115,50 @@ def forbidden_hits(ctx: AppContext, areas: list[str]) -> list[str]:
     return [a for a in areas if any(fnmatch.fnmatch(a, g) or fnmatch.fnmatch(a.rstrip("/") + "/x", g) for g in globs)]
 
 
+# --------------------------------------------------------------------------- open discovery (design §9)
+def discovered_of(ctx: AppContext, upstream: str) -> DiscoveredView | None:
+    """The ``discovered_targets`` row of a repo outside targets.yaml, or None (config targets, which
+    keep their card byte-identical, and repos without a row)."""
+    if resolve_target(ctx.config.targets, upstream) is not None:
+        return None
+    return ctx.discovered.get(upstream)
+
+
+def keepable(found: DiscoveredView | None) -> bool:
+    """The ⭐ Keep / 🚫 Never row is shown only for a discovered ``candidate`` (§9.2)."""
+    return found is not None and found.status == "candidate"
+
+
+def discovery_line(found: DiscoveredView) -> k.Line:
+    """``🔎 open discovery · topic gitops · ★ 24,440`` (search), ``🔎 suggested by Hermes · ★ N`` or
+    ``⭐ kept target (open discovery) · ★ N``; unknown parts are left out. The topic is escaped text,
+    the stars come from the integer column (§9.1)."""
+    spans: list[k.Span]
+    if found.source == "owner" or found.status == "kept":
+        spans = [k.Const("⭐ kept target (open discovery)")]
+    elif found.source == "hermes":
+        spans = [k.Const("🔎 suggested by Hermes")]
+    else:
+        spans = [k.Const("🔎 open discovery")]
+        if found.topic:
+            spans += [k.Const(" · topic "), k.Text(found.topic, 50)]
+    if found.stars is not None:
+        spans.append(k.Const(f" · ★ {found.stars:,}"))
+    return tuple(spans)
+
+
+def activity_line(found: DiscoveredView, now: datetime) -> k.Line | None:
+    """Owner addition (2026-10-21): ``🌿 last commit on the default branch: 3 d ago`` from the stored
+    default-branch commit date; None when it is unknown."""
+    if not found.default_branch_commit_at:
+        return None
+    try:
+        days = max(0, (now - from_iso(found.default_branch_commit_at)).days)
+    except ValueError:
+        return None
+    return (k.Const(f"🌿 last commit on the default branch: {'today' if days == 0 else f'{days} d ago'}"),)
+
+
 # --------------------------------------------------------------------------- the card
 def card_view(ctx: AppContext, row: sqlite3.Row) -> k.View | None:
     cid, version = str(row["cid"]), int(row["version"])
@@ -131,6 +177,12 @@ def card_view(ctx: AppContext, row: sqlite3.Row) -> k.View | None:
             note += [k.Const(' · "'), k.Text(str(contrib["notes"]), 80), k.Const('"')]
         lines.append(tuple(note))
     lines.append((k.Bold(k.Text(str(contrib["upstream"]), 150)),))
+    found = discovered_of(ctx, str(contrib["upstream"]))
+    if found is not None:
+        lines.append(discovery_line(found))
+        activity = activity_line(found, ctx.clock.now())
+        if activity is not None:
+            lines.append(activity)
     if contrib["issue_number"]:
         issue: list[k.Span] = [k.Const("Issue ")]
         number = k.Const(f"#{contrib['issue_number']}")
@@ -319,10 +371,15 @@ def card_rows(ctx: AppContext, approval_id: str, tokens: dict[str, str]) -> keyb
     rows.append(second)
     rows.append([("🚫 Never…", kit["proposal_never"]), ("⏰ Later…", kit["proposal_later"])])
     fourth: list[keyboards.Button] = [("🧭 Details", kit["proposal_details"])]
-    contrib = db.one(ctx.conn, "SELECT vetting_json FROM contributions WHERE id = ?", (cid,))
+    contrib = db.one(ctx.conn, "SELECT vetting_json, upstream FROM contributions WHERE id = ?", (cid,))
     if contrib is not None and _json(contrib["vetting_json"]).get("requires_assignment"):
         fourth.append(("🙋 Ask maintainers first", kit["proposal_ask_first"]))
     rows.append(fourth)
+    if contrib is not None and keepable(discovered_of(ctx, str(contrib["upstream"]))):
+        # §9.2: minted only for a discovered candidate; Never lands on the existing confirm step
+        keep = kit_token(ctx, "proposal_keep", message_id=mid, cid=cid, arg=arg)
+        never = kit_token(ctx, "proposal_never_pick", message_id=mid, cid=cid, arg={**arg, "target": "repo"})
+        rows.append([("⭐ Keep as target", keep), ("🚫 Never this repo", never)])
     return rows
 
 

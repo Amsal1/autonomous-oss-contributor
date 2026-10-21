@@ -5,16 +5,21 @@ version and hash, the budget rule, Details (no decision buttons) and Ask maintai
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
+from datetime import timedelta
 
 import pytest
 
+from ossbot.common.clock import FakeClock, to_iso
+from ossbot.common.schemas import DiscoveredFacts
 from ossbot.gatekeeper import action_requests, db
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.telegram import proposal_cards
+from ossbot.gatekeeper.telegram import proposal_actions, proposal_cards
 from ossbot.gatekeeper.telegram.ui import classic
 from ossbot.runner.stages import fetch
-from tests.telegram.proposalkit import proposal_card, state
+from tests.telegram import golden
+from tests.telegram.proposalkit import PCard, proposal_card, revise, state
 from tests.telegram.reviewkit import labels, latest, text, toast, token, view_message
 from tests.telegram.tgharness import TgRig, make_rig
 
@@ -226,6 +231,161 @@ async def test_ask_maintainers_first_refused_while_paused(rig: TgRig) -> None:
     await rig.tap(token(rig, card.message_id, "🙋 Ask maintainers first"), message=card.message_id)
     assert toast(rig).startswith("Paused or killed: nothing was requested")
     assert db.one(rig.ctx.conn, "SELECT 1 FROM outbound_actions WHERE cid = ?", (card.cid,)) is None
+
+
+# --------------------------------------------------------------------------- post-v1 open discovery (§9)
+OPEN = "openfaas/faas"
+SEED_LABELS = ["✅ Start work", "⏭ Skip", "✏️ Adjust plan", "📏 Make it smaller", "🚫 Never…", "⏰ Later…",
+               "🧭 Details"]  # fmt: skip
+KEEP_ROW = ["⭐ Keep as target", "🚫 Never this repo"]
+
+
+def discovered(ctx: AppContext, *, source: str = "search", topic: str | None = "gitops", stars: int | None = 24440,
+               commit_days: int | None = None) -> None:  # fmt: skip
+    """A ``candidate`` row for OPEN as the runner records it."""
+    facts: dict[str, object] = {"repo": OPEN, "source": source, "status": "candidate", "topic": topic, "stars": stars}
+    if commit_days is not None:
+        facts["default_branch_commit_at"] = to_iso(ctx.clock.now() - timedelta(days=commit_days))
+    ctx.discovered.record(DiscoveredFacts.model_validate(facts), "uid:2001/worker")
+
+
+async def open_card(rig: TgRig, **row: object) -> PCard:
+    discovered(rig.ctx, **row)  # type: ignore[arg-type]
+    return await proposal_card(rig, contrib={"upstream": OPEN, "category": "open-discovery",
+                                             "issue_url": f"https://github.com/{OPEN}/issues/7"})  # fmt: skip
+
+
+def discovered_status(ctx: AppContext) -> str:
+    found = ctx.discovered.get(OPEN)
+    assert found is not None
+    return found.status
+
+
+def _header(body: str) -> list[str]:
+    """The lines after the repo line, up to the issue line."""
+    lines = body.split("\n")
+    start = next(i for i, ln in enumerate(lines) if ln.startswith("<b>") and "/" in ln)
+    return lines[start + 1 : next(i for i, ln in enumerate(lines) if ln.startswith("Issue "))]
+
+
+async def test_open_discovery_card_line_and_keep_row(rig: TgRig) -> None:
+    card = await open_card(rig, commit_days=3)
+    body = text(rig, card.message_id)
+    assert _header(body) == ["🔎 open discovery · topic gitops · ★ 24,440",
+                             "🌿 last commit on the default branch: 3 d ago"]  # fmt: skip
+    assert labels(rig, card.message_id) == SEED_LABELS + KEEP_ROW
+
+
+@pytest.mark.parametrize(
+    ("row", "line"),
+    [
+        ({"topic": None}, "🔎 open discovery · ★ 24,440"),
+        ({"stars": None}, "🔎 open discovery · topic gitops"),
+        ({"source": "hermes", "topic": None}, "🔎 suggested by Hermes · ★ 24,440"),
+        ({"source": "hermes", "stars": None}, "🔎 suggested by Hermes"),
+    ],
+)  # fmt: skip
+async def test_unknown_parts_are_left_out(rig: TgRig, row: dict[str, object], line: str) -> None:
+    card = await open_card(rig, **row)
+    assert _header(text(rig, card.message_id)) == [line]  # no commit date: no activity line
+    assert labels(rig, card.message_id)[-2:] == KEEP_ROW
+
+
+async def test_kept_repo_card_has_no_keep_row(rig: TgRig) -> None:
+    discovered(rig.ctx)
+    rig.ctx.discovered.decide(OPEN, "keep", "tg:4242")
+    card = await proposal_card(rig, contrib={"upstream": OPEN, "category": "open-discovery"})
+    assert _header(text(rig, card.message_id)) == ["⭐ kept target (open discovery) · ★ 24,440"]
+    assert labels(rig, card.message_id) == SEED_LABELS
+
+
+def _normalized(body: str, cid: str) -> str:
+    """The card without the per-test values (cid, random issue number, expiry time)."""
+    body = re.sub(r"<tg-time[^>]*>[^<]*</tg-time>", "<tg-time/>", body.replace(cid, "CID"))
+    return re.sub(r">#\d+</a>", ">#N</a>", body)
+
+
+async def test_seed_card_is_unchanged(rig: TgRig) -> None:
+    """Config targets show no open-discovery line and no fifth row; the golden pins the bytes."""
+    card = await proposal_card(rig, vetting={"claim_status": "unclaimed", "ai_policy": "unstated"})
+    body = latest(rig, card.message_id)["text"]
+    assert "open discovery" not in body and "🌿" not in body and "suggested by Hermes" not in body
+    assert labels(rig, card.message_id) == SEED_LABELS
+    golden.check("proposal_seed_card.html", _normalized(str(body), card.cid) + "\n")
+
+
+async def test_keep_is_two_taps_and_changes_only_the_db(rig: TgRig) -> None:
+    card = await open_card(rig)
+    tracked = {p.name: p.read_bytes() for p in rig.ctx.paths.config_dir.glob("*.yaml")}
+    await rig.tap(token(rig, card.message_id, "⭐ Keep as target"), message=card.message_id)
+    panel = text(rig, card.message_id)
+    assert (
+        "<b>Keep openfaas/faas as a target? It will be scanned every cycle like a seed target. Stored in the"
+        " gatekeeper DB, not targets.yaml; undo with ossctl targets unblock --unkeep openfaas/faas.</b>"
+    ) in panel
+    assert labels(rig, card.message_id) == ["⭐ Keep this repo", "↩️ Cancel"]
+    assert rig.buttons(latest(rig, card.message_id))[0][0]["style"] == "primary"
+    assert discovered_status(rig.ctx) == "candidate"  # not yet
+    await rig.tap(token(rig, card.message_id, "⭐ Keep this repo"), message=card.message_id)
+    assert toast(rig) == "⭐ Kept: scanned every cycle."
+    found = rig.ctx.discovered.get(OPEN)
+    assert found is not None and found.status == "kept" and found.decided_by == "tg:4242"
+    assert state(rig.ctx, card.cid) == "PROPOSED"  # Keep doesn't decide the proposal
+    assert labels(rig, card.message_id) == SEED_LABELS  # the restored keyboard, without the fifth row
+    assert "⭐ kept target (open discovery) · ★ 24,440" in text(rig, card.message_id)
+    assert {p.name: p.read_bytes() for p in rig.ctx.paths.config_dir.glob("*.yaml")} == tracked
+
+
+async def test_keep_cancel_restores_the_card(rig: TgRig) -> None:
+    card = await open_card(rig)
+    await rig.tap(token(rig, card.message_id, "⭐ Keep as target"), message=card.message_id)
+    await rig.tap(token(rig, card.message_id, "↩️ Cancel"), message=card.message_id)
+    assert labels(rig, card.message_id) == SEED_LABELS + KEEP_ROW
+    assert discovered_status(rig.ctx) == "candidate"
+
+
+async def test_keep_confirm_fails_closed(rig: TgRig, clock: FakeClock) -> None:
+    card = await open_card(rig)
+    await rig.tap(token(rig, card.message_id, "⭐ Keep as target"), message=card.message_id)
+    confirm = token(rig, card.message_id, "⭐ Keep this repo")
+    await rig.tap(confirm, message=card.message_id, user=999, chat=999)  # a stranger
+    await rig.tap(confirm, message=card.message_id + 1)  # another message (forwarded)
+    assert discovered_status(rig.ctx) == "candidate"
+    clock.advance(seconds=rig.ctx.config.policy.limits.confirm_ttl_seconds + 1)
+    await rig.tap(confirm, message=card.message_id)  # expired
+    assert discovered_status(rig.ctx) == "candidate"
+
+
+async def test_keep_on_a_superseded_version_is_refused(rig: TgRig) -> None:
+    card = await open_card(rig)
+    keep = token(rig, card.message_id, "⭐ Keep as target")
+    await revise(rig, card.cid, 1, problem="a different problem")
+    await rig.tap(keep, message=card.message_id)
+    assert toast(rig) in (proposal_cards.SUPERSEDED, "This button is no longer valid.")
+    assert discovered_status(rig.ctx) == "candidate"
+
+
+async def test_keep_refused_once_the_repo_is_no_longer_a_candidate(rig: TgRig) -> None:
+    card = await open_card(rig)
+    await rig.tap(token(rig, card.message_id, "⭐ Keep as target"), message=card.message_id)
+    rig.ctx.discovered.decide(OPEN, "never", "uid:1000/operator")  # ossctl targets block meanwhile
+    await rig.tap(token(rig, card.message_id, "⭐ Keep this repo"), message=card.message_id)
+    assert toast(rig) == proposal_actions.NOT_KEEPABLE
+    assert discovered_status(rig.ctx) == "never"
+
+
+async def test_never_on_a_discovered_repo_names_ossctl(rig: TgRig) -> None:
+    card = await open_card(rig)
+    await rig.tap(token(rig, card.message_id, "🚫 Never this repo"), message=card.message_id)
+    assert (
+        "Never propose work from openfaas/faas again? It won't be searched again. Undo with ossctl targets"
+        " unblock openfaas/faas (there is no Telegram undo for discovered repos)."
+    ) in text(rig, card.message_id)
+    assert discovered_status(rig.ctx) == "candidate"  # not yet
+    await rig.tap(token(rig, card.message_id, "🚫 Never this repo"), message=card.message_id)
+    assert discovered_status(rig.ctx) == "never"
+    assert state(rig.ctx, card.cid) == "PROPOSAL_REJECTED"
+    assert rig.ctx.discovery_prefs.rows() == []  # not the config-target path
 
 
 def test_claim_template_matches_the_runner() -> None:
