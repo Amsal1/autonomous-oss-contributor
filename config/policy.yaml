@@ -79,6 +79,11 @@ discovery:
   interval_hours: 6
   top_n: 5
   proposals_per_cycle: 3           # proposal cards per discovery cycle
+vet:
+  ai_policy:                       # §9.5: skip only on an explicit ban; banned is fixed
+    unstated: allow                # allow | skip: no AI wording in any repo doc
+    unclear: allow                 # allow | skip: AI mentioned, neither banned nor allowed
+    banned: skip                   # always skip (any other value is rejected)
 telegram:
   mode: single
 hermes:                            # §15.5; switch with ossctl hermes tier <tier> (TTY confirm) or /hermes tier

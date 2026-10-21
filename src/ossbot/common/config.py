@@ -193,6 +193,21 @@ class DiscoveryPolicy(Strict):
     proposals_per_cycle: PosInt = 3  # §9.14: proposal cards per discovery cycle
 
 
+AiRule = Literal["allow", "skip"]
+
+
+class AiPolicyRules(Strict):
+    """§9.5 (owner decision, post-v1): skip a repo only on an explicit AI ban; a ban can't be allowed."""
+
+    unstated: AiRule = "allow"  # no AI wording in any fetched repo doc
+    unclear: AiRule = "allow"  # AI mentioned, neither banned nor allowed
+    banned: Literal["skip"] = "skip"
+
+
+class VetPolicy(Strict):
+    ai_policy: AiPolicyRules = AiPolicyRules()
+
+
 class TelegramPolicy(Strict):
     mode: Literal["single"] = "single"  # 'dual' is phase 2
 
@@ -273,6 +288,7 @@ class PolicyConfig(Strict):
     discovery_filters: DiscoveryFilters = DiscoveryFilters()
     proposal: ProposalPolicy = ProposalPolicy()
     discovery: DiscoveryPolicy = DiscoveryPolicy()
+    vet: VetPolicy = VetPolicy()
     telegram: TelegramPolicy = TelegramPolicy()
     hermes: HermesPolicy = HermesPolicy()
     chat: ChatPolicy = ChatPolicy()
@@ -310,6 +326,13 @@ class TargetDefaults(Strict):
     egress_extra: list[Annotated[str, Field(pattern=HOST_RE)]] = Field(default_factory=list)
 
 
+class AiPolicyOverride(Strict):
+    """Per-repo override of ``policy.vet.ai_policy`` (§9.5); there is no ``banned`` key (a ban always skips)."""
+
+    unstated: AiRule | None = None
+    unclear: AiRule | None = None
+
+
 class RepoEntry(Strict):
     repo: Annotated[str, Field(pattern=REPO_RE)]
     enabled: bool | None = None
@@ -322,6 +345,7 @@ class RepoEntry(Strict):
     validation: list[ValidationKind] | None = None
     cla_signed: bool | None = None
     ai_policy_override: Literal["allowed"] | None = None
+    ai_policy: AiPolicyOverride | None = None
     egress_extra: list[Annotated[str, Field(pattern=HOST_RE)]] = Field(default_factory=list)
     disclosure_template: str | None = None
 
@@ -376,6 +400,22 @@ class ResolvedTarget:
     ai_policy_override: str | None
     egress_extra: tuple[str, ...]
     disclosure_template: str | None
+    ai_unstated: str | None = None  # per-repo ``ai_policy`` override (None = policy.vet.ai_policy)
+    ai_unclear: str | None = None
+
+
+def effective_ai_rules(policy: PolicyConfig, target: ResolvedTarget | None) -> AiPolicyRules:
+    """``policy.vet.ai_policy`` with the target's overrides applied; ``ai_policy_override: allowed``
+    allows both ``unstated`` and ``unclear``. ``banned`` is always ``skip``."""
+    rules = policy.vet.ai_policy
+    if target is None:
+        return rules
+    if target.ai_policy_override == "allowed":
+        return AiPolicyRules(unstated="allow", unclear="allow")
+    return AiPolicyRules(
+        unstated="skip" if (target.ai_unstated or rules.unstated) == "skip" else "allow",
+        unclear="skip" if (target.ai_unclear or rules.unclear) == "skip" else "allow",
+    )
 
 
 def all_targets(targets: TargetsConfig) -> list[ResolvedTarget]:
@@ -410,6 +450,8 @@ def resolve_target(targets: TargetsConfig, repo: str) -> ResolvedTarget | None:
                 ai_policy_override=e.ai_policy_override or d.ai_policy_override,
                 egress_extra=(*d.egress_extra, *e.egress_extra),
                 disclosure_template=e.disclosure_template,
+                ai_unstated=e.ai_policy.unstated if e.ai_policy else None,
+                ai_unclear=e.ai_policy.unclear if e.ai_policy else None,
             )
     return None
 

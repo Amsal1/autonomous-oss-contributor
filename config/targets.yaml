@@ -2,6 +2,8 @@
 # `why:` texts are neutral; personal relevance lives in profile.yaml `interests`.
 # Seeded from §17.2 (verified 2026-10-17 via the GitHub search API); re-verified by
 # `ossctl targets verify`. AI-policy and CLA status come from vetting, not from this file.
+# Optional per-repo AI-policy rule (overrides policy.vet.ai_policy; an explicit ban always skips):
+#   - { repo: owner/name, ai_policy: { unstated: skip, unclear: skip } }
 version: 1
 defaults:
   enabled: true

@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from ossbot.common.config import (
+    AiPolicyRules,
     ConfigError,
     EgressConfig,
     ModelsConfig,
@@ -12,6 +13,7 @@ from ossbot.common.config import (
     ProfileConfig,
     RetentionPolicy,
     TargetsConfig,
+    effective_ai_rules,
     parse_bundle,
     parse_models,
     parse_yaml_model,
@@ -85,6 +87,52 @@ def test_retention_bounds(key: str, bad: object) -> None:
     text = f"version: 1\nretention: {{{key}: {bad!r}}}\n".replace("'", '"')
     with pytest.raises(ConfigError, match=key):
         parse_yaml_model(PolicyConfig, "policy.yaml", text.encode())
+
+
+def test_vet_ai_policy_defaults() -> None:
+    """§9.5 (post-v1): skip only on an explicit ban; the shipped block equals the defaults."""
+    shipped = parse_bundle(bundle_files()).policy.vet.ai_policy
+    assert shipped == PolicyConfig(version=1).vet.ai_policy == AiPolicyRules()
+    assert (shipped.unstated, shipped.unclear, shipped.banned) == ("allow", "allow", "skip")
+
+
+@pytest.mark.parametrize(
+    ("text", "needle"),
+    [
+        ("vet: {ai_policy: {banned: allow}}", "banned"),
+        ("vet: {ai_policy: {unclear: maybe}}", "unclear"),
+        ("vet: {ai_policy: {silent: allow}}", "silent"),
+        ("vet: {bogus: 1}", "bogus"),
+    ],
+)
+def test_vet_ai_policy_rejects(text: str, needle: str) -> None:
+    with pytest.raises(ConfigError, match=needle):
+        parse_yaml_model(PolicyConfig, "policy.yaml", f"version: 1\n{text}\n".encode())
+
+
+def _targets(repos: str) -> TargetsConfig:
+    text = f"version: 1\ncategories: [{{id: a, priority: 1, why: x, repos: [{repos}]}}]\n"
+    return parse_yaml_model(TargetsConfig, "targets.yaml", text.encode())
+
+
+def test_repo_ai_policy_override_rejects_banned() -> None:
+    with pytest.raises(ConfigError, match="banned"):
+        _targets("{repo: a/one, ai_policy: {banned: skip}}")
+
+
+def test_effective_ai_rules_per_repo() -> None:
+    targets = _targets(
+        "{repo: a/one}, {repo: a/two, ai_policy: {unclear: skip}}, {repo: a/three, ai_policy_override: allowed}"
+    )
+    strict = parse_yaml_model(PolicyConfig, "policy.yaml", b"version: 1\nvet: {ai_policy: {unstated: skip}}\n")
+    default = PolicyConfig(version=1)
+    assert effective_ai_rules(default, resolve_target(targets, "a/one")) == AiPolicyRules()
+    assert effective_ai_rules(default, None) == AiPolicyRules()
+    two = effective_ai_rules(default, resolve_target(targets, "a/two"))
+    assert (two.unstated, two.unclear) == ("allow", "skip")
+    assert effective_ai_rules(strict, resolve_target(targets, "a/one")).unstated == "skip"
+    three = effective_ai_rules(strict, resolve_target(targets, "a/three"))
+    assert (three.unstated, three.unclear, three.banned) == ("allow", "allow", "skip")
 
 
 def test_xl_fits_the_default_ceiling() -> None:
