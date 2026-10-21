@@ -45,6 +45,9 @@ class Candidate:
     priority: int = 3
     category: str = ""
     language: str | None = None
+    # post-v1 open discovery (design §5.3; review-3 L3): 0.5 * the open repo's score (CI included), so
+    # CI counts once for an open candidate; seed repos get only the default-branch activity boost here
+    repo_bonus: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -141,6 +144,8 @@ def score(
         parts["ci_on_pr"] = ci_weight
     if c.comments > 30:
         parts["crowded"] = -10.0
+    if c.repo_bonus:
+        parts["repo"] = c.repo_bonus
     return sum(parts.values()), parts
 
 
@@ -166,10 +171,11 @@ def rank(
 
 
 def candidate_from_issue(repo: str, issue: dict[str, Any], *, priority: int, category: str,
-                         language: str | None) -> Candidate:  # fmt: skip
+                         language: str | None, repo_bonus: float = 0.0) -> Candidate:  # fmt: skip
     from ossbot.common.clock import from_iso  # noqa: PLC0415
 
     return Candidate(
+        repo_bonus=repo_bonus,
         repo=repo, number=int(issue["number"]), title=str(issue.get("title") or "")[:300],
         body=str(issue.get("body") or "")[:20_000],
         labels=tuple(str(lbl.get("name", "")) for lbl in issue.get("labels") or [] if isinstance(lbl, dict)),

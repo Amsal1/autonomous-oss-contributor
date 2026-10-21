@@ -67,3 +67,22 @@ def test_ci_on_pr_is_a_boost_not_a_filter() -> None:
     assert kept[1].score == kept[2].score and "ci_on_pr" not in kept[1].reasons  # no penalty for no/unknown
     flat, _ = rank([unknown, without, with_ci], ci_weight=0.0, **args)  # type: ignore[arg-type]
     assert len({r.score for r in flat}) == 1
+
+
+def test_repo_bonus_is_a_score_part_only_when_set() -> None:
+    """Post-v1 open discovery (§5.3, L3): ``repo_bonus`` adds part "repo"; at 0 seed scores are unchanged."""
+    from dataclasses import replace
+
+    from ossbot.runner.scoring import score
+
+    seed = cand(1, "Crash", ("good first issue",))
+    total, parts = score(seed, RepoSignals(ci_on_pr="yes"), NOW, est_class="s", preferred=["s"], ci_weight=6.0)
+    assert "repo" not in parts and seed.repo_bonus == 0.0
+    assert total == sum(v for k, v in parts.items())  # the same parts as before repo_bonus existed
+    assert parts == {"priority": 30.0, "size_fit": 14.0, "labels": 8.0, "freshness": 5.0, "clarity": 0.0,
+                     "interests": 0.0, "history": 0.0, "ci_on_pr": 6.0}  # fmt: skip
+    boosted = replace(seed, repo_bonus=8.25)
+    total2, parts2 = score(boosted, RepoSignals(), NOW, est_class="s", preferred=["s"])
+    assert parts2["repo"] == 8.25 and "ci_on_pr" not in parts2 and total2 == total - 6.0 + 8.25
+    kept, _ = rank([seed, boosted], filters=DiscoveryFilters(), max_class="s", preferred=["s"], signals={}, now=NOW)
+    assert [r.candidate.repo_bonus for r in kept] == [8.25, 0.0]
