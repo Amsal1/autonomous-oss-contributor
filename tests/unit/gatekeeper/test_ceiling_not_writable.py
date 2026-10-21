@@ -11,7 +11,11 @@ import ast
 import re
 from pathlib import Path
 
-from ossbot.gatekeeper import approvals
+import pytest
+
+from ossbot.common.config import OpenDiscoveryPolicy
+from ossbot.common.schemas import PrefsUpdate
+from ossbot.gatekeeper import approvals, discovery_prefs
 from ossbot.gatekeeper.app import create_app
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram import actions
@@ -73,6 +77,26 @@ def test_no_api_route_writes_the_ceiling(ctx: AppContext) -> None:
     assert routes
     writes = [r for r in routes if r.methods & {"POST", "PUT", "PATCH", "DELETE"}]
     assert [r.path for r in writes if CEILING_RE.search(r.path)] == []
+
+
+OPEN_COUNT_RE = re.compile(r"min_stars|search_budget|repos_per_cycle|topics_per_cycle|reserved_slots|cooldown_days"
+                           r"|pushed_within|language_weight|issue_labels")  # fmt: skip
+
+
+def test_open_discovery_counts_are_config_only(ctx: AppContext) -> None:
+    """Post-v1 open discovery (design §3.2): only enabled, topics and languages_preferred are tunable;
+    every other discovery.open key is refused by discovery_prefs (config_only), and no route, kit action,
+    command or token purpose is named after one."""
+    tunable = {k.removeprefix("open_") for k in discovery_prefs.OPEN_PREF_KEYS}
+    assert tunable == {"enabled", "topics", "languages_preferred"}
+    config_only = {k.removeprefix("open_") for k in discovery_prefs.CONFIG_ONLY_OPEN_KEYS}
+    assert config_only | tunable == set(OpenDiscoveryPolicy.model_fields) and not config_only & tunable
+    for key in discovery_prefs.CONFIG_ONLY_OPEN_KEYS:
+        with pytest.raises(discovery_prefs.PrefsRefused, match="config_only"):
+            ctx.discovery_prefs.update(PrefsUpdate(filters={key: 1}), "tg:4242")
+    names = [*actions.ACTIONS, *COMMANDS, *CONFIRMS, *token_purposes()]
+    names += [r.path for r in api_routes(create_app(ctx, housekeeping=False).routes)]
+    assert [n for n in names if OPEN_COUNT_RE.search(n)] == []
 
 
 def _config_dir_users() -> dict[str, list[str]]:

@@ -17,12 +17,22 @@ import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import ValidationError
+from pydantic import Field, ValidationError, field_validator
 
 from ossbot.common.clock import Clock, from_iso, to_iso
-from ossbot.common.config import ConfigBundle, DiscoveryFilters, resolve_target
+from ossbot.common.config import (
+    ConfigBundle,
+    DiscoveryFilters,
+    Language,
+    OpenDiscoveryPolicy,
+    Strict,
+    Topic,
+    resolve_target,
+    unique_languages,
+    unique_topics,
+)
 from ossbot.common.ids import new_id
 from ossbot.common.schemas import PrefsUpdate
 from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
@@ -33,6 +43,32 @@ UNDO_SECONDS = 60
 FILTER_KEYS: frozenset[str] = frozenset(DiscoveryFilters.model_fields)
 REPO_ONLY_KEYS: frozenset[str] = frozenset({"never"})  # Never this repo (§14.11.15)
 CEILING_KEYS: frozenset[str] = frozenset({"diff", "max_files", "max_changed_lines", "max_test_lines", "ceiling"})
+# Post-v1 open discovery (design §3.2): the Telegram-tunable part of policy.discovery.open, stored only
+# in the "*" row's filters_json and kept out of DiscoveryFilters. Every count and budget is config-only.
+OPEN_PREF_KEYS: frozenset[str] = frozenset({"open_enabled", "open_topics", "open_languages_preferred"})
+CONFIG_ONLY_OPEN_KEYS: frozenset[str] = frozenset({
+    "open_min_stars", "open_search_budget", "open_new_repos_per_cycle", "open_topics_per_cycle",
+    "open_reserved_slots", "open_repo_cooldown_days", "open_pushed_within_days", "open_language_weight",
+    "open_issue_labels",
+})  # fmt: skip
+
+
+class OpenPrefs(Strict):
+    """The tunable view of open discovery; defaults come from ``policy.discovery.open``."""
+
+    enabled: bool
+    topics: Annotated[list[Topic], Field(min_length=1, max_length=30)]
+    languages_preferred: Annotated[list[Language], Field(max_length=20)]
+
+    @field_validator("topics")
+    @classmethod
+    def _topics_unique(cls, value: list[str]) -> list[str]:
+        return unique_topics(value)
+
+    @field_validator("languages_preferred")
+    @classmethod
+    def _languages_unique(cls, value: list[str]) -> list[str]:
+        return unique_languages(value)
 
 
 class PrefsRefused(ValueError):
@@ -50,6 +86,7 @@ class EffectivePrefs:
     filters: DiscoveryFilters
     never_repo: bool = False
     sources: dict[str, str] = field(default_factory=dict)
+    open: OpenPrefs | None = None  # always set by ``DiscoveryPrefs.effective``
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +95,7 @@ class EffectivePrefs:
             "filters": self.filters.model_dump(),
             "never_repo": self.never_repo,
             "sources": self.sources,
+            "open": self.open.model_dump() if self.open is not None else None,
         }
 
 
@@ -89,14 +127,20 @@ class DiscoveryPrefs:
         max_class: SelectableSizeClass = policy.size.autonomous_max_class
         preferred = tuple(policy.size.preferred_classes)
         filters = policy.discovery_filters.model_dump()
-        sources = {"autonomous_max_class": "policy.yaml", "preferred_classes": "policy.yaml"}
+        sources = {"autonomous_max_class": "policy.yaml", "preferred_classes": "policy.yaml", "open": "policy.yaml"}
+        open_raw: dict[str, Any] = {}
         glob = self._row("*")
         if glob is not None:
             if glob["autonomous_max_class"]:
                 max_class, sources["autonomous_max_class"] = glob["autonomous_max_class"], "prefs *"
             if glob["preferred_classes_json"]:
                 preferred, sources["preferred_classes"] = tuple(json.loads(glob["preferred_classes_json"])), "prefs *"
-            filters.update(json.loads(glob["filters_json"] or "{}"))
+            raw = json.loads(glob["filters_json"] or "{}")
+            open_raw = {k: raw.pop(k) for k in list(raw) if k in OPEN_PREF_KEYS}  # never in DiscoveryFilters
+            if open_raw:
+                sources["open"] = "prefs *"
+            filters.update(raw)
+        open_prefs = _open_prefs(policy.discovery.open, open_raw)
         never = False
         if repo is not None:
             target = resolve_target(self.config().targets, repo)
@@ -109,7 +153,8 @@ class DiscoveryPrefs:
                 extra = json.loads(own["filters_json"] or "{}")
                 never = bool(extra.pop("never", False))
                 filters.update(extra)
-        return EffectivePrefs(max_class, preferred, DiscoveryFilters.model_validate(filters), never, sources)
+        return EffectivePrefs(max_class, preferred, DiscoveryFilters.model_validate(filters), never, sources,
+                              open_prefs)  # fmt: skip
 
     # ------------------------------------------------------------------ writes
     def _check(self, req: PrefsUpdate) -> tuple[str, dict[str, Any]]:
@@ -125,10 +170,16 @@ class DiscoveryPrefs:
         bad = sorted(set(filters) & CEILING_KEYS)
         if bad:
             raise PrefsRefused(400, "ceiling_key", f"{bad} are config-only (policy.diff in config/policy.yaml)")
-        allowed = FILTER_KEYS | (REPO_ONLY_KEYS if scope != "*" else frozenset())
-        unknown = sorted(set(filters) - allowed)
+        config_only = sorted(set(filters) & CONFIG_ONLY_OPEN_KEYS)
+        if config_only:  # design §3.2: Telegram can never raise an open-discovery count or budget
+            raise PrefsRefused(400, "config_only", f"{config_only} are config-only (discovery.open in policy.yaml)")
+        allowed = FILTER_KEYS | (REPO_ONLY_KEYS if scope != "*" else OPEN_PREF_KEYS)
+        unknown = sorted(set(filters) - allowed - OPEN_PREF_KEYS)
         if unknown:
             raise PrefsRefused(400, "unknown_filter", ",".join(unknown))
+        global_only = sorted(set(filters) & OPEN_PREF_KEYS - allowed)
+        if global_only:
+            raise PrefsRefused(400, "open_key_global_only", ",".join(global_only))
         if "never" in filters and not isinstance(filters["never"], bool):
             raise PrefsRefused(400, "bad_filter", "never")
         if req.autonomous_max_class is not None and req.autonomous_max_class != "inherit":
@@ -152,6 +203,11 @@ class DiscoveryPrefs:
                 )  # fmt: skip
             except ValidationError as exc:
                 raise PrefsRefused(400, "bad_filter", str(exc.errors()[0]["loc"])) from exc
+            try:  # ... and the merged open part a valid OpenPrefs (design §3.2)
+                _open_prefs(self.config().policy.discovery.open,
+                            {k: v for k, v in merged_filters.items() if k in OPEN_PREF_KEYS})  # fmt: skip
+            except ValidationError as exc:
+                raise PrefsRefused(400, "bad_filter", "open_" + str(exc.errors()[0]["loc"][0])) from exc
             max_class = before["autonomous_max_class"] if before else None
             if req.autonomous_max_class is not None:
                 max_class = None if req.autonomous_max_class == "inherit" else req.autonomous_max_class
@@ -222,6 +278,13 @@ class DiscoveryPrefs:
         return self.update(PrefsUpdate(filters={"excluded_kinds": excluded, "allowed_kinds": allowed}), actor)
 
 
+def _open_prefs(policy: OpenDiscoveryPolicy, open_raw: dict[str, Any]) -> OpenPrefs:
+    """``policy.discovery.open`` overlaid with the stored ``open_*`` keys (raises ``ValidationError``)."""
+    base: dict[str, Any] = {"enabled": policy.enabled, "topics": list(policy.topics),
+                            "languages_preferred": list(policy.languages_preferred)}  # fmt: skip
+    return OpenPrefs.model_validate({**base, **{k.removeprefix("open_"): v for k, v in open_raw.items()}})
+
+
 def _describe(after: dict[str, Any]) -> str:
     parts = []
     if after["autonomous_max_class"]:
@@ -229,5 +292,14 @@ def _describe(after: dict[str, Any]) -> str:
     if after["preferred_classes_json"]:
         parts.append(f"prefer {', '.join(json.loads(after['preferred_classes_json']))}")
     if after["filters_json"]:
-        parts.append("filters " + ", ".join(sorted(json.loads(after["filters_json"]))))
+        stored = json.loads(after["filters_json"])
+        names = sorted(k for k in stored if k not in OPEN_PREF_KEYS)
+        if names:
+            parts.append("filters " + ", ".join(names))
+        if "open_enabled" in stored:
+            parts.append(f"open discovery {'on' if stored['open_enabled'] else 'off'}")
+        if "open_topics" in stored:
+            parts.append(f"topics {len(stored['open_topics'])}")
+        if "open_languages_preferred" in stored:
+            parts.append(f"languages {len(stored['open_languages_preferred'])}")
     return "; ".join(parts) or "back to defaults"
