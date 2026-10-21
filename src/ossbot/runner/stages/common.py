@@ -8,9 +8,13 @@ import re
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
+
 from ossbot.common.config import ResolvedTarget, resolve_target
+from ossbot.common.schemas import ResolvedTargetView
 from ossbot.runner import prompts
 from ossbot.runner.errors import sandbox_run
+from ossbot.runner.gk_client import GkError
 from ossbot.runner.llm import StageFailed, new_run_id
 from ossbot.runner.pipeline import STAGE_TIMEOUT_S, StageContext
 from ossbot.runner.sbx_client import SbxError
@@ -56,10 +60,22 @@ def has_test_suite(fetch_info: dict[str, Any] | None) -> bool:
 
 
 def target(sc: StageContext, repo: str) -> ResolvedTarget:
+    """The config target (no call), else the gatekeeper's resolution of a discovered repo (design
+    §8.5, ``GET /v1/targets/resolve``): 404 -> ``not_a_target``; an unreachable gatekeeper raises
+    the usual ``GkError(503)``."""
     found = resolve_target(sc.config().targets, repo)
-    if found is None:
-        raise StageFailed("not_a_target", repo)
-    return found
+    if found is not None:
+        return found
+    try:
+        doc = sc.gk.resolve_target(repo)
+    except GkError as exc:
+        if exc.status == 404:
+            raise StageFailed("not_a_target", repo) from exc
+        raise
+    try:
+        return ResolvedTargetView.model_validate(doc["target"]).to_target()
+    except (KeyError, TypeError, ValidationError) as exc:
+        raise StageFailed("not_a_target", f"{repo}: unreadable resolution") from exc
 
 
 def job(

@@ -87,6 +87,43 @@ def _vet(sc: StageContext, ctx: AppContext, sbx: FakeSbx, number: int, answer: d
     return str(got["state"]), got["state_reason"], json.loads(got["vetting_json"] or "{}")
 
 
+@pytest.mark.parametrize("discovered", [True, False], ids=["discovered", "config-target"])
+def test_cla_note_wording(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub,
+                          monkeypatch: pytest.MonkeyPatch, discovered: bool) -> None:  # fmt: skip
+    """Design §6.4 (finding 16): one CLA note per repo; a discovered repo is told how to unlock it."""
+    import dataclasses
+
+    from ossbot.common.config import OPEN_CATEGORY, resolve_target
+    from tests.unit.gatekeeper.test_discovered_targets import WORKER, facts
+
+    repo = "openfaas/faas" if discovered else "langfuse/langfuse"
+    said: list[str] = []
+    sc.notify = said.append
+    if discovered:
+        github.add_repo(repo, default_branch="main", language="Go")
+        ctx.discovered.record(facts(repo), WORKER)
+        resolve = ctx.discovered.effective_target
+        monkeypatch.setattr(ctx.discovered, "effective_target",  # the shipped defaults sign every repo
+                            lambda r: dataclasses.replace(resolve(r), cla_signed=False))  # type: ignore[type-var]  # fmt: skip
+    else:
+        found = resolve_target(ctx.config.targets, repo)
+        assert found is not None
+        monkeypatch.setattr(stages.common, "resolve_target",
+                            lambda targets, r: dataclasses.replace(found, cla_signed=False))  # fmt: skip
+    github.add_issue(repo, 77, title="Bug", body="b")
+    for number in (77, 78):
+        st, reason, _ = _vet(sc, ctx, sbx, number, {**VETTING, "cla_required": True}, upstream=repo,
+                             **({"category": OPEN_CATEGORY} if discovered else {}))  # fmt: skip
+        assert (st, reason) == ("SKIPPED", "cla_required")
+    notes = [t for t in said if "requires a CLA" in t]
+    if discovered:
+        assert notes == ["✍️ openfaas/faas requires a CLA: sign it, then add the repo to config/targets.yaml with "
+                         "cla_signed: true (or set defaults.cla_signed) to unlock it."]  # fmt: skip
+    else:
+        assert notes == ["✍️ langfuse/langfuse requires a CLA: sign it and set cla_signed: true in targets.yaml "
+                         "to unlock it."]  # fmt: skip
+
+
 def test_silent_repo_is_vetted_as_not_stated(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
                                              github: FakeGitHub) -> None:  # fmt: skip
     """Post-v1 owner rule: no AI wording anywhere -> allowed, recorded as ``unstated``."""

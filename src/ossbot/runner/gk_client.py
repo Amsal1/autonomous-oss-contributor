@@ -126,6 +126,32 @@ class Gatekeeper:
         doc: dict[str, Any] = self._call("GET", "/v1/discovery-prefs", params={"repo": repo} if repo else None)
         return dict(doc["effective"])
 
+    # --------------------------------------------------------------- open discovery (post-v1, §8.4)
+    def discovered(self, status: str | None = None, *, untried: bool = False, limit: int = 200) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit}
+        if status:
+            params["status"] = status
+        if untried:
+            params["untried"] = "true"
+        doc: list[dict[str, Any]] = self._call("GET", "/v1/discovered-targets", params=params)
+        return doc
+
+    def excluded(self) -> set[str]:
+        """Lower-cased repos open discovery must not record again (never, kept, cooling, queued)."""
+        return {str(r).lower() for r in self._call("GET", "/v1/discovered-targets/excluded")["repos"]}
+
+    def record_discovered(self, facts: dict[str, Any]) -> dict[str, Any]:
+        doc: dict[str, Any] = self._call("POST", "/v1/discovered-targets", facts)
+        return doc
+
+    def resolve_target(self, repo: str) -> dict[str, Any]:
+        """``{"source": "config"|"discovered", "target": ResolvedTargetView}``; 404 ``not_a_target``."""
+        doc: dict[str, Any] = self._call("GET", "/v1/targets/resolve", params={"repo": repo})
+        return doc
+
+    def egress_mode(self) -> str:
+        return str(self._call("GET", "/v1/control/egress-mode")["mode"])
+
     def pacing(self) -> dict[str, Any]:
         """``proposal.max_per_day`` state: ``remaining`` and ``next_slot_at`` (§9.5b)."""
         doc: dict[str, Any] = self._call("GET", "/v1/discovery-prefs")

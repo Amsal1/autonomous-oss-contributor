@@ -22,7 +22,7 @@ from typing import Any
 
 from ossbot.common import ai_policy
 from ossbot.common.ai_policy import AI_SECTION_RE, Classification
-from ossbot.common.config import AiPolicyRules, effective_ai_rules
+from ossbot.common.config import AiPolicyRules, effective_ai_rules, resolve_target
 from ossbot.runner import ci_detect, prompts
 from ossbot.runner.outputs import SCHEMA_HINTS, IssueVetting
 from ossbot.runner.pipeline import StageContext, StageRun
@@ -139,7 +139,11 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         noted = sc.load("_repos").get("cla_noted", [])
         if reason == "cla_required" and repo not in noted:  # one note per repo (§9.5)
             sc.save("_repos", cla_noted=[*noted, repo])
-            sc.say(f"✍️ {repo} requires a CLA: sign it and set cla_signed: true in targets.yaml to unlock it.")
+            if resolve_target(sc.config().targets, repo) is None:  # a discovered repo (design §6.4)
+                sc.say(f"✍️ {repo} requires a CLA: sign it, then add the repo to config/targets.yaml with "
+                       "cla_signed: true (or set defaults.cla_signed) to unlock it.")  # fmt: skip
+            else:
+                sc.say(f"✍️ {repo} requires a CLA: sign it and set cla_signed: true in targets.yaml to unlock it.")
         if user and reason != "ai_policy_banned":  # that one gets the gatekeeper's refusal card
             sc.say(f"🛑 Not working on {repo} for your request: {reason.replace('_', ' ')}.")
         return
