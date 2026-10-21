@@ -50,6 +50,7 @@ from ossbot.gatekeeper.telegram import (
     proposal_cards,
     rawapi,
     routing,
+    shortcuts,
 )
 from ossbot.gatekeeper.telegram.auth import authorized, authorized_chat_only
 from ossbot.gatekeeper.telegram.commands import (
@@ -293,11 +294,15 @@ class Handlers:
         return view
 
     def _send_reply(self, reply: Reply, *, thread_id: int | None = None, reply_to: int | None = None,
-                    stale_s: int = 0) -> None:  # fmt: skip
-        """Command replies land in the originating topic (§14.10.1)."""
+                    stale_s: int = 0, compact: bool = False) -> None:  # fmt: skip
+        """Command replies land in the originating topic (§14.10.1). ``compact``: a reply in All that
+        has no buttons of its own gets the shortcut row (``telegram/shortcuts.py``)."""
         if reply.deferred:
             return
-        ui_send.deliver(self.ctx, self.reply_view(reply, stale_s=stale_s), thread_id=thread_id, reply_to=reply_to)
+        view = self.reply_view(reply, stale_s=stale_s)
+        if compact and not view.rows:
+            view.rows = shortcuts.shortcut_rows(self.ctx, "compact")
+        ui_send.deliver(self.ctx, view, thread_id=thread_id, reply_to=reply_to)
         if reply.document is not None:
             name, data = reply.document
             ui_send.document(self.ctx, name, data, thread_id=thread_id)
@@ -945,13 +950,17 @@ class Handlers:
         thread_id = target.thread_id
         cctx = CommandContext(self.ctx, user_id, words[1:], thread_id=thread_id, message_id=message_id,
                               stale_s=stale_s, handlers=self)  # fmt: skip
+        # typed in All (with or without the implicit topic Telegram opened): the reply goes to All
+        compact = shortcuts.compact_in_all(self.ctx, name, thread_id=thread_id,
+                                           typed_in_all=target.where in ("all", "stray"))  # fmt: skip
         if spec is None:
             reply = Reply(f"Unknown command {esc(words[0][:40])}. Try /help.")
         elif self.ctx.control.view().state == "killed" and name not in KILLED_ALLOWED:
             reply = Reply(KILLED_TEXT, view=killed_view(self.ctx))  # §14.16: reason, since, Resume and Logs
         elif spec.effect == "io":  # BA-18: never hold the update slot on I/O
             after = functools.partial(self._after_command_reply, inc, user_id, message_id, target)
-            self.spawn(self._run_command(spec.func(cctx, words[1:]), thread_id, stale_s, after), "command")
+            self.spawn(self._run_command(spec.func(cctx, words[1:]), thread_id, stale_s, after, compact=compact),
+                       "command")  # fmt: skip
             return
         else:
             try:
@@ -962,16 +971,16 @@ class Handlers:
                 # §14.18.5 item 4: the local effect (kill/pause transaction) is committed first, then
                 # the cancellable work stops; submit and command tasks keep their Phase 1 rules.
                 self.cancel(KILL_CANCELS)
-        self._send_reply(reply, thread_id=thread_id, stale_s=stale_s)
+        self._send_reply(reply, thread_id=thread_id, stale_s=stale_s, compact=compact)
         self._after_command_reply(inc, user_id, message_id, target)
 
     async def _run_command(self, effect: Awaitable[Reply], thread_id: int | None, stale_s: int,
-                           after: Callable[[], None] | None = None) -> None:  # fmt: skip
+                           after: Callable[[], None] | None = None, *, compact: bool = False) -> None:  # fmt: skip
         try:
             reply = await effect
         except (Blocked, ApprovalError, TransitionError) as exc:
             reply = Reply(f"Refused: {esc(str(exc)[:300])}")
-        self._send_reply(reply, thread_id=thread_id, stale_s=stale_s)
+        self._send_reply(reply, thread_id=thread_id, stale_s=stale_s, compact=compact)
         if after is not None:
             after()
 

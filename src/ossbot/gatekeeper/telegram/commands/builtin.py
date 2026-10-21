@@ -18,6 +18,8 @@ from ossbot.gatekeeper.telegram.commands.registry import (
 )
 from ossbot.gatekeeper.telegram.escape import b, esc
 from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.shortcuts import shortcut_rows
+from ossbot.gatekeeper.telegram.ui import kit as k
 
 REASON_MAX = 300
 
@@ -113,5 +115,9 @@ async def dashboard(ctx: CommandContext, args: list[str]) -> Reply:
 
 @command("help", help="List commands", safety="read")
 async def help_(ctx: CommandContext, args: list[str]) -> Reply:
-    lines = [f"/{spec.name} — {esc(spec.help)}" for spec in sorted(COMMANDS.values(), key=lambda s: s.name)]
+    specs = sorted(COMMANDS.values(), key=lambda s: s.name)
+    rows = shortcut_rows(ctx.app, "help")  # telegram.yaml command_shortcuts: a button menu under the list
+    if rows:  # the same lines (Const is escaped like esc), so the /name links still work
+        return Reply("", view=k.plain("fyi", *(k.line(f"/{spec.name} — {spec.help}") for spec in specs), rows=rows))
+    lines = [f"/{spec.name} — {esc(spec.help)}" for spec in specs]
     return Reply("\n".join(lines))

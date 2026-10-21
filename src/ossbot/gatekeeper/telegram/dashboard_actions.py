@@ -40,11 +40,17 @@ async def _run(tap: Tap, name: str, args: list[str] | None = None) -> str:
 
 
 def _refresh(tap: Tap) -> None:
-    """Refresh the pinned dashboard, and the /status copy the tap came from (same builder)."""
+    """Refresh the pinned dashboard, and the /status copy the tap came from (same builder). A tap from
+    another message (the /help shortcut menu) leaves that message as it is."""
     dashboard = ui_of(tap.app).dashboard
     dashboard.tick(force=True)
-    if tap.message_id is not None and not dashboard.is_pinned(tap.message_id):
+    if tap.message_id is not None and not dashboard.is_pinned(tap.message_id) and _is_status_copy(tap):
         dashboard.refresh_copy(tap.message_id)
+
+
+def _is_status_copy(tap: Tap) -> bool:
+    row = db.one(tap.app.conn, "SELECT kind FROM tg_views WHERE message_id = ?", (tap.message_id,))
+    return row is not None and row["kind"] == "status"
 
 
 @action("dash_refresh")

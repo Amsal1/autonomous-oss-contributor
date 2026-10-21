@@ -1,0 +1,2 @@
+help_on: [["🚦 Status", "📥 Queue", "🛠 Work"], ["📏 Size", "🔎 Filters", "🤖 Model"], ["⏸ Pause", "▶️ Resume…"]]
+help_off: []

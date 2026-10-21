@@ -44,8 +44,7 @@ def _purposes(ctx: AppContext, rig: TgRig, payload: dict[str, Any]) -> list[list
 
 def test_one_builder_classic_and_rich_renders_are_identical(ctx: AppContext) -> None:
     dash = ui_of(ctx).dashboard
-    pinned = dash.render({p: f"tok-{p}" for p in ("dash_refresh", "dash_queue", "dash_pause", "dash_resume",
-                                                   "quiet_set", "dash_down", "dash_kill")})  # fmt: skip
+    pinned = dash.render({p: f"tok-{p}" for p in dash.purposes()})
     copy = dash.view(None, kind="status")
     assert copy.kind == "status" and pinned.kind == "dashboard"
     assert [b.name for b in copy.blocks] == [b.name for b in pinned.blocks] == ["header", "facts", "footer"]
@@ -53,8 +52,10 @@ def test_one_builder_classic_and_rich_renders_are_identical(ctx: AppContext) -> 
     assert classic.render(copy).text == classic.render(pinned).text
     assert rich.render(copy) == rich.render(pinned)
     assert copy.keyboard_labels() == pinned.keyboard_labels()
+    # command_shortcuts is on by default: its two rows sit between Pause/Quiet and Down/Kill
     assert [[b.purpose for b in row] for row in copy.rows] == [
-        ["dash_refresh", "dash_queue"], ["dash_pause", "quiet_set"], ["dash_down", "dash_kill"]]  # fmt: skip
+        ["dash_refresh", "dash_queue"], ["dash_pause", "quiet_set"], ["sc_work", "sc_size", "sc_filters"],
+        ["sc_model", "sc_help"], ["dash_down", "dash_kill"]]  # fmt: skip
     assert all(b.token is None for row in copy.rows for b in row)  # fresh tokens, minted at send
     assert len(classic.render(copy).text) <= 1500
 

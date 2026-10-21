@@ -8,7 +8,9 @@ so a stale dashboard visibly ages even while the bot is unreachable.
 
 The buttons are kit tokens bound to the dashboard message and reused across edits (re-minted when
 they get within a day of expiry): Refresh, Approvals, Pause or Resume…, Quiet 1h, Down… and the
-two-tap Kill (the second tap is a 10-s single-use ``danger_second_tap`` token, D14).
+two-tap Kill (the second tap is a 10-s single-use ``danger_second_tap`` token, D14). With
+``telegram.yaml command_shortcuts`` on, two more rows carry Work, Size, Filters, Model and Help
+(``telegram/shortcuts.py``).
 """
 
 from __future__ import annotations
@@ -39,6 +41,8 @@ TOKEN_TTL = timedelta(hours=72)
 TOKEN_REFRESH = timedelta(hours=24)
 KILL_SECOND_TAP = timedelta(seconds=10)
 PURPOSES = ("dash_refresh", "dash_queue", "dash_pause", "dash_resume", "quiet_set", "dash_down", "dash_kill")
+# telegram.yaml command_shortcuts (telegram/shortcuts.py): one more row of command buttons
+SHORTCUT_PURPOSES = ("sc_work", "sc_size", "sc_filters", "sc_model", "sc_help")
 RUNNING_LINES = 3
 
 
@@ -199,11 +203,20 @@ class Dashboard:
             last = [k.bound("🛑 Tap again to kill (10 s)", kill_armed, style="danger")]
         else:
             last = [btn("⬇️ Down…", "dash_down"), btn("🛑 Kill", "dash_kill", style="danger")]
-        return [
+        rows = [
             [btn("🔄 Refresh", "dash_refresh"), btn(f"📥 Approvals ({pending})", "dash_queue")],
             [pause, btn("🌙 Quiet 1h", "quiet_set")],
-            last,
         ]
+        if ctx.config.telegram.command_shortcuts:  # ≤ 3 buttons per row (ui/limits.py), so two rows
+            rows += [[btn("🛠 Work", "sc_work"), btn("📏 Size", "sc_size"), btn("🔎 Filters", "sc_filters")],
+                     [btn("🤖 Model", "sc_model"), btn("❓ Help", "sc_help")]]  # fmt: skip
+        return [*rows, last]
+
+    def purposes(self) -> tuple[str, ...]:
+        """The token set the pinned dashboard carries (``_tokens`` re-mints when it changes)."""
+        if self.ctx.config.telegram.command_shortcuts:
+            return PURPOSES + SHORTCUT_PURPOSES
+        return PURPOSES
 
     def text(self, view: k.View) -> str:
         return classic.render(view, budget=DASHBOARD_MAX).text
@@ -224,11 +237,12 @@ class Dashboard:
         now = self.ctx.clock.now()
         tokens = state.get("tokens") if isinstance(state.get("tokens"), dict) else None
         exp = state.get("tokens_exp")
-        if tokens and exp and from_iso(str(exp)) - now > TOKEN_REFRESH and set(tokens) == set(PURPOSES):
+        purposes = self.purposes()
+        if tokens and exp and from_iso(str(exp)) - now > TOKEN_REFRESH and set(tokens) == set(purposes):
             return {str(p): str(t) for p, t in tokens.items()}, []
         fresh: dict[str, str] = {}
         with db.transaction(self.ctx.conn):
-            for purpose in PURPOSES:
+            for purpose in purposes:
                 arg = {"hours": 1} if purpose == "quiet_set" else {}
                 fresh[purpose] = self.ctx.approvals.mint_token(
                     purpose, chat_id=self.ctx.telegram_chat_id, message_id=message_id, expires_at=now + TOKEN_TTL,

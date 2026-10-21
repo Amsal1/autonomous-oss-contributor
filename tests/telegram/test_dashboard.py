@@ -59,8 +59,11 @@ async def test_dashboard_is_sent_pinned_and_golden(ctx: AppContext) -> None:
         assert payload["text"].startswith("🚦 🟢 <b>ossbot</b> · UP · <b>🧪 DRY RUN</b>")
         assert '<i>Updated <tg-time unix="' in payload["text"] and 'format="r">' in payload["text"]
         labels = [[b["text"] for b in row] for row in rig.buttons(payload)]
-        assert labels == [["🔄 Refresh", "📥 Approvals (0)"], ["⏸ Pause", "🌙 Quiet 1h"], ["⬇️ Down…", "🛑 Kill"]]
-        kill = rig.buttons(payload)[2][1]
+        # telegram.yaml command_shortcuts (default on) adds the two command rows (tests/telegram/test_shortcuts.py)
+        assert labels == [["🔄 Refresh", "📥 Approvals (0)"], ["⏸ Pause", "🌙 Quiet 1h"],
+                          ["🛠 Work", "📏 Size", "🔎 Filters"], ["🤖 Model", "❓ Help"],
+                          ["⬇️ Down…", "🛑 Kill"]]  # fmt: skip
+        kill = rig.buttons(payload)[-1][1]
         assert kill["style"] == "danger"
         pins = [p for m, p in rig.req.calls if m == "pinChatMessage"]
         assert pins and pins[-1]["message_id"] == _dashboard_id(ctx) and pins[-1]["disable_notification"] is True

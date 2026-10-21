@@ -217,7 +217,8 @@ def review_views(ctx: AppContext, text: str) -> Out:
 def dashboard_view(ctx: AppContext, text: str) -> Out:
     if ctx.control.view().state == "running":
         ctx.control.pause(one_line(text, 500), "tg:4242")
-    tokens = dict.fromkeys(PURPOSES, "A" * 22)
+    tokens = dict.fromkeys(Dashboard(ctx).purposes(), "A" * 22)  # incl. the command_shortcuts row
+    assert set(PURPOSES) <= set(tokens)
     return [Dashboard(ctx).render(tokens), Dashboard(ctx).render(tokens, kill_armed="B" * 22)]
 
 

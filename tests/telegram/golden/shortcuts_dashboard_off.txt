@@ -1,0 +1,2 @@
+dashboard: [["🔄 Refresh", "📥 Approvals (0)"], ["⏸ Pause", "🌙 Quiet 1h"], ["⬇️ Down…", "🛑 Kill"]]
+status: [["🔄 Refresh", "📥 Approvals (0)"], ["⏸ Pause", "🌙 Quiet 1h"], ["⬇️ Down…", "🛑 Kill"]]
