@@ -14,18 +14,35 @@ Every value here comes from GitHub search items or files; nothing is LLM output.
 from __future__ import annotations
 
 import fnmatch
+import logging
 import math
 import re
-from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from ossbot.common.clock import from_iso
-from ossbot.common.config import REPO_RE, ConfigBundle, helm_hosts
+from ossbot.common.config import (
+    LANGUAGE_RE,
+    OPEN_CATEGORY,
+    OPEN_PRIORITY,
+    REPO_RE,
+    TOPIC_RE,
+    ConfigBundle,
+    helm_hosts,
+)
 from ossbot.common.osi_licenses import is_osi
+from ossbot.common.schemas import ISO_TS_RE, SPDX_ID_RE
+from ossbot.runner import ci_detect, scoring
+from ossbot.runner.github_read import UNAVAILABLE, GitHubRateLimited, GitHubRead, GitHubReadError
+from ossbot.runner.gk_client import GkError
 
+if TYPE_CHECKING:
+    from ossbot.runner.pipeline import StageContext
+
+log = logging.getLogger(__name__)
 OPEN_NOTE = "_open"  # runner note: {"cursor": int, "search_until": float}
 SANDBOX_OPEN = "sandbox_open"  # the only egress mode in which a mode-egress repo skips rule 14
 EXCLUDED = "excluded"
@@ -221,6 +238,24 @@ def repo_filter_reason(hit: RepoHit, rules: RepoRules, now: datetime, excluded: 
         return "prs_disabled"  # 11
     if hit.pull_request_creation_policy == "collaborators_only":
         return "pr_creation_restricted"  # 12
+    return None
+
+
+def kept_reason(hit: RepoHit) -> str | None:
+    """§6.2: a kept repo's re-check runs only rules 3-5 and 10-12 (the owner kept it: stars, push age,
+    license and CONTRIBUTING are not re-checked)."""
+    if hit.fork:
+        return "fork"
+    if hit.archived or hit.disabled:
+        return "archived"
+    if hit.visibility != "public":
+        return "private"
+    if not hit.has_issues:
+        return "issues_disabled"
+    if not hit.has_pull_requests:
+        return "prs_disabled"
+    if hit.pull_request_creation_policy == "collaborators_only":
+        return "pr_creation_restricted"
     return None
 
 
@@ -420,3 +455,411 @@ def reason_text(repo: str, reason: str) -> str | None:
     if code not in {EGRESS_MODE_REASON, EGRESS_STRICT_REASON}:
         return None
     return egress_text(repo, [h for h in tail.split(",") if h], repo_strict=code == EGRESS_STRICT_REASON)
+
+
+# ------------------------------------------------------------------------------------- reads (GET)
+def branch_commit_at(gh: GitHubRead, repo: str, branch: str) -> str | None:
+    """The default branch's last commit date, once per repo per cycle; a 4xx read is unknown (not a
+    skip, re-read next cycle). Outages and rate limits propagate like every read."""
+    try:
+        return gh.default_branch_commit_at(repo, branch)
+    except GitHubReadError as exc:
+        if exc.error_class == UNAVAILABLE:
+            raise
+        log.info("default-branch commit of %s unknown (%s)", repo, exc.error_class,
+                 extra={"event": "branch_commit_unknown"})  # fmt: skip
+        return None
+
+
+def precheck_files(gh: GitHubRead, repo: str) -> dict[str, str]:
+    """§12.4: the root listing (1 read), then ≤ ``EGRESS_READS_MAX`` of the files that exist."""
+    names = {str(e.get("name")) for e in gh.dir_entries(repo, "")}
+    wanted = [p for p in EGRESS_FILES if p.split("/", 1)[0] in names][:EGRESS_READS_MAX]
+    out: dict[str, str] = {}
+    for path in wanted:
+        text = gh.file_text(repo, path)
+        if text:
+            out[path] = text
+    return out
+
+
+@dataclass(frozen=True)
+class Probe:
+    """Rules 13-14 and the activity gate for one repo that passed rules 1-12."""
+
+    reason: str | None
+    commit_at: str | None
+    hosts: tuple[str, ...] = ()  # uncovered hosts (rule 14), also when only reported (dry run)
+
+
+def probe_repo(gh: GitHubRead, hit: RepoHit, *, now: datetime, max_age_days: int, allowed: frozenset[str],
+               strict: bool, repo_strict: bool) -> Probe:  # fmt: skip
+    """The default-branch activity gate, rule 13 (CONTRIBUTING) and, only when ``strict``, rule 14.
+    Raises ``GitHubReadError`` for a failed read (the caller skips the repo on a 4xx)."""
+    commit_at = branch_commit_at(gh, hit.full_name, hit.default_branch)
+    inactive = inactive_reason(commit_at, now, max_age_days)
+    if inactive:
+        return Probe(inactive, commit_at)
+    missing = contributing_reason(gh.community_profile(hit.full_name))
+    if missing:
+        return Probe(missing, commit_at)
+    if strict:
+        hosts = uncovered_hosts(egress_hosts(precheck_files(gh, hit.full_name)), allowed)
+        if hosts:
+            return Probe(egress_reason(hosts, repo_strict=repo_strict), commit_at, tuple(hosts))
+    return Probe(None, commit_at)
+
+
+_TOPIC = re.compile(TOPIC_RE)
+_LANGUAGE = re.compile(LANGUAGE_RE)
+_SPDX = re.compile(SPDX_ID_RE)
+_ISO = re.compile(ISO_TS_RE)
+
+
+def facts_body(
+    repo: str, *, source: str, status: str, topic: str | None = None, stars: int | None = None,
+    language: str | None = None, license_spdx: str | None = None, pushed_at: str | None = None,
+    commit_at: str | None = None, ci_on_pr: str | None = None, score: float | None = None,
+    skip_reason: str | None = None, tried: bool = False, kept_check: bool = False,
+) -> dict[str, Any]:  # fmt: skip
+    """A ``DiscoveredFacts`` body with every GitHub value bounded to the schema (a value that would
+    not validate is sent as unknown, so a strange language name never costs the repo)."""
+
+    def iso(v: str | None) -> str | None:
+        return v if isinstance(v, str) and len(v) <= 40 and _ISO.match(v) else None
+
+    return {
+        "repo": repo, "source": source if source in {"search", "hermes"} else "search", "status": status,
+        "kept_check": kept_check, "topic": topic if topic and _TOPIC.match(topic) else None,
+        "stars": stars if isinstance(stars, int) and 0 <= stars <= 10_000_000 else None,
+        "language": language if language and _LANGUAGE.match(language) else None,
+        "license_spdx": license_spdx if license_spdx and _SPDX.match(license_spdx) else None,
+        "pushed_at": iso(pushed_at), "default_branch_commit_at": iso(commit_at),
+        "ci_on_pr": ci_on_pr if ci_on_pr in {"yes", "no", "unknown"} else None,
+        "repo_score": None if score is None else min(200.0, max(0.0, round(score, 4))),
+        "skip_reason": skip_reason, "tried": tried,
+    }  # fmt: skip
+
+
+def hit_facts(hit: RepoHit, **kw: Any) -> dict[str, Any]:
+    return facts_body(hit.full_name, topic=kw.pop("topic", hit.topic), stars=hit.stars, language=hit.language,
+                      license_spdx=hit.license_spdx, pushed_at=hit.pushed_at, **kw)  # fmt: skip
+
+
+# ----------------------------------------------------------------------------- the open phase
+class OpenEnded(Exception):  # a control-flow signal, not an error
+    """A 4xx on a search ends the open phase for this cycle (a 422 would repeat every cycle)."""
+
+
+@dataclass
+class Selected:
+    """A repo chosen for an issue scan this cycle (carry-over, Hermes suggestion or search)."""
+
+    repo: str
+    source: str  # discovered_targets source: "search" | "hermes"
+    facts: dict[str, Any]  # its DiscoveredFacts body (status candidate), re-sent with tried: true
+    score: float
+    language: str | None
+    suggested_issue: int | None = None
+
+
+@dataclass
+class OpenResult:
+    """Tier-1 candidates for the merge (§7.3) and the budget their mention checks are paid from."""
+
+    budget: SearchBudget
+    candidates: list[scoring.Candidate] = field(default_factory=list)
+    hashes: dict[str, str] = field(default_factory=dict)
+    sources: dict[str, str] = field(default_factory=dict)  # "repo#n" -> contribution source
+
+
+REFUSED_CODES = frozenset({"never_repo", "is_target", "denied", "is_kept", "cooling", "not_kept"})
+CARRY_MAX_AGE = timedelta(days=7)
+SUGGESTIONS_MAX = 3
+
+
+def record(sc: StageContext, body: dict[str, Any]) -> bool:
+    """``POST /v1/discovered-targets``; False when the repo is dropped for the cycle. Review-3 M3: the
+    answer is keyed on the gatekeeper's ``error`` code, not the status: a refusal is INFO
+    ``open_repo_refused``; ``schema_error`` (400) or any other code is a runner bug, ERROR
+    ``open_facts_invalid``; a 5xx is re-raised (the cycle ends like any gatekeeper outage)."""
+    try:
+        sc.gk.record_discovered(body)
+    except GkError as exc:
+        if exc.status >= 500:
+            raise
+        if exc.code in REFUSED_CODES:
+            log.info("open discovery: %s refused (%s)", body["repo"], exc.code,
+                     extra={"event": "open_repo_refused", "repo": body["repo"], "code": exc.code})  # fmt: skip
+        else:
+            log.error("open discovery: facts for %s rejected (%s %s)", body["repo"], exc.status, exc.code,
+                      extra={"event": "open_facts_invalid", "repo": body["repo"], "code": exc.code})  # fmt: skip
+        return False
+    return True
+
+
+class OpenPhase:
+    """§5.4, §6.1, §7.1 step 3 for one cycle. ``check`` (kill/pause/stop/drain) runs before every repo,
+    every search and every CI read. A search rate limit saves ``_open.search_until`` and re-raises
+    (the stage is deferred; nothing is created without its mention check). M2: the ``active`` set
+    filters search hits, carry-over rows, suggestions and named issues, and leaves their rows alone."""
+
+    def __init__(
+        self, sc: StageContext, *, bundle: ConfigBundle, prefs_open: Mapping[str, Any] | None, active: set[str],
+        egress_mode: str | None, now: datetime, check: Callable[[], None],
+    ) -> None:  # fmt: skip
+        self.sc = sc
+        self.bundle = bundle
+        self.cfg = bundle.policy.discovery.open
+        self.topics = list((prefs_open or {}).get("topics") or self.cfg.topics)
+        self.languages = list((prefs_open or {}).get("languages_preferred") or self.cfg.languages_preferred)
+        self.active = {r.lower() for r in active}
+        self.now = now
+        self.check = check
+        self.rules = RepoRules.from_bundle(bundle)
+        self.allowed = allowed_hosts(bundle)
+        self.repo_strict = bundle.targets.defaults.egress == "strict"
+        self.strict = effective_strict(egress_mode, "strict" if self.repo_strict else "mode")
+        self.budget = SearchBudget(self.cfg.search_budget)
+        self.result = OpenResult(self.budget)
+
+    # ------------------------------------------------------------------ helpers
+    def _record(self, body: dict[str, Any]) -> bool:
+        return record(self.sc, body)
+
+    def _save_until(self, until: float) -> None:
+        self.sc.save(OPEN_NOTE, search_until=until)
+        log.info("open discovery rate limited until %d", int(until), extra={"event": "open_discovery_rate_limited"})
+
+    def _search(self, fn: Callable[[str], list[dict[str, Any]]], q: str) -> list[dict[str, Any]]:
+        try:
+            return fn(q)
+        except GitHubRateLimited as exc:
+            self._save_until(exc.until)
+            raise
+        except GitHubReadError as exc:
+            if exc.error_class == UNAVAILABLE:
+                raise
+            log.warning("open discovery search failed (%s): %s", exc.error_class, q[:200],
+                        extra={"event": "open_search_failed"})  # fmt: skip
+            raise OpenEnded(q) from exc
+
+    def _base(self, hit: RepoHit) -> float:
+        return repo_score_base(hit, min_stars=self.cfg.min_stars, now=self.now, languages_preferred=self.languages,
+                               language_weight=self.cfg.language_weight)  # fmt: skip
+
+    def _ci(self, repo: str) -> str:
+        self.check()
+        try:
+            return ci_detect.cached(self.sc, repo, self.bundle.policy.discovery.ci_facts_ttl_hours).status
+        except GitHubReadError as exc:
+            if exc.error_class == UNAVAILABLE:
+                raise
+            log.warning("CI detection failed for %s: %s", repo, exc, extra={"event": "discover_ci_failed"})
+            return "unknown"
+
+    def _probe(self, hit: RepoHit) -> Probe | None:
+        """None when a read failed with a 4xx (the repo is skipped this cycle, not recorded)."""
+        try:
+            return probe_repo(self.sc.gh, hit, now=self.now, max_age_days=self.bundle.policy.discovery
+                              .max_default_branch_age_days, allowed=self.allowed, strict=self.strict,
+                              repo_strict=self.repo_strict)  # fmt: skip
+        except GitHubReadError as exc:
+            if exc.error_class == UNAVAILABLE:
+                raise
+            log.warning("open discovery read failed for %s: %s", hit.full_name, exc,
+                        extra={"event": "open_repo_read_failed"})  # fmt: skip
+            return None
+
+    def _passed(self, hit: RepoHit, source: str, probe: Probe) -> Selected:
+        """CI facts and the final repo score of a repo that passed every rule; recorded ``candidate``."""
+        ci = self._ci(hit.full_name)
+        score = repo_score(self._base(hit), ci_on_pr=ci, ci_weight=self.bundle.policy.discovery.ci_on_pr_weight,
+                           branch_bonus=branch_activity_bonus(probe.commit_at, self.now))  # fmt: skip
+        body = hit_facts(hit, source=source, status="candidate", commit_at=probe.commit_at, ci_on_pr=ci, score=score)
+        return Selected(hit.full_name, source, body, score, hit.language)
+
+    def _skip(self, hit: RepoHit, source: str, reason: str, commit_at: str | None = None) -> None:
+        self._record(hit_facts(hit, source=source, status="skipped", skip_reason=reason, commit_at=commit_at))
+
+    def _named_out(self, repo: str) -> bool:
+        """Rule 1 by name and rule 1b (M2): no request, no write; the row stays as it is."""
+        key = repo.lower()
+        if key in self.active:
+            log.info("open discovery: %s has an open PR of ours; not scanned", repo,
+                     extra={"event": "open_repo_active"})  # fmt: skip
+            return True
+        owner = key.split("/", 1)[0]
+        return key in self.rules.config_repos or self.rules.is_denied(key) or owner in self.rules.own_logins
+
+    # ------------------------------------------------------------------ selection (§5.4)
+    def _carry_over(self, rows: list[dict[str, Any]], slots: int) -> list[Selected]:
+        out: list[Selected] = []
+        for row in rows:
+            if len(out) >= slots:
+                break
+            repo = str(row.get("repo") or "")
+            age = _age(self.now, str(row.get("updated_at") or ""))
+            if not repo or self._named_out(repo) or age is None or age > CARRY_MAX_AGE:
+                continue  # stale facts re-enter through the search
+            score = float(row.get("repo_score") or 0.0)
+            body = facts_body(repo, source=str(row.get("source") or "search"), status="candidate",
+                              topic=row.get("topic"), stars=row.get("stars"), language=row.get("language"),
+                              license_spdx=row.get("license_spdx"), pushed_at=row.get("pushed_at"),
+                              commit_at=row.get("default_branch_commit_at"), ci_on_pr=row.get("ci_on_pr"),
+                              score=score)  # fmt: skip
+            out.append(Selected(repo, body["source"], body, score, row.get("language")))
+        return out
+
+    def _suggestions(self, rows: list[dict[str, Any]], n: int) -> list[Selected]:
+        out: list[Selected] = []
+        for row in sorted(rows, key=lambda r: str(r.get("first_seen") or "")):
+            if len(out) >= n:
+                break
+            repo = str(row.get("repo") or "")
+            if not repo or self._named_out(repo):
+                continue
+            self.check()
+            try:
+                info = self.sc.gh.repo(repo)
+            except GitHubReadError as exc:
+                if exc.error_class == UNAVAILABLE:
+                    raise
+                log.warning("open discovery read failed for %s: %s", repo, exc,
+                            extra={"event": "open_repo_read_failed"})  # fmt: skip
+                continue
+            hit = RepoHit.from_item(info) if info is not None else None
+            if hit is None:
+                self._record(facts_body(repo, source="hermes", status="skipped", skip_reason=NOT_FOUND))
+                continue
+            reason = repo_filter_reason(hit, self.rules, self.now, excluded=(), active=self.active)
+            if reason == EXCLUDED:
+                continue
+            if reason is not None:
+                self._skip(hit, "hermes", reason)
+                continue
+            probe = self._probe(hit)
+            if probe is None:
+                continue
+            if probe.reason is not None:
+                self._skip(hit, "hermes", probe.reason, probe.commit_at)
+                continue
+            sel = self._passed(hit, "hermes", probe)
+            if self._record(sel.facts):
+                number = row.get("suggested_issue")
+                sel.suggested_issue = int(number) if isinstance(number, int) and number > 0 else None
+                out.append(sel)
+        return out
+
+    def _repo_search(self, excluded: set[str], slots: int) -> list[Selected]:
+        note = self.sc.load(OPEN_NOTE)
+        cursor = int(note.get("cursor") or 0) if isinstance(note.get("cursor"), int) else 0
+        picked, _ = select_topics(self.topics, cursor, self.cfg.topics_per_cycle)
+        since = (self.now - timedelta(days=self.cfg.pushed_within_days)).date()
+        hits: dict[str, RepoHit] = {}
+        searched = 0
+        for topic in picked:
+            self.check()
+            if not self.budget.take():
+                break
+            items = self._search(self.sc.gh.search_repos, build_repo_query(topic, self.cfg.min_stars, since))
+            searched += 1
+            for item in items:
+                hit = RepoHit.from_item(item, topic)
+                if hit is None:
+                    log.debug("open discovery: unusable search item", extra={"event": "open_repo_filtered"})
+                    continue
+                if hit.full_name.lower() in hits:
+                    continue
+                reason = repo_filter_reason(hit, self.rules, self.now, excluded, self.active)
+                if reason is not None:  # rules 1-12: no request, no row (finding 10)
+                    extra = {"event": "open_repo_filtered", "repo": hit.full_name, "reason": reason}
+                    log.debug("open discovery: %s filtered (%s)", hit.full_name, reason, extra=extra)
+                    continue
+                hits[hit.full_name.lower()] = hit
+        # finding 14: the cursor moves right after the repo searches, before any probe or issue search
+        self.sc.save(OPEN_NOTE, cursor=(cursor + searched) % max(1, len(self.topics)))
+        bases = {key: self._base(hit) for key, hit in hits.items()}
+        ordered = sorted(hits.values(), key=lambda h: rank_key(bases[h.full_name.lower()], h))
+        window, max_probes = probe_window(slots)
+        passed: list[tuple[RepoHit, Probe]] = []
+        probes = 0
+        for hit in ordered:
+            if len(passed) >= window or probes >= max_probes:
+                break
+            self.check()
+            probes += 1
+            probe = self._probe(hit)
+            if probe is None:
+                continue
+            if probe.reason is not None:
+                self._skip(hit, "search", probe.reason, probe.commit_at)
+                continue
+            passed.append((hit, probe))
+        scored = [self._passed(hit, "search", probe) for hit, probe in passed]
+        by_name = {h.full_name: h for h, _ in passed}
+        scored.sort(key=lambda s: rank_key(s.score, by_name[s.repo]))
+        out: list[Selected] = []
+        for sel in scored:  # the rest stay untried candidates: the next cycle takes them first
+            if self._record(sel.facts) and len(out) < slots:
+                out.append(sel)
+        return out
+
+    # ------------------------------------------------------------------ issues (§6.1)
+    def _scan(self, sel: Selected) -> None:
+        from ossbot.runner.stages.discover import issue_hash, keep_issue  # noqa: PLC0415 - discover imports us
+
+        self.check()
+        skip_labels = {s.lower() for s in self.bundle.targets.defaults.skip_labels}
+        issues: list[dict[str, Any]] = []
+        if sel.suggested_issue is not None:  # a named issue: labels not required (§11)
+            try:
+                issue = self.sc.gh.issue(sel.repo, sel.suggested_issue)
+            except GitHubReadError as exc:
+                if exc.error_class == UNAVAILABLE:
+                    raise
+                log.warning("open discovery read failed for %s: %s", sel.repo, exc,
+                            extra={"event": "open_repo_read_failed"})  # fmt: skip
+                return
+            issues = [issue] if issue is not None else []
+        else:
+            if not self.budget.issue_search_allowed(self.cfg.reserved_slots):
+                return  # stays an untried candidate for the next cycle
+            self.budget.take()
+            issues = self._search(self.sc.gh.search_issues, build_issue_query(sel.repo, self.cfg.issue_labels))
+        source = "hermes_request" if sel.source == "hermes" else "discover"
+        seen: set[int] = set()
+        for issue in issues:
+            number = int(issue.get("number") or 0)
+            if number <= 0 or number in seen or not keep_issue(issue, skip_labels, self.now):
+                continue
+            seen.add(number)
+            key = f"{sel.repo}#{number}"
+            self.result.hashes[key] = issue_hash(issue)
+            self.result.sources[key] = source
+            self.result.candidates.append(scoring.candidate_from_issue(
+                sel.repo, issue, priority=OPEN_PRIORITY, category=OPEN_CATEGORY, language=sel.language,
+                repo_bonus=repo_bonus(sel.score)))  # fmt: skip
+        self._record({**sel.facts, "tried": True})
+
+    # ------------------------------------------------------------------ the cycle
+    def run(self) -> OpenResult:
+        try:
+            excluded = self.sc.gk.excluded()
+            carry = self.sc.gk.discovered("candidate", untried=True, limit=50)
+            suggested = self.sc.gk.discovered("suggested", limit=50)
+        except GkError as exc:
+            log.warning("open discovery skipped: gatekeeper answered %s %s", exc.status, exc.code,
+                        extra={"event": "open_phase_skipped"})  # fmt: skip
+            return self.result
+        slots = self.cfg.new_repos_per_cycle
+        try:
+            selected = self._carry_over(carry, slots)
+            selected += self._suggestions(suggested, min(SUGGESTIONS_MAX, slots - len(selected)))
+            if len(selected) < slots:
+                selected += self._repo_search(excluded, slots - len(selected))
+            for sel in sorted(selected, key=lambda s: (-s.score, s.repo.lower())):
+                self._scan(sel)
+        except OpenEnded:
+            pass  # the merge goes on with what the open phase found so far
+        return self.result

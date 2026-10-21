@@ -8,6 +8,12 @@ PR; create at most ``discovery.proposals_per_cycle`` contributions. The gatekeep
 re-discovery rules (409 refusals are cached for one cycle). Reads only; nothing is posted. A cycle
 reads for minutes, so a service stop (SIGTERM), kill, pause or drain ends it between targets.
 
+Post-v1: a repo whose default branch has had no commit for ``max_default_branch_age_days`` is skipped
+for the cycle (owner addition 2026-10-21; a recent commit is a small boost); kept discovered repos
+join the seed loop (design §6.2); then, unless ``repos`` restricts the cycle, the open phase
+(``open_discovery.OpenPhase``) adds tier-1 candidates, merged seed-first with ``reserved_slots``
+(§7.3) and their mention checks paid from the open search budget.
+
 A read that fails as ``github_http_<status>`` skips that target. A read that fails as
 ``github_unavailable`` (its retries used up) ends the cycle with ``GitHubUnavailable``: the next
 target would wait through the same retries, and the scheduler tick that runs discovery dispatches
@@ -19,11 +25,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from ossbot.common.config import DiscoveryFilters, all_targets
+from ossbot.common.clock import from_iso
+from ossbot.common.config import (
+    ConfigBundle,
+    DiscoveryFilters,
+    ResolvedTarget,
+    all_targets,
+    discovered_target,
+    resolve_target,
+)
 from ossbot.runner import ci_detect, scoring
+from ossbot.runner import open_discovery as od
 from ossbot.runner.errors import Deferred
 from ossbot.runner.github_read import UNAVAILABLE, GitHubReadError
 from ossbot.runner.gk_client import GkError
@@ -66,11 +81,173 @@ def _check(sc: StageContext) -> None:
     sc.gate.check(STAGE)
 
 
+def _rank_open(opened: od.OpenResult | None, *, prefs: dict[str, Any], filters: DiscoveryFilters, now: datetime,
+               bundle: ConfigBundle) -> list[scoring.Ranked]:  # fmt: skip
+    """Tier 1 (§7.3, review-3 L3): ranked with ``signals={}`` and ``ci_weight=0``; the repo's CI boost
+    is already in ``Candidate.repo_bonus``, so it counts once. The global autonomous class applies."""
+    if opened is None or not opened.candidates:
+        return []
+    kept, _dropped = scoring.rank(opened.candidates, filters=filters, max_class=str(prefs["autonomous_max_class"]),
+                                  preferred=list(prefs["preferred_classes"]), signals={}, now=now, ci_weight=0.0,
+                                  interests=bundle.profile.interests.categories_priority)  # fmt: skip
+    return kept
+
+
+def _merge(tier0: list[scoring.Ranked], tier1: list[scoring.Ranked], remaining: int,
+           reserved_slots: int) -> list[tuple[scoring.Ranked, int]]:  # fmt: skip
+    """§7.3 creation order: the top ``remaining - reserved`` seed/kept candidates, then the open ones,
+    then the rest of the seed/kept ones (``reserved = min(reserved_slots, remaining)`` if any open)."""
+    reserved = min(reserved_slots, max(0, remaining)) if tier1 else 0
+    head = max(0, remaining - reserved)
+    return [(r, 0) for r in tier0[:head]] + [(r, 1) for r in tier1] + [(r, 0) for r in tier0[head:]]
+
+
+def _scan_labels(sc: StageContext, target: ResolvedTarget, info: dict[str, Any], now: datetime, bonus: float,
+                 candidates: list[scoring.Candidate], hashes: dict[str, str]) -> None:  # fmt: skip
+    """The per-label issues API (core bucket) for a seed or kept repo."""
+    seen: set[int] = set()
+    for label in target.labels or ("",):
+        for issue in sc.gh.issues(target.repo, label or None):
+            number = int(issue.get("number", 0))
+            if number in seen or not keep_issue(issue, {s.lower() for s in target.skip_labels}, now):
+                continue
+            seen.add(number)
+            hashes[f"{target.repo}#{number}"] = issue_hash(issue)
+            candidates.append(scoring.candidate_from_issue(
+                target.repo, issue, priority=target.priority, category=target.category,
+                language=info.get("language"), repo_bonus=bonus))  # fmt: skip
+
+
+def _activity(sc: StageContext, repo: str, info: dict[str, Any], now: datetime, max_days: int) -> float | None:
+    """Owner addition (2026-10-21): the default branch's last commit, one read per repo per cycle.
+    None = skip the repo this cycle (``inactive_default_branch``, INFO; re-checked next cycle, never
+    removed); else the small activity boost. An unknown date is not a skip."""
+    branch = info.get("default_branch")
+    if not isinstance(branch, str) or not branch:
+        return 0.0
+    commit_at = od.branch_commit_at(sc.gh, repo, branch)
+    if od.inactive_reason(commit_at, now, max_days):
+        log.info("discovery skips %s this cycle: no commit on %s since %s", repo, branch, commit_at,
+                 extra={"event": "discover_repo_inactive", "repo": repo, "reason": od.INACTIVE})  # fmt: skip
+        return None
+    return od.branch_activity_bonus(commit_at, now)
+
+
+def _egress_mode(sc: StageContext) -> str | None:
+    """The active egress mode for rule 14; a failed read is unknown, which counts as strict (§7.4)."""
+    try:
+        return sc.gk.egress_mode()
+    except GkError as exc:
+        log.warning("egress mode unknown (%s); open discovery treats every repo as strict", exc.code,
+                    extra={"event": "egress_mode_unknown"})  # fmt: skip
+        return None
+
+
+def _kept_due(row: dict[str, Any], now: datetime, cooldown_days: int) -> bool:
+    checked = row.get("checked_at")
+    if not checked:
+        return True
+    try:
+        return now - from_iso(str(checked)) > timedelta(days=cooldown_days)
+    except ValueError:
+        return True
+
+
+def _kept_check(sc: StageContext, row: dict[str, Any], info: dict[str, Any] | None, now: datetime,
+                egress_mode: str | None) -> bool:  # fmt: skip
+    """§6.2: the re-check of a kept repo (``GET /repos`` already read): rules 3-5, 10-12 and 14 when its
+    egress is strict; the result goes back with ``kept_check: true``. True = scan it."""
+    bundle = sc.config()
+    repo = str(row["repo"])
+    hit = od.RepoHit.from_item(info) if info is not None else None
+    reason = od.NOT_FOUND if hit is None else od.kept_reason(hit)
+    repo_strict = bool(row.get("egress_strict")) or bundle.targets.defaults.egress == "strict"
+    if hit is not None and reason is None and od.effective_strict(egress_mode, "strict" if repo_strict else "mode"):
+        hosts = od.uncovered_hosts(od.egress_hosts(od.precheck_files(sc.gh, repo)), od.allowed_hosts(bundle))
+        if hosts:
+            reason = od.egress_reason(hosts, repo_strict=repo_strict)
+    status = "skipped" if reason else "candidate"
+    body = (od.hit_facts(hit, source="search", status=status, skip_reason=reason, kept_check=True,
+                         topic=row.get("topic"), ci_on_pr=row.get("ci_on_pr"), score=row.get("repo_score"))
+            if hit is not None else
+            od.facts_body(repo, source="search", status=status, skip_reason=reason, kept_check=True))  # fmt: skip
+    od.record(sc, body)
+    return reason is None
+
+
+def _kept(
+    sc: StageContext, *, repos: list[str] | None, active: set[str], now: datetime, egress_mode: str | None,
+    candidates: list[scoring.Candidate], hashes: dict[str, str], per_repo_max: dict[str, str],
+) -> None:  # fmt: skip
+    """§6.2: kept discovered repos join the seed loop after the config targets (first_seen order),
+    scanned like a seed repo with ``KEPT_PRIORITY`` and no cooldown, re-checked when due."""
+    bundle = sc.config()
+    try:
+        rows = sc.gk.discovered("kept", limit=500)
+    except GkError as exc:
+        log.warning("kept repos skipped this cycle: gatekeeper answered %s %s", exc.status, exc.code,
+                    extra={"event": "open_phase_skipped"})  # fmt: skip
+        return
+    wanted = {r.lower() for r in repos or ()}
+    disc = bundle.policy.discovery
+    for row in sorted(rows, key=lambda r: str(r.get("first_seen") or "")):
+        repo = str(row.get("repo") or "")
+        if not repo or (wanted and repo.lower() not in wanted) or resolve_target(bundle.targets, repo) is not None:
+            continue
+        _check(sc)
+        if repo.lower() in active:
+            continue  # M2: one open PR per repo, as for seed repos
+        due = _kept_due(row, now, disc.open.repo_cooldown_days)
+        if not due and row.get("skip_reason"):
+            continue  # not scanned until a later re-check clears it
+        repo_prefs = sc.gk.prefs(repo)
+        if repo_prefs.get("never_repo"):
+            continue
+        target = discovered_target(bundle.targets, repo, kept=True, egress_strict=bool(row.get("egress_strict")))
+        if target is None:
+            continue
+        try:
+            info = sc.gh.repo(repo)
+            if (due and not _kept_check(sc, row, info, now, egress_mode)) or info is None:
+                continue
+            bonus = _activity(sc, repo, info, now, disc.max_default_branch_age_days)
+            if bonus is None:
+                continue
+            per_repo_max[repo] = str(repo_prefs["autonomous_max_class"])
+            _scan_labels(sc, target, info, now, bonus, candidates, hashes)
+        except GitHubReadError as exc:
+            log.warning("discovery read failed for %s: %s", repo, exc, extra={"event": "discover_read_failed"})
+            _end_if_unavailable(exc)
+
+
+def _open_phase(sc: StageContext, *, prefs: dict[str, Any], active: set[str], now: datetime,
+                egress_mode: str | None) -> od.OpenResult | None:  # fmt: skip
+    """§7.1 step 3, only when the effective ``open.enabled`` holds and the search bucket is not waiting."""
+    bundle = sc.config()
+    open_prefs = prefs.get("open") if isinstance(prefs.get("open"), dict) else None
+    enabled = bundle.policy.discovery.open.enabled
+    if open_prefs and "enabled" in open_prefs:
+        enabled = bool(open_prefs["enabled"])  # /filters page "Open" (a preference, global scope only)
+    if not enabled:
+        return None
+    until = sc.load(od.OPEN_NOTE).get("search_until")
+    if isinstance(until, int | float) and now.timestamp() < until:
+        log.info("open discovery waits for the search rate limit", extra={"event": "open_discovery_waiting"})
+        return None
+    phase = od.OpenPhase(sc, bundle=bundle, prefs_open=open_prefs, active=active, egress_mode=egress_mode, now=now,
+                         check=lambda: _check(sc))  # fmt: skip
+    try:
+        return phase.run()
+    except GitHubReadError as exc:  # only github_unavailable leaves the phase
+        _end_if_unavailable(exc)
+        raise
+
+
 def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | None = None,
         refused: set[str] | None = None, created: list[str] | None = None) -> list[str]:  # fmt: skip
     """One discovery cycle; returns the cids created by this call. ``repos`` limits it (``ossctl
-    discover``). ``created`` carries the cids an earlier, cut-short attempt of the same cycle created:
-    they count against ``proposals_per_cycle`` and new ones are appended to it as they are made."""
+    discover``; no open phase then). ``created`` carries the cids an earlier, cut-short attempt of the
+    same cycle created: they count against ``proposals_per_cycle`` and new ones are appended to it."""
     sc.gate.check(STAGE)
     now = now or datetime.now(UTC)
     bundle = sc.config()
@@ -83,6 +260,8 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
     prefs = sc.gk.prefs()
     filters = DiscoveryFilters.model_validate(prefs["filters"])
     active = {r for r, n in open_prs.items() if n >= filters.max_open_prs_by_me_per_repo}
+    egress_mode = _egress_mode(sc)
+    disc = bundle.policy.discovery
     candidates: list[scoring.Candidate] = []
     hashes: dict[str, str] = {}
     per_repo_max: dict[str, str] = {}
@@ -96,32 +275,27 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
         if repo_prefs.get("never_repo"):
             continue
         per_repo_max[entry.repo] = str(repo_prefs["autonomous_max_class"])
-        seen: set[int] = set()
         try:
             info = sc.gh.repo(entry.repo) or {}
             if info.get("archived"):
                 continue
-            for label in entry.labels or ("",):
-                for issue in sc.gh.issues(entry.repo, label or None):
-                    number = int(issue.get("number", 0))
-                    if number in seen or not keep_issue(issue, {s.lower() for s in entry.skip_labels}, now):
-                        continue
-                    seen.add(number)
-                    hashes[f"{entry.repo}#{number}"] = issue_hash(issue)
-                    candidates.append(scoring.candidate_from_issue(
-                        entry.repo, issue, priority=entry.priority, category=entry.category,
-                        language=info.get("language")))  # fmt: skip
+            bonus = _activity(sc, entry.repo, info, now, disc.max_default_branch_age_days)
+            if bonus is None:
+                continue  # skipped this cycle, kept in targets.yaml
+            _scan_labels(sc, entry, info, now, bonus, candidates, hashes)
         except GitHubReadError as exc:
             log.warning("discovery read failed for %s: %s", entry.repo, exc, extra={"event": "discover_read_failed"})
             _end_if_unavailable(exc)
+    _kept(sc, repos=repos, active=active, now=now, egress_mode=egress_mode, candidates=candidates, hashes=hashes,
+          per_repo_max=per_repo_max)  # fmt: skip
+    opened = None if repos else _open_phase(sc, prefs=prefs, active=active, now=now, egress_mode=egress_mode)
     created = created if created is not None else []
     already = len(created)
-    budget = bundle.policy.discovery.proposals_per_cycle
+    budget = disc.proposals_per_cycle
     by_repo: dict[str, list[scoring.Candidate]] = {}
     for cand in candidates:
         by_repo.setdefault(cand.repo, []).append(cand)
     ranked: list[scoring.Ranked] = []
-    disc = bundle.policy.discovery
     for repo, cands in by_repo.items():
         rank_args: dict[str, Any] = {"filters": filters, "max_class": per_repo_max[repo], "now": now,
                                      "preferred": list(prefs["preferred_classes"]),
@@ -140,18 +314,24 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
                                       ci_weight=disc.ci_on_pr_weight, **rank_args)  # fmt: skip
         ranked += kept
     ranked.sort(key=lambda r: -r.score)
-    for item in ranked:
+    order = _merge(ranked, _rank_open(opened, prefs=prefs, filters=filters, now=now, bundle=bundle),
+                   budget - len(created), disc.open.reserved_slots)  # fmt: skip
+    sources = opened.sources if opened is not None else {}
+    hashes.update(opened.hashes if opened is not None else {})
+    for item, tier in order:
         if len(created) >= budget:
             break
         _check(sc)
         key = f"{item.candidate.repo}#{item.candidate.number}"
         if key in refused:
             continue
+        if tier == 1 and opened is not None and not opened.budget.take():
+            continue  # §7.3: an unpaid tier-1 mention check skips the pick (not cached); tier 0 takes the slot
         try:
             if sc.gh.open_prs_mentioning(item.candidate.repo, item.candidate.number) > 0:
                 refused.add(key)
                 continue
-            created.append(sc.gk.create(item.candidate.repo, item.candidate.number, "discover",
+            created.append(sc.gk.create(item.candidate.repo, item.candidate.number, sources.get(key, "discover"),
                                         round(item.score, 2), hashes.get(key)))  # fmt: skip
         except GkError as exc:
             if exc.status in {400, 409}:

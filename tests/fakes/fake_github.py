@@ -227,12 +227,12 @@ class FakeGitHub:
             encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
             return httpx.Response(200, json={"type": "file", "encoding": "base64", "content": encoded,
                                              "path": "README.md"})  # fmt: skip
-        m5 = re.fullmatch(r"/contents/(.+)", rest)
+        m5 = re.fullmatch(r"/contents(?:/(.*))?", rest)
         if m5 and method == "GET":  # CONTRIBUTING, AI policy, PR template (runner vet); directory listings
-            wanted = m5.group(1).rstrip("/")
-            text = self.files.get((repo, wanted))
+            wanted = (m5.group(1) or "").rstrip("/")
+            text = self.files.get((repo, wanted)) if wanted else None
             if text is None:
-                prefix = wanted + "/"
+                prefix = wanted + "/" if wanted else ""  # "" = the root listing (egress precheck)
                 names = sorted({p[len(prefix):].split("/", 1)[0] for (r, p) in self.files
                                 if r == repo and p.startswith(prefix)})  # fmt: skip
                 if not names:
