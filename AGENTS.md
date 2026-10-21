@@ -16,7 +16,10 @@ The short list first:
   exact content and mode.
 - Dry-run defaults ON; any toggle invalidates every open approval.
 - The kill switch is checked at every stage, job and outbound action, and survives reboot.
-- No container both holds a credential and runs repo code.
+- No container both holds a credential and runs repo code. Repo code (`fetch`, `validate`) reaches the
+  public web only in egress mode `sandbox_open` (owner-chosen, not the default), behind the always-denied
+  floors and the per-job anomaly guard, and never for an `egress: strict` repo (ADR-0023). An anomaly
+  holds only that contribution; only the human resumes it (Telegram two-tap or `ossctl egress release`).
 - Everything the human reviews is derived by the gatekeeper from its own mirror.
 - **The size ceiling is not Telegram-raisable.** `policy.diff.max_files / max_changed_lines /
   max_test_lines` change only by editing `config/policy.yaml` plus a human-confirmed `/reload`.
@@ -37,7 +40,7 @@ DESIGN §8.3 I1–I13 (the boundary rules; the work login is `profile.github_log
 | I2 | Within the distro's non-root users, only the gatekeeper can read the write token. Root and root helpers (dockerfilter, enforcer, watchdog) are TCB. sandboxd has no route to root: it is not in `docker`, and the Docker filter refuses any request that could mount host paths or escalate. | `gatekeeper.env` root:gatekeeper 0640 + Docker filter |
 | I3 | An approval is accepted only from a Telegram `callback_query` whose `from.id` equals the configured user ID, in the private chat with that user, on the exact message ID the gatekeeper sent, carrying an unused, unexpired opaque token, followed by a second confirm tap whose text states the mode (LIVE or DRY RUN). | gatekeeper Telegram handlers |
 | I4 | Kill/pause blocks: stage starts (runner), container creation and start (sandboxd and Docker filter), every outbound write (gatekeeper, checked again before each individual write of a submission; an interrupted submission is never resumed automatically). A root enforcer stops processes and containers. Killed state survives reboot via the boot gate. | every layer + systemd path unit + boot gate |
-| I5 | Sandboxes get no host mounts, no Docker/filter/gatekeeper sockets, no GitHub tokens, egress only through the proxy with a per-profile allowlist. Repo code runs only in containers without any credential. Key-holding containers (`research`, `agent-llm`) never mount an attacker-writable path. A Kiro job runs only if the live safety probes passed for the exact CLI/image/agent-config/settings/trust-mode tuple. | sandboxd + Docker filter + iptables + squid + agents + probe gate |
+| I5 | Sandboxes get no host mounts, no Docker/filter/gatekeeper sockets, no GitHub tokens, egress only through the proxy with a per-profile allowlist ([ADR-0023](docs/adr/0023-egress-mode-sandbox-open.md): in egress mode `sandbox_open` `fetch`/`validate` also get `web_public`, behind the always-denied floors and the per-job anomaly guard; `egress: strict` repos keep the base list in every mode; every fetch/validate job states its egress, fail closed). Repo code runs only in containers without any credential. Key-holding containers (`research`, `agent-llm`) never mount an attacker-writable path. A Kiro job runs only if the live safety probes passed for the exact CLI/image/agent-config/settings/trust-mode tuple. | sandboxd + Docker filter + iptables + squid + agents + probe gate + egress meter and contribution holds |
 | I6 | Commits are created by a deterministic package job in a fresh git repo with the fixed identity; the LLM never authors commits. The gatekeeper re-verifies that `base..head` is exactly one commit with parent `base_sha`, `base_sha` is in upstream history, and author == committer == last `Signed-off-by` == `profile.yaml`. | package job + `gitops.py`/`policy.py` |
 | I7 | Dry-run defaults ON at first start and after any DB reset; turning it off requires a human (Telegram confirm or ossadmin TTY). Any dry-run toggle invalidates every open approval. | gatekeeper control state |
 | I8 | LLM output is data, never control: it is parsed only through pydantic schemas into fields that cannot express approve/resume/limit changes; it is never executed on the host. Commands the planner suggests run only inside credential-free sandboxes. | runner schemas; sandboxd |
@@ -161,7 +164,10 @@ a Hermes provider plugin under `vendor/`, `model.provider` in `hermes/config/con
 `ossctl doctor --probes`. Never touch the gatekeeper, approvals, probes list or key-scan needles.
 
 **Add an egress host.** A category in `config/egress.yaml` (or a host in an existing one), evidence
-from learn mode or the proxy log, then `/reload`. Never give `fetch` or `validate` `web_public`.
+from learn mode or the proxy log (`ossctl egress jobs` shows per-job hosts and bytes), then `/reload`.
+Categories are per profile; the egress modes (`allowlist`, `research`, `open`, `sandbox_open`) only add
+`web_public`, and only to their closed set of grantees. `fetch` and `validate` get `web_public` only in
+egress mode `sandbox_open`, with the anomaly guard; strict repos never (ADR-0023).
 
 **Add a Telegram view.** Build it with `gatekeeper/telegram/ui/kit.py` (blocks, buttons, tokens via
 `ui/send.py`), route every untrusted text through `ui/redact.py`, and add classic and rich goldens.

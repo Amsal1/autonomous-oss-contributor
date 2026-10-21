@@ -91,8 +91,9 @@ Component details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
   Every dry-run toggle invalidates open approvals.
 - **The kill switch is checked at every stage, job and outbound action** and survives reboots
   (`/kill`, `ossctl kill`, `scripts\kill.ps1`).
-- **Repo code runs only in credential-free sandboxes** with a hostname egress allowlist; the container
-  that holds the Kiro key never runs repo code (split coder).
+- **Repo code runs only in credential-free sandboxes** with a hostname egress allowlist (the public web
+  only in the opt-in egress mode `sandbox_open`, metered per job); the container that holds the Kiro
+  key never runs repo code (split coder).
 - **A hard size ceiling** (`config/policy.yaml` `diff.max_files: 80`, `max_changed_lines: 3000`,
   `max_test_lines: 3000`) refuses runaway diffs. It cannot be raised from Telegram.
 - **No exposure.** No webhook, tunnel, Mini App or inbound port; Telegram uses long polling.
@@ -146,7 +147,8 @@ Retention is time-based, with no size caps:
 | `/tmp` leftovers | 7 days |
 | Mirrors, bundles, imports and artifacts of finished contributions; unused cache repos | 30 days after they finished |
 | Closed Telegram rows (outbox, views, button tokens) | 90 days |
-| Sandbox run logs | 30 days |
+| Sandbox run logs and per-job egress summaries | 30 days |
+| Rotated squid access logs (`access.log.<stamp>`, rotated daily at 00:10 UTC) | 30 days (`proxy_logs_days`, at least 30) |
 | Idle files in Hermes' `sessions/` dir | 90 days (the sessions themselves live in Hermes' `state.db` and stay resumable) |
 
 Never selected: the audit log, open contributions and anything awaiting approval.
@@ -223,18 +225,30 @@ and `request` never touch an approval or the ceiling. The command table below is
 
 ## Egress modes and Hermes capability tiers
 
-One switch, the **egress mode**, decides how much of the public web LLM components get. It never
-changes what untrusted code can reach: `fetch` and `validate` sandboxes keep their package and GitHub
-allowlists in every mode, and gatekeeper and runner egress is identical in every mode.
+One switch, the **egress mode**, decides how much of the public web LLM components get. In the first
+three modes it never changes what untrusted code can reach: `fetch` and `validate` sandboxes keep their
+package and GitHub allowlists, and gatekeeper and runner egress is identical in every mode.
 
-| Mode | Research jobs and Hermes | Coder (`agent-llm`) |
-|---|---|---|
-| `allowlist` | named categories only, no general web | Kiro endpoints only |
-| `research` | plus the public web | Kiro endpoints only |
-| `open` (default) | plus the public web | plus the public web (web search for unknowns) |
+| Mode | Research jobs and Hermes | Coder (`agent-llm`) | Repo code (`fetch`, `validate`) |
+|---|---|---|---|
+| `allowlist` | named categories only, no general web | Kiro endpoints only | package and GitHub allowlists |
+| `research` | plus the public web | Kiro endpoints only | package and GitHub allowlists |
+| `open` (default) | plus the public web | plus the public web (web search for unknowns) | package and GitHub allowlists |
+| `sandbox_open` | plus the public web | plus the public web | plus the public web, metered per job |
 
 Switch with `/egress <mode>` or `ossctl egress mode <mode>` (confirm required, audited). An unreadable
 mode flag falls back to `allowlist`.
+
+**Egress for repo code (`sandbox_open`).** Open discovery finds repos whose builds fetch from hosts no
+egress category lists. `/egress sandbox_open` lets their fetch and validate jobs reach the public web;
+the default stays `open`, and you switch yourself. Private and metadata addresses, IP literals, upload
+and publishing endpoints stay denied in every mode. Repos marked `egress: strict` (in
+`config/targets.yaml`, or `ossctl targets strict owner/repo` for a discovered one) keep the allowlist in
+every mode. Every fetch/validate job is metered from the proxy log: a job over 60 hosts, 50 MB up or
+6 GB down (`config/egress.yaml` `anomaly`) is stopped and only that contribution is held; a 🚨 card
+in Control shows the numbers, and **▶️ Resume…** (two taps) or `sudo ossctl egress release <cid>` lets
+it run again. `ossctl egress holds` lists open holds, `sudo ossctl egress jobs` the per-job numbers.
+HTTPS content is not visible to the proxy, only hosts, ports and byte counts (ADR-0023).
 
 The **Hermes capability tier** decides which Hermes toolsets are on:
 

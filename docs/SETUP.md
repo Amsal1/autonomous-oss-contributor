@@ -205,7 +205,7 @@ killed or paused, and `ossctl gc` stops (exit 3) when a kill or pause arrives; `
 
 - `sudo ossctl gc --dry-run` (in the distro) prints what would go, store by store; `--json` lists the
   names (never Hermes file names). `sudo ossctl gc` runs the daily pass by hand; `--only <store>` picks
-  stores (`tmp`, `gatekeeper`, `artifacts`, `run-logs`, `hermes-sessions`, `images`, `build-cache`,
+  stores (`tmp`, `gatekeeper`, `artifacts`, `run-logs`, `proxy-logs`, `hermes-sessions`, `images`, `build-cache`,
   `fstrim`); `--only build-cache --build-cache-until-hours 0` drops every unused cache record once.
 - `fstrim -v /` runs last in each pass. With `sparseVhd=true` (`config/wsl/wslconfig`) the freed blocks
   go back to Windows: `scripts\ossctl.ps1 doctor` shows the `ext4.vhdx` size on disk next to its logical
