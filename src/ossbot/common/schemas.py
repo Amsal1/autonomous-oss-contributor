@@ -470,6 +470,8 @@ class DiscoveredFacts(ApiModel):
     language: Language | None = None
     license_spdx: Annotated[str, Field(pattern=SPDX_ID_RE)] | None = None
     pushed_at: IsoTs | None = None
+    # owner addition (2026-10-21): the default branch's latest commit (committer date); None = unknown
+    default_branch_commit_at: IsoTs | None = None
     ci_on_pr: CiOnPr | None = None
     repo_score: Annotated[float, Field(ge=0.0, le=200.0)] | None = None
     skip_reason: SkipReason | None = None
@@ -500,6 +502,7 @@ class DiscoveredView(ApiModel):
     language: str | None = None
     license_spdx: str | None = None
     pushed_at: str | None = None
+    default_branch_commit_at: str | None = None
     ci_on_pr: CiOnPr | None = None
     repo_score: float | None = None
     skip_reason: str | None = None

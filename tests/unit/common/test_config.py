@@ -338,6 +338,16 @@ def test_open_discovery_rejects(block: str, needle: str) -> None:
     assert needle in str(info.value)
 
 
+def test_default_branch_age_gate_key() -> None:
+    """Owner addition (2026-10-21): discovery.max_default_branch_age_days, 180 by default, bounded."""
+    assert PolicyConfig(version=1).discovery.max_default_branch_age_days == 180
+    assert parse_bundle(bundle_files()).policy.discovery.max_default_branch_age_days == 180
+    for bad in ("29", "3651", "'180'"):
+        with pytest.raises(ConfigError, match="max_default_branch_age_days"):
+            parse_yaml_model(PolicyConfig, "policy.yaml",
+                             f"version: 1\ndiscovery: {{max_default_branch_age_days: {bad}}}\n".encode())  # fmt: skip
+
+
 def test_reserved_slots_within_proposals_per_cycle() -> None:
     text = b"version: 1\ndiscovery: {proposals_per_cycle: 1, open: {reserved_slots: 2}}\n"
     with pytest.raises(ConfigError, match=r"discovery\.open\.reserved_slots 2 exceeds"):

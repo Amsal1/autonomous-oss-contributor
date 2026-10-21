@@ -279,6 +279,9 @@ class DiscoveryPolicy(Strict):
     # Config-only (/reload), not a Telegram-tunable discovery preference.
     ci_on_pr_weight: Annotated[float, Field(ge=0.0, le=30.0)] = 6.0
     ci_facts_ttl_hours: Annotated[int, Field(ge=1, le=720)] = 168
+    # Owner addition (2026-10-21): skip a repo (seed or discovered) whose DEFAULT branch's latest commit
+    # is older than this; read from the default branch's commits, not pushed_at (any branch push moves it).
+    max_default_branch_age_days: Annotated[int, Field(ge=30, le=3650)] = 180
     open: OpenDiscoveryPolicy = OpenDiscoveryPolicy()
 
 

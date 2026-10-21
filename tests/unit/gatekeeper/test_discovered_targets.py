@@ -103,6 +103,18 @@ def test_source_never_changes_and_topic_filled_once(ctx: AppContext, clock: Fake
     assert v.topic == "gitops" and v.source == "hermes"
 
 
+def test_default_branch_commit_stored_and_inactive_skip(ctx: AppContext) -> None:
+    """Owner addition (2026-10-21): the default branch's latest commit is a stored fact; a stale default
+    branch is a recorded skip with the existing cooldown."""
+    v = ctx.discovered.record(facts(default_branch_commit_at="2026-10-01T00:00:00Z"), WORKER)
+    assert v.default_branch_commit_at == "2026-10-01T00:00:00Z"
+    v = ctx.discovered.record(skipped("o/stale", reason="inactive_default_branch",
+                                      default_branch_commit_at="2026-01-01T00:00:00Z"), WORKER)  # fmt: skip
+    assert (v.status, v.skip_reason, v.default_branch_commit_at) == (
+        "skipped", "inactive_default_branch", "2026-01-01T00:00:00Z")  # fmt: skip
+    assert v.cooldown_until is not None
+
+
 def test_hermes_skip_sends_one_fyi(ctx: AppContext) -> None:
     ctx.discovered.suggest(REPO, 5, HERMES)
     ctx.discovered.record(skipped(reason="stars_below_min", source="hermes"), WORKER)

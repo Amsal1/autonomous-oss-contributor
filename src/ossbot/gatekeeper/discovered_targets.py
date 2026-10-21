@@ -49,6 +49,7 @@ SKIP_TEXTS: dict[str, str] = {
     "prs_disabled": "its pull requests are disabled",
     "pr_creation_restricted": "only collaborators may open pull requests",
     "no_contributing": "it has no CONTRIBUTING guide",
+    "inactive_default_branch": "its default branch has had no commit in months",
     "egress_extra_needed": "it needs package hosts outside the allowlist",
     "egress_extra_needed_strict": "it needs package hosts outside the allowlist (strict egress)",
 }

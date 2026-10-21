@@ -11,6 +11,7 @@ CREATE TABLE discovered_targets (
   source TEXT NOT NULL CHECK (source IN ('search', 'hermes', 'owner')),
   status TEXT NOT NULL CHECK (status IN ('suggested', 'candidate', 'kept', 'never', 'skipped')),
   topic TEXT, stars INTEGER, language TEXT, license_spdx TEXT, pushed_at TEXT,
+  default_branch_commit_at TEXT,         -- owner addition: the default branch's latest commit (activity gate)
   ci_on_pr TEXT CHECK (ci_on_pr IS NULL OR ci_on_pr IN ('yes', 'no', 'unknown')),
   repo_score REAL, skip_reason TEXT, suggested_issue INTEGER,
   egress_strict INTEGER NOT NULL DEFAULT 0 CHECK (egress_strict IN (0, 1)),

@@ -13,11 +13,13 @@ from collections.abc import Mapping
 from typing import Any
 
 ROW_COLUMNS: tuple[str, ...] = (
-    "repo", "source", "status", "topic", "stars", "language", "license_spdx", "pushed_at", "ci_on_pr",
-    "repo_score", "skip_reason", "suggested_issue", "egress_strict", "first_seen", "updated_at", "tried_at",
-    "checked_at", "cooldown_until", "decided_by", "decided_at",
+    "repo", "source", "status", "topic", "stars", "language", "license_spdx", "pushed_at",
+    "default_branch_commit_at", "ci_on_pr", "repo_score", "skip_reason", "suggested_issue", "egress_strict",
+    "first_seen", "updated_at", "tried_at", "checked_at", "cooldown_until", "decided_by", "decided_at",
 )  # fmt: skip
-FACT_COLUMNS: tuple[str, ...] = ("stars", "language", "license_spdx", "pushed_at", "ci_on_pr", "repo_score")
+FACT_COLUMNS: tuple[str, ...] = (
+    "stars", "language", "license_spdx", "pushed_at", "default_branch_commit_at", "ci_on_pr", "repo_score",
+)  # fmt: skip
 STATUS_COLUMNS: tuple[str, ...] = (
     "skip_reason", "suggested_issue", "cooldown_until", "checked_at", "tried_at", "decided_by", "decided_at",
 )  # fmt: skip

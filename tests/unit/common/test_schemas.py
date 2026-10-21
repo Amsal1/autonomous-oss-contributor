@@ -29,9 +29,15 @@ def test_facts_minimal_and_full() -> None:
     assert (f.kept_check, f.tried, f.skip_reason) == (False, False, None)
     full = DiscoveredFacts.model_validate(
         _facts(topic="gitops", stars=24440, language="Go", license_spdx="Apache-2.0",
-               pushed_at="2026-10-20T08:00:00Z", ci_on_pr="yes", repo_score=81.5, tried=True)
+               pushed_at="2026-10-20T08:00:00Z", default_branch_commit_at="2026-10-19T08:00:00Z",
+               ci_on_pr="yes", repo_score=81.5, tried=True)
     )  # fmt: skip
     assert full.stars == 24440 and full.ci_on_pr == "yes"
+    assert full.default_branch_commit_at == "2026-10-19T08:00:00Z"
+    skip = DiscoveredFacts.model_validate(_facts(status="skipped", skip_reason="inactive_default_branch"))
+    assert skip.skip_reason == "inactive_default_branch"
+    with pytest.raises(ValidationError):
+        DiscoveredFacts.model_validate(_facts(default_branch_commit_at="last week"))
 
 
 @pytest.mark.parametrize(
