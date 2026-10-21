@@ -417,6 +417,7 @@ def _repo_policy_block(view: CardView) -> k.Block | None:
     conditions = ai_policy.parse_conditions(view.vetting.get("ai_conditions"))
     text = f"AI policy: {ai_policy.display(view.vetting.get('ai_policy'), conditions)}"
     shown = [c for c in conditions if not (c.kind in ai_policy.VALUE_KINDS and not ai_policy.sanitize_value(c.value))]
+    missing: list[ai_policy.ConditionKind] = []
     if shown:
         missing = ai_policy.missing_conditions(view.title or "", view.body or "", shown)
         kinds = {c.kind for c in shown}
@@ -424,7 +425,8 @@ def _repo_policy_block(view: CardView) -> k.Block | None:
             text += " · checklist ⚠️ missing: " + ", ".join(ai_policy.KIND_LABELS[m] for m in missing)
         else:
             text += f" · checklist ✅ {len(kinds)}/{len(kinds)}"
-    line: k.Line = (k.Const("✅ "), k.Const(text))
+    warn = bool(missing) or ai_policy.normalize_status(view.vetting.get("ai_policy")) == "banned"
+    line: k.Line = (k.Const("⚠️ " if warn else "✅ "), k.Const(text))
     return k.Block((k.Lines((line,)),), required=False, priority=8, name="repo_policy")
 
 

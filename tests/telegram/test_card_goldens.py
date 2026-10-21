@@ -79,9 +79,12 @@ def test_golden_s1_open_pr_with_ai_conditions() -> None:
     body = "Body\n\n" + checklist_block(conds[:1], login="bot", coder_model="a", reviewer_model="b")
     vetting = {"ai_policy": "allowed_with_conditions", "ai_conditions": [c.model_dump() for c in conds]}
     out = cards.render(view("open_pr", False, body=body + "\n\nAI assistance disclosure", vetting=vetting))
-    assert "✅ AI policy: allowed with conditions (disclosure, label) · checklist ⚠️ missing: label" in out.card
+    assert "⚠️ AI policy: allowed with conditions (disclosure, label) · checklist ⚠️ missing: label" in out.card
     text = "\n\n----- part -----\n".join([out.card, *out.parts]) + "\n"
     golden.check("s1_open_pr_ai_conditions_live.html", text)
+    full = "Body\n\n" + checklist_block(conds, login="bot", coder_model="a", reviewer_model="b")
+    ok = cards.render(view("open_pr", False, body=full + "\n\nAI assistance disclosure", vetting=vetting))
+    assert "✅ AI policy: allowed with conditions (disclosure, label) · checklist ✅ 2/2" in ok.card
 
 
 # ----------------------------------------------------------------------------- published cards
