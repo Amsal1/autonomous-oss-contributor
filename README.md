@@ -280,7 +280,37 @@ clarity, your interest categories and your history in that repo. Repos whose CI 
 recently merged PRs rank higher (`policy.discovery.ci_on_pr_weight`; a boost, never a filter), and the
 proposal and preview cards say so: `CI on PRs: ✅ tests, lint (8/10 merged PRs)`, plus
 `runs after maintainer approval` when a maintainer has to start CI for outside PRs. The top few per
-cycle become proposal cards (at most five a day).
+cycle become proposal cards (at most five a day). A repo whose default branch has had no commit for
+more than 180 days (`policy.discovery.max_default_branch_age_days`) is skipped for the cycle.
+
+**Open discovery.** The seed list is a priority list, not a fence. Each cycle the bot also searches
+GitHub for popular repos by topic (`devops`, `platform-engineering`, `kubernetes`, `terraform`, `gitops`,
+`observability`, … three topics per cycle in turn), with at least 1000 ★, pushed within 60 days, not a
+fork, archived or mirror, an OSI license, issues and pull requests open to everyone, a CONTRIBUTING file
+(an org-wide default counts) and an egress precheck. Repos are ranked by stars, activity, CI on PRs and
+your preferred languages (Java, JavaScript, TypeScript, Python, Rust, Go, HCL, CloudFormation: a
+preference, not a filter), and their small `good first issue` / `help wanted` / `bug` / docs issues go
+through the same vet, AI-policy rule, scout and both gates. Seed targets come first: of the three
+proposals per cycle, one slot is reserved for the best open-discovery candidate
+(`discovery.open.reserved_slots`; `0` = strict seed-first). Search calls have their own budget (10 per
+cycle) and rate-limit bucket; a limit pauses the search, never the seed scan. Found repos live in the
+gatekeeper DB (`discovered_targets`), never in `targets.yaml`.
+
+Their proposal cards say where they came from: `🔎 open discovery · topic gitops · ★ 24,440`,
+`🔎 suggested by Hermes · ★ 5,000` or `⭐ kept target (open discovery)`, plus
+`🌿 last commit on the default branch: 3 d ago`. A found repo's card has one more row:
+**⭐ Keep as target** (two taps) scans it every cycle like a seed target, without searching for it
+again; **🚫 Never this repo** (two taps) stops it for good. There is no Telegram undo for a discovered
+repo's Never or Keep (unlike `/repos` for seed targets): use `ossctl targets unblock <repo>` or
+`ossctl targets unblock --unkeep <repo>`. Hermes can suggest a repo or issue URL
+(`ossbot_request_discovery`); it is untrusted input, checked by the same rules, and nothing it
+suggests is approved without your taps.
+
+`/filters` page 5 **Open** turns open discovery on or off and edits its topics (`➕ Add topic…`) and
+preferred languages; the counts and the search budget are config-only (`policy.yaml discovery.open`).
+From a terminal: `ossctl targets search [--top N] [--topic T]` (a read-only dry run: ranked repos with
+language, ★ and CI on PRs; no DB row, no Telegram), `ossctl targets discovered [--status S]`, and
+`ossctl targets add|block|unblock|strict` (each asks for a typed confirmation).
 
 Size is a **preference** for what the bot picks on its own. Classes count non-test changed lines,
 excluding lockfiles, generated and vendored files: `xs` ≤ 20, `s` ≤ 80, `m` ≤ 250, `l` ≤ 500,
@@ -295,7 +325,10 @@ preference. It applies to everything, including your own requests, and changes o
 **User-directed work.** `/work <issue, PR or repo URL> [notes]`, a forwarded GitHub link with
 `🛠 Work on this`, or `ossctl work <url>` creates a contribution marked `👤 requested by you`. It skips
 ranking, caps, the size preference and the filters, may be any size, and still passes both gates, the
-forbidden paths, the repo's AI policy, a CLA check, the one-open-PR-per-repo rule and the ceiling.
+forbidden paths, the repo's AI policy, a CLA check, the one-open-PR-per-repo rule and the ceiling. Any
+public repo works: one outside `targets.yaml` must exist, be public, not archived, disabled or a fork,
+accept issues and pull requests from everyone and not be blocked with Never; it is then added to your
+kept targets (the confirm card says so). A stale default branch is only a ⚠️ warning on that card.
 
 **AI policy.** Vet reads CONTRIBUTING, the AI policy file, the code of conduct, the PR template, the
 README and maintainer comments, and skips only repos that explicitly ban AI-assisted contributions.

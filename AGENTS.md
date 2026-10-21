@@ -126,7 +126,15 @@ entry overrides `policy.vet.ai_policy` (default: allow both). An explicit ban al
 configured away. `ossctl targets facts <repo>…` (≤ 5, read-only, no LLM, no contribution row) prints
 the deterministic AI-policy status and the CI-on-PR facts (`runner/ci_detect.py`) that vet and
 discovery would see; CI that ran on merged PRs is a ranking boost (`policy.discovery.ci_on_pr_weight`),
-never a filter.
+never a filter. A config entry is also where per-repo facts go: `egress_extra` hosts, `egress: strict`
+for a repo that must never get a widened egress, `cla_signed: true`. A repo that needs none of that
+can instead be kept in the gatekeeper DB (DESIGN §17.3): ⭐ Keep on its proposal card,
+`ossctl targets add <repo>` (TTY confirm) or `/work` on it; such rows are written only through
+`gatekeeper/discovered_targets_writer.py`, imported only by `gatekeeper/discovered_targets.py`
+(import-linter contract), and code never writes `config/targets.yaml`. `ossctl targets search
+[--top N] [--topic T]` is the read-only look at what open discovery would find (GET only, no row,
+no Telegram). Tests: `tests/unit/common/test_config.py` for a config entry,
+`tests/unit/gatekeeper/test_discovered_targets.py` for a DB-kept repo.
 
 **Add a pipeline stage.** A state in the gatekeeper state enum and its `ALLOWED` edges with actors
 (`gatekeeper/state_machine.py`), a stage module in `src/ossbot/runner/stages/`, the sandbox profile

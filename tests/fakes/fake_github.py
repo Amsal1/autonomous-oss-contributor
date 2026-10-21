@@ -116,13 +116,15 @@ class FakeGitHub:
         return response
 
     def _search_repos(self, q: str) -> httpx.Response:
-        """``topic:T stars:>=N …``: repos carrying topic T with at least N stars, most stars first (the
-        other qualifiers are post-filtered by the runner anyway)."""
+        """``topic:T stars:>=N pushed:>=D …``: repos carrying topic T with at least N stars, pushed on or
+        after D, most stars first (the other qualifiers are post-filtered by the runner anyway)."""
         topic = re.search(r"\btopic:(\S+)", q)
         stars = re.search(r"\bstars:>=(\d+)", q)
+        pushed = re.search(r"\bpushed:>=(\S+)", q)
         items = [d for d in self.repos.values()
                  if (topic is None or topic.group(1) in d.get("topics", []))
-                 and int(d.get("stargazers_count") or 0) >= (int(stars.group(1)) if stars else 0)]  # fmt: skip
+                 and int(d.get("stargazers_count") or 0) >= (int(stars.group(1)) if stars else 0)
+                 and (pushed is None or str(d.get("pushed_at") or "")[:10] >= pushed.group(1))]  # fmt: skip
         items.sort(key=lambda d: -int(d.get("stargazers_count") or 0))
         return httpx.Response(200, json={"total_count": len(items), "incomplete_results": False, "items": items[:50]})
 
@@ -137,7 +139,9 @@ class FakeGitHub:
             return httpx.Response(200, json={"total_count": count, "items": []})
         label_m = re.search(r"\blabel:(.+)$", q)
         wanted = {w.strip('"') for w in re.findall(r'"[^"]*"|[^,]+', label_m.group(1))} if label_m else set()
+        unassigned = "no:assignee" in q
         items = [i for (r, _), i in sorted(self.issues.items()) if r == repo and i.get("state") == "open"
+                 and not (unassigned and (i.get("assignee") or i.get("assignees")))
                  and (not wanted or wanted & {lbl.get("name") for lbl in i.get("labels", [])})]  # fmt: skip
         return httpx.Response(200, json={"total_count": len(items), "incomplete_results": False, "items": items})
 
