@@ -47,13 +47,14 @@ def refused(fn: Any, *args: Any) -> DiscoveredRefused:
     return info.value
 
 
-def contribution(ctx: AppContext, repo: str, state: str = "FETCHING", cid: str = "c_0000000001") -> None:
+def contribution(ctx: AppContext, repo: str, state: str = "FETCHING", cid: str = "c_0000000001",
+                 category: str = OPEN_CATEGORY) -> None:  # fmt: skip
     now = to_iso(ctx.clock.now())
     with db.transaction(ctx.conn):
         ctx.conn.execute(
-            "INSERT INTO contributions (id, upstream, issue_number, source, state, created_at, updated_at)"
-            " VALUES (?, ?, 7, 'discover', ?, ?, ?)",
-            (cid, repo, state, now, now),
+            "INSERT INTO contributions (id, upstream, issue_number, source, category, state, created_at, updated_at)"
+            " VALUES (?, ?, 7, 'discover', ?, ?, ?, ?)",
+            (cid, repo, category, state, now, now),
         )
 
 
@@ -268,6 +269,9 @@ def test_m1_skipped_repo_with_a_contribution_still_resolves(ctx: AppContext, clo
     contribution(ctx, "o/norow", cid="c_0000000002")  # a contribution without a row still resolves
     t = ctx.discovered.effective_target("o/norow")
     assert t is not None and t.priority == OPEN_PRIORITY
+    # a contribution left over from a repo removed from targets.yaml (config category) does not resolve
+    contribution(ctx, "o/removed", cid="c_0000000003", category="iac")
+    assert ctx.discovered.effective_target("o/removed") is None
 
 
 def test_creatable_target(ctx: AppContext) -> None:

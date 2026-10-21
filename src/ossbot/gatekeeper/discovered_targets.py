@@ -7,8 +7,9 @@ announced as an FYI. Values come from GitHub through the runner (bounded by ``Di
 from the owner; nothing here is LLM output.
 
 ``effective_target`` resolves a repo for ``/package`` and ``GET /v1/targets/resolve``: a config target
-first, else a ``candidate``/``kept``/``never`` row, else any repo that already has a contribution (an
-in-flight item keeps its target when its row later moves to ``skipped``; review-3 M1). Creating a new
+first, else a ``candidate``/``kept``/``never`` row, else any repo that already has a contribution created
+for a discovered repo (category ``open-discovery``): an in-flight item keeps its target when its row later
+moves to ``skipped`` (review-3 M1), while a repo removed from targets.yaml stays unresolved. Creating a new
 contribution is stricter (``creatable_target``: ``candidate`` or ``kept`` only).
 """
 
@@ -21,7 +22,7 @@ from datetime import timedelta
 from typing import Any
 
 from ossbot.common.clock import Clock, from_iso, to_iso
-from ossbot.common.config import ConfigBundle, ResolvedTarget, discovered_target, resolve_target
+from ossbot.common.config import OPEN_CATEGORY, ConfigBundle, ResolvedTarget, discovered_target, resolve_target
 from ossbot.common.schemas import DiscoveredDecisionName, DiscoveredFacts, DiscoveredView, PrefsUpdate
 from ossbot.gatekeeper import db, policy
 from ossbot.gatekeeper import discovered_targets_writer as writer
@@ -144,8 +145,12 @@ class DiscoveredTargets:
         if row is not None and row["status"] in RESOLVABLE:
             return discovered_target(targets, str(row["repo"]), kept=row["status"] == "kept",
                                      egress_strict=bool(row["egress_strict"]))  # fmt: skip
+        # M1: only contributions created for a discovered repo (category open-discovery); a repo removed
+        # from targets.yaml keeps failing not_a_target for its old contributions, as before.
         contrib = db.one(
-            self.conn, "SELECT upstream FROM contributions WHERE upstream = ? COLLATE NOCASE LIMIT 1", (repo,)
+            self.conn,
+            "SELECT upstream FROM contributions WHERE upstream = ? COLLATE NOCASE AND category = ? LIMIT 1",
+            (repo, OPEN_CATEGORY),
         )
         if contrib is None:
             return None

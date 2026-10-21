@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from ossbot.common.clock import FakeClock
-from ossbot.common.schemas import ProposalSubmit, State
+from ossbot.common.schemas import DiscoveredFacts, ProposalSubmit, State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalError, Superseded
 from ossbot.gatekeeper.context import AppContext
@@ -265,6 +265,34 @@ def test_never_repo_and_never_kind_write_through_discovery_prefs(ctx: AppContext
     assert "docs" in ctx.discovery_prefs.effective().filters.excluded_kinds
     events = [r[0] for r in ctx.conn.execute("SELECT event FROM audit_events WHERE event LIKE 'discovery_prefs%'")]
     assert events == ["discovery_prefs_changed", "discovery_prefs_changed"]
+
+
+def _discovered_candidate(ctx: AppContext, repo: str = "openfaas/faas") -> None:
+    ctx.discovered.record(
+        DiscoveredFacts.model_validate({"repo": repo, "source": "search", "status": "candidate", "stars": 25000}),
+        "uid:2001/worker",
+    )
+
+
+def test_never_on_a_discovered_repo_writes_its_row(ctx: AppContext) -> None:
+    """Design §9.4: Never on a non-config repo goes to discovered_targets, not discovery_prefs."""
+    _discovered_candidate(ctx)
+    cid = scouting(ctx, upstream="openfaas/faas", category="open-discovery")
+    out = submit(ctx, cid)
+    ProposalService(ctx).decline(out["approval_id"], "never_repo", OWNER)
+    found = ctx.discovered.get("openfaas/faas")
+    assert found is not None and found.status == "never" and found.decided_by == OWNER
+    assert ctx.discovery_prefs.rows() == []
+    assert contribution(ctx, cid)["state"] == "PROPOSAL_REJECTED"
+
+
+def test_submit_refused_for_a_discovered_never_repo(ctx: AppContext) -> None:
+    _discovered_candidate(ctx)
+    cid = scouting(ctx, upstream="openfaas/faas", category="open-discovery")
+    ctx.discovered.decide("openfaas/faas", "never", OWNER)
+    with pytest.raises(ProposalRefused) as info:
+        submit(ctx, cid)
+    assert (info.value.status, info.value.code) == (422, "never_repo")
 
 
 def test_decline_of_an_armed_card_refused(ctx: AppContext) -> None:

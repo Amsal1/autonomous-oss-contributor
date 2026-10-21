@@ -308,7 +308,7 @@ def build_context(
             notify,
             claim_comment=lambda: holder["snap"].current.bundle.policy.proposal.claim_comment == "on",
         ),
-        contributions=ContributionService(conn, clock, audit, lambda: snapshots.current.bundle),
+        contributions=ContributionService(conn, clock, audit, lambda: snapshots.current.bundle, discovered),
         anomaly=AnomalyHandler(conn, clock, audit, control, notify),
         models=ModelsAdmin(paths.config_dir / "models.yaml", conn, clock, audit, notify),
         anchors=AnchorClient(paths.anchor_sock),

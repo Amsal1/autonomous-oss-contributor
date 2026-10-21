@@ -19,7 +19,7 @@ from typing import Any
 
 from ossbot.common import ai_policy
 from ossbot.common.clock import to_iso
-from ossbot.common.config import effective_ai_rules, resolve_target
+from ossbot.common.config import effective_ai_rules
 from ossbot.common.gitcmd import CHANGE_REF
 from ossbot.common.hashing import sha256_hex
 from ossbot.common.ids import new_action_id
@@ -332,7 +332,8 @@ class Packager:
         eff_body = contrib["pr_body_override"] if contrib["pr_body_override"] is not None else body
         message = derived.commit_message.decode("utf-8", "replace")
         confidentiality = policy.effective_confidentiality(ctx.conn, ctx.config)
-        target = resolve_target(ctx.config.targets, upstream)
+        # config target, else a discovered repo (design §8.5; an in-flight discovered item keeps it, M1)
+        target = ctx.discovered.effective_target(upstream)
         violations = policy.check_diff(derived.entries, ctx.config.policy)
         values = ctx.secret_scanner.values  # U14: the gatekeeper's own secret values
         violations += policy.check_text(

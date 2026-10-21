@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ from ossbot.common import gitcmd
 from ossbot.common.ai_policy import AiCondition, checklist_block
 from ossbot.common.hashing import sha256_hex, sha256_text
 from ossbot.common.paths import Paths
-from ossbot.common.schemas import State
+from ossbot.common.schemas import DiscoveredFacts, State
 from ossbot.gatekeeper import db, derive, gitops, live_checks
 from ossbot.gatekeeper.approvals import Superseded
 from ossbot.gatekeeper.context import AppContext
@@ -31,6 +32,7 @@ from tests.githarness import (
     NUMSTAT2JSON,
     PACKAGE_TS,
     GitWorld,
+    LocalRemote,
     PackageOut,
     package_request,
     stage_artifacts,
@@ -564,7 +566,11 @@ async def test_kiro_key_hash_in_patch_rejected(gctx: AppContext, world: GitWorld
     ],
 )
 async def test_repo_rejections(gctx: AppContext, world: GitWorld, vetting: dict[str, Any], override: int | None,
-                               code: str) -> None:  # fmt: skip
+                               code: str, monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
+    if code == "cla_required":  # the shipped targets.yaml signs every target (defaults.cla_signed: true)
+        resolve = gctx.discovered.effective_target
+        monkeypatch.setattr(gctx.discovered, "effective_target",
+                            lambda repo: dataclasses.replace(resolve(repo), cla_signed=False))  # type: ignore[type-var]  # fmt: skip
     if override is not None:
         with db.transaction(gctx.conn):
             gctx.conn.execute(
@@ -576,6 +582,40 @@ async def test_repo_rejections(gctx: AppContext, world: GitWorld, vetting: dict[
     sums = stage_artifacts(gctx.paths, cid, 1, out.out)
     resp = await post(gctx, cid, package_request(gctx.paths, cid, 1, sums, out.head, world.base))
     assert code in resp.json()["detail"].split(",")
+
+
+OPEN_REPO = "openfaas/faas"  # not in config/targets.yaml
+
+
+def _record(ctx: AppContext, status: str, **kw: Any) -> None:
+    facts = {"repo": OPEN_REPO, "source": "search", "status": status, "stars": 25000, **kw}
+    ctx.discovered.record(DiscoveredFacts.model_validate(facts), "uid:2001/worker")
+
+
+async def test_discovered_repo_packages_and_keeps_its_target_when_skipped(
+    gctx: AppContext, remote: LocalRemote, tmp_path: Path
+) -> None:
+    """Design §8.5 + review-3 M1: /package resolves a discovered candidate, and still does after its row
+    moves to skipped while the contribution is in flight."""
+    world = GitWorld(tmp_path / "open", remote, upstream=OPEN_REPO)
+    _record(gctx, "candidate", tried=True)
+    cid = packaging(gctx, upstream=OPEN_REPO, category="open-discovery")
+    gctx.clock.advance(days=15)  # type: ignore[attr-defined]
+    _record(gctx, "skipped", skip_reason="no_contributing")
+    assert gctx.discovered.get(OPEN_REPO).status == "skipped"  # type: ignore[union-attr]
+    doc = await package_ok(gctx, world, cid, world.package(world.base, {"src/app.py": "print('open')\n"}))
+    assert doc["kind"] == "open_pr"
+
+
+async def test_unresolved_repo_refused_at_package(gctx: AppContext, remote: LocalRemote, tmp_path: Path) -> None:
+    """A skipped row without a discovered contribution (here a leftover of a config category) stays unresolved."""
+    world = GitWorld(tmp_path / "open", remote, upstream=OPEN_REPO)
+    _record(gctx, "skipped", skip_reason="no_contributing")
+    cid = packaging(gctx, upstream=OPEN_REPO, category="iac")
+    out = world.package(world.base, {"src/app.py": "print('nope')\n"})
+    sums = stage_artifacts(gctx.paths, cid, 1, out.out)
+    resp = await post(gctx, cid, package_request(gctx.paths, cid, 1, sums, out.head, world.base))
+    assert resp.status_code == 422 and "not_a_target" in resp.json()["detail"].split(",")
 
 
 @pytest.mark.parametrize("status", ["unstated", "unclear", "disclosure_required"])

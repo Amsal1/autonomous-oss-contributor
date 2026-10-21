@@ -20,6 +20,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Literal
 
 from ossbot.common.clock import from_iso, to_iso
+from ossbot.common.config import resolve_target
 from ossbot.common.hashing import canonical_json, sha256_hex
 from ossbot.common.schemas import ProposalSubmit, SizeClassName, State
 from ossbot.common.size import SIZE_CLASSES, classify
@@ -139,7 +140,8 @@ class ProposalService:
             user = row["source"] == "user"
             if not user:  # autonomous only (Amendment B): size preference, filters, never, pacing
                 prefs = ctx.discovery_prefs.effective(row["upstream"])
-                if prefs.never_repo:
+                found = ctx.discovered.get(str(row["upstream"]))
+                if prefs.never_repo or (found is not None and found.status == "never"):
                     raise ProposalRefused(422, "never_repo", row["upstream"])
                 if class_index(est_class) > class_index(prefs.autonomous_max_class):
                     raise ProposalRefused(422, "above_autonomous_max", f"{est_class} > {prefs.autonomous_max_class}")
@@ -270,7 +272,11 @@ class ProposalService:
             )
             ctx.audit.append(actor, "proposal_declined", {"approval_id": approval_id, "reason": reason}, cid)
             if reason == "never_repo":
-                ctx.discovery_prefs.never_repo(str(row["upstream"]), actor)
+                upstream = str(row["upstream"])
+                if resolve_target(ctx.config.targets, upstream) is not None:
+                    ctx.discovery_prefs.never_repo(upstream, actor)
+                else:  # a discovered repo (design §9.4): its discovered_targets row, same transaction
+                    ctx.discovered.decide(upstream, "never", actor)
             elif reason == "never_kind" and row["kind"]:
                 ctx.discovery_prefs.never_kind(str(row["kind"]), actor)
         return {"cid": cid, "state": to.value, "snooze_until": until}

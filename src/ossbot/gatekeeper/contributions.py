@@ -15,6 +15,7 @@ from ossbot.common.rediscover import Decision, PriorContribution, RepoFactChange
 from ossbot.common.schemas import TERMINAL_STATES, WORK_URL_RE, ContributionSource, State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.audit import AuditLog
+from ossbot.gatekeeper.discovered_targets import DiscoveredRefused, DiscoveredTargets
 
 REDACTED_FOR_REQUESTER = (
     "plan_json", "validation_json", "review_json", "vetting_json", "commit_message", "pr_body",
@@ -42,7 +43,9 @@ def _cla_signed_at(conn: sqlite3.Connection, repo: str) -> str | None:
             since = None
             continue
         resolved = resolve_target(targets, repo)
-        if resolved is not None and resolved.cla_signed:
+        # a repo outside targets.yaml (open discovery, design §8.5) inherits defaults.cla_signed
+        signed = resolved.cla_signed if resolved is not None else targets.defaults.cla_signed
+        if signed:
             since = since or str(row["loaded_at"])
         else:
             since = None
@@ -82,12 +85,15 @@ WORK_RE = re.compile(WORK_URL_RE)
 
 class ContributionService:
     def __init__(
-        self, conn: sqlite3.Connection, clock: Clock, audit: AuditLog, config: Callable[[], ConfigBundle]
-    ) -> None:
+        self, conn: sqlite3.Connection, clock: Clock, audit: AuditLog, config: Callable[[], ConfigBundle],
+        discovered: DiscoveredTargets | None = None,
+    ) -> None:  # fmt: skip
         self.conn = conn
         self.clock = clock
         self.audit = audit
         self.config = config
+        # post-v1 open discovery: repos outside targets.yaml (None = config targets only)
+        self.discovered = discovered
 
     def decide(self, repo: str, issue_number: int, issue_hash: str | None = None) -> Decision:
         return eligible(
@@ -107,9 +113,14 @@ class ContributionService:
         """
         names: list[str] = []
         for repo in repos:
-            target = resolve_target(self.config().targets, repo.removeprefix("https://github.com/").strip("/"))
-            if target is None:
-                raise ContributionRefused(400, "not_a_target")
+            slug = repo.removeprefix("https://github.com/").strip("/")
+            target = resolve_target(self.config().targets, slug)
+            if target is None:  # a kept discovered repo is a target for discovery too (design §8.5)
+                kept = self.discovered.get(slug) if self.discovered is not None else None
+                if kept is None or kept.status != "kept":
+                    raise ContributionRefused(400, "not_a_target")
+                names.append(kept.repo)
+                continue
             if not target.enabled or not target.discovery:
                 raise ContributionRefused(400, "discovery_disabled")
             names.append(target.repo)
@@ -179,8 +190,13 @@ class ContributionService:
         issue_hash: str | None = None,
     ) -> str:  # fmt: skip
         target = resolve_target(self.config().targets, repo)
-        if target is None:
-            raise ContributionRefused(400, "not_a_target")
+        if target is None:  # open discovery (design §8.5): a candidate or kept row only
+            if self.discovered is None:
+                raise ContributionRefused(400, "not_a_target")
+            try:
+                target = self.discovered.creatable_target(repo)
+            except DiscoveredRefused as exc:
+                raise ContributionRefused(exc.status, exc.code) from exc
         if not target.discovery and source != "operator":
             raise ContributionRefused(400, "discovery_disabled")
         with db.transaction(self.conn):
