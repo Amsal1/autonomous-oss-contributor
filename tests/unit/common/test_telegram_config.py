@@ -24,6 +24,16 @@ def test_tracked_file_parses_with_the_defaults() -> None:
     assert bundle.telegram.review_mirror.enabled is False and bundle.telegram.telegraph.enabled is False
 
 
+def test_all_text_mode_and_command_shortcuts_defaults_and_values() -> None:
+    cfg = TelegramConfig()
+    assert (cfg.all_text_mode, cfg.command_shortcuts) == ("topic_session", True)
+    for mode in ("topic_session", "legacy"):
+        for flag in ("true", "false"):
+            data = f"version: 1\nall_text_mode: {mode}\ncommand_shortcuts: {flag}\n".encode()
+            got = parse_yaml_model(TelegramConfig, "telegram.yaml", data)
+            assert (got.all_text_mode, got.command_shortcuts) == (mode, flag == "true")
+
+
 def test_missing_file_means_defaults() -> None:
     files = _files()
     del files["telegram.yaml"]
@@ -40,6 +50,8 @@ def test_missing_file_means_defaults() -> None:
     "version: 1\ntopics: on\n",
     "version: 2\n",
     "version: 1\ntelegraph: {max_content_kb: 64}\n",
+    "version: 1\nall_text_mode: flat\n",
+    "version: 1\ncommand_shortcuts: maybe\n",
 ])  # fmt: skip
 def test_unknown_keys_and_out_of_range_values_are_refused(bad: str) -> None:
     with pytest.raises(ConfigError):

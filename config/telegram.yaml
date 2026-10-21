@@ -17,3 +17,9 @@ attachments: {max_mb: 20, album_window_s: 1.5}
 review_mirror: {enabled: false, poll_pending_s: 60, poll_other_s: 600}
 telegraph: {enabled: false, offer_min_chars: 1500, max_content_kb: 60, author_name: ""}   # §14.12.8; never automatic
 features: {enabled: []}
+# Plain text typed in All (§14.10): topic_session keeps the topic Telegram opens for it as a chat
+# session; legacy restores the previous behaviour. Revert = set `legacy` and /reload.
+all_text_mode: topic_session # topic_session | legacy
+# Inline-button command shortcuts on the dashboard, /help and button-less replies in All (buttons send
+# no message, so they never open a topic). Revert = set false and /reload.
+command_shortcuts: true      # true | false

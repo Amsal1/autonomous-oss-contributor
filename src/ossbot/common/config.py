@@ -694,6 +694,13 @@ class TelegramConfig(Strict):
     review_mirror: ReviewMirrorConfig = ReviewMirrorConfig()
     telegraph: TelegraphConfig = TelegraphConfig()
     features: FeaturesConfig = FeaturesConfig()
+    # How plain text typed in All is handled (§14.10): topic_session pairs the implicit topic with its
+    # text and keeps it as a chat session; legacy is the pre-post-v1 behaviour. Presentation only;
+    # revert = set `legacy` and /reload.
+    all_text_mode: Literal["topic_session", "legacy"] = "topic_session"
+    # Tappable command shortcuts (inline buttons, which send no message) on the dashboard, /help and
+    # button-less command replies in All. Presentation only; revert = set false and /reload.
+    command_shortcuts: bool = True
 
 
 # ----------------------------------------------------------------------------------- loading
