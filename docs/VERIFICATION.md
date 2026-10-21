@@ -772,6 +772,20 @@ Close-out (Parts A and B, 2026-10-21, HEAD 2b3316a, tree clean before the run): 
 
 Owner notes: `/reload` records the new `policy.yaml` keys (`vet.ai_policy`, `discovery.ci_on_pr_weight`, `discovery.ci_facts_ttl_hours`) in the snapshot; the code defaults already equal the file values (`text.project_url` is not in the file and uses its default). The earlier `ai_policy_unclear` skips are re-discoverable from the next scheduled discovery cycle and still need gate 1 and gate 2. Follow-ups: PV1-V3 (watcher does not read check runs, so a failing CI check drafts no fix by itself); check names truncated to 40 characters can repeat in the Details list (phoenix shows "Phoenix Client Canary Tests for Third-Pa" three times), cosmetic.
 
+## Post-v1 open discovery
+
+FEAT-001 (config, schemas and gatekeeper data for discovered targets; plan items 1-9 plus the owner additions "/work on any public repo" and the data layer of "default-branch activity gate", 2026-10-21): commits ce66bd2..35c8b37 on `main`, start 680959d with a clean tree. Hermetic only, no redeploy. Dry-run is OFF (owner); no GitHub write, no live stage, no Telegram message, no `/work`, `ossctl discover`, `/reload` or egress switch; GitHub use in tests is `tests/fakes/fake_github.py` and fake readers only. The only network access was one read-only GET of the pinned SPDX list.
+
+| Check | Command | Result |
+|---|---|---|
+| SPDX pin (web-research rule) | GET `https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/json/licenses.json` into `.ossbot-local/`, `Get-FileHash -Algorithm SHA256` | `47d1cc68…509a`, equal to the design; licenseListVersion 3.29.0, releaseDate 2026-09-16; 154 ids with `isOsiApproved: true` (`config/versions.lock.yaml spdx_license_list`) |
+| Lint gate (35c8b37) | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all clean; 551 files formatted; mypy 259 files no issues; 15 contracts kept (new: only `discovered_targets` imports `discovered_targets_writer`), 0 broken |
+| FEAT targeted tests | `DEV pytest tests/unit/common tests/unit/gatekeeper/test_discovered_targets.py …/test_discovered_targets_writer.py …/test_api_discovered.py …/test_contributions_discovered.py …/test_discovery_requests.py …/test_migrations.py …/test_import_contracts.py …/test_authz.py …/test_discovery_prefs.py …/test_package_verify.py …/test_proposals.py -x -q --timeout=120` | 564 passed |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4201 passed in 67 s (`.ossbot-local/logs/open-discovery-feat001.log`) |
+| Docs | `DEV ossctl docs commands --check` | command table current |
+
+Two tests failed on the start commit 680959d, independent of this FEAT: `test_package_verify.py::test_repo_rejections[cla_required]` and `test_policy.py::test_repo_checks` assert a `cla_required` refusal for a shipped target, which `defaults.cla_signed: true` now signs. Both now use an unsigned copy of the target (4c6449c, 35c8b37); the refusal itself is unchanged.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
