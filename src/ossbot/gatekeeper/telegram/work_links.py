@@ -15,10 +15,12 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from ossbot.common.ai_policy import POLICY_DOC_PATHS
+from ossbot.common.config import resolve_target
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.contributions import ContributionRefused
+from ossbot.gatekeeper.discovered_targets import WorkRepoFacts, read_work_facts
 from ossbot.gatekeeper.state_machine import WORKING, Actor, TransitionError
 from ossbot.gatekeeper.telegram.actions import Tap, action
 from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Reply, command
@@ -87,7 +89,8 @@ def _facts_line(ref: GithubRef, info: dict[str, str] | None) -> k.Line:
     return (*parts, k.Const(ref.ref + (f" · {info['state']}" if info["state"] else "")))
 
 
-def working_view(ctx: AppContext, cid: str, ref: GithubRef, info: dict[str, str] | None) -> k.View:
+def working_view(ctx: AppContext, cid: str, ref: GithubRef, info: dict[str, str] | None,
+                 created: dict[str, Any] | None = None) -> k.View:  # fmt: skip
     lines: list[k.Line] = [
         (
             k.Const(f"{icons.WORK} "),
@@ -98,32 +101,81 @@ def working_view(ctx: AppContext, cid: str, ref: GithubRef, info: dict[str, str]
         ),
         _facts_line(ref, info),
         k.line(f"{_slot(ctx, cid)} · the proposal card will arrive in ✅ Reviews"),
-        k.line("Size preference and filters don't apply; safety checks do."),
     ]
+    if created is not None and created.get("kept_added"):  # owner addition: /work on any public repo
+        lines.append((k.Const("⭐ Added "), k.Text(str(created["repo"]), 150), k.Const(" to your kept targets")))
+    if created is not None and created.get("warning"):  # the activity gate warns, never refuses, for 👤 work
+        lines.append((k.Text(str(created["warning"]), 120),))
+    lines.append(k.line("Size preference and filters don't apply; safety checks do."))
     rows: k.Rows = [[k.button("✖️ Cancel request", "work_cancel", {"cid": cid}, single_use=True)]]
     return k.View(kind="work_request", blocks=[k.Block((k.Lines(tuple(lines)),))], rows=rows, cid=cid)
 
 
-def request(ctx: AppContext, url: str, notes: str, actor: str) -> tuple[str | None, str]:
-    """(cid, error text): queue the request (DB only)."""
+REFUSALS: dict[str, str] = {
+    "not_a_github_url": "that isn't a GitHub issue, PR or repo URL",
+    "not_a_target": "that repo isn't in targets.yaml", "target_disabled": "that repo is disabled",
+    "duplicate_active": "that issue is already being worked on",
+    # owner addition (2026-10-21): the hard checks for a repo outside targets.yaml
+    "not_found": "that repo wasn't found", "private": "that repo isn't public",
+    "archived": "that repo is archived or disabled", "fork": "that repo is a fork",
+    "issues_disabled": "that repo has issues turned off", "prs_disabled": "that repo has pull requests turned off",
+    "pr_creation_restricted": "only collaborators may open pull requests there",
+    "never_repo": "you blocked that repo (Never); undo with ossctl targets unblock",
+    "denied": "that repo is denylisted or its owner is a forbidden login",
+    "repo_unreadable": "GitHub couldn't be read to check the repo; try again later",
+}  # fmt: skip
+
+
+def is_config_target(ctx: AppContext, ref: GithubRef) -> bool:
+    return resolve_target(ctx.config.targets, ref.upstream) is not None
+
+
+def request(ctx: AppContext, url: str, notes: str, actor: str,
+            work_facts: WorkRepoFacts | None = None) -> tuple[dict[str, Any] | None, str]:  # fmt: skip
+    """(created, error text): queue the request (DB only; the repo facts were read by the caller)."""
     try:
-        created = ctx.contributions.create_user(url, notes[:NOTES_MAX], actor)
+        created = ctx.contributions.create_user(url, notes[:NOTES_MAX], actor, facts=work_facts)
     except ContributionRefused as exc:
-        why = {"not_a_github_url": "that isn't a GitHub issue, PR or repo URL",
-               "not_a_target": "that repo isn't in targets.yaml", "target_disabled": "that repo is disabled",
-               "duplicate_active": "that issue is already being worked on"}.get(exc.code, exc.code)  # fmt: skip
-        return None, f"Not queued: {why}."
-    return str(created["cid"]), ""
+        return None, f"Not queued: {REFUSALS.get(exc.code, exc.code)}."
+    return created, ""
 
 
 async def send_working(ctx: AppContext, reader: Any, cid: str, ref: GithubRef, *, thread_id: int | None,
-                       reply_to: int | None, edit: int | None = None) -> None:  # fmt: skip
+                       reply_to: int | None, edit: int | None = None,
+                       created: dict[str, Any] | None = None) -> None:  # fmt: skip
     """The spawned ``github_read`` task: one read, then the reply (or the link card edited in place)."""
-    view = working_view(ctx, cid, ref, await facts(reader, ref))
+    view = working_view(ctx, cid, ref, await facts(reader, ref), created)
     if edit is not None:
         ui_send.edit(ctx, view, message_id=edit)
     else:
         ui_send.deliver(ctx, view, thread_id=thread_id, reply_to=reply_to)
+
+
+async def keep_and_work(ctx: AppContext, reader: Any, ref: GithubRef, url: str, notes: str, actor: str, *,
+                        thread_id: int | None, message_id: int) -> None:  # fmt: skip
+    """Owner addition (2026-10-21): ``/work`` on a repo outside targets.yaml, after the human's tap. The
+    hard repo checks read GitHub first (a ``github_read`` task); a refusal edits the card with the reason."""
+    created, error = request(ctx, url, notes, actor, await read_work_facts(reader, ref.upstream))
+    if created is None:
+        ui_send.edit(ctx, k.plain("fyi", (k.Const("🚫 "), k.Text(error, 200))), message_id=message_id)
+        return
+    await send_working(ctx, reader, str(created["cid"]), ref, thread_id=thread_id, reply_to=None, edit=message_id,
+                       created=created)  # fmt: skip
+
+
+def keep_confirm_view(ref: GithubRef, notes: str) -> k.View:
+    """The confirm card for ``/work`` on a repo outside targets.yaml: the tap is the human decision."""
+    lines: list[k.Line] = [
+        (k.Const(f"{icons.WORK} "), k.Bold(k.Const("Work on ")), k.Bold(k.Text(ref.label, 150)), k.Const("?")),
+        (k.Text(ref.upstream, 150), k.Const(" isn't in targets.yaml: this adds "), k.Text(ref.upstream, 150),
+         k.Const(" to your kept targets (scanned every cycle; undo with ossctl targets unblock --unkeep).")),
+        k.line("Checked first: public, not archived or a fork, pull requests open to everyone."),
+    ]  # fmt: skip
+    if notes:
+        lines.append((k.Const('Notes: "'), k.Text(notes, NOTES_SHOWN), k.Const('"')))
+    rows: k.Rows = [[k.button("⭐ Add and work on it", "work_keep", {"url": ref.url, "notes": notes}, single_use=True),
+                     k.button("✖️ Cancel", "link_dismiss", {"url": ref.url}, single_use=True)]]  # fmt: skip
+    return k.View(kind="link_card", blocks=[k.Block((k.Lines(tuple(lines)),))], rows=rows)
 
 
 @command("work", help="Work on a GitHub issue, PR or repo you choose (👤; filters don't apply)", safety="request")
@@ -133,9 +185,16 @@ async def work(ctx: CommandContext, args: list[str]) -> Reply:
     ref = parse_github_url(args[0])
     if ref is None:
         return Reply(esc(f"Not queued: that isn't a GitHub issue, PR or repo URL. {USAGE}"))
-    cid, error = request(ctx.app, args[0], " ".join(args[1:]), ctx.actor)
-    if cid is None:
+    notes = " ".join(args[1:])[:NOTES_MAX]
+    if not is_config_target(ctx.app, ref):  # any public repo: confirm first, the tap runs the checks
+        found = ctx.app.discovered.get(ref.upstream)
+        if found is not None and found.status == "never":
+            return Reply(esc(f"Not queued: {REFUSALS['never_repo']}."))
+        return Reply("", view=keep_confirm_view(ref, notes))
+    created, error = request(ctx.app, args[0], notes, ctx.actor)
+    if created is None:
         return Reply(esc(error))
+    cid = str(created["cid"])
     if ctx.handlers is None:
         return Reply("", view=working_view(ctx.app, cid, ref, None))
     ctx.handlers.spawn(send_working(ctx.app, ctx.handlers.reader, cid, ref, thread_id=ctx.thread_id,
@@ -198,7 +257,7 @@ def send_refusal(ctx: AppContext, cid: str, evidence: dict[str, Any]) -> None:
 
 
 # ------------------------------------------------------------------------------ link cards
-def link_view(ref: GithubRef, info: dict[str, str] | None, notes: str) -> k.View:
+def link_view(ref: GithubRef, info: dict[str, str] | None, notes: str, *, outside: bool = False) -> k.View:
     head: list[k.Span] = [k.Const(f"{icons.LINK} "), k.Bold(k.Text(ref.upstream + (f" #{ref.number}" if ref.number
                                                                                    else ""), 150)),
                           k.Const(f" · {ref.ref}")]  # fmt: skip
@@ -208,6 +267,9 @@ def link_view(ref: GithubRef, info: dict[str, str] | None, notes: str) -> k.View
         if info["title"]:
             head += [k.Const(' · "'), k.Text(info["title"], 200), k.Const('"')]
     lines: list[k.Line] = [tuple(head)]
+    if outside:  # owner addition: the tap keeps the repo (after the hard checks)
+        lines.append((k.Const("Not in targets.yaml: 🛠 Work on this adds "), k.Text(ref.upstream, 150),
+                      k.Const(" to your kept targets.")))  # fmt: skip
     if notes:
         lines.append((k.Const('Notes: "'), k.Text(notes, NOTES_SHOWN), k.Const('"')))
     rows: k.Rows = [[k.button("🛠 Work on this", "link_work", {"url": ref.url, "notes": notes}, single_use=True),
@@ -225,7 +287,8 @@ def notes_for(message: Any) -> str:
 async def send_links(ctx: AppContext, reader: Any, refs: tuple[GithubRef, ...], notes: str, *,
                      thread_id: int | None, reply_to: int, more: int = 0) -> None:  # fmt: skip
     for ref in refs:
-        ui_send.deliver(ctx, link_view(ref, await facts(reader, ref), notes), thread_id=thread_id, reply_to=reply_to)
+        view = link_view(ref, await facts(reader, ref), notes, outside=not is_config_target(ctx, ref))
+        ui_send.deliver(ctx, view, thread_id=thread_id, reply_to=reply_to)
     if more > 0:
         ui_send.deliver(ctx, k.plain("fyi", k.line(f"+{more} more links: use /work for each")), thread_id=thread_id,
                         reply_to=reply_to)  # fmt: skip
@@ -248,12 +311,25 @@ async def link_work(tap: Tap) -> str:
     ref = parse_github_url(tap.arg.url)
     if ref is None:
         return "Not a GitHub link."
-    cid, error = request(tap.app, tap.arg.url, tap.arg.notes, tap.actor)
-    if cid is None:
+    if not is_config_target(tap.app, ref):  # the link card said it adds the repo to the kept targets
+        return await work_keep(tap)
+    created, error = request(tap.app, tap.arg.url, tap.arg.notes, tap.actor)
+    if created is None:
         return error
-    tap.handlers.spawn(send_working(tap.app, tap.handlers.reader, cid, ref, thread_id=tap.thread_id, reply_to=None,
-                                    edit=tap.message_id), "github_read")  # fmt: skip
+    tap.handlers.spawn(send_working(tap.app, tap.handlers.reader, str(created["cid"]), ref, thread_id=tap.thread_id,
+                                    reply_to=None, edit=tap.message_id), "github_read")  # fmt: skip
     return "🛠 Queued."
+
+
+@action("work_keep", arg=LinkArg)
+async def work_keep(tap: Tap) -> str:
+    """``⭐ Add and work on it`` (owner addition 2026-10-21): check the repo, keep it, queue the 👤 item."""
+    ref = parse_github_url(tap.arg.url)
+    if ref is None:
+        return "Not a GitHub link."
+    tap.handlers.spawn(keep_and_work(tap.app, tap.handlers.reader, ref, tap.arg.url, tap.arg.notes, tap.actor,
+                                     thread_id=tap.thread_id, message_id=tap.message_id), "github_read")  # fmt: skip
+    return "Checking the repo…"
 
 
 @action("link_dismiss", arg=LinkArg)

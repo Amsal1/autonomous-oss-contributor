@@ -15,15 +15,33 @@ contribution is stricter (``creatable_target``: ``candidate`` or ``kept`` only).
 
 from __future__ import annotations
 
+import asyncio
 import builtins
+import contextlib
+import re
 import sqlite3
 from collections.abc import Callable
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 from ossbot.common.clock import Clock, from_iso, to_iso
-from ossbot.common.config import OPEN_CATEGORY, ConfigBundle, ResolvedTarget, discovered_target, resolve_target
-from ossbot.common.schemas import DiscoveredDecisionName, DiscoveredFacts, DiscoveredView, PrefsUpdate
+from ossbot.common.config import (
+    LANGUAGE_RE,
+    OPEN_CATEGORY,
+    ConfigBundle,
+    ResolvedTarget,
+    discovered_target,
+    resolve_target,
+)
+from ossbot.common.schemas import (
+    ISO_TS_RE,
+    SPDX_ID_RE,
+    DiscoveredDecisionName,
+    DiscoveredFacts,
+    DiscoveredView,
+    PrefsUpdate,
+)
 from ossbot.gatekeeper import db, policy
 from ossbot.gatekeeper import discovered_targets_writer as writer
 from ossbot.gatekeeper.audit import AuditLog
@@ -54,6 +72,93 @@ SKIP_TEXTS: dict[str, str] = {
     "egress_extra_needed": "it needs package hosts outside the allowlist",
     "egress_extra_needed_strict": "it needs package hosts outside the allowlist (strict egress)",
 }
+
+
+# Owner addition (2026-10-21): /work on any public repo. The hard checks applied before a non-target repo
+# is kept for user-directed work (preferences and the activity gate don't apply; the latter only warns).
+WORK_READ_TIMEOUT_S = 10.0
+_LANGUAGE = re.compile(LANGUAGE_RE)
+_SPDX = re.compile(SPDX_ID_RE)
+_ISO = re.compile(ISO_TS_RE)
+
+
+@dataclass(frozen=True)
+class WorkRepoFacts:
+    """``GET /repos/{r}`` (None = 404) and the default branch's latest commit date (None = unknown)."""
+
+    doc: dict[str, Any] | None
+    default_branch_commit_at: str | None = None
+
+
+async def read_work_facts(reader: Any, repo: str, timeout_s: float | None = None) -> WorkRepoFacts | None:
+    """Read the repo facts for ``/work`` with the gatekeeper's read-only client; None when GitHub can't be
+    read (no client, an error or the timeout), which refuses the request rather than guessing."""
+    if reader is None:
+        return None
+    try:
+        async with asyncio.timeout(WORK_READ_TIMEOUT_S if timeout_s is None else timeout_s):
+            doc = await reader.repo(repo)
+            if doc is None:
+                return WorkRepoFacts(None)
+            branch = doc.get("default_branch")
+            commit_at = None
+            if isinstance(branch, str) and branch:
+                with contextlib.suppress(Exception):  # unknown activity is not a refusal
+                    commit_at = await reader.default_branch_commit_at(repo, branch)
+    except Exception:  # noqa: BLE001 - any read failure means "couldn't check", never a pass
+        return None
+    return WorkRepoFacts(doc if isinstance(doc, dict) else None, commit_at)
+
+
+def hard_repo_check(repo: str, doc: dict[str, Any] | None) -> str | None:
+    """The refusal code for ``/work`` on a non-target repo, or None (exists and public, not archived,
+    disabled or a fork, issues and pull requests on, PR creation open to everyone)."""
+    if doc is None or str(doc.get("full_name") or "").lower() != repo.lower():
+        return "not_found"
+    if doc.get("private") is True or doc.get("visibility", "public") != "public":
+        return "private"
+    if doc.get("archived") or doc.get("disabled"):
+        return "archived"
+    if doc.get("fork"):
+        return "fork"
+    if doc.get("has_issues") is False:
+        return "issues_disabled"
+    if doc.get("has_pull_requests") is False:
+        return "prs_disabled"
+    if doc.get("pull_request_creation_policy") == "collaborators_only":
+        return "pr_creation_restricted"
+    return None
+
+
+def activity_warning(facts: WorkRepoFacts, max_age_days: int, now: datetime) -> str | None:
+    """``⚠️ last commit on main: 8 months ago`` when the default branch is older than the gate; else None."""
+    doc = facts.doc or {}
+    branch = str(doc.get("default_branch") or "the default branch")[:100]
+    if facts.default_branch_commit_at is None or not _ISO.match(facts.default_branch_commit_at):
+        return None
+    days = (now - from_iso(facts.default_branch_commit_at)).days
+    if days <= max_age_days:
+        return None
+    age = f"{days // 30} months ago" if days >= 60 else f"{days} days ago"
+    return f"⚠️ last commit on {branch}: {age}"
+
+
+def _work_facts(facts: WorkRepoFacts) -> dict[str, Any]:
+    """The bounded GitHub facts stored on the kept row (values that don't fit the schema are dropped)."""
+    doc = facts.doc or {}
+    stars = doc.get("stargazers_count")
+    language = doc.get("language")
+    lic = doc.get("license")
+    spdx = lic.get("spdx_id") if isinstance(lic, dict) else None
+    pushed = doc.get("pushed_at")
+    commit_at = facts.default_branch_commit_at
+    return {
+        "stars": stars if isinstance(stars, int) and 0 <= stars <= 10_000_000 else None,
+        "language": language if isinstance(language, str) and _LANGUAGE.match(language) else None,
+        "license_spdx": spdx if isinstance(spdx, str) and _SPDX.match(spdx) else None,
+        "pushed_at": pushed if isinstance(pushed, str) and len(pushed) <= 40 and _ISO.match(pushed) else None,
+        "default_branch_commit_at": commit_at if commit_at and len(commit_at) <= 40 and _ISO.match(commit_at) else None,
+    }
 
 
 class DiscoveredRefused(ValueError):
@@ -372,6 +477,36 @@ class DiscoveredTargets:
             out = self._row(key)
         assert out is not None
         return {"view": view(out).model_dump()}
+
+    def keep_for_work(self, repo: str, facts: WorkRepoFacts, actor: str) -> tuple[str, bool]:
+        """Owner addition (2026-10-21): ``/work`` on a non-target repo keeps it (``source=owner`` on insert,
+        ``decided_by`` the human). The caller ran ``hard_repo_check``; ``never`` refuses (400 ``never_repo``).
+        Returns (canonical repo, newly kept). Runs inside the caller's transaction."""
+        if self._is_target(repo):
+            raise DiscoveredRefused(409, "is_target")
+        if self._denied(repo):
+            raise DiscoveredRefused(400, "denied")
+        now = to_iso(self.clock.now())
+        values = _work_facts(facts)
+        with db.transaction(self.conn):
+            row = self._row(repo)
+            if row is not None and row["status"] == "never":
+                raise DiscoveredRefused(400, "never_repo")
+            if row is None:
+                writer.insert_row(self.conn, {"repo": repo, "source": "owner", "status": "kept", **values,
+                                              "decided_by": actor, "decided_at": now, "first_seen": now,
+                                              "updated_at": now})  # fmt: skip
+                key, before = repo, None
+            else:
+                key, before = str(row["repo"]), str(row["status"])
+                writer.update_facts(self.conn, key, values, now)
+                if before == "kept":
+                    return key, False
+                writer.set_status(self.conn, key, "kept", now, decided_by=actor, decided_at=now,
+                                  cooldown_until=None, checked_at=None)  # fmt: skip
+            self.audit.append(actor, "discovered_target_kept", {"repo": key, "from": before, "via": "work"})
+            self.notify(f"⭐ Kept {key} as a target (open discovery, requested with /work): scanned every cycle.")
+        return key, True
 
     def _announce(self, actor: str, event: str, repo: str, before: str | None, text: str) -> None:
         self.audit.append(actor, event, {"repo": repo, "from": before})

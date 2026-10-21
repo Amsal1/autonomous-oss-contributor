@@ -727,9 +727,12 @@ def models_refresh() -> None:
     typer.echo(f"catalog refresh requested at {data.get('requested_at')}; the runner picks it up on its next tick")
 
 
+WORK_URL_HELP = "GitHub issue, PR or repo URL (a repo outside targets.yaml is checked and added to your kept targets)"
+
+
 @app.command("work")
 def work(
-    url: Annotated[str, typer.Argument(help="GitHub issue, PR or repo URL of a configured target")],
+    url: Annotated[str, typer.Argument(help=WORK_URL_HELP)],
     notes: Annotated[str, typer.Option(help="what you want (≤ 1000 chars; shown on every card)")] = "",
 ) -> None:
     """User-directed work (👤): vet -> scout -> proposal card; size preference and filters don't apply."""

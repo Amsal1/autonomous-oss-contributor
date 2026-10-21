@@ -84,6 +84,16 @@ class GitHubReader:
         doc = await self.json_or_none(f"/repos/{full_name}")
         return doc if isinstance(doc, dict) else None
 
+    async def default_branch_commit_at(self, full_name: str, branch: str) -> str | None:
+        """Committer date of the latest commit on ``branch`` (the default-branch activity gate), or None."""
+        doc = await self.json_or_none(f"/repos/{full_name}/commits", {"sha": branch, "per_page": "1"})
+        if not isinstance(doc, list) or not doc or not isinstance(doc[0], dict):
+            return None
+        commit = doc[0].get("commit")
+        committer = commit.get("committer") if isinstance(commit, dict) else None
+        date = committer.get("date") if isinstance(committer, dict) else None
+        return date if isinstance(date, str) else None
+
     async def issue(self, upstream: str, number: int) -> dict[str, Any] | None:
         doc = await self.json_or_none(f"/repos/{upstream}/issues/{number}")
         return doc if isinstance(doc, dict) else None

@@ -11,9 +11,11 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
+from ossbot.common.config import resolve_target
 from ossbot.common.schemas import DiscoverRequest, WorkRequest
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
+from ossbot.gatekeeper.discovered_targets import read_work_facts
 
 router = APIRouter(prefix="/v1")
 
@@ -35,7 +37,15 @@ async def claim_discover(request: Request, caller: Annotated[Caller, Depends(req
 @router.post("/work", status_code=201)
 async def work(request: Request, body: WorkRequest, caller: Annotated[Caller, Depends(require(Role.OPERATOR))]) -> Any:
     c = ctx(request)
-    created = c.contributions.create_user(body.url, body.notes, caller.actor)
+    repo = c.contributions.work_repo(body.url)
+    facts = None
+    if repo is not None and resolve_target(c.config.targets, repo) is None:  # any public repo (owner addition)
+        found = c.discovered.get(repo)
+        if found is None or found.status != "never":  # a never-blocked repo is refused without a read
+            facts = await read_work_facts(c.github_reader, repo)
+    created = c.contributions.create_user(body.url, body.notes, caller.actor, facts=facts)
     where = created["url"].removeprefix("https://github.com/")
-    c.notify(f"🛠 Working on it · {where} · 👤 requested by you\nScouting next; the proposal card follows.")
+    extra = f"\n⭐ Added {created['repo']} to your kept targets." if created["kept_added"] else ""
+    extra += f"\n{created['warning']}" if created["warning"] else ""
+    c.notify(f"🛠 Working on it · {where} · 👤 requested by you{extra}\nScouting next; the proposal card follows.")
     return created

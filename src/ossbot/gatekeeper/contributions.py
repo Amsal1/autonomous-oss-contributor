@@ -15,7 +15,13 @@ from ossbot.common.rediscover import Decision, PriorContribution, RepoFactChange
 from ossbot.common.schemas import TERMINAL_STATES, WORK_URL_RE, ContributionSource, State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.audit import AuditLog
-from ossbot.gatekeeper.discovered_targets import DiscoveredRefused, DiscoveredTargets
+from ossbot.gatekeeper.discovered_targets import (
+    DiscoveredRefused,
+    DiscoveredTargets,
+    WorkRepoFacts,
+    activity_warning,
+    hard_repo_check,
+)
 
 REDACTED_FOR_REQUESTER = (
     "plan_json", "validation_json", "review_json", "vetting_json", "commit_message", "pr_body",
@@ -146,12 +152,20 @@ class ContributionService:
             self.audit.append(actor, "discover_claimed", {"repos": repos})
         return {"requested": True, "repos": repos}
 
-    def create_user(self, url: str, notes: str, actor: str) -> dict[str, Any]:
+    def work_repo(self, url: str) -> str | None:
+        """The ``owner/repo`` of a ``/work`` URL, or None when it isn't a GitHub issue, PR or repo URL."""
+        match = WORK_RE.fullmatch(url.strip().split("#", 1)[0].split("?", 1)[0])
+        return f"{match['owner']}/{match['repo']}" if match is not None else None
+
+    def create_user(self, url: str, notes: str, actor: str, *, facts: WorkRepoFacts | None = None) -> dict[str, Any]:
         """``/work`` / ``ossctl work`` (CR-004 Amendment B): user-directed, ``source='user'``.
 
-        Only GitHub issue, PR or repo URLs of a configured, enabled target. Skips ranking, caps, the
-        size preference, the filters and the re-discovery history (the owner asked for it); an
-        active contribution for the same issue still answers 409 ``duplicate_active``."""
+        GitHub issue, PR or repo URLs of a configured, enabled target, or (owner addition 2026-10-21) of
+        any public repo: a non-target repo needs ``facts`` read by the caller, must pass the hard checks
+        (``discovered_targets.hard_repo_check``; never-blocked refuses) and is kept as a discovered target
+        in the same transaction. Skips ranking, caps, the size preference, the filters, the activity gate
+        (a warning only) and the re-discovery history (the owner asked for it); an active contribution for
+        the same issue still answers 409 ``duplicate_active``."""
         clean = url.strip().split("#", 1)[0].split("?", 1)[0]
         match = WORK_RE.fullmatch(clean)
         if match is None:
@@ -159,14 +173,25 @@ class ContributionService:
         repo = f"{match['owner']}/{match['repo']}"
         target = resolve_target(self.config().targets, repo)
         if target is None:
-            raise ContributionRefused(400, "not_a_target")
-        if not target.enabled:
+            self._work_precheck(repo, facts)
+        elif not target.enabled:
             raise ContributionRefused(400, "target_disabled")
         ref = {"issues": "issue", "pull": "pull", None: "repo"}[match["kind"]]
         number = int(match["n"]) if match["n"] else None
         issue_number = number if ref == "issue" else None
-        canonical = f"https://github.com/{target.repo}" + (f"/{match['kind']}/{number}" if number else "")
+        kept_added, warning = False, None
         with db.transaction(self.conn):
+            if target is None:
+                assert self.discovered is not None  # _work_precheck
+                assert facts is not None
+                try:
+                    kept, kept_added = self.discovered.keep_for_work(repo, facts, actor)
+                    target = self.discovered.creatable_target(kept)
+                except DiscoveredRefused as exc:
+                    raise ContributionRefused(exc.status, exc.code) from exc
+                warning = activity_warning(facts, self.config().policy.discovery.max_default_branch_age_days,
+                                           self.clock.now())  # fmt: skip
+            canonical = f"https://github.com/{target.repo}" + (f"/{match['kind']}/{number}" if number else "")
             if issue_number is not None and any(
                 p.state not in TERMINAL_STATES for p in history(self.conn, target.repo, issue_number)
             ):
@@ -182,8 +207,23 @@ class ContributionService:
                     target.priority, State.DISCOVERED.value, canonical, ref, notes or None, now, now,
                 ),
             )  # fmt: skip
-            self.audit.append(actor, "work_requested", {"url": canonical, "ref": ref, "notes": bool(notes)}, cid)
-        return {"cid": cid, "repo": target.repo, "ref": ref, "url": canonical}
+            self.audit.append(actor, "work_requested", {"url": canonical, "ref": ref, "notes": bool(notes),
+                                                        "kept_added": kept_added}, cid)  # fmt: skip
+        return {"cid": cid, "repo": target.repo, "ref": ref, "url": canonical, "kept_added": kept_added,
+                "warning": warning}  # fmt: skip
+
+    def _work_precheck(self, repo: str, facts: WorkRepoFacts | None) -> None:
+        """A non-target repo for ``/work``: refused before anything is written (owner addition 2026-10-21)."""
+        if self.discovered is None:
+            raise ContributionRefused(400, "not_a_target")
+        found = self.discovered.get(repo)
+        if found is not None and found.status == "never":
+            raise ContributionRefused(400, "never_repo")
+        if facts is None:
+            raise ContributionRefused(503, "repo_unreadable")
+        reason = hard_repo_check(repo, facts.doc)
+        if reason is not None:
+            raise ContributionRefused(400, reason)
 
     def create(
         self, repo: str, issue_number: int, source: ContributionSource, score: float | None, actor: str,

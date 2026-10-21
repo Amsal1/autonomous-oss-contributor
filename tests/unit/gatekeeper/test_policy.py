@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from ossbot.common.ai_policy import AiCondition, checklist_block
@@ -168,9 +170,12 @@ def test_repo_checks(ctx: AppContext) -> None:
     assert "ai_policy_banned" in codes(policy.check_repo("langfuse/langfuse", target, RepoState("banned"), logins))
     allowed = RepoState("unclear", ai_override_allowed=True)
     assert codes(policy.check_repo("langfuse/langfuse", target, allowed, logins)) == set()
+    assert target is not None
+    unsigned = dataclasses.replace(target, cla_signed=False)  # the shipped defaults sign every target
     assert "cla_required" in codes(
-        policy.check_repo("langfuse/langfuse", target, RepoState("allowed", cla_required=True), logins)
+        policy.check_repo("langfuse/langfuse", unsigned, RepoState("allowed", cla_required=True), logins)
     )
+    assert not codes(policy.check_repo("langfuse/langfuse", target, RepoState("allowed", cla_required=True), logins))
     assert "forbidden_owner" in codes(policy.check_repo("test-work-login/x", target, RepoState("allowed"), logins))
 
 

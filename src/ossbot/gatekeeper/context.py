@@ -84,6 +84,8 @@ class AppContext:
     card_recover: Callable[[], None] = field(default=lambda: None)
     chat: ChatRuntime | None = None  # the assistant backend (§15.6), set by build_context
     review_mirror: Any = None  # the opt-in review mirror service (ADR-0019 C), set by main
+    # the gatekeeper's read-only GitHub client (GETs only), set by main: /v1/work repo checks
+    github_reader: Any = None
     telegraph: Any = None  # the opt-in Telegraph service (§14.12.8), set by main
 
     @property

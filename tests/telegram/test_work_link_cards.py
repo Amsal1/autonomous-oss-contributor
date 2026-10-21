@@ -46,7 +46,17 @@ class FakeReader:
 
     async def repo(self, upstream: str) -> dict[str, Any]:
         self.calls.append(("repo", upstream, None))
-        return await self._answer({"description": "Open source LLM engineering platform", "archived": False})
+        return await self._answer({"description": "Open source LLM engineering platform", "archived": False,
+                                   "full_name": upstream, "private": False, "visibility": "public", "fork": False,
+                                   "has_issues": True, "has_pull_requests": True, "default_branch": "main",
+                                   **self.repo_over})  # fmt: skip
+
+    async def default_branch_commit_at(self, upstream: str, branch: str) -> str | None:
+        self.calls.append(("commits", upstream, None))
+        return self.commit_at
+
+    repo_over: dict[str, Any] = {}  # noqa: RUF012 - per-test override of the repo doc
+    commit_at: str | None = "2026-10-15T00:00:00Z"
 
 
 @pytest.fixture
@@ -107,9 +117,67 @@ async def test_work_refusals(rig: TgRig) -> None:
     assert "Usage: /work" in rig.last_text()
     await rig.say("/work https://example.com/x")
     assert "isn&#x27;t a GitHub" in rig.last_text() or "isn't a GitHub" in rig.last_text()
-    await rig.say("/work https://github.com/someone/not-a-target/issues/1")
-    assert "isn't in targets.yaml" in rig.last_text()
     assert user_items(rig.ctx) == []
+
+
+# ------------------------------------------------- owner addition (2026-10-21): /work on any public repo
+OPEN_URL = "https://github.com/openfaas/faas/issues/7"  # not in config/targets.yaml
+
+
+async def test_non_target_work_asks_first_then_keeps(rig: TgRig) -> None:
+    await rig.say(f"/work {OPEN_URL} small fix please")
+    mid = sent_with(rig, "Work on")
+    body = text(rig, mid)
+    assert "openfaas/faas isn't in targets.yaml: this adds openfaas/faas to your kept targets" in body
+    assert labels(rig, mid) == ["⭐ Add and work on it", "✖️ Cancel"]
+    assert user_items(rig.ctx) == [] and rig.ctx.discovered.get("openfaas/faas") is None
+    assert rig.handlers.reader.calls == []  # nothing read before the tap
+    await rig.tap(token(rig, mid, "⭐ Add and work on it"), message=mid)
+    await rig.flush()
+    items = user_items(rig.ctx)
+    assert len(items) == 1 and items[0]["upstream"] == "openfaas/faas" and items[0]["notes"] == "small fix please"
+    kept = rig.ctx.discovered.get("openfaas/faas")
+    assert kept is not None and (kept.status, kept.source, kept.decided_by) == ("kept", "owner", "tg:4242")
+    body = text(rig, mid)
+    assert "Working on it" in body and "⭐ Added openfaas/faas to your kept targets" in body
+    assert "⚠️" not in body
+
+
+async def test_non_target_hard_check_refusal_card(rig: TgRig) -> None:
+    rig.handlers.reader.repo_over = {"archived": True}
+    await rig.say(f"/work {OPEN_URL}")
+    mid = sent_with(rig, "Work on")
+    await rig.tap(token(rig, mid, "⭐ Add and work on it"), message=mid)
+    await rig.flush()
+    assert "🚫 Not queued: that repo is archived or disabled." in text(rig, mid)
+    assert user_items(rig.ctx) == [] and rig.ctx.discovered.get("openfaas/faas") is None
+
+
+async def test_non_target_never_blocked_refused_at_once(rig: TgRig) -> None:
+    rig.ctx.discovered.decide("openfaas/faas", "never", "uid:1000/operator")
+    await rig.say(f"/work {OPEN_URL}")
+    assert "you blocked that repo (Never)" in rig.last_text()
+    assert user_items(rig.ctx) == []
+
+
+async def test_non_target_inactive_repo_gets_a_warning(rig: TgRig) -> None:
+    rig.handlers.reader.commit_at = "2026-02-01T00:00:00Z"
+    await rig.say(f"/work {OPEN_URL}")
+    mid = sent_with(rig, "Work on")
+    await rig.tap(token(rig, mid, "⭐ Add and work on it"), message=mid)
+    await rig.flush()
+    assert "⚠️ last commit on main: 8 months ago" in text(rig, mid)
+    assert len(user_items(rig.ctx)) == 1
+
+
+async def test_non_target_link_card_says_it_keeps(rig: TgRig) -> None:
+    await rig.say(OPEN_URL, forward=True)
+    mid = sent_with(rig, "🔗")
+    assert "Not in targets.yaml: 🛠 Work on this adds openfaas/faas to your kept targets." in text(rig, mid)
+    await rig.tap(token(rig, mid, "🛠 Work on this"), message=mid)
+    await rig.flush()
+    assert rig.ctx.discovered.get("openfaas/faas").status == "kept"  # type: ignore[union-attr]
+    assert len(user_items(rig.ctx)) == 1 and "Working on it" in text(rig, mid)
 
 
 async def test_cancel_request(rig: TgRig) -> None:

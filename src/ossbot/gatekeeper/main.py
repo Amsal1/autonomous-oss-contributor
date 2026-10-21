@@ -72,6 +72,7 @@ def build_services(ctx: AppContext) -> list[Service]:
     client = make_client(write_token)
     submitter = make_submitter(ctx, client, write_token)
     reconciler = Reconciler(ctx, GitHubReader(client))
+    ctx.github_reader = GitHubReader(client)  # read-only: /work checks a non-target repo before keeping it
     services: list[Service] = [ReconcileService(reconciler)]
     mirror_token = os.environ.get("GITHUB_REVIEW_MIRROR_TOKEN") or None  # optional (ADR-0019 C, off by default)
     ctx.review_mirror = ReviewMirror(ctx, make_client(mirror_token) if mirror_token else None, mirror_token,
