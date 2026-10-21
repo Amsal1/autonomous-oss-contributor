@@ -61,7 +61,9 @@ distro. `scripts\bootstrap.ps1 -Only provision` redeploys the code after a chang
 
 Create, then enter them with `powershell -NoProfile -File scripts\setup-secrets.ps1` (values go
 straight to `/etc/ossbot/secrets/*.env` inside the distro, never to a Windows file; an empty answer
-keeps the current value):
+keeps the current value). Run it in a standalone Windows PowerShell window, not an editor's
+integrated terminal: some integrated terminals mangle text pasted into a masked prompt, so a valid
+token fails with `invalid format`.
 
 | Key | Where to get it | Notes |
 |---|---|---|
