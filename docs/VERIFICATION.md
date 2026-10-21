@@ -665,6 +665,18 @@ Commits 3544da9 (`telegram.yaml` `all_text_mode` and `command_shortcuts`) and 46
 | Demo media | `scripts\dev\make-demo.ps1`, then `-Check` | regenerated (stills 01-07, GIF, MP4 changed; demo.gif 665,955 bytes, 720x820, 18.3 s); `-Check` PASS, every page passed assert_faithful, personal_check 0 hits |
 | Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits; command table current (no command added) |
 
+## Post-v1 topic sessions in All (PV1-T2, 2026-10-21)
+
+Commit 364f6fe (`telegram/implicit_topics.py` text side, `handlers.py` adoption and deferred dispatch) on `main`. Hermetic only, no redeploy (the close-out's). Dry-run stayed ON, no GitHub write, no Telegram message.
+
+| Check | Command | Result |
+|---|---|---|
+| [VERIFY] V7 replies in an adopted topic | core.telegram.org/bots/api#replyparameters and #sendmessagedraft (2026-10-21) | `sendMessageDraft` takes `message_thread_id`; `allow_sending_without_reply` is documented as always False for replies in another chat or forum topic, so whether B counts as inside A's thread is not stated. Every reply already sends `allow_sending_without_reply: true` (`ui/send.py`) and B exists, so no code change; live confirmation = owner O1 re-check |
+| Legacy bytes | goldens `all_text_in_all.txt`, `all_text_flat.txt` recorded with the code before 364f6fe (source stashed), then compared with it | legacy mode, users without topic rights and the no-A fallback send the same calls as before; flat mode unchanged |
+| Lint gate | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 530 files formatted, mypy 250 files, 14 contracts kept |
+| Targeted tests | `pytest tests/telegram/test_all_topic_sessions.py tests/telegram/test_implicit_topics.py tests/telegram/test_status_is_dashboard.py -x --timeout=120` | 71 passed: topic first and text first adopted (session `tg-<uid>-t<thread>`, no deleteForumTopic), no A within TTL answered in All, follow-ups and a later command answered in the topic, commands in All still deleted, link card and photo and album in the topic, system topics never adopted, replays adopt once, logs without text; correlator unit cases (prefix rule, CAP, expiry, waiter) |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120` | 3888 passed in 48 s (`.ossbot-local/logs/feat004-suite.log`) |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
