@@ -10,3 +10,6 @@ The user wants real validation when cheap. Running a repo's compose file or a ki
 
 ## Consequences
 Some repos (operators, exporters) get weaker local validation in v1; the card states "relies on upstream CI".
+
+## Implementation addendum (post-v1 open discovery, 2026-10-22)
+The Phase-2 stack pool is now `10.213.224.0/19` (the upper half of the former stack /18); `10.213.192.0/19` is `pool_strict` for repos with `egress: strict` (ADR-0023).
