@@ -9,6 +9,7 @@ from ossbot.common.schemas import STAGE_ENTRYPOINTS, StageRunOpen, StageRunUpdat
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.stage_runs import StageRunRefused
 from tests.conftest import UID_OPERATOR, UID_WORKER, insert_contribution
+from tests.fakes.holds import hold_request
 from tests.unit.gatekeeper.api_helpers import client
 
 W = "uid:2001/worker"
@@ -67,6 +68,20 @@ def test_no_stage_opens_past_the_control_state(ctx: AppContext, stage: str, how:
     with pytest.raises(StageRunRefused) as info:
         ctx.stage_runs.open(cid, StageRunOpen(stage=stage), W)
     assert info.value.status == 423
+    assert ctx.stage_runs.list(None, cid) == []
+
+
+@pytest.mark.parametrize("stage", STAGE_ENTRYPOINTS)
+async def test_no_stage_opens_while_held(ctx: AppContext, stage: str) -> None:
+    """Open-discovery §13.3: an egress-anomaly hold stops every stage of that contribution (423)."""
+    cid = insert_contribution(ctx, State.VALIDATING)
+    ctx.holds.hold(cid, hold_request(), "uid:2002/sandbox")
+    with pytest.raises(StageRunRefused) as info:
+        ctx.stage_runs.open(cid, StageRunOpen(stage=stage), W)
+    assert (info.value.status, info.value.code) == (423, "contribution_held")
+    async with client(ctx, UID_WORKER) as c:
+        resp = await c.post(f"/v1/contributions/{cid}/stage-runs", json={"stage": stage})
+    assert (resp.status_code, resp.json()["error"]) == (423, "contribution_held")
     assert ctx.stage_runs.list(None, cid) == []
 
 

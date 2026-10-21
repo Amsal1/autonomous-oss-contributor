@@ -9,6 +9,7 @@ runs are re-queued by the runner from the last completed stage, at most 3 times 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Callable
 from typing import Any
 
 from ossbot.common.clock import Clock, to_iso
@@ -34,11 +35,13 @@ class StageRunRefused(RuntimeError):
 
 
 class StageRuns:
-    def __init__(self, conn: sqlite3.Connection, clock: Clock, audit: AuditLog, control: ControlService) -> None:
+    def __init__(self, conn: sqlite3.Connection, clock: Clock, audit: AuditLog, control: ControlService,
+                 held: Callable[[str], bool] = lambda cid: False) -> None:  # fmt: skip
         self.conn = conn
         self.clock = clock
         self.audit = audit
         self.control = control
+        self.held = held  # ContributionHolds.is_held (wired by context; no import of the hold service)
 
     def open(self, cid: str, req: StageRunOpen, actor: str) -> dict[str, Any]:
         if req.stage not in STAGE_NAMES:
@@ -50,6 +53,8 @@ class StageRuns:
         info = self.control.lifecycle()
         if info is not None:
             raise StageRunRefused(423, info.state, f"stage:{req.stage} while {info.state}")
+        if self.held(cid):  # open-discovery design §13.3: an egress-anomaly hold stops only this contribution
+            raise StageRunRefused(423, "contribution_held", f"stage:{req.stage} while {cid} is held")
         now = to_iso(self.clock.now())
         with db.transaction(self.conn):
             if db.one(self.conn, "SELECT 1 FROM contributions WHERE id = ?", (cid,)) is None:

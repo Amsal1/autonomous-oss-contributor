@@ -17,9 +17,10 @@ from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.github_read import GitHubError, GitHubReader
 from ossbot.gatekeeper.reconcile import Reconciler
 from ossbot.gatekeeper.state_machine import Actor
-from ossbot.gatekeeper.submit import Submitter
+from ossbot.gatekeeper.submit import HELD_TEXT, Submitter
 from tests.conftest import insert_action, insert_contribution
 from tests.fakes.fake_github import FakeGitHub, FakePusher
+from tests.fakes.holds import hold_request
 from tests.githarness import GitWorld
 from tests.unit.gatekeeper.test_package_verify import VETTED, package_ok
 
@@ -287,6 +288,38 @@ async def test_kill_between_push_and_pr(gctx: AppContext, world: GitWorld, gh: F
     assert result["cause"] == how
     assert contribution(gctx, doc["cid"])["state"] == "SUBMIT_FAILED"
     assert any(f"Submission interrupted by {how} after push" in n and "[Retry]" in n for n in notes(gctx))
+
+
+async def test_hold_between_push_and_pr_then_retry_while_held(
+    gctx: AppContext, world: GitWorld, gh: FakeGitHub
+) -> None:
+    """Open-discovery §13.3: a hold set after the push stops before the PR (cause held, its own text);
+    [Retry] while the hold is open stops before the first write; FakeGitHub writes are unchanged."""
+    doc = await open_pr_ready(gctx, world, gh, live=True)
+    gh.add_repo(FORK, fork=True, parent={"full_name": UPSTREAM})
+
+    def hold_after_push(what: str) -> None:
+        if what == "PUSH":
+            gctx.holds.hold(doc["cid"], hold_request(), "uid:2002/sandbox")
+
+    gh.on_write = hold_after_push
+    assert await submitter(gctx, gh).submit(doc["approval_id"]) == "failed"
+    assert not [w for w in gh.writes if w.path.endswith("/pulls")]
+    act = action(gctx, doc["action_id"])
+    result = json.loads(act["result_json"])
+    assert (act["error_class"], result["cause"], result["writes"]) == ("interrupted", "held", ["push"])
+    assert contribution(gctx, doc["cid"])["state"] == "SUBMIT_FAILED"
+    assert HELD_TEXT.format(done="push") in notes(gctx)
+    gh.on_write = None
+    writes = list(gh.writes)
+    retry = retry_action(gctx, doc["action_id"])
+    confirm(gctx, retry, message_id=11)
+    assert await submitter(gctx, gh).submit(retry) == "failed"
+    assert gh.writes == writes
+    retried = action(gctx, str(db.one(gctx.conn, "SELECT action_id FROM approvals WHERE id = ?", (retry,))[0]))
+    assert json.loads(retried["result_json"])["cause"] == "held"
+    assert json.loads(retried["result_json"])["writes"] == []
+    assert HELD_TEXT.format(done="no writes") in notes(gctx)
 
 
 async def test_pause_before_fork(gctx: AppContext, world: GitWorld, gh: FakeGitHub) -> None:

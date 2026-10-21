@@ -193,6 +193,20 @@ forbidden_modules = ["ossbot.gatekeeper.discovered_targets_writer"]
 allow_indirect_imports = false
 
 [[tool.importlinter.contracts]]
+# owner decision sandbox_open (ADR-0023, open-discovery design §13.3): only these modules reach the hold
+# service. ignore_imports lists exactly the real edges (L4; stage_runs, packaging, submit and
+# contributions use ctx.holds or an injected check, not an import); the AST test pins the same set.
+name = "Only the hold API, hold cards and the hold call sites import ossbot.gatekeeper.holds"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.**"]
+ignore_imports = ["ossbot.gatekeeper.app -> ossbot.gatekeeper.holds",
+    "ossbot.gatekeeper.context -> ossbot.gatekeeper.holds"]
+unmatched_ignore_imports_alerting = "error"
+forbidden_modules = ["ossbot.gatekeeper.holds"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
 # DESIGN §18.10, plan D8: the gatekeeper's retention deleter runs only through the operator API.
 name = "Only ossbot.gatekeeper.api.retention imports ossbot.gatekeeper.retention"
 type = "forbidden"

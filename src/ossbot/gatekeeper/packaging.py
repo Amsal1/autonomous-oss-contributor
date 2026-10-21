@@ -208,6 +208,8 @@ class Packager:
         if os.path.normpath(req.artifact_dir).rstrip("/") != str(expected):
             raise PackageRefused(400, "artifact_dir", "artifact_dir must be the gatekeeper-built directory")
         ctx.control.require_running("package")
+        if ctx.holds.is_held(cid):  # open-discovery design §13.3: egress-anomaly hold, human release only
+            raise PackageRefused(423, "contribution_held")
         if contrib["artifact_rev"] is not None and req.rev < int(contrib["artifact_rev"]):
             raise PackageRefused(409, "stale_rev")
         kind: OutboundKind = "push_update" if contrib["pr_number"] is not None else "open_pr"

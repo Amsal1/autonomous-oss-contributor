@@ -16,6 +16,7 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.review import stale
 from tests.conftest import REPO_ROOT
+from tests.fakes.holds import hold_request
 from tests.telegram.reviewkit import Card, labels, latest, open_card, status, text, toast, token
 from tests.telegram.tgharness import TgRig, make_rig
 
@@ -62,7 +63,7 @@ def reason_literals() -> set[str]:
 def test_every_invalidation_reason_has_a_label() -> None:
     found = reason_literals()
     assert {"reissued", "text_edited", "new_package_rev", "killed", "live_check:", "binding_unavailable:",
-            "render_failed", "no_write_token", "changes_requested"} <= found  # fmt: skip
+            "render_failed", "no_write_token", "changes_requested", "egress_anomaly"} <= found  # fmt: skip
     missing = sorted(r for r in found if r not in stale.REASON_LABELS)
     assert missing == [], missing
     for reason in found:
@@ -142,6 +143,17 @@ async def test_no_show_current_without_an_open_card(rig: TgRig) -> None:
         ctx.approvals.invalidate_contribution(card.cid, "killed", "system")
     await _tick(rig)
     assert "⚪ <b>Invalidated</b> · kill" in text(rig, card.message_id)
+    assert labels(rig, card.message_id) == ["⛔ Not approvable"]
+
+
+async def test_held_card_offers_no_second_button(rig: TgRig) -> None:
+    """Open-discovery §13.3: a hold invalidates the cid's card; no Retry/Show current while held."""
+    ctx = rig.ctx
+    card = await open_card(rig)
+    ctx.holds.hold(card.cid, hold_request(), "uid:2002/sandbox")
+    await _tick(rig)
+    assert status(ctx, card.approval) == "invalidated"
+    assert "⚪ <b>Invalidated</b> · egress anomaly: contribution held" in text(rig, card.message_id)
     assert labels(rig, card.message_id) == ["⛔ Not approvable"]
 
 

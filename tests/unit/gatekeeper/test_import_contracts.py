@@ -62,6 +62,29 @@ def test_only_discovered_targets_imports_its_writer() -> None:
     assert importers == ["ossbot.gatekeeper.discovered_targets"]
 
 
+HOLDS = "ossbot.gatekeeper.holds"
+
+
+def _holds_contract_edges() -> list[str]:
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    block = text.split('name = "Only the hold API, hold cards and the hold call sites import', 1)[1]
+    block = block.split("[[tool.importlinter.contracts]]", 1)[0]
+    ignore = block.split("ignore_imports = [", 1)[1].split("]", 1)[0]
+    return sorted(re.findall(r'"([a-z_.]+) -> ossbot\.gatekeeper\.holds"', ignore))
+
+
+def test_holds_importers_equal_the_contract_list() -> None:
+    """Open-discovery design §13.3, review-3 L4: the holds contract lists exactly the real import edges."""
+    importers = sorted(_module(p) for p in SRC.rglob("*.py") if any(i == HOLDS for i in _imports(p)))
+    assert importers == _holds_contract_edges()
+    assert importers  # the service is wired somewhere
+
+
+def test_holds_imports_no_telegram_module() -> None:
+    """The P1 card is an injected publisher: holds.py never imports Telegram (no holds -> hold_cards edge)."""
+    assert not [i for i in _imports(SRC / "gatekeeper" / "holds.py") if "telegram" in i]
+
+
 def test_untrusted_side_never_imports_gatekeeper() -> None:
     for package in ("runner", "sandboxd", "sandbox_tools"):
         for path in (SRC / package).rglob("*.py"):

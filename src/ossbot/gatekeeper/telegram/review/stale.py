@@ -42,6 +42,8 @@ REASON_LABELS: dict[str, tuple[str, Second]] = {
     "restored": ("restored from a backup", "none"),
     "no_write_token": ("no GitHub write token", "retry"),
     "superseded": ("a newer version was staged", "show_current"),  # skill_reviews: a newer staged skill
+    # open-discovery §13.3: no Retry/Show current while held (Resume on the hold card first)
+    "egress_anomaly": ("egress anomaly: contribution held", "none"),
 }
 S5_REASONS = frozenset({"entered_implementing", "changes_requested"})
 STALE_BODY_MAX = 3600  # the old card's text kept under the stale header (≤ 3,900 in total)

@@ -43,7 +43,11 @@ RETRY_DELAYS: tuple[float, ...] = (2.0, 8.0, 30.0)
 FORK_POLL_SECONDS = 3.0
 FORK_POLL_MAX_SECONDS = 300.0
 PR_KINDS: frozenset[str] = frozenset({"open_pr", "push_update"})
-Cause = Literal["pause", "kill", "mode_changed"]
+Cause = Literal["pause", "kill", "mode_changed", "held"]  # held: an egress-anomaly hold (open-discovery §13.3)
+HELD_TEXT = (
+    "Submission interrupted by an egress-anomaly hold after {done}; nothing further was written. Resume the"
+    " hold first, then [Retry]."
+)
 Sleep = Callable[[float], Awaitable[None]]
 RetryNote = Callable[[str, str], None]  # (failed action id, text)
 
@@ -273,6 +277,8 @@ class Submitter:
             raise Interrupted("mode_changed") from exc
         except RuntimeError as exc:  # control row says paused/killed without a flag (N12)
             raise Interrupted("pause") from exc
+        if self.ctx.holds.is_held(snap.cid):  # read-only; a hold stops before the next write like a kill
+            raise Interrupted("held")
 
     async def _identity(self) -> None:
         ctx = self.ctx
@@ -542,6 +548,8 @@ class Submitter:
                 f"Submission interrupted: mode changed during submission (now {now}) after {done};"
                 " nothing further was written. [Retry]"
             )
+        elif cause == "held":
+            text = HELD_TEXT.format(done=done)
         else:
             text = f"Submission interrupted by {cause} after {done}; nothing further was written. [Retry]"
         self.retry_note(snap.action_id, text)

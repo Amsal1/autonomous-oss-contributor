@@ -64,6 +64,7 @@ REASON_LABELS: dict[str, str] = {
     "new_proposal_version": "new proposal version",
     "new_skill_version": "new skill version",
     "render_failed": "card could not be rendered",
+    "egress_anomaly": "egress anomaly: contribution held",  # open-discovery design §13.3 (holds.py)
 }
 # Eligibility of a re-send (§14.18.4.3): the contribution states each kind lives in.
 REISSUE_STATES: dict[str, frozenset[str]] = {

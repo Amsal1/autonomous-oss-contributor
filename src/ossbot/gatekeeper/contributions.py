@@ -291,7 +291,9 @@ class ContributionService:
         with ``offset``, so long-waiting items never fall out of a window of recent ones)."""
         sql = "SELECT id, upstream, issue_number, source, state, state_reason, pr_number, pr_url, updated_at," \
               " kind, est_class, approved_class, proposal_version, snooze_until, work_url, work_ref," \
-              " proposal_feedback_json IS NOT NULL AS feedback_pending FROM contributions"  # fmt: skip
+              " proposal_feedback_json IS NOT NULL AS feedback_pending," \
+              " EXISTS (SELECT 1 FROM contribution_holds h WHERE h.cid = contributions.id" \
+              " AND h.released_at IS NULL) AS held FROM contributions"  # fmt: skip
         where: list[str] = []
         params: list[Any] = []
         if state:
@@ -305,7 +307,8 @@ class ContributionService:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY updated_at DESC, id LIMIT ? OFFSET ?"
         params.extend((limit, offset))
-        return [dict(r) for r in self.conn.execute(sql, params)]
+        # held: an open egress-anomaly hold (open-discovery §13.3); the runner scheduler skips the row
+        return [{**dict(r), "held": bool(r["held"])} for r in self.conn.execute(sql, params)]
 
     def package_ts(self, cid: str, rev: int) -> str:
         """Idempotent per rev: the timestamp the package job uses for deterministic commits (§9.11)."""

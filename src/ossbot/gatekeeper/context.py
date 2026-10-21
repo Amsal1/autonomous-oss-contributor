@@ -36,6 +36,7 @@ from ossbot.gatekeeper.derive import GitArtifacts
 from ossbot.gatekeeper.discovered_targets import DiscoveredTargets
 from ossbot.gatekeeper.discovery_prefs import DiscoveryPrefs
 from ossbot.gatekeeper.gitops import GitOps
+from ossbot.gatekeeper.holds import ContributionHolds
 from ossbot.gatekeeper.models_admin import ModelsAdmin
 from ossbot.gatekeeper.outbox import Outbox
 from ossbot.gatekeeper.pollstats import PollStats
@@ -79,6 +80,8 @@ class AppContext:
     # post-v1 open discovery (design §8): repos found outside targets.yaml, set by build_context
     discovered: DiscoveredTargets = field(default=None)  # type: ignore[assignment]
     stage_runs: StageRuns = field(default=None)  # type: ignore[assignment]  # set by build_context
+    # open-discovery design §13.3 (ADR-0023): per-contribution egress-anomaly holds, set by build_context
+    holds: ContributionHolds = field(default=None)  # type: ignore[assignment]
     skill_reviews: SkillReviews = field(default=None)  # type: ignore[assignment]  # set by build_context
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
     card_recover: Callable[[], None] = field(default=lambda: None)
@@ -290,6 +293,7 @@ def build_context(
     holder["snap"] = snapshots
     prefs = DiscoveryPrefs(conn, clock, audit, lambda: snapshots.current.bundle, notify)
     discovered = DiscoveredTargets(conn, clock, audit, lambda: snapshots.current.bundle, prefs, notify)
+    holds = ContributionHolds(conn, clock, audit, approvals)
     ctx = AppContext(
         paths=paths,
         clock=clock,
@@ -320,7 +324,8 @@ def build_context(
         decisions=decisions,
         discovery_prefs=prefs,
         discovered=discovered,
-        stage_runs=StageRuns(conn, clock, audit, control),
+        stage_runs=StageRuns(conn, clock, audit, control, held=holds.is_held),
+        holds=holds,
     )
     ctx_ref["ctx"] = ctx
     decisions.proposals.rows_hook = lambda approval_id, tokens: proposal_cards.card_rows(ctx, approval_id, tokens)

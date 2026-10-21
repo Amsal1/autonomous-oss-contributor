@@ -13,7 +13,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort, Language, ResolvedTarget, Topic
+from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort, EgressAnomaly, Language, ResolvedTarget, Topic
+from ossbot.common.control_flags import EgressMode
 
 
 class State(StrEnum):
@@ -567,3 +568,42 @@ class FeatureCardRequest(ApiModel):
 
     kind: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{0,31}$")]
     data: dict[str, Any]
+
+
+# -------------------------------------------- contribution holds (open-discovery design §13.3, ADR-0023)
+HOLD_RUN_ID_RE = r"^[a-z0-9][a-z0-9_-]{0,30}$"  # sandboxd's RUN_ID_RE (common can't import sandboxd)
+# A squid-log host (CONNECT host:port or a URL's hostname); sandboxd sends "?" for anything else.
+HOLD_HOST_RE = r"^([a-z0-9.-]{1,253}(:[0-9]{1,5})?|\?)$"
+HOLD_TOP_HOSTS_MAX = 10
+HoldBreach = Literal["hosts", "upload", "download"]
+
+
+class HoldRequest(ApiModel):
+    """``POST /v1/contributions/{cid}/hold`` (sandbox, worker; a stop request, I9): the egress meter's
+    numbers for the job it stopped. Values come from the squid log, bounded, and only rendered escaped."""
+
+    reason: Literal["egress_anomaly"]
+    run_id: Annotated[str, Field(pattern=HOLD_RUN_ID_RE)]
+    stage: Literal["fetch", "validate"]
+    egress: Literal["mode", "strict"]
+    egress_mode: EgressMode
+    hosts: Annotated[int, Field(ge=0, le=1_000_000)]
+    up_bytes: Annotated[int, Field(ge=0, le=10**13)]
+    down_bytes: Annotated[int, Field(ge=0, le=10**13)]
+    denied: Annotated[int, Field(ge=0, le=10**7)]
+    top_hosts: Annotated[list[Annotated[str, Field(pattern=HOLD_HOST_RE)]], Field(max_length=HOLD_TOP_HOSTS_MAX)]
+    limits: EgressAnomaly
+    breached: Annotated[list[HoldBreach], Field(min_length=1, max_length=3)]
+
+
+class HoldView(ApiModel):
+    """One ``contribution_holds`` row (open while ``released_at`` is None)."""
+
+    id: str
+    cid: str
+    reason: Literal["egress_anomaly"]
+    detail: HoldRequest
+    held_by: str
+    held_at: str
+    released_by: str | None = None
+    released_at: str | None = None
