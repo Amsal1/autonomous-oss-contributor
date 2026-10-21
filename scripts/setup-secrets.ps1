@@ -24,7 +24,8 @@ if ($SelfTest) {
 function Read-Secret([string]$Prompt) {
     $secure = Read-Host -AsSecureString -Prompt "$Prompt (empty = keep)"
     $bstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    # Trim: a pasted token often carries a trailing space or newline, which the format check rejects.
+    try { return [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr).Trim() }
     finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
 }
 
