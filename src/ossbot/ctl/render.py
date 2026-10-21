@@ -69,6 +69,12 @@ SQUID_POOLS: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     ("research", "10.213.64.0/18", ("research",)),
     ("llm", "10.213.128.0/18", ("agent-llm", "catalog")),
 )
+# Strict repos (design §12.3, ADR-0023): fetch/validate jobs of an `egress: strict` target get a /28 in
+# this pool and the fetch base list in every egress mode. Not a SQUID_POOLS tuple (it has no profile of
+# its own): squid_context renders it explicitly. 10.213.224.0/19 stays reserved for the Phase-2 stack.
+STRICT_POOL = ("strict", "10.213.192.0/19")
+STRICT_POOL_SRC = "pool_strict"
+STRICT_BASE_PROFILE = "fetch"
 HOST_CALLER_ORDER = ("runner", "hermes", "gatekeeper")
 SERVICE_USERS = ("ossrunner", "hermes", "gatekeeper", "ossbox", "ossnobody")
 DEFAULT_TEMPLATE = Path("/opt/ossbot/app/sandbox/proxy/squid.conf.j2")
@@ -91,8 +97,10 @@ REQUIRED_DENIED_CIDRS = (
     "0.0.0.0/8", "::/128", "::1/128", "fc00::/7", "fe80::/10",
 )  # fmt: skip
 REQUIRED_DENIED_DOMAINS = ("uploads.github.com", "telegra.ph", "api.telegra.ph", "edit.telegra.ph")
-CODE_POOL_SRC = "pool_fetch"  # fetch + validate: untrusted code, never web_public
+CODE_POOL_SRC = "pool_fetch"  # fetch + validate: untrusted code, web_public only in sandbox_open
+CODE_WEB_MODE = "sandbox_open"
 LLM_POOL_SRC = "pool_llm"
+LLM_WEB_MODES = ("open", "sandbox_open")
 TRUSTED_CALLERS = ("runner", "gatekeeper")  # identical egress in every mode
 # A mode switch writes the flag first and the root apply re-renders a moment later: a conf older
 # than a flag this young is "apply pending", not drift (the watchdog re-checks within 9 s anyway).
@@ -196,6 +204,13 @@ def squid_context(
             dst = _dst(category, cats)
             if dst is not None:
                 rules.append({"port": "sandbox", "src": f"pool_{pool}", "dst": dst})
+    # pool_strict: the fetch BASE list (mode_lists is never consulted), identical in every mode
+    if STRICT_BASE_PROFILE in egress.sandbox_profiles:
+        pools.append({"name": STRICT_POOL[0], "cidr": STRICT_POOL[1]})
+        for category in egress.sandbox_profiles[STRICT_BASE_PROFILE]:
+            dst = _dst(category, cats)
+            if dst is not None:
+                rules.append({"port": "sandbox", "src": STRICT_POOL_SRC, "dst": dst})
     for caller in HOST_CALLER_ORDER:
         if caller not in caller_lists:
             continue
@@ -232,15 +247,17 @@ def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
     """§11.5 invariants of one rendered context (assertions, not data): raise RenderError on a violation."""
     rules: list[dict[str, str]] = ctx["rules"]
     for r in rules:
-        if r["src"] == CODE_POOL_SRC and r["dst"] == "all":
-            raise RenderError("fetch/validate (code-running profiles) must never get web_public")
+        if r["src"] == STRICT_POOL_SRC and r["dst"] == "all":
+            raise RenderError("strict fetch/validate jobs (pool_strict) must never get web_public")
+        if r["src"] == CODE_POOL_SRC and r["dst"] == "all" and ctx["mode"] != CODE_WEB_MODE:
+            raise RenderError(f"fetch/validate get web_public only in egress mode {CODE_WEB_MODE}")
         if r["port"] in TRUSTED_CALLERS and r["dst"] == "all":
             raise RenderError(f"host caller {r['port']} must never get web_public")
     web = {(r["port"], r["src"]) for r in rules if r["dst"] == "all"}
     if ctx["mode"] == "allowlist" and web:
         raise RenderError(f"egress mode allowlist grants web_public to {sorted(web)}")
-    if ctx["mode"] != "open" and ("sandbox", LLM_POOL_SRC) in web:
-        raise RenderError(f"egress mode {ctx['mode']} grants web_public to agent-llm/catalog (open only)")
+    if ctx["mode"] not in LLM_WEB_MODES and ("sandbox", LLM_POOL_SRC) in web:
+        raise RenderError(f"egress mode {ctx['mode']} grants web_public to agent-llm/catalog (open/sandbox_open only)")
     denied = {str(ipaddress.ip_network(c)) for c in ctx["denied_cidrs"]}
     missing = [c for c in REQUIRED_DENIED_CIDRS if str(ipaddress.ip_network(c)) not in denied]
     if missing:
@@ -258,8 +275,15 @@ def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
 
 
 def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
-    """The parts of a context that must be identical in every egress mode (§11.5)."""
-    fixed = [r for r in ctx["rules"] if r["src"] == CODE_POOL_SRC or r["port"] in TRUSTED_CALLERS]
+    """The parts of a context that must be identical in every egress mode (§11.5; design §12.2): the
+    strict pool, the fetch pool's base rules (sandbox_open only adds its ``all`` line), the trusted
+    callers, their categories, listeners, pools, denies and the IP-literal patterns."""
+    fixed = [
+        r for r in ctx["rules"]
+        if r["src"] == STRICT_POOL_SRC
+        or (r["src"] == CODE_POOL_SRC and r["dst"] != "all")
+        or r["port"] in TRUSTED_CALLERS
+    ]  # fmt: skip
     used = {r["dst"][4:] for r in fixed if r["dst"].startswith("cat_")}
     return {
         "listeners": ctx["listeners"],
@@ -269,7 +293,7 @@ def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
         "denied_domains": ctx["denied_domains"],
         "denied_cidrs": ctx["denied_cidrs"],
         "ip_literal_patterns": ctx["ip_literal_patterns"],
-        "fetch_validate_runner_gatekeeper_rules": fixed,
+        "strict_fetch_validate_runner_gatekeeper_rules": fixed,
         "pre_deny_rules": ctx["pre_deny_rules"],
         "their_categories": {k: v for k, v in ctx["categories"].items() if k in used},
     }

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import socket
@@ -200,7 +201,7 @@ def test_nameservers_from_resolv_conf(tmp_path: Path) -> None:
 
 
 # ------------------------------------------------------------------------------ squid
-MODES = ("allowlist", "research", "open")
+MODES = ("allowlist", "research", "open", "sandbox_open")
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -233,6 +234,7 @@ def test_mode_table_of_design_11_5() -> None:
         "http_access allow port_hermes src_host all !denied_dst",
     }
     assert web["open"] == web["research"] | {"http_access allow port_sandbox pool_llm all !denied_dst"}
+    assert web["sandbox_open"] == web["open"] | {"http_access allow port_sandbox pool_fetch all !denied_dst"}
     for text in texts.values():
         acl = "acl cat_github_user_content dstdomain -n .github.io gist.github.com gist.githubusercontent.com\n"
         assert acl in text
@@ -244,7 +246,8 @@ def test_mode_table_of_design_11_5() -> None:
 
 
 def test_invariants_identical_in_every_mode() -> None:
-    """Everything but the research/hermes/llm grants is byte-identical between the modes."""
+    """Everything but the research/hermes/llm grants and sandbox_open's one pool_fetch ``all`` line is
+    byte-identical between the modes."""
     texts = {m: render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode=m) for m in MODES}  # type: ignore[arg-type]
 
     def fixed(text: str) -> list[str]:
@@ -252,10 +255,10 @@ def test_invariants_identical_in_every_mode() -> None:
             line for line in text.splitlines()
             if not line.startswith("# Egress mode:")
             and not (line.startswith("http_access allow ") and any(
-                k in line for k in ("pool_research", "port_hermes", "pool_llm")))
+                k in line for k in ("pool_research", "port_hermes", "pool_llm", "pool_fetch all ")))
         ]  # fmt: skip
 
-    assert fixed(texts["allowlist"]) == fixed(texts["research"]) == fixed(texts["open"])
+    assert fixed(texts["allowlist"]) == fixed(texts["research"]) == fixed(texts["open"]) == fixed(texts["sandbox_open"])
     denied = _acls(texts["open"])["denied_domains"][2:]
     assert {"uploads.github.com", "checkpoint-api.hashicorp.com", "telegra.ph", "api.telegra.ph",
             "edit.telegra.ph"} == set(denied)  # fmt: skip
@@ -301,7 +304,8 @@ def test_the_telegraph_category_cannot_be_listed_by_anyone() -> None:
 
 
 def test_grant_to_a_code_running_profile_is_rejected_by_the_schema() -> None:
-    """Decision B3: grantee keys are a closed Literal set; fetch/validate/runner/gatekeeper are not."""
+    """Decision B3: grantee keys are a closed Literal set (runner/gatekeeper are not keys); fetch and
+    validate are keys for sandbox_open only (ADR-0023), refused in every other mode."""
     text = (ROOT / "config" / "egress.yaml").read_text(encoding="utf-8")
     for grantee in ("fetch", "validate", "runner", "gatekeeper"):
         bad = text.replace("  allowlist: {}", f"  allowlist: {{{grantee}: [web_public]}}")
@@ -375,6 +379,129 @@ def test_check_mode_invariants_catches_a_grant_to_the_code_pool(monkeypatch: pyt
     monkeypatch.setattr(render, "mode_lists", leaky)
     with pytest.raises(render.RenderError):
         render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode="allowlist")
+
+
+# ------------------------------------------------- sandbox_open and pool_strict (design §12.2)
+# Design §12.2 table: which (port, source) gets web_public (``all``) in which mode.
+WEB_MATRIX = {
+    "allowlist": set(),
+    "research": {("sandbox", "pool_research"), ("hermes", "src_host")},
+    "open": {("sandbox", "pool_research"), ("hermes", "src_host"), ("sandbox", "pool_llm")},
+    "sandbox_open": {("sandbox", "pool_research"), ("hermes", "src_host"), ("sandbox", "pool_llm"),
+                     ("sandbox", "pool_fetch")},
+}  # fmt: skip
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_mode_pool_matrix_rule_by_rule(mode: str) -> None:
+    bundle = _bundle()
+    ctx = render.squid_context(bundle, "0" * 64, [NS], mode=mode)  # type: ignore[arg-type]
+    assert {(r["port"], r["src"]) for r in ctx["rules"] if r["dst"] == "all"} == WEB_MATRIX[mode]
+    base = bundle.egress.sandbox_profiles
+    by_src: dict[str, list[str]] = {}
+    for r in ctx["rules"]:
+        by_src.setdefault(r["src"] if r["port"] == "sandbox" else r["port"], []).append(r["dst"])
+    cats = [f"cat_{c}" for c in base["fetch"] if f"cat_{c}" in {r["dst"] for r in ctx["rules"]}]
+    assert by_src["pool_strict"] == cats  # the fetch base list, never a grant
+    assert by_src["pool_fetch"] == cats + (["all"] if mode == "sandbox_open" else [])
+    assert by_src["runner"] == ["cat_github_read"] and by_src["gatekeeper"] == ["cat_gatekeeper"]
+    assert "all" not in by_src["pool_strict"]
+
+
+def test_pool_strict_is_identical_in_all_four_goldens() -> None:
+    texts = {m: (GOLDEN / f"squid.{m}.conf").read_text(encoding="utf-8") for m in MODES}
+    strict = {
+        m: [ln for ln in t.splitlines() if "pool_strict" in ln and not ln.startswith("#")] for m, t in texts.items()
+    }
+    assert strict["allowlist"] == strict["research"] == strict["open"] == strict["sandbox_open"]
+    lines = strict["sandbox_open"]
+    assert lines[0] == "acl pool_strict src 10.213.192.0/19"
+    allows = lines[1:]
+    assert allows and all(ln.startswith("http_access allow port_sandbox pool_strict cat_") for ln in allows)
+    assert all(ln.endswith(" !denied_dst") for ln in allows)
+    fetch = [ln.replace("pool_fetch", "pool_strict") for ln in texts["allowlist"].splitlines()
+             if ln.startswith("http_access allow port_sandbox pool_fetch ")]  # fmt: skip
+    assert allows == fetch
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_no_rendered_pool_overlaps_another(mode: str) -> None:
+    ctx = render.squid_context(_bundle(), "0" * 64, [NS], mode=mode)  # type: ignore[arg-type]
+    nets = [ipaddress.ip_network(p["cidr"]) for p in ctx["pools"]]
+    assert [p["name"] for p in ctx["pools"]] == ["fetch", "research", "llm", "strict"]
+    assert str(nets[-1]) == "10.213.192.0/19"
+    for i, a in enumerate(nets):
+        assert a.subnet_of(ipaddress.ip_network(render.TASK_NET))
+        for b in nets[i + 1 :]:
+            assert not a.overlaps(b), (a, b)
+    assert not nets[-1].overlaps(ipaddress.ip_network("10.213.224.0/19"))  # the Phase-2 stack range
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_always_denied_precede_every_web_allow_and_floors_hold(mode: str) -> None:
+    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode=mode)  # type: ignore[arg-type]
+    lines = text.splitlines()
+    denies = [lines.index(f"http_access deny {a}") for a in ("denied_domains", "ip_literal")]
+    for i, line in enumerate(lines):
+        if line.startswith("http_access allow ") and " all " in line:
+            assert i > max(denies) and line.endswith(" !denied_dst"), line
+    acls = _acls(text)
+    assert set(render.REQUIRED_DENIED_DOMAINS) <= set(acls["denied_domains"][2:])
+    denied = {str(ipaddress.ip_network(c)) for c in acls["denied_dst"][1:]}
+    assert {str(ipaddress.ip_network(c)) for c in render.REQUIRED_DENIED_CIDRS} <= denied
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_log_format_carries_bytes_and_time(mode: str) -> None:
+    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode=mode)  # type: ignore[arg-type]
+    assert "logformat ossbot %ts.%03tu %>a %>lp %Ss/%03>Hs %rm %ru %<a %>st %<st %tr\n" in text
+    assert "access_log stdio:/var/log/squid/access.log logformat=ossbot rotate=0\n" in text
+
+
+def _grant_code_web(bundle: render.ConfigBundle, mode: str) -> render.ConfigBundle:
+    """Bypass the schema validator (model_copy) to hand the renderer a fetch/validate grant."""
+    modes = {k: dict(v) for k, v in bundle.egress.modes.items()}
+    modes[mode] = {**modes[mode], "fetch": ["web_public"], "validate": ["web_public"]}  # type: ignore[index]
+    return _with_egress(bundle, modes=modes)
+
+
+@pytest.mark.parametrize("mode", ["allowlist", "research", "open"])
+def test_check_mode_invariants_fails_when_fetch_gets_web_public_outside_sandbox_open(mode: str) -> None:
+    bundle = _grant_code_web(_bundle(), mode)
+    with pytest.raises(render.RenderError, match="only in egress mode sandbox_open"):
+        render.check_mode_invariants(bundle, [NS])
+    with pytest.raises(render.RenderError, match="only in egress mode sandbox_open"):
+        render.render_squid(bundle, "0" * 64, [NS], TEMPLATE, mode="sandbox_open")
+
+
+def test_renderer_refuses_web_public_for_the_strict_pool_and_llm_outside_open() -> None:
+    ctx = render.squid_context(_bundle(), "0" * 64, [NS], mode="sandbox_open")
+    ctx["rules"] = [*ctx["rules"], {"port": "sandbox", "src": "pool_strict", "dst": "all"}]
+    with pytest.raises(render.RenderError, match="pool_strict"):
+        render.render_context(ctx, TEMPLATE)
+    ctx = render.squid_context(_bundle(), "0" * 64, [NS], mode="research")
+    ctx["rules"] = [*ctx["rules"], {"port": "sandbox", "src": "pool_llm", "dst": "all"}]
+    with pytest.raises(render.RenderError, match="agent-llm/catalog"):
+        render.render_context(ctx, TEMPLATE)
+    ctx = render.squid_context(_bundle(), "0" * 64, [NS], mode="open")
+    ctx["rules"] = [*ctx["rules"], {"port": "gatekeeper", "src": "src_host", "dst": "all"}]
+    with pytest.raises(render.RenderError, match="gatekeeper"):
+        render.render_context(ctx, TEMPLATE)
+
+
+def test_strict_pool_ignores_the_mode_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pool_strict comes from egress.sandbox_profiles['fetch'] directly: a mode_lists leak can't reach it."""
+    real = render.mode_lists
+
+    def leaky(egress: EgressConfig, mode: str) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        profiles, callers = real(egress, mode)  # type: ignore[arg-type]
+        widened = [*profiles["fetch"], "kiro_core"]
+        return {**profiles, "fetch": widened, "validate": widened}, callers
+
+    monkeypatch.setattr(render, "mode_lists", leaky)
+    ctx = render.squid_context(_bundle(), "0" * 64, [NS], mode="sandbox_open")
+    assert "cat_kiro_core" not in {r["dst"] for r in ctx["rules"] if r["src"] == "pool_strict"}
+    assert "cat_kiro_core" in {r["dst"] for r in ctx["rules"] if r["src"] == "pool_fetch"}
 
 
 # ------------------------------------------------------------------- live drift (--check)
