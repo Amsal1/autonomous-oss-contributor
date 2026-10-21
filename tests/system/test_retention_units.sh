@@ -15,9 +15,12 @@ trap cleanup EXIT
 for t in ossbot-gc.timer ossbot-docker-prune.timer; do
   check "$t enabled" systemctl is-enabled --quiet "$t"
   check "$t active" systemctl is-active --quiet "$t"
-  if systemctl list-timers --all --no-pager "$t" | grep -q "$t"; then pass "$t listed by list-timers"; else fail "$t not listed"; fi
+  # Capture first: with pipefail, `cmd | grep -q` fails when grep exits early and cmd gets SIGPIPE.
+  timers=$(systemctl list-timers --all --no-pager "$t")
+  if grep -q "$t" <<<"$timers"; then pass "$t listed by list-timers"; else fail "$t not listed"; fi
 done
-if systemd-analyze cat-config systemd/journald.conf | grep -qx 'MaxRetentionSec=30d'; then
+journald=$(systemd-analyze cat-config systemd/journald.conf)
+if grep -qx 'MaxRetentionSec=30d' <<<"$journald"; then
   pass "journald MaxRetentionSec=30d in effect"
 else
   fail "journald drop-in missing"
