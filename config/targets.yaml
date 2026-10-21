@@ -16,6 +16,7 @@ defaults:
   cla_signed: true
   ai_policy_override: null        # null | allowed (prefer the /repos button, which writes a DB override)
   egress_extra: []
+  egress: mode                    # mode = fetch/validate follow the active egress mode | strict = always the allowlist pool (per repo too)
 categories:
   - id: llm-observability
     priority: 1                   # 1 = highest

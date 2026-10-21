@@ -52,6 +52,7 @@ from ossbot.common.config import (
     EgressConfig,
     ProfileConfig,
     TargetsConfig,
+    helm_hosts,
     parse_bundle,
 )
 from ossbot.common.control_flags import EGRESS_MODE_FILE, EGRESS_MODES, EgressMode, read_egress_mode
@@ -130,14 +131,6 @@ def idc_login_hosts(profile: ProfileConfig) -> list[str]:
         f"{region}.signin.aws",
         f"{region}.signin.aws.amazon.com",
     ]
-
-
-def helm_hosts(targets: TargetsConfig) -> list[str]:
-    hosts = list(targets.defaults.egress_extra)
-    for category in targets.categories:
-        for repo in category.repos:
-            hosts.extend(repo.egress_extra)
-    return hosts
 
 
 def _dedupe(hosts: Iterable[str]) -> list[str]:

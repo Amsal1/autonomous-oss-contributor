@@ -81,6 +81,19 @@ discovery:
   proposals_per_cycle: 3           # proposal cards per discovery cycle
   ci_on_pr_weight: 6.0             # 0..30: ranking boost for repos whose CI runs tests/lint on PRs; never a filter
   ci_facts_ttl_hours: 168          # 1..720: how long a repo's CI-on-PR facts are reused
+  open:                            # post-v1 open discovery: repos found by topic search, not only targets.yaml
+    enabled: true                  # /filters page "Open" can toggle it (a preference, audited, 60 s undo)
+    topics: [devops, platform-engineering, kubernetes, terraform, infrastructure-as-code, gitops, observability, sre, cloudformation, aws, ci-cd, helm, monitoring, opentelemetry, llm-observability]  # 1..30 GitHub topics; /filters edits them
+    min_stars: 1000                # 100..1000000: repos below are never recorded (config-only)
+    pushed_within_days: 60         # 7..365: last push at most this old (config-only)
+    languages_preferred: [Java, JavaScript, TypeScript, Python, Rust, Go, HCL, CloudFormation]  # ranking preference, not a filter; /filters edits it
+    language_weight: 6.0           # 0..30: ranking boost for a preferred language (config-only)
+    new_repos_per_cycle: 5         # 1..20: open repos whose issues are scanned per cycle (config-only)
+    topics_per_cycle: 3            # 1..15: topic searches per cycle, round-robin over topics (config-only)
+    reserved_slots: 1              # 0..3 (<= proposals_per_cycle): cards kept for open candidates behind the seed targets
+    repo_cooldown_days: 14         # 1..365: a scanned or skipped repo isn't searched again before this (config-only)
+    search_budget: 10              # 3..25 (>= topics_per_cycle + reserved_slots + 2): GitHub searches per cycle (config-only)
+    issue_labels: ["good first issue", "help wanted", bug, documentation, docs]  # 1..10: issue search labels (OR; config-only)
 vet:
   ai_policy:                       # §9.5: skip only on an explicit ban; banned is fixed
     unstated: allow                # allow | skip: no AI wording in any repo doc

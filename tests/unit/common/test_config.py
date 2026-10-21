@@ -5,6 +5,11 @@ from __future__ import annotations
 import pytest
 
 from ossbot.common.config import (
+    DEFAULT_OPEN_TOPICS,
+    DEFAULT_PREFERRED_LANGUAGES,
+    KEPT_PRIORITY,
+    OPEN_CATEGORY,
+    OPEN_PRIORITY,
     AiPolicyRules,
     ConfigError,
     EgressConfig,
@@ -13,7 +18,9 @@ from ossbot.common.config import (
     ProfileConfig,
     RetentionPolicy,
     TargetsConfig,
+    discovered_target,
     effective_ai_rules,
+    helm_hosts,
     parse_bundle,
     parse_models,
     parse_yaml_model,
@@ -288,3 +295,114 @@ def test_profile_example_has_no_personal_values() -> None:
     text = load("profile.example.yaml").decode()
     for needle in ("your-", "Your Name", "example", "age1replace"):
         assert needle in text
+
+
+# ------------------------------------------------------------- post-v1 open discovery (design §3.1, §8.5)
+def test_open_discovery_defaults_equal_the_spec() -> None:
+    p = PolicyConfig(version=1).discovery.open
+    assert p.enabled is True
+    assert len(p.topics) == 15 and p.topics[:2] == ["devops", "platform-engineering"]
+    assert "llm-observability" in p.topics and "gitops" in p.topics
+    assert (p.min_stars, p.pushed_within_days, p.new_repos_per_cycle) == (1000, 60, 5)
+    assert p.languages_preferred == list(DEFAULT_PREFERRED_LANGUAGES) and len(p.languages_preferred) == 8
+    assert "Go" in p.languages_preferred and "CloudFormation" in p.languages_preferred
+    assert (p.topics_per_cycle, p.reserved_slots, p.repo_cooldown_days, p.search_budget) == (3, 1, 14, 10)
+    assert p.language_weight == 6.0
+    assert p.issue_labels == ["good first issue", "help wanted", "bug", "documentation", "docs"]
+    assert tuple(p.topics) == DEFAULT_OPEN_TOPICS
+    # the shipped block equals the defaults (one comment per key in config/policy.yaml)
+    assert parse_bundle(bundle_files()).policy.discovery.open == p
+
+
+@pytest.mark.parametrize(
+    ("block", "needle"),
+    [
+        ("{bogus: 1}", "discovery.open.bogus"),
+        ("{topics: [Bad_Topic]}", "discovery.open.topics.0"),
+        ("{topics: [gitops, GitOps]}", "discovery.open.topics"),
+        ("{topics: [gitops, gitops]}", "topics must be unique"),
+        ("{topics: []}", "discovery.open.topics"),
+        ("{topics: [" + "a" * 51 + "]}", "discovery.open.topics.0"),
+        ("{languages_preferred: [Go, go]}", "case-insensitive"),
+        ("{languages_preferred: ['9lang']}", "discovery.open.languages_preferred.0"),
+        ("{issue_labels: ['a,b']}", "discovery.open.issue_labels.0"),
+        ("{min_stars: 99}", "discovery.open.min_stars"),
+        ("{search_budget: 5}", "search_budget 5 must be >="),  # 3 + 1 + 2 = 6
+        ("{topics_per_cycle: 8, search_budget: 10}", "search_budget 10"),
+        ("{new_repos_per_cycle: 21}", "discovery.open.new_repos_per_cycle"),
+    ],
+)
+def test_open_discovery_rejects(block: str, needle: str) -> None:
+    with pytest.raises(ConfigError) as info:
+        parse_yaml_model(PolicyConfig, "policy.yaml", f"version: 1\ndiscovery: {{open: {block}}}\n".encode())
+    assert needle in str(info.value)
+
+
+def test_reserved_slots_within_proposals_per_cycle() -> None:
+    text = b"version: 1\ndiscovery: {proposals_per_cycle: 1, open: {reserved_slots: 2}}\n"
+    with pytest.raises(ConfigError, match=r"discovery\.open\.reserved_slots 2 exceeds"):
+        parse_yaml_model(PolicyConfig, "policy.yaml", text)
+    ok = b"version: 1\ndiscovery: {proposals_per_cycle: 1, open: {reserved_slots: 1}}\n"
+    assert parse_yaml_model(PolicyConfig, "policy.yaml", ok).discovery.open.reserved_slots == 1
+
+
+def test_bad_open_block_fails_the_bundle_with_the_field_path() -> None:
+    files = bundle_files()
+    files["policy.yaml"] = files["policy.yaml"].replace(b"    min_stars: 1000", b"    min_stars: 5")
+    with pytest.raises(ConfigError) as info:
+        parse_bundle(files)
+    assert "discovery.open.min_stars" in " ".join(info.value.errors["policy.yaml"])
+
+
+def test_target_egress_entry_and_defaults() -> None:
+    text = (
+        "version: 1\ndefaults: {egress: strict}\ncategories: [{id: a, priority: 1, why: x, repos: ["
+        "{repo: a/one}, {repo: a/two, egress: mode}]}]\n"
+    )
+    targets = parse_yaml_model(TargetsConfig, "targets.yaml", text.encode())
+    assert getattr(resolve_target(targets, "a/one"), "egress", None) == "strict"
+    assert getattr(resolve_target(targets, "a/two"), "egress", None) == "mode"
+    plain = _targets("{repo: a/one}, {repo: a/two, egress: strict}")
+    assert getattr(resolve_target(plain, "a/one"), "egress", None) == "mode"
+    assert getattr(resolve_target(plain, "a/two"), "egress", None) == "strict"
+    with pytest.raises(ConfigError, match="egress"):
+        _targets("{repo: a/one, egress: open}")
+    shipped = parse_yaml_model(TargetsConfig, "targets.yaml", load("targets.yaml"))
+    assert shipped.defaults.egress == "mode"
+
+
+def test_discovered_target_synthesis() -> None:
+    targets = parse_yaml_model(TargetsConfig, "targets.yaml", load("targets.yaml"))
+    d = targets.defaults
+    t = discovered_target(targets, "argoproj/argo-cd", kept=False, egress_strict=False)
+    assert t is not None
+    assert (t.repo, t.category, t.priority) == ("argoproj/argo-cd", OPEN_CATEGORY, OPEN_PRIORITY)
+    assert t.discovery is True and t.disclosure_template is None
+    assert t.labels == tuple(d.labels) and t.skip_labels == tuple(d.skip_labels)
+    assert t.clone_depth == d.clone_depth and t.validation == tuple(d.validation)
+    assert t.cla_signed is d.cla_signed and t.egress_extra == tuple(d.egress_extra)
+    assert t.ai_unstated is None and t.ai_unclear is None and t.egress == "mode"
+    kept = discovered_target(targets, "argoproj/argo-cd", kept=True, egress_strict=True)
+    assert kept is not None and kept.priority == KEPT_PRIORITY and kept.egress == "strict"
+    assert discovered_target(targets, "LineageOS/android", kept=False, egress_strict=False) is None  # denylist
+
+
+def test_discovered_target_takes_every_default() -> None:
+    """Review-3 L2: enabled, size_class, ai_policy_override and egress_extra flow from targets.defaults."""
+    text = (
+        "version: 1\ndefaults: {enabled: false, size_class: s, ai_policy_override: allowed, cla_signed: true,"
+        " egress_extra: [charts.example.org], egress: strict}\ncategories: []\n"
+    )
+    targets = parse_yaml_model(TargetsConfig, "targets.yaml", text.encode())
+    t = discovered_target(targets, "o/r", kept=False, egress_strict=False)
+    assert t is not None
+    assert (t.enabled, t.size_class, t.ai_policy_override) == (False, "s", "allowed")
+    assert t.cla_signed is True and t.egress_extra == ("charts.example.org",) and t.egress == "strict"
+
+
+def test_helm_hosts_lives_in_common_config() -> None:
+    targets = _targets("{repo: a/one, egress_extra: [charts.example.org]}")
+    assert helm_hosts(targets) == ["charts.example.org"]
+    from ossbot.ctl import render
+
+    assert render.helm_hosts is helm_hosts

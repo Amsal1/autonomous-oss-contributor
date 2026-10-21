@@ -191,6 +191,85 @@ class ProposalPolicy(Strict):
     max_concurrent_scouts: PosInt = 2
 
 
+TOPIC_RE = r"^[a-z0-9][a-z0-9-]{0,49}$"  # GitHub topic rules: lowercase letters, digits, hyphens, <= 50
+LABEL_RE = r"^[^\x00-\x1f\",]{1,50}$"  # no quote or comma: they would break the label:a,b OR list
+LANGUAGE_RE = r"^[A-Za-z][A-Za-z0-9 +#.-]{0,39}$"
+Topic = Annotated[str, Field(pattern=TOPIC_RE)]
+Language = Annotated[str, Field(pattern=LANGUAGE_RE)]
+IssueLabel = Annotated[str, Field(pattern=LABEL_RE)]
+DEFAULT_OPEN_TOPICS: tuple[str, ...] = (
+    "devops", "platform-engineering", "kubernetes", "terraform", "infrastructure-as-code", "gitops",
+    "observability", "sre", "cloudformation", "aws", "ci-cd", "helm", "monitoring", "opentelemetry",
+    "llm-observability",
+)  # fmt: skip
+DEFAULT_PREFERRED_LANGUAGES: tuple[str, ...] = (
+    "Java", "JavaScript", "TypeScript", "Python", "Rust", "Go", "HCL", "CloudFormation",
+)  # fmt: skip
+DEFAULT_OPEN_LABELS: tuple[str, ...] = ("good first issue", "help wanted", "bug", "documentation", "docs")
+
+
+def unique_topics(value: list[str]) -> list[str]:
+    """Topics are unique after lower() (shared by the policy block and the /filters prefs)."""
+    lowered = [t.lower() for t in value]
+    if len(lowered) != len(set(lowered)):
+        raise ValueError("topics must be unique")
+    return value
+
+
+def unique_languages(value: list[str]) -> list[str]:
+    """Languages are unique case-insensitively (shared by the policy block and the /filters prefs)."""
+    folded = [x.casefold() for x in value]
+    if len(folded) != len(set(folded)):
+        raise ValueError("languages must be unique (case-insensitive)")
+    return value
+
+
+class OpenDiscoveryPolicy(Strict):
+    """Post-v1 open discovery (design §3.1): repos found by topic search beyond targets.yaml.
+
+    Only ``enabled``, ``topics`` and ``languages_preferred`` are Telegram-tunable (``/filters``,
+    ``discovery_prefs``); every count and budget is config-only (/reload)."""
+
+    enabled: bool = True
+    topics: Annotated[list[Topic], Field(min_length=1, max_length=30)] = Field(
+        default_factory=lambda: list(DEFAULT_OPEN_TOPICS)
+    )
+    min_stars: Annotated[int, Field(ge=100, le=1_000_000)] = 1000
+    pushed_within_days: Annotated[int, Field(ge=7, le=365)] = 60
+    languages_preferred: Annotated[list[Language], Field(max_length=20)] = Field(
+        default_factory=lambda: list(DEFAULT_PREFERRED_LANGUAGES)
+    )
+    language_weight: Annotated[float, Field(ge=0.0, le=30.0)] = 6.0
+    new_repos_per_cycle: Annotated[int, Field(ge=1, le=20)] = 5
+    topics_per_cycle: Annotated[int, Field(ge=1, le=15)] = 3
+    reserved_slots: Annotated[int, Field(ge=0, le=3)] = 1
+    repo_cooldown_days: Annotated[int, Field(ge=1, le=365)] = 14
+    search_budget: Annotated[int, Field(ge=3, le=25)] = 10
+    issue_labels: Annotated[list[IssueLabel], Field(min_length=1, max_length=10)] = Field(
+        default_factory=lambda: list(DEFAULT_OPEN_LABELS)
+    )
+
+    @field_validator("topics")
+    @classmethod
+    def _topics_unique(cls, value: list[str]) -> list[str]:
+        return unique_topics(value)
+
+    @field_validator("languages_preferred")
+    @classmethod
+    def _languages_unique(cls, value: list[str]) -> list[str]:
+        return unique_languages(value)
+
+    @model_validator(mode="after")
+    def _budget_fits(self) -> OpenDiscoveryPolicy:
+        # the repo searches, one issue search and the reserved tier-1 mention checks fit one cycle
+        need = self.topics_per_cycle + self.reserved_slots + 2
+        if self.search_budget < need:
+            raise ValueError(
+                f"search_budget {self.search_budget} must be >= topics_per_cycle + reserved_slots + 2 ({need})"
+            )
+        return self
+
+
 class DiscoveryPolicy(Strict):
     proactive: Literal[False] = False  # phase 2
     interval_hours: PosInt = 6
@@ -200,6 +279,7 @@ class DiscoveryPolicy(Strict):
     # Config-only (/reload), not a Telegram-tunable discovery preference.
     ci_on_pr_weight: Annotated[float, Field(ge=0.0, le=30.0)] = 6.0
     ci_facts_ttl_hours: Annotated[int, Field(ge=1, le=720)] = 168
+    open: OpenDiscoveryPolicy = OpenDiscoveryPolicy()
 
 
 AiRule = Literal["allow", "skip"]
@@ -314,10 +394,25 @@ class PolicyConfig(Strict):
             )
         return self
 
+    @model_validator(mode="after")
+    def _reserved_slots_fit(self) -> PolicyConfig:
+        if self.discovery.open.reserved_slots > self.discovery.proposals_per_cycle:
+            raise ValueError(
+                f"discovery.open.reserved_slots {self.discovery.open.reserved_slots} exceeds"
+                f" discovery.proposals_per_cycle {self.discovery.proposals_per_cycle}"
+            )
+        return self
+
 
 # ----------------------------------------------------------------------------------- targets
 ValidationKind = Literal["static", "unit", "smoke"]
 DEFAULT_VALIDATION: tuple[ValidationKind, ...] = ("static", "unit", "smoke")
+TargetEgress = Literal["mode", "strict"]
+# Post-v1 open discovery (design §8.5): repos outside targets.yaml resolve into this category; a kept
+# repo ranks just ahead of a plain open candidate, both behind every configured category.
+OPEN_CATEGORY = "open-discovery"
+OPEN_PRIORITY = 5
+KEPT_PRIORITY = 4
 
 
 class TargetDefaults(Strict):
@@ -333,6 +428,9 @@ class TargetDefaults(Strict):
     cla_signed: bool = False
     ai_policy_override: Literal["allowed"] | None = None
     egress_extra: list[Annotated[str, Field(pattern=HOST_RE)]] = Field(default_factory=list)
+    # §12.3 (post-v1): "mode" follows the active egress mode; "strict" keeps the allowlist pool for
+    # fetch/validate jobs of the repo in every mode. None = "mode".
+    egress: TargetEgress | None = None
 
 
 class AiPolicyOverride(Strict):
@@ -357,6 +455,7 @@ class RepoEntry(Strict):
     ai_policy: AiPolicyOverride | None = None
     egress_extra: list[Annotated[str, Field(pattern=HOST_RE)]] = Field(default_factory=list)
     disclosure_template: str | None = None
+    egress: TargetEgress | None = None  # §12.3; None = defaults.egress (else "mode")
 
 
 class Category(Strict):
@@ -411,6 +510,7 @@ class ResolvedTarget:
     disclosure_template: str | None
     ai_unstated: str | None = None  # per-repo ``ai_policy`` override (None = policy.vet.ai_policy)
     ai_unclear: str | None = None
+    egress: str = "mode"  # §12.3: "mode" | "strict" (entry, else defaults.egress, else "mode")
 
 
 def effective_ai_rules(policy: PolicyConfig, target: ResolvedTarget | None) -> AiPolicyRules:
@@ -461,8 +561,46 @@ def resolve_target(targets: TargetsConfig, repo: str) -> ResolvedTarget | None:
                 disclosure_template=e.disclosure_template,
                 ai_unstated=e.ai_policy.unstated if e.ai_policy else None,
                 ai_unclear=e.ai_policy.unclear if e.ai_policy else None,
+                egress=e.egress or d.egress or "mode",
             )
     return None
+
+
+def discovered_target(targets: TargetsConfig, repo: str, *, kept: bool, egress_strict: bool) -> ResolvedTarget | None:
+    """A repo outside targets.yaml that passed the open-discovery checks (design §8.5), or None if denied.
+
+    Seed defaults throughout (``enabled``, ``size_class``, ``ai_policy_override``, labels, validation,
+    ``cla_signed``, ``egress_extra``: the same merge ``resolve_target`` applies; review-3 L2); no per-repo
+    host, AI override or disclosure template. The caller checks that ``repo`` isn't a config target."""
+    if targets.is_denied(repo):
+        return None
+    d = targets.defaults
+    return ResolvedTarget(
+        repo=repo,
+        category=OPEN_CATEGORY,
+        priority=KEPT_PRIORITY if kept else OPEN_PRIORITY,
+        enabled=d.enabled,
+        discovery=True,
+        labels=tuple(dict.fromkeys(d.labels)),
+        skip_labels=tuple(d.skip_labels),
+        clone_depth=d.clone_depth,
+        size_class=d.size_class,
+        validation=tuple(d.validation),
+        cla_signed=d.cla_signed,
+        ai_policy_override=d.ai_policy_override,
+        egress_extra=tuple(d.egress_extra),
+        disclosure_template=None,
+        egress="strict" if egress_strict else (d.egress or "mode"),
+    )
+
+
+def helm_hosts(targets: TargetsConfig) -> list[str]:
+    """Every ``egress_extra`` host of targets.yaml (defaults first): the ``pkg_helm`` category (§11.2)."""
+    hosts = list(targets.defaults.egress_extra)
+    for category in targets.categories:
+        for repo in category.repos:
+            hosts.extend(repo.egress_extra)
+    return hosts
 
 
 # ------------------------------------------------------------------------------------ egress
