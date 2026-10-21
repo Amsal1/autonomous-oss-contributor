@@ -201,7 +201,8 @@ type = "forbidden"
 source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
     "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.**"]
 ignore_imports = ["ossbot.gatekeeper.app -> ossbot.gatekeeper.holds",
-    "ossbot.gatekeeper.context -> ossbot.gatekeeper.holds"]
+    "ossbot.gatekeeper.context -> ossbot.gatekeeper.holds",
+    "ossbot.gatekeeper.telegram.hold_cards -> ossbot.gatekeeper.holds"]
 unmatched_ignore_imports_alerting = "error"
 forbidden_modules = ["ossbot.gatekeeper.holds"]
 allow_indirect_imports = false

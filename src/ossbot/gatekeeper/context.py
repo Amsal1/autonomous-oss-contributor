@@ -14,6 +14,7 @@ from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
+from ossbot.common.schemas import HoldView
 from ossbot.gatekeeper import db, policy, proposals, secret_scan
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
@@ -328,6 +329,14 @@ def build_context(
         holds=holds,
     )
     ctx_ref["ctx"] = ctx
+
+    def publish_hold(view: HoldView) -> None:
+        """The P1 hold card (open-discovery §13.3): injected, so holds.py never imports Telegram."""
+        from ossbot.gatekeeper.telegram import hold_cards  # noqa: PLC0415 - telegram imports the context
+
+        hold_cards.queue_hold_card(ctx, view)
+
+    holds.publish_hold = publish_hold
     decisions.proposals.rows_hook = lambda approval_id, tokens: proposal_cards.card_rows(ctx, approval_id, tokens)
     ctx.skill_reviews = SkillReviews(conn, paths, clock, audit, decisions.skills, hermes_tier, owner_chat,
                                      on_card=lambda approval_id: ctx.on_approval_created(approval_id))  # noqa: PLW0108 - late-bound: the front-end replaces it  # fmt: skip
