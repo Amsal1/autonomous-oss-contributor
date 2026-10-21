@@ -4,12 +4,16 @@ open-discovery line and the Keep/Never row, Hermes suggestions, and a search rat
 the cycle. Every component is real (scheduler, stages, gatekeeper, sandboxd on the fake runtime, the
 Telegram handlers over the fake Bot API); GitHub is ``tests/fakes/fake_github.py``.
 
+Scenario 6 (design §13, ADR-0023): sandboxd's egress meter stops a validate job that uploaded 80 MB, the
+gatekeeper holds only that contribution (P1 card, 423 at stage open), the other one goes on, and the
+owner's Resume two-tap lets the stage run again.
+
 Scenario 7 holds throughout: FakeGitHub records no write and the dry-run flag is never touched.
-Scenario 6 (the egress anomaly hold) belongs to the egress work and is not here.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, tzinfo
@@ -23,13 +27,15 @@ from ossbot.common.schemas import PrefsUpdate
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.runner import open_discovery as od
+from ossbot.runner.errors import ContributionHeld
 from ossbot.runner.github_read import GitHubRead
-from ossbot.runner.stages import discover
+from ossbot.runner.stages import discover, validate
+from ossbot.sandboxd.egress_meter import EgressMeter
 from tests.conftest import UID_REQUESTER
 from tests.e2e.conftest import E2E, build_e2e
 from tests.githarness import GitWorld
 from tests.telegram.proposalkit import card_of
-from tests.telegram.reviewkit import labels, text, token
+from tests.telegram.reviewkit import labels, sent_with, text, token
 from tests.telegram.tgharness import TgRig, make_rig
 from tests.unit.gatekeeper.api_helpers import client
 from tests.unit.runner.test_discover_open import issue, issue_searches, open_repo, row
@@ -216,6 +222,89 @@ async def test_hermes_suggestions_are_checked_and_gated(rig: Rig) -> None:
     assert rig.e2e.state(cid) == "PROPOSED"  # one tap is not a decision
     await rig.tap(mid, "🛠 Confirm")
     assert rig.e2e.state(cid) == "PROPOSAL_APPROVED"
+    rig.untouched()
+
+
+# ---------------------------------------------------------------- scenario 6
+MIB = 1024 * 1024
+
+
+def anomaly_meter(r: Rig, tmp_path: Path, cid: str) -> EgressMeter:
+    """sandboxd's meter on a fake squid log; ``cid``'s first validate job "uploads" 80 MB (limit 50)."""
+    log = tmp_path / "proxy" / "access.log"
+    log.parent.mkdir()
+    log.write_text("", encoding="utf-8")
+    jobs = r.e2e.jobs
+    meter = EgressMeter(log, tmp_path / "egress-runs", lambda: r.ctx.config.egress.anomaly, sleep=lambda s: None,
+                        on_breach=jobs.flag_anomaly)  # fmt: skip
+    meter.prime()
+    register = meter.register
+    done: list[str] = []
+
+    def with_traffic(run_id: str, job_cid: str, stage: str, subnet: str, start_ts: float, egress: str,
+                     mode: str) -> None:  # fmt: skip
+        register(run_id, job_cid, stage, subnet, start_ts, egress, mode)
+        if job_cid == cid and stage == "validate" and not done:
+            done.append(run_id)
+            client = str(next(ipaddress.IPv4Network(subnet).hosts()))
+            with log.open("a", encoding="utf-8") as fh:
+                fh.write(f"{start_ts + 1:.3f} {client} 3128 TCP_TUNNEL/200 CONNECT paste.example:443 1.2.3.4"
+                         f" {80 * MIB} 4000 900\n")  # fmt: skip
+
+    meter.register = with_traffic  # type: ignore[method-assign]
+    jobs.meter = meter
+    return meter
+
+
+def stage_runs(ctx: AppContext, cid: str) -> list[tuple[str, str, str | None]]:
+    sql = "SELECT stage, status, error_class FROM stage_runs WHERE cid = ? ORDER BY started_at, rowid"
+    return [(r[0], r[1], r[2]) for r in ctx.conn.execute(sql, (cid,))]
+
+
+def validated(ctx: AppContext, cid: str) -> bool:
+    return ("validate", "succeeded", None) in stage_runs(ctx, cid)
+
+
+async def test_an_egress_anomaly_holds_only_that_contribution(rig: Rig, tmp_path: Path) -> None:
+    go_repo(rig)  # the seed keeps its issue: one seed and one open candidate
+    by_repo = {rig.upstream(c): c for c in rig.cycle()}
+    held, other = by_repo[SEED], by_repo[OPEN]
+    anomaly_meter(rig, tmp_path, held)
+    rig.e2e.start_work(held)
+    rig.e2e.start_work(other)
+    scheduler = rig.e2e.ready_scheduler()
+    for _ in range(40):
+        if rig.ctx.holds.is_held(held) and validated(rig.ctx, other):
+            break
+        scheduler.tick()
+        rig.ctx.clock.advance(seconds=20)  # type: ignore[attr-defined]
+    # the meter stopped the held one's validate job; the run is cancelled, not failed (ContributionHeld)
+    hold = rig.ctx.holds.get_open(held)
+    assert hold is not None, rig.e2e.why(held)
+    assert (hold.detail.stage, hold.detail.breached, hold.detail.up_bytes) == ("validate", ["upload"], 80 * MIB)
+    assert ("validate", "cancelled", "contribution_held") in stage_runs(rig.ctx, held)
+    assert [r for r in stage_runs(rig.ctx, held) if r[1] == "failed"] == []
+    assert rig.e2e.state(held) == "VALIDATING"
+    assert rig.e2e.jobs.pending_holds() == []  # the gatekeeper recorded it on the first call
+    assert validated(rig.ctx, other), rig.e2e.why(other)  # the other contribution went on
+    card = db.one(rig.ctx.conn, "SELECT priority FROM tg_outbox WHERE payload_json LIKE '%Egress anomaly%'")
+    assert card is not None and card["priority"] == 1
+    # the next stage-run open is refused by the gatekeeper (423) and maps to ContributionHeld (L1)
+    with pytest.raises(ContributionHeld):
+        validate.run(rig.e2e.sc, rig.e2e.sc.gk.contribution(held))
+    # 🚨 card -> ▶️ Resume… -> ▶️ Resume (owner, two taps)
+    await rig.tg.flush()
+    mid = sent_with(rig.tg, "Egress anomaly")
+    await rig.tap(mid, "▶️ Resume…")
+    assert rig.ctx.holds.is_held(held)  # one tap is not a decision
+    await rig.tap(mid, "▶️ Resume")
+    assert not rig.ctx.holds.is_held(held)
+    for _ in range(10):
+        if validated(rig.ctx, held):
+            break
+        scheduler.tick()
+        rig.ctx.clock.advance(seconds=20)  # type: ignore[attr-defined]
+    assert validated(rig.ctx, held), rig.e2e.why(held)  # the stage ran again
     rig.untouched()
 
 
