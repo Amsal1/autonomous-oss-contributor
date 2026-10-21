@@ -13,7 +13,7 @@ defaults:
   size_class: null                # optional autonomous-discovery preference xs|s|m|l|xl (null = inherit size.autonomous_max_class); never a hard limit
   validation: [static, unit, smoke]
   stack_validation: none          # compose | kind are phase 2
-  cla_signed: false
+  cla_signed: true
   ai_policy_override: null        # null | allowed (prefer the /repos button, which writes a DB override)
   egress_extra: []
 categories:
