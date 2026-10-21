@@ -93,6 +93,193 @@ def test_targets_facts_rows() -> None:
     assert len(verify_targets.facts(GitHubRead(gh.sync_client()), [f"o/r{i}" for i in range(9)])) == 5
 
 
+def test_targets_verify_and_facts_show_an_inactive_default_branch() -> None:
+    """Owner addition (2026-10-21): a seed target whose default branch is 7 months old is a WARN in
+    ``targets verify`` and flagged in ``targets facts`` (discovery skips it; it stays in targets.yaml)."""
+    gh = FakeGitHub()
+    now = datetime(2026, 10, 18, tzinfo=UTC)
+    gh.add_repo("old/branch", pushed_at="2026-10-17T00:00:00Z", default_branch="main")
+    gh.commit_dates["old/branch"] = "2026-03-01T00:00:00Z"
+    gh.add_repo("new/branch", pushed_at="2026-10-17T00:00:00Z", default_branch="trunk")
+    gh.commit_dates["new/branch"] = "2026-10-16T00:00:00Z"
+    rows = verify_targets.verify(GitHubRead(gh.sync_client()), ["old/branch", "new/branch"], 60, now)
+    assert [(r["repo"], r["status"]) for r in rows] == [("old/branch", "WARN"), ("new/branch", "PASS")]
+    assert rows[0]["detail"].startswith("inactive_default_branch: no commit on main for 231 days")
+    by = {r["repo"]: r for r in verify_targets.facts(GitHubRead(gh.sync_client()), ["old/branch", "new/branch"],
+                                                     now)}  # fmt: skip
+    assert (by["old/branch"]["inactive"], by["old/branch"]["branch_days"]) == (True, 231)
+    assert (by["new/branch"]["inactive"], by["new/branch"]["branch_days"]) == (False, 2)
+    assert "⚠️ inactive_default_branch" in cli._branch_line(by["old/branch"])
+    assert cli._branch_line(by["new/branch"]) == " · last commit on trunk: 2 d ago"
+
+
+# ------------------------------------------------------------------ post-v1 open discovery (§10)
+def search_fake() -> FakeGitHub:
+    gh = FakeGitHub()
+    base = {"stargazers_count": 20000, "pushed_at": "2026-10-16T00:00:00Z", "language": "Go",
+            "license": {"spdx_id": "Apache-2.0"}, "topics": ["gitops"], "has_issues": True,
+            "visibility": "public", "default_branch": "main"}  # fmt: skip
+    gh.add_repo("acme/top", **base)
+    gh.add_repo("acme/helm", **{**base, "stargazers_count": 3000})
+    gh.add_repo("acme/forked", **{**base, "fork": True})
+    gh.add_repo("acme/nodocs", **base)
+    gh.add_repo("langfuse/langfuse", **base)  # a config target: excluded
+    for repo in ("acme/top", "acme/helm", "acme/forked", "langfuse/langfuse"):
+        gh.files[(repo, "CONTRIBUTING.md")] = "Be kind."
+    gh.files[("acme/helm", "Chart.yaml")] = "dependencies:\n  - repository: https://charts.example.io\n"
+    gh.add_pull("acme/helm", state="closed", merged_at="2026-10-01T00:00:00Z", head={"sha": "h1", "label": "x:h1"})
+    gh.check_runs[("acme/helm", "h1")] = [{"name": "pytest", "status": "completed", "conclusion": "success"}]
+    return gh
+
+
+SEARCH_REQ: dict[str, Any] = {
+    "mode": "search", "topics": ["gitops"], "min_stars": 1000, "pushed_within_days": 60,
+    "languages_preferred": ["Go"], "language_weight": 6.0, "ci_weight": 6.0, "top": 10,
+    "exclude": ["langfuse/langfuse"], "deny_patterns": [], "own_logins": ["test-bot-login"],
+    "allowed_hosts": ["github.com", "proxy.golang.org"], "max_default_branch_age_days": 180,
+}  # fmt: skip
+
+
+def test_targets_search_dry_run_is_get_only_and_ranked() -> None:
+    gh = search_fake()
+    doc = verify_targets.search(GitHubRead(gh.sync_client(), sleep=lambda s: None), SEARCH_REQ,
+                                datetime(2026, 10, 18, tzinfo=UTC))  # fmt: skip
+    assert doc["ok"] is True
+    assert [r["repo"] for r in doc["rows"]] == ["acme/helm", "acme/top"]  # CI on PRs moves helm first
+    helm = doc["rows"][0]
+    assert helm["ci_on_pr"] == "yes" and helm["would_skip_if_strict"] == "egress_extra_needed:charts.example.io"
+    assert doc["rows"][1]["would_skip_if_strict"] is None
+    reasons = {r["repo"]: r["reason"] for r in doc["filtered"]}
+    assert reasons == {"acme/forked": "fork", "langfuse/langfuse": "excluded", "acme/nodocs": "no_contributing"}
+    assert gh.writes == [] and {r.method for r in gh.requests} == {"GET"}
+    assert not any(r.path.startswith("/v1/") for r in gh.requests)
+    q = next(r.params for r in gh.requests if r.path == "/search/repositories")
+    assert q == {"q": "topic:gitops stars:>=1000 pushed:>=2026-08-19 archived:false mirror:false is:public",
+                 "sort": "stars", "order": "desc", "per_page": "50"}  # fmt: skip
+
+
+def test_targets_search_rate_limit_exits_1(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    import io
+
+    gh = search_fake()
+    gh.answers["GET /search/repositories"] = [(403, {"x-ratelimit-remaining": "0", "x-ratelimit-reset": "1793000000"},
+                                               {"message": "API rate limit exceeded"})]  # fmt: skip
+    monkeypatch.setattr(verify_targets, "GitHubRead", lambda: GitHubRead(gh.sync_client(), sleep=lambda s: None))
+    monkeypatch.setattr(verify_targets.sys, "stdin", io.StringIO(json.dumps(SEARCH_REQ)))
+    assert verify_targets.main() == 1
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["error"] == "rate_limited" and doc["until"] > 0 and gh.writes == []
+
+
+def test_targets_search_builds_the_request_and_prints(monkeypatch: pytest.MonkeyPatch) -> None:
+    import subprocess
+
+    from tests.unit.common.test_config import bundle_files
+
+    monkeypatch.setattr(cli, "_require_root", lambda what: None)
+    monkeypatch.setattr(cli, "read_current", lambda root: ("h", bundle_files()))
+    gets: list[str] = []
+
+    def api(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 30.0) -> tuple[int, Any]:
+        assert method == "GET"
+        gets.append(path)
+        if path == "/v1/discovery-prefs":
+            return 200, {"effective": {"open": {"enabled": True, "topics": ["helm", "sre"],
+                                                "languages_preferred": ["Rust"]}}}  # fmt: skip
+        return 200, [{"repo": "never/one"}] if "never" in path else [{"repo": "kept/two"}]
+
+    monkeypatch.setattr(cli, "api", api)
+    ran: list[tuple[list[str], str]] = []
+    out = {"ok": True, "rows": [{"repo": "acme/top", "stars": 20000, "language": "Go", "ci_on_pr": "yes",
+                                 "pushed_at": "2026-10-16T00:00:00Z", "license": "Apache-2.0", "topic": "helm",
+                                 "score": 27.5, "would_skip_if_strict": None}],
+           "filtered": [{"repo": "acme/forked", "reason": "fork", "topic": "helm"}]}  # fmt: skip
+
+    def run(argv: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        ran.append((argv, kw.get("input") or ""))
+        return subprocess.CompletedProcess(argv, 0, json.dumps(out) + "\n" if kw.get("input") else "", "")
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    result = CliRunner().invoke(cli.app, ["targets", "search", "--top", "5", "--all"])
+    assert result.exit_code == 0, result.output
+    assert ran[0][0] == [cli.FIREWALL_CHECK, "--check"] and ran[1][0] == cli.targets_verify_argv()
+    req = json.loads(ran[1][1])
+    assert (req["mode"], req["top"], req["topics"], req["languages_preferred"]) == ("search", 5, ["helm", "sre"],
+                                                                                   ["Rust"])  # fmt: skip
+    assert {"langfuse/langfuse", "never/one", "kept/two"} <= set(req["exclude"])
+    assert "test-bot-login" in req["own_logins"] and "pypi.org" in req["allowed_hosts"]
+    assert req["max_default_branch_age_days"] == 180
+    assert gets == ["/v1/discovery-prefs", "/v1/discovered-targets?status=never&limit=500",
+                    "/v1/discovered-targets?status=kept&limit=500"]  # fmt: skip
+    assert "acme/top" in result.output and "filtered acme/forked (helm): fork" in result.output
+    topic = CliRunner().invoke(cli.app, ["targets", "search", "--topic", "gitops"])
+    assert topic.exit_code == 0 and json.loads(ran[-1][1])["topics"] == ["gitops"]
+
+
+@pytest.mark.parametrize(
+    ("argv", "decision"),
+    [(["add", "acme/tool"], "keep"), (["block", "acme/tool"], "never"), (["unblock", "acme/tool"], "unblock"),
+     (["unblock", "acme/tool", "--unkeep"], "unkeep"), (["strict", "acme/tool", "--off"], "unstrict")],
+)  # fmt: skip
+def test_targets_decisions_need_a_tty_and_send_the_decision(monkeypatch: pytest.MonkeyPatch, argv: list[str],
+                                                            decision: str) -> None:  # fmt: skip
+    sent: list[Any] = []
+
+    def api(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 30.0) -> tuple[int, Any]:
+        sent.append((method, path, body))
+        return 200, {"view": {"repo": "acme/tool", "status": "kept", "egress_strict": False}}
+
+    monkeypatch.setattr(cli, "api", api)
+    refused = CliRunner().invoke(cli.app, ["targets", *argv])  # CliRunner's stdin is not a TTY
+    assert refused.exit_code == 2 and "interactive TTY confirm" in refused.output and sent == []
+    words: list[str] = []
+    monkeypatch.setattr(cli, "_confirm", words.append)
+    ok = CliRunner().invoke(cli.app, ["targets", *argv])
+    assert ok.exit_code == 0, ok.output
+    assert sent == [("POST", "/v1/discovered-targets/decision", {"repo": "acme/tool", "decision": decision})]
+    assert words == [{"keep": "KEEP", "never": "BLOCK", "unblock": "UNBLOCK", "unkeep": "UNBLOCK",
+                      "unstrict": "WIDEN"}[decision]]  # fmt: skip
+
+
+def test_targets_strict_on_needs_no_confirm_and_refusals_are_explained(monkeypatch: pytest.MonkeyPatch) -> None:
+    view = {"view": {"repo": "acme/tool", "status": "candidate", "egress_strict": True}}
+    answers = [
+        (200, view),
+        (409, {"error": "is_target"}),
+        (409, {"error": "already_target"}),
+        (400, {"error": "denied"}),
+    ]
+    monkeypatch.setattr(cli, "api", lambda method, path, body=None, timeout=30.0: answers.pop(0))
+    monkeypatch.setattr(cli, "_confirm", lambda word: None)
+    ok = CliRunner().invoke(cli.app, ["targets", "strict", "acme/tool"])
+    assert ok.exit_code == 0 and "strict egress: acme/tool is now candidate (strict egress)" in ok.output
+    target = CliRunner().invoke(cli.app, ["targets", "strict", "langfuse/langfuse"])
+    assert target.exit_code == 1 and "set egress: strict in config/targets.yaml" in target.output
+    assert "already in config/targets.yaml" in CliRunner().invoke(cli.app, ["targets", "add", "langfuse/x"]).output
+    assert "denylisted or forbidden owner" in CliRunner().invoke(cli.app, ["targets", "add", "aosp-mirror/x"]).output
+    bad = CliRunner().invoke(cli.app, ["targets", "add", "not a repo"])
+    assert bad.exit_code == 1 and "owner/name" in bad.output
+
+
+def test_targets_discovered_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows = [{"repo": "acme/top", "status": "skipped", "source": "search", "topic": "gitops", "stars": 20000,
+             "language": "Go", "ci_on_pr": "yes", "egress_strict": True, "skip_reason": "no_contributing",
+             "checked_at": None, "cooldown_until": "2026-11-01T00:00:00Z"}]  # fmt: skip
+    paths: list[str] = []
+
+    def api(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 30.0) -> tuple[int, Any]:
+        paths.append(path)
+        return 200, rows
+
+    monkeypatch.setattr(cli, "api", api)
+    result = CliRunner().invoke(cli.app, ["targets", "discovered", "--status", "skipped"])
+    assert result.exit_code == 0, result.output
+    assert paths == ["/v1/discovered-targets?status=skipped"]
+    line = next(ln for ln in result.output.splitlines() if ln.startswith("acme/top"))
+    assert "skipped" in line and "yes" in line and "no_contributing / - / 2026-11-01T00:00:00Z" in line
+    assert CliRunner().invoke(cli.app, ["targets", "discovered", "--status", "bogus"]).exit_code == 1
+
+
 def test_targets_facts_refuses_more_than_five_repos(monkeypatch: pytest.MonkeyPatch) -> None:
     ran: list[list[str]] = []
     monkeypatch.setattr(cli, "_require_root", lambda what: None)

@@ -63,7 +63,11 @@ size_app = typer.Typer(no_args_is_help=True, help="autonomous size preference (C
 app.add_typer(size_app, name="size")
 contribution_app = typer.Typer(no_args_is_help=True, help="contributions (operator import, §9.13)")
 app.add_typer(contribution_app, name="contribution")
-targets_app = typer.Typer(no_args_is_help=True, help="targets (config/targets.yaml)")
+targets_app = typer.Typer(
+    no_args_is_help=True,
+    help="targets (config/targets.yaml) and discovered repos (open discovery: search, add, block, unblock, "
+    "strict, discovered)",
+)
 app.add_typer(targets_app, name="targets")
 kiro_app = typer.Typer(no_args_is_help=True, help="Kiro CLI checks (sandbox key)")
 app.add_typer(kiro_app, name="kiro")
@@ -955,7 +959,8 @@ def targets_verify() -> None:
     check = subprocess.run([FIREWALL_CHECK, "--check"], capture_output=True, text=True, timeout=60, check=False)
     if check.returncode != 0:  # the runner unit's ExecStartPre: no read with the token while egress is open
         _fail(f"firewall check failed (exit {check.returncode}): {check.stderr.strip()[-300:]}")
-    req = json.dumps({"repos": repos, "stale_days": DiscoveryFilters().min_maintainer_activity_days})
+    req = json.dumps({"repos": repos, "stale_days": DiscoveryFilters().min_maintainer_activity_days,
+                      "max_default_branch_age_days": bundle.policy.discovery.max_default_branch_age_days})  # fmt: skip
     proc = subprocess.run(targets_verify_argv(), input=req, capture_output=True, text=True, timeout=900, check=False)
     try:
         doc = json.loads(proc.stdout.strip().splitlines()[-1])
@@ -999,8 +1004,193 @@ def targets_facts(repos: list[str]) -> None:
         conds = f" · conditions: {', '.join(row['conditions'])}" if row.get("conditions") else ""
         checks = f" [{', '.join(row['ci_checks'])}]" if row.get("ci_checks") else ""
         typer.echo(f"{row['repo']} · AI policy: {row['ai_display']}{quote}{conds} · CI on PRs: {row['ci_display']}"
-                   f"{checks}")  # fmt: skip
+                   f"{checks}{_branch_line(row)}")  # fmt: skip
     raise typer.Exit(0 if doc["ok"] else 1)
+
+
+def _branch_line(row: dict[str, Any]) -> str:
+    """The default-branch activity gate in ``targets facts`` (owner addition 2026-10-21)."""
+    days = row.get("branch_days")
+    if not isinstance(days, int):
+        return " · last commit on the default branch: unknown"
+    flag = " ⚠️ inactive_default_branch (discovery skips it)" if row.get("inactive") else ""
+    return f" · last commit on {row.get('default_branch') or 'the default branch'}: {days} d ago{flag}"
+
+
+TARGETS_SEARCH_TOP_MAX = 25
+
+
+def _search_request(top: int, topics: list[str]) -> dict[str, Any]:
+    """The stdin of ``targets search`` (design §10.2): the current snapshot plus the effective open
+    prefs and the never/kept repos, read with GETs; config only when the gatekeeper is down."""
+    from ossbot.runner import open_discovery as od  # noqa: PLC0415 - pure helpers (allowed hosts)
+
+    try:
+        _, files = read_current(Paths.default().snapshot_root)
+        bundle = parse_bundle(files)
+    except (OSError, ValueError, ConfigError) as exc:
+        _fail(f"no usable config snapshot ({exc}); ossctl config reload")
+    cfg = bundle.policy.discovery.open
+    eff_topics, languages = list(cfg.topics), list(cfg.languages_preferred)
+    exclude = [e.repo for c in bundle.targets.categories for e in c.repos]
+    try:
+        code, prefs = api("GET", "/v1/discovery-prefs")
+        if code == 200 and isinstance(prefs.get("effective", {}).get("open"), dict):
+            eff_topics = list(prefs["effective"]["open"]["topics"])
+            languages = list(prefs["effective"]["open"]["languages_preferred"])
+        for status in ("never", "kept"):
+            code, rows = api("GET", f"/v1/discovered-targets?status={status}&limit=500")
+            if code == 200 and isinstance(rows, list):
+                exclude += [str(r["repo"]) for r in rows]
+    except GatekeeperDown:
+        typer.echo("gatekeeper not reachable: using config/targets.yaml and policy.yaml only", err=True)
+    profile = bundle.profile
+    return {
+        "mode": "search", "topics": (topics or eff_topics)[:25], "min_stars": cfg.min_stars,
+        "pushed_within_days": cfg.pushed_within_days, "languages_preferred": languages,
+        "language_weight": cfg.language_weight, "ci_weight": bundle.policy.discovery.ci_on_pr_weight, "top": top,
+        "exclude": sorted(set(exclude)), "deny_patterns": [d.pattern for d in bundle.targets.denylist],
+        "own_logins": [profile.github_login, *profile.forbidden_logins],
+        "allowed_hosts": sorted(od.allowed_hosts(bundle)),
+        "max_default_branch_age_days": bundle.policy.discovery.max_default_branch_age_days,
+    }  # fmt: skip
+
+
+@targets_app.command("search")
+def targets_search(
+    top: Annotated[int, typer.Option(help="how many ranked repos to print (1..25)")] = 10,
+    topic: Annotated[list[str] | None, typer.Option(help="search these topics instead of the effective ones")] = None,
+    show_all: Annotated[bool, typer.Option("--all", help="also list filtered repos with the reason")] = False,
+) -> None:
+    """Read-only dry run of the open repo search (root; runs as ossrunner via 3140; design §10.2).
+
+    GETs to GitHub only: no discovery cycle, no gatekeeper write, no row, no Telegram message."""
+    _require_root("targets search")
+    if not 1 <= top <= TARGETS_SEARCH_TOP_MAX:
+        _fail(f"--top must be 1..{TARGETS_SEARCH_TOP_MAX}")
+    if any(not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,49}", t) for t in topic or []):
+        _fail("topics are lowercase letters, digits and hyphens")
+    req = _search_request(top, list(topic or []))
+    check = subprocess.run([FIREWALL_CHECK, "--check"], capture_output=True, text=True, timeout=60, check=False)
+    if check.returncode != 0:  # the runner unit's ExecStartPre: no read with the token while egress is open
+        _fail(f"firewall check failed (exit {check.returncode}): {check.stderr.strip()[-300:]}")
+    proc = subprocess.run(targets_verify_argv(), input=json.dumps(req), capture_output=True, text=True, timeout=900,
+                          check=False)  # fmt: skip
+    try:
+        doc = json.loads(proc.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _fail(f"targets search failed (exit {proc.returncode}): {proc.stderr.strip()[-500:]}")
+    if doc.get("error") == "rate_limited":
+        reset = datetime.fromtimestamp(float(doc.get("until") or 0), UTC).isoformat(timespec="seconds")
+        _fail(f"GitHub search rate limit: try again after {reset}")
+    if not doc.get("ok"):
+        _fail(f"targets search failed: {doc.get('error')}")
+    typer.echo(f"{'#':>2}  {'repo':<45} {'★':>7}  {'language':<12} {'ci_on_pr':<8} {'pushed':<10} "
+               f"{'license':<14} {'topic':<22} score")  # fmt: skip
+    for i, row in enumerate(doc["rows"], 1):
+        note = f"  (would skip if strict: {row['would_skip_if_strict']})" if row.get("would_skip_if_strict") else ""
+        pushed = str(row.get("pushed_at") or "-")[:10]
+        typer.echo(f"{i:>2}  {row['repo']:<45} {row['stars']:>7}  {row.get('language') or '-':<12} "
+                   f"{row['ci_on_pr']:<8} {pushed:<10} {row.get('license') or '-':<14} "
+                   f"{row.get('topic') or '-':<22} {row['score']:.1f}{note}")  # fmt: skip
+    if show_all:
+        for row in doc.get("filtered", []):
+            typer.echo(f"    filtered {row['repo']} ({row.get('topic') or '-'}): {row['reason']}")
+    raise typer.Exit(0)
+
+
+def _repo_arg(repo: str) -> str:
+    from ossbot.common.config import REPO_RE  # noqa: PLC0415
+
+    if not re.fullmatch(REPO_RE, repo):
+        _fail("repo must look like owner/name")
+    return repo
+
+
+def _decide(repo: str, decision: str) -> dict[str, Any]:
+    """``POST /v1/discovered-targets/decision`` (operator; audited and announced by the gatekeeper)."""
+    code, data = api("POST", "/v1/discovered-targets/decision", {"repo": repo, "decision": decision})
+    if code == 200 and isinstance(data, dict):
+        return data
+    error = data.get("error") if isinstance(data, dict) else None
+    texts = {
+        "already_target": f"{repo} is already in config/targets.yaml",
+        "denied": "refused: denylisted or forbidden owner",
+        "is_target": "set egress: strict in config/targets.yaml (config targets aren't changed from ossctl)",
+        "not_never": f"{repo} is not blocked",
+        "not_found": f"{repo} has no discovered-targets row",
+    }  # fmt: skip
+    _fail(texts.get(str(error), f"refused ({code}): {data}"))
+
+
+def _decided(data: dict[str, Any], done: str) -> None:
+    if data.get("routed") == "discovery_prefs":
+        typer.echo(f"{done} (config target: through the discovery preferences)")
+        return
+    view = data.get("view") or {}
+    typer.echo(f"{done}: {view.get('repo')} is now {view.get('status')}"
+               f"{' (strict egress)' if view.get('egress_strict') else ''}")  # fmt: skip
+
+
+@targets_app.command("add")
+def targets_add(repo: str) -> None:
+    """Keep a repo outside targets.yaml: discovery scans it every cycle like a seed target (TTY KEEP)."""
+    repo = _repo_arg(repo)
+    typer.echo(f"Keep {repo}: discovery scans its issues every cycle (no repo search, no cooldown), after the "
+               "config targets; it is re-checked before the first scan. Nothing is posted.")  # fmt: skip
+    _confirm("KEEP")
+    _decided(_decide(repo, "keep"), "kept")
+
+
+@targets_app.command("block")
+def targets_block(repo: str) -> None:
+    """Never pick this repo again, discovered or configured (TTY BLOCK)."""
+    repo = _repo_arg(repo)
+    _confirm("BLOCK")
+    _decided(_decide(repo, "never"), "blocked")
+
+
+@targets_app.command("unblock")
+def targets_unblock(
+    repo: str, unkeep: Annotated[bool, typer.Option("--unkeep", help="turn a kept repo back into a candidate")] = False
+) -> None:
+    """Undo ``block`` (or, with ``--unkeep``, ``add``/Keep) (TTY UNBLOCK)."""
+    repo = _repo_arg(repo)
+    _confirm("UNBLOCK")
+    _decided(_decide(repo, "unkeep" if unkeep else "unblock"), "unkept" if unkeep else "unblocked")
+
+
+@targets_app.command("strict")
+def targets_strict(
+    repo: str,
+    off: Annotated[bool, typer.Option("--off", help="follow the egress mode again (widens; TTY WIDEN)")] = False,
+) -> None:
+    """Pin a discovered repo's fetch/validate egress to the allowlist in every mode (on: no confirm)."""
+    repo = _repo_arg(repo)
+    if off:
+        _confirm("WIDEN")
+    _decided(_decide(repo, "unstrict" if off else "strict"), "egress follows the mode" if off else "strict egress")
+
+
+@targets_app.command("discovered")
+def targets_discovered(
+    status: Annotated[str | None, typer.Option(help="suggested | candidate | kept | never | skipped")] = None,
+) -> None:
+    """Discovered repos (open discovery): status, source, facts and the skip reason."""
+    if status is not None and status not in {"suggested", "candidate", "kept", "never", "skipped"}:
+        _fail("status must be suggested, candidate, kept, never or skipped")
+    code, rows = api("GET", "/v1/discovered-targets" + (f"?status={status}" if status else ""))
+    if code != 200 or not isinstance(rows, list):
+        _fail(f"gatekeeper answered {code}: {rows}")
+    typer.echo(f"{'repo':<45} {'status':<9} {'source':<6} {'topic':<20} {'★':>7} {'lang':<10} {'ci':<7} strict  "
+               "skip_reason / checked_at / cooldown_until")  # fmt: skip
+    for r in rows:
+        typer.echo(f"{r['repo']:<45} {r['status']:<9} {r['source']:<6} {r.get('topic') or '-':<20} "
+                   f"{r.get('stars') if r.get('stars') is not None else '-'!s:>7} {r.get('language') or '-':<10} "
+                   f"{r.get('ci_on_pr') or '-':<7} {'yes' if r.get('egress_strict') else 'no':<7} "
+                   f"{r.get('skip_reason') or '-'} / {r.get('checked_at') or '-'} / "
+                   f"{r.get('cooldown_until') or '-'}")  # fmt: skip
+    typer.echo(f"{len(rows)} discovered repos")
 
 
 def _prefs_show(repo: str | None) -> None:
