@@ -1,0 +1,11 @@
+# Daily squid access-log rotation at 00:10 UTC (open-discovery design 13.5). Enabled by provisioning
+# (OSSBOT_ENABLE_UNITS); a run missed while the distro was off happens at the next boot.
+[Unit]
+Description=ossbot daily squid access-log rotation timer
+
+[Timer]
+OnCalendar=*-*-* 00:10:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

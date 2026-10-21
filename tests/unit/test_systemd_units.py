@@ -149,6 +149,31 @@ def test_gc_units_are_wired_everywhere() -> None:
     assert _unit(UNITS / "ossbot-docker-prune.timer")["Timer"]["OnCalendar"] == "Sun *-*-* 05:00:00"
 
 
+def test_proxy_rotate_units_are_wired_everywhere() -> None:
+    """Open-discovery design §13.5: a daily root oneshot renames access.log and signals squid (rotate=0);
+    not gated on kill or pause (rotation keeps every line); timer persistent, enabled and started."""
+    root = UNITS.parent
+    services_sh = (root / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    enable = services_sh.split("OSSBOT_ENABLE_UNITS=(", 1)[1].split(")", 1)[0].split()
+    start = services_sh.split("step_enable_start()", 1)[1].split("case $level", 1)[0]
+    bins = services_sh.split("OSSBOT_BINS=(", 1)[1].split(")", 1)[0].split()
+    service = _unit(UNITS / "ossbot-proxy-rotate.service")["Service"]
+    assert service["Type"] == "oneshot" and "User" not in service
+    assert service["ExecStart"] == "/opt/ossbot/bin/ossbot-proxy-rotate"
+    assert _seconds(service["TimeoutStopSec"]) == 150
+    timer = _unit(UNITS / "ossbot-proxy-rotate.timer")
+    assert timer["Timer"]["OnCalendar"] == "*-*-* 00:10:00 UTC" and timer["Timer"]["Persistent"] == "true"
+    assert timer["Install"]["WantedBy"] == "timers.target"
+    assert "ossbot-proxy-rotate.timer" in enable and "ossbot-proxy-rotate.timer" in start
+    assert "ossbot-proxy-rotate" in bins
+    script = (root / "scripts" / "bin" / "ossbot-proxy-rotate").read_text(encoding="utf-8")
+    assert script.startswith("#!/usr/bin/env bash\n") and "\nset -euo pipefail\n" in script
+    assert 'docker exec --user proxy "$CONTAINER" squid -k rotate -f /etc/squid/squid.conf' in script
+    assert 'mv -- "$LOG" "$target"' in script and "date -u +%Y%m%dT%H%M%SZ" in script
+    squid = (root / "sandbox" / "proxy" / "squid.conf.j2").read_text(encoding="utf-8")
+    assert "access_log stdio:/var/log/squid/access.log logformat=ossbot rotate=0" in squid
+
+
 def test_journald_dropin_is_time_based_only() -> None:
     """Plan D5: 30 days of journal, no size cap (owner decision); provisioning installs it and restarts journald."""
     path = UNITS / "journald.conf.d" / "ossbot.conf"

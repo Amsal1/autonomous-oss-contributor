@@ -14,10 +14,10 @@ OSSBOT_ENABLE_UNITS=(
   ossbot-runner.service ossbot-hermes.service ossbot-hermes-probe.socket
   ossbot-anchor.socket ossbot-killswitch.path ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer
   ossbot-hermes-tier.path ossbot-hermes-tier.timer ossbot-skills.path ossbot-skills-scan.timer
-  ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer
+  ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer ossbot-proxy-rotate.timer
 )
 OSSBOT_BINS=(ossbot-firewall ossbot-boot-gate ossbot-kill ossbot-resume ossbot-proxy-run ossbot-egress-apply
-  ossbot-hermes-tier ossbot-lifecycle)
+  ossbot-hermes-tier ossbot-lifecycle ossbot-proxy-rotate)
 
 # install_unit NAME [SUBDIR]: copy systemd/<SUBDIR>/NAME to /etc/systemd/system/<SUBDIR>/NAME.
 install_unit() {
@@ -223,7 +223,8 @@ step_enable_start() {
   local -a units=(ossbot-boot-gate.service ossbot-nointerop.service ossbot-firewall.service docker.service
     ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-anchor.socket ossbot-killswitch.path
     ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer ossbot-hermes-tier.path ossbot-hermes-tier.timer
-    ossbot-skills.path ossbot-skills-scan.timer ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer)
+    ossbot-skills.path ossbot-skills-scan.timer ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer
+    ossbot-proxy-rotate.timer)
   case $level in
     none) units+=(ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service ossbot-runner.service
       ossbot-hermes.service ossbot-hermes-probe.socket) ;;

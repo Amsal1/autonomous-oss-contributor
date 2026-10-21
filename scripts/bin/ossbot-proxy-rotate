@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# ossbot-proxy-rotate (installed as /opt/ossbot/bin/ossbot-proxy-rotate; ExecStart of
+# ossbot-proxy-rotate.service, daily by ossbot-proxy-rotate.timer; open-discovery design 13.5, ADR-0023).
+# squid logs with `rotate=0` (squid.conf.j2): it never renames its own files, it only closes and reopens
+# them on `squid -k rotate`. So root renames a non-empty access.log to access.log.<UTC stamp> first, then
+# signals squid inside the proxy container. Until squid reopens, it keeps writing the renamed file, so
+# no line is lost; sandboxd's egress meter reads its held fd to the end before it follows the new file.
+# Rotated files keep their owner and group (proxy:ossart); `ossctl gc` deletes them after
+# retention.proxy_logs_days (>= 30). Exit 0 done (or nothing to rotate), 1 the rotate signal failed
+# (the next run retries; nothing is lost meanwhile).
+set -euo pipefail
+
+LOG_DIR=/srv/ossbot/logs/proxy
+LOG=$LOG_DIR/access.log
+CONTAINER=ossbot-proxy
+
+if [[ ! -s $LOG ]]; then
+  echo "ossbot-proxy-rotate: $LOG is empty or missing, nothing to rotate"
+  exit 0
+fi
+stamp=$(date -u +%Y%m%dT%H%M%SZ)
+target=$LOG.$stamp
+if [[ -e $target ]]; then
+  echo "ossbot-proxy-rotate: $target already exists" >&2
+  exit 1
+fi
+mv -- "$LOG" "$target"
+if ! /usr/bin/docker exec --user proxy "$CONTAINER" squid -k rotate -f /etc/squid/squid.conf; then
+  echo "ossbot-proxy-rotate: squid -k rotate failed; squid keeps writing $target until the next run" >&2
+  exit 1
+fi
+echo "ossbot-proxy-rotate: rotated to $target"

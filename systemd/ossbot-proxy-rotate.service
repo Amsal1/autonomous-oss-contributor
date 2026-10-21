@@ -1,0 +1,17 @@
+# Daily squid access-log rotation (open-discovery design 13.5, ADR-0023): root renames the live
+# access.log to access.log.<UTC stamp>, then `squid -k rotate` reopens it in the proxy container
+# (squid logs with rotate=0). Not gated on kill or pause: rotating keeps every line (the evidence a
+# kill may need); `ossctl gc` deletes rotated files after retention.proxy_logs_days.
+[Unit]
+Description=ossbot squid access-log rotation
+After=ossbot-proxy.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/
+ExecStart=/opt/ossbot/bin/ossbot-proxy-rotate
+TimeoutStartSec=120
+# CR-001: >= drain timeout (120 s) + 30 s, like every ossbot unit.
+TimeoutStopSec=150
+Nice=10
+IOSchedulingClass=idle

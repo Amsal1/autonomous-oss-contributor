@@ -10,11 +10,15 @@
 #   Windows host per unit context and per pool, through socket() and through io_uring's
 #   IORING_OP_SOCKET (P1-13, P1-14), and the WSL interop sockets; the Hyper-V layer (root's
 #   non-80/443 egress), a counted SKIP when not applied.
+# Open discovery (design §12.2, §16; ADR-0023): four egress modes and the strict pool (pool_strict,
+# 10.213.192.0/19; probe network 10.213.223.240/28, its last /28). sandbox_open is probed only when the
+# test found it already active (the owner switched to it); the test never switches into it (O7).
 # shellcheck source=tests/system/lib.sh disable=SC1091,SC2317,SC2016
 source "$(dirname "$0")/lib.sh"
 require_running
+FOUND_MODE=$(live_egress_mode)
 # The DNS meter rows below need a mode where hermes and research have web_public but the llm pool
-# does not: egress mode research (§11.5). The other two modes are probed near the end; the trap
+# does not: egress mode research (§11.5). The other modes are probed near the end; the trap
 # restores whatever mode the test found.
 save_egress_mode
 set_egress_mode research || { echo "$TEST_NAME: could not switch to egress mode research" >&2; restore_egress_mode; exit 2; }
@@ -23,7 +27,8 @@ PROXY=10.212.0.2
 RAW=OSSBOT-TDNS-$$
 NS=$(awk '$1 == "nameserver" && $2 ~ /^[0-9.]+$/ {print $2; exit}' /etc/resolv.conf)
 FULL=$(awk '/^  sandbox_full:/{f=1} f && /digest:/{gsub(/"/,"",$2); print $2; exit}' /etc/ossbot/versions.lock.yaml)
-declare -A POOL_NET=([fetch]=10.213.63.240/28 [research]=10.213.127.240/28 [llm]=10.213.191.240/28)
+declare -A POOL_NET=([fetch]=10.213.63.240/28 [research]=10.213.127.240/28 [llm]=10.213.191.240/28
+  [strict]=10.213.223.240/28)
 NETS=()
 
 cleanup() {
@@ -187,9 +192,11 @@ print("vsock=" + vsock())
 PY
 '
 declare -A POOL_LABEL=() POOL_OUT=()
-declare -A CONTROL_URL=([fetch]=https://pypi.org/ [research]=https://example.com/ [llm]=https://app.kiro.dev/)
+declare -A CONTROL_URL=([fetch]=https://pypi.org/ [research]=https://example.com/ [llm]=https://app.kiro.dev/
+  [strict]=https://pypi.org/)
+POOLS=(fetch research llm strict)
 octet=10
-for pool in fetch research llm; do
+for pool in "${POOLS[@]}"; do
   net="ossbot-t-egresstest-$pool-$$"
   docker network create --internal --subnet "${POOL_NET[$pool]}" --label ossbot.sandbox=1 "$net" >/dev/null || {
     fail "$pool: could not create test network ${POOL_NET[$pool]}"; continue; }
@@ -203,7 +210,7 @@ for pool in fetch research llm; do
     "ossbot/sandbox-full@$FULL" bash -c "$POOL_SCRIPT" 2>&1)
 done
 field() { sed -n "s/^$2=//p" <<<"${POOL_OUT[$1]:-}" | head -n 1; }
-for pool in fetch research llm; do
+for pool in "${POOLS[@]}"; do
   [[ -n ${POOL_OUT[$pool]:-} ]] || continue
   if [[ $pool == research ]]; then
     expect_not "pool $pool -> random label not allowed (web_public resolves; NXDOMAIN)" 200 "$(field "$pool" label)"
@@ -239,7 +246,7 @@ sleep 2  # let squid finish any lookup it might (wrongly) have started
 for spec in ossrunner:3140 gatekeeper:3150 root:3128; do
   expect "proxy sent no DNS query for the label denied on ${spec##*:} (P1-12)" 0 "$(count "host-${spec##*:}")"
 done
-for pool in fetch llm; do
+for pool in fetch llm strict; do
   [[ -n ${POOL_LABEL[$pool]:-} ]] && expect "proxy sent no DNS query for the label denied in pool $pool (P1-12)" 0 "$(count "pool-$pool")"
 done
 expect "proxy sent no PTR query for any IP literal, IPv4 (P1-11)" 0 "$(count ptr4)"
@@ -275,15 +282,23 @@ expect "proxy: no seccomp override" '["no-new-privileges"]' "$(docker inspect -f
 # ------------------------------------------------------------- egress modes (DESIGN §11.5)
 # Each mode through the root path (flag -> ossbot-egress.path -> ossbot-egress-apply -> proxy
 # restart, test networks re-attached). What untrusted code and the trusted writers reach never
-# changes; hermes/research gain web_public outside allowlist, the llm pool only in open.
+# changes; hermes/research gain web_public outside allowlist, the llm pool in open and sandbox_open,
+# the fetch pool (repo code) only in sandbox_open (ADR-0023); the strict pool never.
 MODE_SCRIPT='
 connect() { curl -s -o /dev/null --max-time 15 -w "%{http_connect}" -x http://proxy:3128 "$1" 2>/dev/null || true; }
-echo "web=$(connect https://example.com/) ghio=$(connect https://github.github.io/) telegraph=$(connect https://telegra.ph/)"'
+echo "web=$(connect https://example.com/) ghio=$(connect https://github.github.io/) telegraph=$(connect https://telegra.ph/)"
+echo "ipv4=$(connect https://203.0.113.77/) uploads=$(connect https://uploads.github.com/) localtest=$(connect https://localtest.me/)"'
 mode_pool() {  # mode_pool POOL -> "web=.. ghio=.. telegraph=.." from a container in POOL's test network
   docker run --rm --network "ossbot-t-egresstest-$1-$$" --dns 127.0.0.1 --dns-search . --user 10001:10001 \
     --cap-drop ALL --security-opt no-new-privileges --read-only "ossbot/sandbox-full@$FULL" bash -c "$MODE_SCRIPT" 2>&1
 }
-for mode in allowlist open research; do
+localtest_loopback=no
+getent ahostsv4 localtest.me 2>/dev/null | grep -q '^127\.' && localtest_loopback=yes
+for mode in allowlist open research sandbox_open; do
+  if [[ $mode == sandbox_open && $FOUND_MODE != sandbox_open ]]; then
+    skip "egress mode sandbox_open: not activated (run again after /egress sandbox_open)"
+    continue
+  fi
   if ! set_egress_mode "$mode"; then
     fail "egress mode $mode: not applied within 90 s (journalctl -u ossbot-egress-apply)"
     continue
@@ -291,7 +306,8 @@ for mode in allowlist open research; do
   pass "egress mode $mode applied (running proxy rendered for $mode)"
   check "egress mode $mode: ossbot-firewall --check passes" /opt/ossbot/bin/ossbot-firewall --check
   web=403; [[ $mode != allowlist ]] && web=200
-  llm=403; [[ $mode == open ]] && llm=200
+  llm=403; [[ $mode == open || $mode == sandbox_open ]] && llm=200
+  code_web=403; [[ $mode == sandbox_open ]] && code_web=200
   expect "egress mode $mode: hermes via 3141 -> example.com" "$web" "$(connect hermes 3141 https://example.com/)"
   expect "egress mode $mode: hermes via 3141 -> x.github.io allowed in every mode" 200 "$(raw_connect hermes 3141 x.github.io.:443)"
   expect "egress mode $mode: hermes via 3141 -> telegra.ph denied" 403 "$(raw_connect hermes 3141 telegra.ph:443)"
@@ -301,18 +317,24 @@ for mode in allowlist open research; do
     expect "egress mode $mode: ${spec%%:*} via ${spec##*:} -> x.github.io denied" 403 \
       "$(raw_connect "${spec%%:*}" "${spec##*:}" x.github.io.:443)"
   done
-  for pool in fetch research llm; do
+  for pool in "${POOLS[@]}"; do
     [[ " ${NETS[*]} " == *" ossbot-t-egresstest-$pool-$$ "* ]] || continue
     out=$(mode_pool "$pool")
     got() { sed -n "s/.*$1=\([0-9]*\).*/\1/p" <<<"$out" | head -n 1; }
     case $pool in
-      fetch) want_web=403 want_ghio=403 ;;
+      fetch) want_web=$code_web want_ghio=$code_web ;;  # web_public covers github.io in sandbox_open
       research) want_web=$web want_ghio=200 ;;
       llm) want_web=$llm want_ghio=$llm ;;  # web_public covers github.io; no github_user_content
+      strict) want_web=403 want_ghio=403 ;;  # the base fetch list in every mode
     esac
     expect "egress mode $mode: pool $pool -> example.com" "$want_web" "$(got web)"
     expect "egress mode $mode: pool $pool -> github.github.io" "$want_ghio" "$(got ghio)"
     expect "egress mode $mode: pool $pool -> telegra.ph denied" 403 "$(got telegraph)"
+    expect "egress mode $mode: pool $pool -> IPv4 literal denied" 403 "$(got ipv4)"
+    expect "egress mode $mode: pool $pool -> uploads.github.com denied" 403 "$(got uploads)"
+    if [[ $localtest_loopback == yes ]]; then
+      expect "egress mode $mode: pool $pool -> localtest.me (127.0.0.1) denied" 403 "$(got localtest)"
+    fi
   done
 done
 
