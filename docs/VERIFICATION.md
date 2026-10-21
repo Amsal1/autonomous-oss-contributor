@@ -626,6 +626,16 @@ Commits 719b236..3b3f1e1 on `main`: ShutdownBlocker back-off, commands in All, R
 
 Owner checks still open: the real restart and shutdown (R1, FINAL_REPORT "Restart test"), and the README as GitHub renders it (banner, badges, GIF, stills, mermaid) after the next push.
 
+## Post-v1 retention, gatekeeper side (PV1-R1, 2026-10-21)
+
+Commits 23c9520 (`retention:` block in policy.yaml) and 9107f3e (`gatekeeper/retention.py`, operator-only `POST /v1/retention/run`, import-linter contract) on `main`. Hermetic only, no redeploy: the root `ossctl gc` caller, its timer and the live run come with PV1-R2..R4. Dry-run stayed ON, no GitHub write, no Telegram message.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 524 files formatted, mypy 248 files, 13 contracts kept, 0 broken (new: only `api.retention` imports `gatekeeper.retention`) |
+| Targeted tests | `pytest tests/unit/gatekeeper/test_retention.py tests/unit/gatekeeper/test_authz.py tests/unit/common/test_config.py -x --timeout=120` | 122 passed: selection (every non-terminal state, 29 days, open action or approval, shared cache), Telegram rows (closed outbox, current dashboard, open approval, open ForceReply prompt, tokens), safety (audit chain verifies and grows by one, never-touched tables unchanged, dry run deletes nothing and reports the same counts, 409 `blocked` while killed or paused, symlinks not followed), route table |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120` | 3803 passed in 50 s |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
