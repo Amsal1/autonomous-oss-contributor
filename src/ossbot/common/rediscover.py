@@ -18,6 +18,7 @@ NEVER_RETRY_SKIP_REASONS = frozenset(
     {"claimed_by_other", "claim_rejected", "ai_policy_banned", "signed_commits_required", "not_found"}
 )
 COOLDOWN_STATES = frozenset({State.FAILED, State.ABANDONED, State.EXPIRED, State.SKIPPED})
+AI_RULE_SKIP_REASONS = frozenset({"ai_policy_unclear", "ai_policy_unstated"})  # repo-fact skips of §9.5
 # CR-004 gate 1: "Never this repo / kind" is never re-proposed. A snooze (Later) stays non-terminal
 # (PROPOSAL_SNOOZED) and is re-scouted by the runner after it ends; PROPOSAL_EXPIRED likewise.
 NEVER_PROPOSAL_REASONS = frozenset({"never_repo", "never_kind"})
@@ -38,6 +39,9 @@ class RepoFactChanges:
 
     ai_allowed_at: datetime | None = None
     cla_signed_at: datetime | None = None
+    # the effective policy.vet.ai_policy rule (with the target override) for that status is ``allow``
+    ai_unclear_allowed: bool = False
+    ai_unstated_allowed: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,10 +87,15 @@ def eligible(
         return Decision(False, "skipped_unchanged")
     if newest.state is State.DRY_RUN_DONE:
         return Decision(True, "after_dry_run") if not dry_run else Decision(False, "dry_run_rehearsal")
-    if newest.state is State.SKIPPED and _skip_reason(newest) == "ai_policy_unclear":
+    if newest.state is State.SKIPPED and _skip_reason(newest) in AI_RULE_SKIP_REASONS:
+        reason = _skip_reason(newest)
         if facts.ai_allowed_at is not None and facts.ai_allowed_at > newest.updated_at:
             return Decision(True, "ai_allowed")
-        return Decision(False, "repo_fact_unchanged:ai_policy_unclear")
+        # post-v1 (§9.5): the owner's rule for that status is now ``allow``; re-vet re-classifies, so a
+        # real ban still skips. A legacy ``ai_policy_unclear`` (silent or unclear) lifts on ``unclear``.
+        if facts.ai_unclear_allowed if reason == "ai_policy_unclear" else facts.ai_unstated_allowed:
+            return Decision(True, "ai_policy_rule_allow")
+        return Decision(False, f"repo_fact_unchanged:{reason}")
     if newest.state is State.SKIPPED and _skip_reason(newest) == "cla_required":
         if facts.cla_signed_at is not None and facts.cla_signed_at > newest.updated_at:
             return Decision(True, "cla_signed")

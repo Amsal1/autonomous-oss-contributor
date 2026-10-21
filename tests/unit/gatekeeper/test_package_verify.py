@@ -15,6 +15,7 @@ import httpx
 import pytest
 
 from ossbot.common import gitcmd
+from ossbot.common.ai_policy import AiCondition, checklist_block
 from ossbot.common.hashing import sha256_hex, sha256_text
 from ossbot.common.paths import Paths
 from ossbot.common.schemas import State
@@ -25,6 +26,7 @@ from ossbot.gatekeeper.gitops import BUNDLE_FETCH_ARGS, GIT_ARGS, GIT_ENV, GitEr
 from ossbot.gatekeeper.packaging import gitleaks_scan, prune_retention
 from tests.conftest import UID_WORKER, insert_contribution
 from tests.githarness import (
+    DISCLOSURE,
     IDENTITY,
     NUMSTAT2JSON,
     PACKAGE_TS,
@@ -556,7 +558,7 @@ async def test_kiro_key_hash_in_patch_rejected(gctx: AppContext, world: GitWorld
     ("vetting", "override", "code"),
     [
         ({"ai_policy": "banned"}, None, "ai_policy_banned"),
-        ({"ai_policy": "unclear"}, None, "ai_policy_unclear"),
+        ({}, None, "ai_policy_unvetted"),  # never vetted (no doc read): needs an explicit override
         ({"ai_policy": "allowed", "cla_required": True}, None, "cla_required"),
         ({"ai_policy": "allowed"}, 0, "repo_disabled"),
     ],
@@ -574,6 +576,31 @@ async def test_repo_rejections(gctx: AppContext, world: GitWorld, vetting: dict[
     sums = stage_artifacts(gctx.paths, cid, 1, out.out)
     resp = await post(gctx, cid, package_request(gctx.paths, cid, 1, sums, out.head, world.base))
     assert code in resp.json()["detail"].split(",")
+
+
+@pytest.mark.parametrize("status", ["unstated", "unclear", "disclosure_required"])
+async def test_silent_and_unclear_repos_package_by_default(gctx: AppContext, world: GitWorld, status: str) -> None:
+    """Post-v1 owner rule: only an explicit ban refuses; a legacy ``disclosure_required`` vetting is
+    read as allowed with conditions (none recorded, so nothing extra is required)."""
+    cid = packaging(gctx, vetting_json=json.dumps({"ai_policy": status}))
+    doc = await package_ok(gctx, world, cid, world.package(world.base, {"src/app.py": f"print('{status}')\n"}))
+    assert doc["kind"] == "open_pr"
+
+
+async def test_ai_conditions_must_be_in_the_runner_body(gctx: AppContext, world: GitWorld) -> None:
+    conds = [AiCondition(kind="disclosure"), AiCondition(kind="label", value="ai-assisted")]
+    vetting = {"ai_policy": "allowed_with_conditions", "ai_conditions": [c.model_dump() for c in conds]}
+    cid = packaging(gctx, vetting_json=json.dumps(vetting))
+    out = world.package(world.base, {"src/app.py": "print('cond')\n"})
+    sums = stage_artifacts(gctx.paths, cid, 1, out.out)
+    resp = await post(gctx, cid, package_request(gctx.paths, cid, 1, sums, out.head, world.base))
+    assert resp.status_code == 422 and resp.json()["error"] == "policy"
+    detail = resp.json()["detail"].split(",")
+    assert {"ai_condition_missing:disclosure", "ai_condition_missing:label"} <= set(detail)
+    block = checklist_block(conds, login="test-bot-login", coder_model="a", reviewer_model="b")
+    body = f"Fixes #1.\n\n{block}{DISCLOSURE}<!-- ossbot:cid={cid} -->"
+    doc = await package_ok(gctx, world, cid, out, body=body)
+    assert doc["kind"] == "open_pr"
 
 
 @pytest.mark.skipif(not os.path.exists("/usr/local/bin/gitleaks"), reason="gitleaks not installed")

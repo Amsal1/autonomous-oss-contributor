@@ -57,6 +57,23 @@ def test_ai_policy_unclear_needs_later_allow() -> None:
     assert decide(skipped, facts=after) == (True, "ai_allowed")
 
 
+@pytest.mark.parametrize(
+    ("reason", "facts", "expected"),
+    [
+        ("ai_policy_unclear", RepoFactChanges(ai_unclear_allowed=True), (True, "ai_policy_rule_allow")),
+        ("ai_policy_unclear", RepoFactChanges(ai_unstated_allowed=True),
+         (False, "repo_fact_unchanged:ai_policy_unclear")),
+        ("ai_policy_unstated", RepoFactChanges(ai_unstated_allowed=True), (True, "ai_policy_rule_allow")),
+        ("ai_policy_unstated", RepoFactChanges(), (False, "repo_fact_unchanged:ai_policy_unstated")),
+        ("ai_policy_banned", RepoFactChanges(ai_unclear_allowed=True, ai_unstated_allowed=True),
+         (False, "never:ai_policy_banned")),
+    ],
+)  # fmt: skip
+def test_ai_rule_lift(reason: str, facts: RepoFactChanges, expected: tuple[bool, str]) -> None:
+    """Post-v1 (§9.5): an AI-policy repo-fact skip lifts when the owner's rule for it is ``allow``."""
+    assert decide(row(State.SKIPPED, 1, reason), facts=facts) == expected
+
+
 def test_cla_required_needs_newer_snapshot() -> None:
     skipped = row(State.SKIPPED, 10, "cla_required")
     assert decide(skipped)[0] is False

@@ -15,8 +15,9 @@ from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from ossbot.common.ai_policy import AiCondition, missing_conditions
 from ossbot.common.clock import Clock, to_iso
-from ossbot.common.config import ConfigBundle, PolicyConfig, ProfileConfig, ResolvedTarget
+from ossbot.common.config import AiPolicyRules, ConfigBundle, PolicyConfig, ProfileConfig, ResolvedTarget
 from ossbot.common.hashing import sha256_text
 from ossbot.common.redact import DEFAULT_SECRET_PATTERNS
 from ossbot.common.size import path_matches, split_numstat  # globs shared with size measurement
@@ -189,15 +190,22 @@ def check_text(
 class RepoState:
     """Facts relevant to a repo-level decision (vetting result + DB overrides)."""
 
-    ai_policy: Literal["allowed", "unclear", "banned", "unknown"] = "unknown"
+    ai_policy: Literal["allowed", "allowed_with_conditions", "unstated", "unclear", "banned", "unknown"] = "unknown"
     ai_override_allowed: bool = False
     cla_required: bool = False
     db_enabled: bool | None = None  # repo_overrides.enabled
+    ai_conditions: tuple[AiCondition, ...] = ()
 
 
 def check_repo(
-    repo: str, target: ResolvedTarget | None, state: RepoState, forbidden_logins: set[str]
-) -> list[Violation]:
+    repo: str, target: ResolvedTarget | None, state: RepoState, forbidden_logins: set[str],
+    rules: AiPolicyRules | None = None,
+) -> list[Violation]:  # fmt: skip
+    """Repo-level policy. AI (post-v1, ADR-0003 addendum): ``banned`` always refuses; ``unstated`` and
+    ``unclear`` refuse only when the effective rule is ``skip`` and nothing overrides it; ``unknown``
+    (never vetted, e.g. an operator import) refuses as ``ai_policy_unvetted`` unless overridden, since
+    no repo doc was read."""
+    rules = rules or AiPolicyRules()
     out: list[Violation] = []
     owner = repo.split("/", 1)[0].lower()
     if owner in forbidden_logins:
@@ -211,8 +219,19 @@ def check_repo(
     allowed_by_override = state.ai_override_allowed or target.ai_policy_override == "allowed"
     if state.ai_policy == "banned":
         out.append(Violation("ai_policy_banned", repo))
-    elif state.ai_policy in {"unclear", "unknown"} and not allowed_by_override:
-        out.append(Violation("ai_policy_unclear", repo))
+    elif state.ai_policy == "unknown" and not allowed_by_override:
+        out.append(Violation("ai_policy_unvetted", repo))
+    elif (
+        state.ai_policy in {"unstated", "unclear"}
+        and not allowed_by_override
+        and getattr(rules, state.ai_policy) == "skip"
+    ):
+        out.append(Violation(f"ai_policy_{state.ai_policy}", repo))
     if state.cla_required and not target.cla_signed:
         out.append(Violation("cla_required", repo))
     return out
+
+
+def check_ai_conditions(conditions: Sequence[AiCondition], title: str, body: str) -> list[Violation]:
+    """The repo's AI-policy conditions recorded by vet must be met by the runner-built title/body."""
+    return [Violation(f"ai_condition_missing:{kind}") for kind in missing_conditions(title, body, conditions)]

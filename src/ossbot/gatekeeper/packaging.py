@@ -17,8 +17,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from ossbot.common import ai_policy
 from ossbot.common.clock import to_iso
-from ossbot.common.config import resolve_target
+from ossbot.common.config import effective_ai_rules, resolve_target
 from ossbot.common.gitcmd import CHANGE_REF
 from ossbot.common.hashing import sha256_hex
 from ossbot.common.ids import new_action_id
@@ -75,6 +76,7 @@ class PackageResult:
 
 
 CEILING_CODES = frozenset({"too_many_files", "too_many_code_lines", "too_many_test_lines"})
+REPO_AI_STATES = frozenset({"allowed", "allowed_with_conditions", "unstated", "unclear", "banned", "unknown"})
 
 
 def _in_areas(path: str, areas: list[str]) -> bool:
@@ -185,12 +187,13 @@ class Packager:
             "SELECT enabled, ai_policy_override FROM repo_overrides WHERE lower(upstream) = lower(?)",
             (contrib["upstream"],),
         )
-        ai = vetting.get("ai_policy", "unknown")
+        ai = ai_policy.normalize_status(vetting.get("ai_policy"))  # legacy disclosure_required: with conditions
         return policy.RepoState(
-            ai_policy=ai if ai in {"allowed", "unclear", "banned", "unknown"} else "unknown",
+            ai_policy=ai if ai in REPO_AI_STATES else "unknown",  # type: ignore[arg-type]
             ai_override_allowed=bool(override and override["ai_policy_override"] == "allowed"),
             cla_required=bool(vetting.get("cla_required", False)),
             db_enabled=None if override is None or override["enabled"] is None else bool(override["enabled"]),
+            ai_conditions=ai_policy.parse_conditions(vetting.get("ai_conditions")),  # invalid entries dropped
         )
 
     # ---------------------------------------------------------------------- package
@@ -342,9 +345,13 @@ class Packager:
             violations += policy.check_text(
                 "body", eff_body or "", ctx.config, confidentiality, ctx.kiro_key_sha256, secret_values=values
             )
+        repo_state = self._repo_state(contrib)
         violations += policy.check_repo(
-            upstream, target, self._repo_state(contrib), policy.effective_forbidden_logins(ctx.conn, profile)
-        )
+            upstream, target, repo_state, policy.effective_forbidden_logins(ctx.conn, profile),
+            effective_ai_rules(ctx.config.policy, target),
+        )  # fmt: skip
+        if kind == "open_pr":  # the runner-built text must carry the repo's AI conditions (not the human edits)
+            violations += policy.check_ai_conditions(repo_state.ai_conditions, title or "", body or "")
         patch_text = derived.patch.decode("utf-8", "replace")
         if ctx.config.policy.secrets.kiro_key_hash_check and ctx.kiro_key_sha256:
             for candidate in policy.TOKENISH_RE.findall(patch_text):

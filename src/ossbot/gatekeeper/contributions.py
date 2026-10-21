@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ossbot.common.clock import Clock, from_iso, to_iso
-from ossbot.common.config import ConfigBundle, TargetsConfig, parse_yaml_model, resolve_target
+from ossbot.common.config import ConfigBundle, TargetsConfig, effective_ai_rules, parse_yaml_model, resolve_target
 from ossbot.common.ids import new_cid
 from ossbot.common.rediscover import Decision, PriorContribution, RepoFactChanges, eligible
 from ossbot.common.schemas import TERMINAL_STATES, WORK_URL_RE, ContributionSource, State
@@ -49,7 +49,7 @@ def _cla_signed_at(conn: sqlite3.Connection, repo: str) -> str | None:
     return since
 
 
-def repo_fact_changes(conn: sqlite3.Connection, repo: str) -> RepoFactChanges:
+def repo_fact_changes(conn: sqlite3.Connection, repo: str, bundle: ConfigBundle | None = None) -> RepoFactChanges:
     override = db.one(
         conn,
         "SELECT ai_policy_override, updated_at FROM repo_overrides WHERE lower(upstream) = lower(?)",
@@ -57,7 +57,12 @@ def repo_fact_changes(conn: sqlite3.Connection, repo: str) -> RepoFactChanges:
     )
     ai_at = from_iso(override["updated_at"]) if override and override["ai_policy_override"] == "allowed" else None
     cla = _cla_signed_at(conn, repo)
-    return RepoFactChanges(ai_allowed_at=ai_at, cla_signed_at=from_iso(cla) if cla else None)
+    rules = effective_ai_rules(bundle.policy, resolve_target(bundle.targets, repo)) if bundle is not None else None
+    return RepoFactChanges(
+        ai_allowed_at=ai_at, cla_signed_at=from_iso(cla) if cla else None,
+        ai_unclear_allowed=rules is not None and rules.unclear == "allow",
+        ai_unstated_allowed=rules is not None and rules.unstated == "allow",
+    )  # fmt: skip
 
 
 def history(conn: sqlite3.Connection, repo: str, issue_number: int) -> list[PriorContribution]:
@@ -90,7 +95,7 @@ class ContributionService:
             dry_run=db.current_dry_run(self.conn),
             now=self.clock.now(),
             cooldown_days=self.config().policy.limits.rediscover_cooldown_days,
-            facts=repo_fact_changes(self.conn, repo),
+            facts=repo_fact_changes(self.conn, repo, self.config()),
             issue_hash=issue_hash,
         )
 

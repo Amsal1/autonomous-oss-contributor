@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 from datetime import timedelta
 
 import pytest
 
 from ossbot.common.clock import FakeClock, to_iso
+from ossbot.common.config import AiPolicyRules, VetPolicy
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
@@ -67,7 +69,17 @@ def test_skipped_claimed_by_other_never(ctx: AppContext) -> None:
     assert refused(ctx) == "not_rediscoverable:never:claimed_by_other"
 
 
-def test_ai_policy_unclear_until_allow_after_skip(ctx: AppContext, clock: FakeClock) -> None:
+def _with_ai_rules(ctx: AppContext, monkeypatch: pytest.MonkeyPatch, **rules: str) -> None:
+    bundle = ctx.contributions.config()
+    vet = VetPolicy(ai_policy=AiPolicyRules.model_validate(rules))
+    patched = dataclasses.replace(bundle, policy=bundle.policy.model_copy(update={"vet": vet}))
+    monkeypatch.setattr(ctx.contributions, "config", lambda: patched)
+
+
+def test_ai_policy_unclear_until_allow_after_skip(ctx: AppContext, clock: FakeClock,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
+    """With the owner's rule ``unclear: skip`` the pre-post-v1 behaviour holds: only "Allow AI" lifts it."""
+    _with_ai_rules(ctx, monkeypatch, unclear="skip")
     prior(ctx, State.SKIPPED, 3, "ai_policy_unclear")
     assert refused(ctx) == "not_rediscoverable:repo_fact_unchanged:ai_policy_unclear"
     with db.transaction(ctx.conn):
@@ -77,6 +89,27 @@ def test_ai_policy_unclear_until_allow_after_skip(ctx: AppContext, clock: FakeCl
             (REPO, "tg:4242", to_iso(clock.now())),
         )
     assert create(ctx).startswith("c_")
+
+
+def test_ai_policy_unclear_rediscoverable_under_the_default_rule(ctx: AppContext) -> None:
+    """Post-v1 (§9.5): the default ``unclear: allow`` lifts an earlier ``ai_policy_unclear`` skip."""
+    prior(ctx, State.SKIPPED, 1, "ai_policy_unclear")
+    assert ctx.contributions.decide(REPO, ISSUE).rule == "ai_policy_rule_allow"
+    assert create(ctx).startswith("c_")
+
+
+def test_ai_policy_unstated_follows_its_own_rule(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    prior(ctx, State.SKIPPED, 1, "ai_policy_unstated")
+    _with_ai_rules(ctx, monkeypatch, unstated="skip")
+    assert refused(ctx) == "not_rediscoverable:repo_fact_unchanged:ai_policy_unstated"
+    _with_ai_rules(ctx, monkeypatch, unstated="allow", unclear="skip")
+    assert create(ctx).startswith("c_")
+
+
+@pytest.mark.parametrize("reason", ["ai_policy_banned", "claimed_by_other"])
+def test_ban_and_claim_stay_never_under_the_default_rule(ctx: AppContext, reason: str) -> None:
+    prior(ctx, State.SKIPPED, 400, reason)
+    assert refused(ctx) == f"not_rediscoverable:never:{reason}"
 
 
 def test_second_active_contribution_is_duplicate(ctx: AppContext) -> None:

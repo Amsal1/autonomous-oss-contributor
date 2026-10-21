@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from ossbot.common.config import ConfigError, resolve_target
+from ossbot.common.ai_policy import AiCondition, checklist_block
+from ossbot.common.config import AiPolicyRules, ConfigError, resolve_target
 from ossbot.common.hashing import sha256_text
 from ossbot.gatekeeper import policy
 from ossbot.gatekeeper.context import AppContext
@@ -165,13 +166,42 @@ def test_repo_checks(ctx: AppContext) -> None:
         policy.check_repo("langfuse/langfuse", target, RepoState("allowed", db_enabled=False), logins)
     )
     assert "ai_policy_banned" in codes(policy.check_repo("langfuse/langfuse", target, RepoState("banned"), logins))
-    assert "ai_policy_unclear" in codes(policy.check_repo("langfuse/langfuse", target, RepoState("unclear"), logins))
     allowed = RepoState("unclear", ai_override_allowed=True)
     assert codes(policy.check_repo("langfuse/langfuse", target, allowed, logins)) == set()
     assert "cla_required" in codes(
         policy.check_repo("langfuse/langfuse", target, RepoState("allowed", cla_required=True), logins)
     )
     assert "forbidden_owner" in codes(policy.check_repo("test-work-login/x", target, RepoState("allowed"), logins))
+
+
+@pytest.mark.parametrize(
+    ("status", "override", "rules", "expected"),
+    [
+        ("unstated", False, AiPolicyRules(), set()),  # post-v1 default: silent and unclear repos pass
+        ("unclear", False, AiPolicyRules(), set()),
+        ("allowed_with_conditions", False, AiPolicyRules(unstated="skip", unclear="skip"), set()),
+        ("unstated", False, AiPolicyRules(unstated="skip"), {"ai_policy_unstated"}),
+        ("unclear", False, AiPolicyRules(unclear="skip"), {"ai_policy_unclear"}),
+        ("unclear", True, AiPolicyRules(unclear="skip"), set()),  # "Allow AI" overrides the rule
+        ("banned", True, AiPolicyRules(), {"ai_policy_banned"}),  # a ban always refuses, even overridden
+        ("unknown", False, AiPolicyRules(), {"ai_policy_unvetted"}),  # never vetted: no doc was read
+        ("unknown", True, AiPolicyRules(), set()),
+    ],
+)
+def test_repo_ai_rules(ctx: AppContext, status: str, override: bool, rules: AiPolicyRules,
+                       expected: set[str]) -> None:  # fmt: skip
+    target = resolve_target(ctx.config.targets, "langfuse/langfuse")
+    state = RepoState(status, ai_override_allowed=override)  # type: ignore[arg-type]
+    assert codes(policy.check_repo("langfuse/langfuse", target, state, {"test-work-login"}, rules)) == expected
+
+
+def test_ai_conditions_check() -> None:
+    conds = (AiCondition(kind="disclosure"), AiCondition(kind="label", value="ai-assisted"))
+    body = checklist_block(conds, login="x", coder_model="a", reviewer_model="b")
+    assert policy.check_ai_conditions(conds, "t", body) == []
+    assert codes(policy.check_ai_conditions(conds, "t", "no checklist")) == {
+        "ai_condition_missing:disclosure", "ai_condition_missing:label",
+    }  # fmt: skip
 
 
 def test_coder_mode_single_rejects_snapshot(ctx: AppContext) -> None:
