@@ -119,6 +119,20 @@ def create_app(jobs: JobService, probes: ProbeRunner, allowed_uids: frozenset[in
         jobs.destroy_task(cid)
         return {"cid": cid, "destroyed": True}
 
+    @app.get("/v1/egress/pending")
+    def egress_pending(uid: Caller) -> list[dict[str, Any]]:
+        """Open-discovery §13.2: egress anomalies whose gatekeeper hold isn't recorded (``ossctl egress holds``)."""
+        return jobs.pending_holds()
+
+    @app.delete("/v1/egress/pending/{cid}")
+    def egress_pending_clear(cid: str, uid: Caller) -> dict[str, Any]:
+        """``ossctl egress release`` (a go action): root only, never the runner."""
+        _check(cid, CID_RE)
+        if uid != 0:
+            raise ApiError(403, "root_only")
+        jobs.clear_pending(cid)
+        return {"cid": cid, "cleared": True}
+
     @app.post("/v1/probes/run")
     def probes_run(body: ProbeRunRequest, uid: Caller) -> dict[str, Any]:
         return {"results": probes.run_all(body.models)}

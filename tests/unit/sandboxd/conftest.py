@@ -12,7 +12,7 @@ import pytest
 from ossbot.common.clock import FakeClock
 from ossbot.common.images import ImagePins
 from ossbot.sandboxd.db import Store
-from ossbot.sandboxd.jobs import JobService, Settings
+from ossbot.sandboxd.jobs import HoldError, JobService, Settings
 from ossbot.sandboxd.keyscan import KeyScanner
 from ossbot.sandboxd.models import CatalogCache
 from ossbot.sandboxd.networks import Networks
@@ -40,10 +40,18 @@ class FakeGatekeeper:
     probe_results: list[tuple[str, str, bool, str]] = field(default_factory=list)
     probe_verdicts: list[tuple[str, str | None, int]] = field(default_factory=list)
     catalog_calls: int = 0
+    holds: list[tuple[str, dict[str, Any]]] = field(default_factory=list)  # (cid, body) of every hold call
+    hold_answers: list[HoldError | None] = field(default_factory=list)  # queued answers; empty = recorded
 
     def catalog(self) -> list[dict[str, Any]]:
         self.catalog_calls += 1
         return list(self.models)
+
+    def hold(self, cid: str, body: dict[str, Any]) -> None:
+        self.holds.append((cid, body))
+        answer = self.hold_answers.pop(0) if self.hold_answers else None
+        if answer is not None:
+            raise answer
 
     def pause(self, reason: str) -> None:
         self.paused.append(reason)

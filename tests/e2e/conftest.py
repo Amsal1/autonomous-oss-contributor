@@ -116,6 +116,17 @@ class SandboxdGatekeeper:
                      verdict: str | None = None, attempts: int = 1) -> None:  # fmt: skip
         pass
 
+    def hold(self, cid: str, body: dict[str, Any]) -> None:
+        """``POST /v1/contributions/{cid}/hold`` as the sandbox role, through the gatekeeper's service."""
+        from ossbot.common.schemas import HoldRequest
+        from ossbot.gatekeeper.holds import HoldRefused
+        from ossbot.sandboxd.jobs import HoldError
+
+        try:
+            self.ctx.holds.hold(cid, HoldRequest.model_validate(body), "uid:2002/sandbox")
+        except HoldRefused as exc:
+            raise HoldError(exc.status, exc.code) from exc
+
 
 class StubProbes:
     """``POST /v1/probes/run``: the five probes "pass" for the current tuple (the probe jobs

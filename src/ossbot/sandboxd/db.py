@@ -1,4 +1,5 @@
-"""sandboxd SQLite state (``/srv/ossbot/sandboxd/sandboxd.db``): subnets, jobs, safety probes."""
+"""sandboxd SQLite state (``/srv/ossbot/sandboxd/sandboxd.db``): subnets, jobs, safety probes, pending
+egress-anomaly holds."""
 
 from __future__ import annotations
 
@@ -20,6 +21,13 @@ CREATE TABLE IF NOT EXISTS jobs (
   state TEXT NOT NULL CHECK (state IN ('queued','running','succeeded','failed','cancelled')),
   exit_code INTEGER, error_class TEXT, artifact_dir TEXT,
   created_at TEXT NOT NULL, finished_at TEXT);
+-- open-discovery design §13.2 (review-3 M3): an egress anomaly whose gatekeeper hold isn't recorded.
+-- While a row exists the cid's fetch/validate jobs are refused (423 egress_anomaly_pending). Rows without
+-- rejected_code are retried every 30 s; a 4xx answer sets rejected_code and only ossctl egress release
+-- clears the row.
+CREATE TABLE IF NOT EXISTS anomaly_pending (
+  cid TEXT PRIMARY KEY, run_id TEXT NOT NULL, summary_json TEXT NOT NULL, created_at TEXT NOT NULL,
+  rejected_code TEXT, attempts INTEGER NOT NULL DEFAULT 0, last_attempt_at TEXT);
 CREATE TABLE IF NOT EXISTS safety_probes (
   kiro_cli_version TEXT NOT NULL, sandbox_llm_digest TEXT NOT NULL, sandbox_full_digest TEXT NOT NULL,
   agent_configs_sha256 TEXT NOT NULL,

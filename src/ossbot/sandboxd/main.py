@@ -24,8 +24,8 @@ import uvicorn
 
 from ossbot.common.backends import pipeline_credential_env
 from ossbot.common.clock import SystemClock
-from ossbot.common.config import ConfigError, parse_bundle
-from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S
+from ossbot.common.config import ConfigError, EgressAnomaly, parse_bundle
+from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S, EgressMode, read_egress_mode
 from ossbot.common.images import DEFAULT_LOCK_COPY, load_image_pins
 from ossbot.common.logging import setup_logging
 from ossbot.common.paths import Paths
@@ -34,7 +34,8 @@ from ossbot.common.snapshot import read_current
 from ossbot.common.uds import uds_client
 from ossbot.sandboxd.app import PeerCredProtocol, create_app
 from ossbot.sandboxd.db import DEFAULT_DB, Store
-from ossbot.sandboxd.jobs import JobService, ProbeRunner, Settings
+from ossbot.sandboxd.egress_meter import EgressMeter
+from ossbot.sandboxd.jobs import HoldError, JobService, ProbeRunner, Settings
 from ossbot.sandboxd.keyscan import KeyScanner
 from ossbot.sandboxd.killwatch import KillWatch
 from ossbot.sandboxd.models import CatalogCache
@@ -82,6 +83,40 @@ class GatekeeperClient:
                 "verdict": verdict, "attempts": attempts}  # fmt: skip
         with self._client() as c:
             c.post("/v1/sandbox/probe-result", json=body).raise_for_status()
+
+    def hold(self, cid: str, body: dict[str, Any]) -> None:
+        """``POST /v1/contributions/{cid}/hold`` (role sandbox; open-discovery §13.3). The caller keys on the
+        status and the ``error`` code (schema errors are 400 ``schema_error``)."""
+        try:
+            with self._client() as c:
+                resp = c.post(f"/v1/contributions/{cid}/hold", json=body)
+        except httpx.HTTPError as exc:
+            raise HoldError(None, "transport") from exc
+        if resp.status_code >= 300:
+            try:
+                doc = resp.json()
+                code = str(doc.get("error") or "error") if isinstance(doc, dict) else "error"
+            except ValueError:
+                code = "error"
+            raise HoldError(resp.status_code, code[:40])
+
+
+def anomaly_limits(root: Path) -> EgressAnomaly:
+    """``egress.yaml anomaly`` from the gatekeeper snapshot; raises when unreadable (the meter then uses the
+    schema defaults and logs WARNING ``egress_limits_default``)."""
+    _, files = read_current(root)
+    return parse_bundle(files).egress.anomaly
+
+
+def egress_mode_now(paths: Paths) -> str:
+    """The live egress mode (the control file, else the snapshot's ``mode_default``): a summary label."""
+    default: EgressMode = "open"
+    try:
+        _, files = read_current(paths.snapshot_root)
+        default = parse_bundle(files).egress.mode_default
+    except (OSError, ValueError, ConfigError):
+        pass
+    return read_egress_mode(paths.control_dir, default)
 
 
 def trust_mode_from_snapshot(root: Path) -> TrustMode:
@@ -156,6 +191,7 @@ def main() -> int:
     store = Store(DEFAULT_DB)
     runtime = DockerCliRuntime()
     gatekeeper = GatekeeperClient(paths.gatekeeper_sock)
+    meter = EgressMeter(PROXY_ACCESS_LOG, paths.logs_dir / "runs", lambda: anomaly_limits(paths.snapshot_root))
     jobs = JobService(
         store=store, runtime=runtime, pins=lambda: load_image_pins(DEFAULT_LOCK_COPY),
         catalog=CatalogCache(gatekeeper.catalog, clock), gatekeeper=gatekeeper,
@@ -166,8 +202,12 @@ def main() -> int:
         ),
         trust_mode=lambda: trust_mode_from_snapshot(paths.snapshot_root),
         networks=Networks(runtime, SubnetAllocator(store, clock)),
+        meter=meter, egress_mode=lambda: egress_mode_now(paths),
     )  # fmt: skip
     jobs.recover()  # CR-001 crash safety: whatever a killed/crashed predecessor left behind
+    meter.on_breach = jobs.flag_anomaly
+    meter.retry = jobs.retry_pending_holds
+    meter.start()  # open-discovery §13.2: per-job egress meter of fetch/validate jobs
     watch = KillWatch(jobs, paths.control_dir)
     watch.start()
     sock = bind_socket(SOCKET, SOCKET_GROUP)
@@ -181,6 +221,7 @@ def main() -> int:
     # already killed the containers). TimeoutStopSec in the unit is >= this + 30 s.
     result = jobs.drain(drain_timeout())
     log.info("stopped: %d finished, %d interrupted", result["finished"], result["interrupted"])
+    meter.stop()
     watch.stop()
     return 0
 

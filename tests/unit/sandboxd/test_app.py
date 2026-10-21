@@ -72,6 +72,21 @@ async def test_probe_status_reports_tuple(sbx: Sbx) -> None:
     assert set(doc["probes"]) == {"research_deny", "symlink", "coder_surface", "settings", "workspace"}
 
 
+async def test_pending_holds_listed_and_cleared_by_root_only(sbx: Sbx) -> None:
+    """Open-discovery §13.2 (M3): ``ossctl egress holds`` lists them; only root's release clears one."""
+    sbx.jobs._pending("c_01ABCDEFGH", "r1", {"run_id": "r1"}, "404:unknown_cid")
+    async with _client(sbx, RUNNER_UID) as client:
+        listed = (await client.get("/v1/egress/pending")).json()
+        assert (await client.delete("/v1/egress/pending/c_01ABCDEFGH")).status_code == 403
+    assert [(p["cid"], p["rejected_code"]) for p in listed] == [("c_01ABCDEFGH", "404:unknown_cid")]
+    async with _client(sbx, 0) as client:
+        assert (await client.delete("/v1/egress/pending/c_01ABCDEFGH")).json() == {"cid": "c_01ABCDEFGH",
+                                                                                     "cleared": True}  # fmt: skip
+        assert (await client.delete("/v1/egress/pending/c_01ABCDEFGH")).status_code == 404
+        assert (await client.delete("/v1/egress/pending/BAD!")).status_code == 400
+    assert sbx.jobs.pending_holds() == []
+
+
 async def test_destroy_requires_terminal(sbx: Sbx) -> None:
     sbx.gatekeeper.states["c_01ABCDEFGH"] = "WATCHING"
     async with _client(sbx, RUNNER_UID) as client:

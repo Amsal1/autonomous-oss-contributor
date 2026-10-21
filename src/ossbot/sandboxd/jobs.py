@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import time
@@ -23,9 +24,10 @@ from typing import Any, Protocol
 from ossbot.common.clock import Clock, to_iso
 from ossbot.common.control_flags import Blocked, NotUp, read_flags, require_running, require_up
 from ossbot.common.images import ImagePins
-from ossbot.common.schemas import TERMINAL_STATES
+from ossbot.common.schemas import HOLD_HOST_RE, HOLD_TOP_HOSTS_MAX, TERMINAL_STATES, HoldRequest
 from ossbot.sandboxd.argv import Volumes, job_spec, probe_spec, stagein_spec
 from ossbot.sandboxd.db import Store
+from ossbot.sandboxd.egress_meter import EgressMeter
 from ossbot.sandboxd.keyscan import BundleFormatError, KeyScanner
 from ossbot.sandboxd.models import CatalogCache, UnknownModel
 from ossbot.sandboxd.networks import Networks
@@ -53,6 +55,7 @@ from ossbot.sandboxd.probes import (
 )
 from ossbot.sandboxd.profiles import (
     CATALOG_CID,
+    EGRESS_PROFILES,
     TEMPLATES,
     TRUST_TOOLS,
     FetchArgs,
@@ -87,6 +90,20 @@ PROMPT_DIR_PROBES = "/opt/ossbot/probes"
 # Before Start work (CR-004 gate 1) a task volume holds only the scout clone and may be destroyed.
 PRE_START_STATES = frozenset({"DISCOVERED", "VETTING", "VETTED", "SCOUTING", "PROPOSED", "PROPOSAL_SNOOZED",
                               "PROPOSAL_EXPIRED", "PROPOSAL_REJECTED"})  # fmt: skip
+# open-discovery design §13.2: the meter stopped the job / a hold for the cid isn't recorded yet
+EGRESS_ANOMALY = "egress_anomaly"
+EGRESS_ANOMALY_PENDING = "egress_anomaly_pending"
+
+
+def hold_body(doc: dict[str, Any]) -> dict[str, Any]:
+    """The gatekeeper's ``HoldRequest`` from a meter summary; any host the schema can't carry becomes ``?``."""
+    hosts = [h if re.fullmatch(HOLD_HOST_RE, h) else "?" for h in doc.get("top_hosts", [])][:HOLD_TOP_HOSTS_MAX]
+    return HoldRequest.model_validate({
+        "reason": "egress_anomaly", "run_id": doc["run_id"], "stage": doc["stage"], "egress": doc["egress"],
+        "egress_mode": doc["egress_mode"], "hosts": doc["hosts"], "up_bytes": doc["up_bytes"],
+        "down_bytes": doc["down_bytes"], "denied": doc["denied"], "top_hosts": hosts, "limits": doc["limits"],
+        "breached": doc["breached"],
+    }).model_dump(mode="json")  # fmt: skip
 
 
 class ApiError(Exception):
@@ -97,6 +114,16 @@ class ApiError(Exception):
         self.detail = detail
 
 
+class HoldError(Exception):
+    """The gatekeeper did not record a hold: ``status`` None = transport error (sandboxd retries those and
+    5xx; a 4xx such as 400 ``schema_error`` or 404 ``unknown_cid`` is final, review-3 M3)."""
+
+    def __init__(self, status: int | None, code: str) -> None:
+        super().__init__(f"{status} {code}")
+        self.status = status
+        self.code = code
+
+
 class Gatekeeper(Protocol):
     """The calls sandboxd makes as the ``sandbox`` role (ossbox) on the gatekeeper UDS."""
 
@@ -105,6 +132,7 @@ class Gatekeeper(Protocol):
     def contribution_state(self, cid: str) -> str | None: ...
     def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str, *,
                      verdict: str | None = None, attempts: int = 1) -> None: ...  # fmt: skip
+    def hold(self, cid: str, body: dict[str, Any]) -> None: ...  # raises HoldError (open-discovery §13.3)
 
 
 @dataclass(frozen=True)
@@ -199,7 +227,12 @@ class JobService:
         trust_mode: Callable[[], TrustMode],
         networks: Networks,
         background: bool = True,
+        meter: EgressMeter | None = None,
+        egress_mode: Callable[[], str] = lambda: "open",
     ) -> None:
+        self.meter = meter  # open-discovery §13.2: fetch/validate jobs are metered (None: not metered)
+        self.egress_mode = egress_mode
+        self._anomaly: dict[str, dict[str, Any]] = {}  # run_id -> the meter summary that stopped it
         self.store = store
         self.runtime = runtime
         self.pins = pins
@@ -240,6 +273,9 @@ class JobService:
             raise ApiError(423, exc.info.state, str(exc)) from exc
         if self._draining:
             raise ApiError(423, "draining", "sandboxd is draining")
+        if spec.profile in EGRESS_PROFILES and self.pending_hold(spec.cid) is not None:
+            # §13.2 fail closed: the gatekeeper hasn't recorded the hold (yet, or it refused it)
+            raise ApiError(423, EGRESS_ANOMALY_PENDING, f"an egress anomaly of {spec.cid} awaits its hold")
         trust_mode = self.trust_mode()
         if isinstance(job.args, KiroArgs):
             try:
@@ -310,6 +346,8 @@ class JobService:
         state = "cancelled" if plan.run_id in self._cancelled else ("succeeded" if outcome.ok else "failed")
         if plan.run_id in self._interrupted:  # CR-001 drain timeout: the runner re-queues the stage
             state, outcome.error_class, outcome.exit_code = "failed", INTERRUPTED, None
+        if self._anomaly.pop(plan.run_id, None) is not None:  # §13.2: stopped by the egress meter
+            state, outcome.error_class = "failed", EGRESS_ANOMALY
         with self.store.tx() as conn:
             conn.execute(
                 "UPDATE jobs SET state = ?, exit_code = ?, error_class = ?, artifact_dir = ?, finished_at = ?"
@@ -439,16 +477,113 @@ class JobService:
             self._quiet(self.runtime.kill, exec_spec.name)
             return [(llm_spec.name, ""), (exec_spec.name, "exec")]
         template = TEMPLATES[plan.template]
-        spec = job_spec(
-            plan.template, run_id=plan.run_id, cid=plan.cid, entrypoint=plan.entrypoint,
-            image_ref=self._image(template.image), network=self._network(plan.template, plan.cid, plan.egress),
-            repo_mode=plan.repo_mode, env=plan.env, cpus=plan.cpus, memory_mb=plan.memory_mb,
-        )  # fmt: skip
-        self.runtime.run(spec)
-        created.append(spec.name)
-        self._track(plan.run_id, spec.name)
-        self._wait(plan, spec.name)
+        network = self._network(plan.template, plan.cid, plan.egress)
+        metered = self._meter_start(plan, template.network)
+        try:
+            spec = job_spec(
+                plan.template, run_id=plan.run_id, cid=plan.cid, entrypoint=plan.entrypoint,
+                image_ref=self._image(template.image), network=network, repo_mode=plan.repo_mode, env=plan.env,
+                cpus=plan.cpus, memory_mb=plan.memory_mb,
+            )  # fmt: skip
+            self.runtime.run(spec)
+            created.append(spec.name)
+            self._track(plan.run_id, spec.name)
+            self._wait(plan, spec.name)
+        finally:
+            if metered and self.meter is not None:  # the finish check always runs (timeout, crash)
+                self.meter.finish(plan.run_id)
         return [(spec.name, "")]
+
+    def _meter_start(self, plan: Plan, net: str) -> bool:
+        """Register a fetch/validate job (mode or strict egress) with the egress meter (§13.2)."""
+        if self.meter is None or plan.template not in EGRESS_PROFILES or plan.egress is None or net == "none":
+            return False
+        subnet = self.networks.subnets.allocate(network_profile(net, plan.egress), plan.cid)  # idempotent
+        try:
+            mode = self.egress_mode()
+        except Exception:  # noqa: BLE001 - the mode is a label of the summary only
+            mode = "open"
+        self.meter.register(plan.run_id, plan.cid, plan.template, subnet, self.clock.now().timestamp(),
+                            plan.egress, mode)  # fmt: skip
+        return True
+
+    # ------------------------------------------------------------- egress anomaly (§13.2)
+    def flag_anomaly(self, run_id: str, doc: dict[str, Any]) -> None:
+        """The meter's breach: stop the job (its outcome becomes ``egress_anomaly``, staging discarded),
+        then ask the gatekeeper for the contribution's hold (once per job)."""
+        with self._lock:
+            if run_id in self._anomaly:
+                return
+            self._anomaly[run_id] = doc
+            names = list(self._containers.get(run_id, []))
+        for name in names:
+            self._quiet(self.runtime.kill, name)
+        try:
+            body = hold_body(doc)
+        except (KeyError, ValueError) as exc:  # a bug, not the gatekeeper's answer: still fail closed
+            self._pending(str(doc["cid"]), run_id, {"summary": doc}, f"local:{type(exc).__name__}")
+            return
+        self.request_hold(str(doc["cid"]), run_id, body)
+
+    def request_hold(self, cid: str, run_id: str, body: dict[str, Any]) -> bool:
+        """True once the gatekeeper recorded it. M3: 5xx and transport errors stay pending and are retried
+        every 30 s; any 4xx (400 ``schema_error``, 404 ``unknown_cid``) is final: the row keeps the cid blocked
+        with ``rejected_code`` and an ERROR, until ``ossctl egress release``."""
+        try:
+            self.gatekeeper.hold(cid, body)
+        except HoldError as exc:
+            final = exc.status is not None and exc.status < 500
+            self._pending(cid, run_id, body, f"{exc.status}:{exc.code}"[:80] if final else None)
+            return False
+        with self.store.tx() as conn:
+            conn.execute("DELETE FROM anomaly_pending WHERE cid = ?", (cid,))
+        return True
+
+    def _pending(self, cid: str, run_id: str, body: dict[str, Any], rejected: str | None) -> None:
+        now = to_iso(self.clock.now())
+        with self.store.tx() as conn:
+            conn.execute(
+                "INSERT INTO anomaly_pending (cid, run_id, summary_json, created_at, rejected_code, attempts,"
+                " last_attempt_at) VALUES (?, ?, ?, ?, ?, 1, ?) ON CONFLICT (cid) DO UPDATE SET rejected_code ="
+                " excluded.rejected_code, attempts = attempts + 1, last_attempt_at = excluded.last_attempt_at",
+                (cid, run_id, json.dumps(body, sort_keys=True), now, rejected, now),
+            )  # fmt: skip
+        if rejected is not None:
+            log.error("the gatekeeper refused the hold of %s (%s); its fetch/validate jobs stay refused until"
+                      " ossctl egress release", cid, rejected,
+                      extra={"event": "hold_rejected", "cid": cid, "run_id": run_id})  # fmt: skip
+        else:
+            log.warning("hold of %s not recorded yet; retried every 30 s", cid,
+                        extra={"event": "hold_pending", "cid": cid, "run_id": run_id})  # fmt: skip
+
+    def retry_pending_holds(self) -> int:
+        """The meter thread, every 30 s: pending rows without ``rejected_code``; returns how many cleared."""
+        with self.store.lock:
+            rows = self.store.conn.execute(
+                "SELECT cid, run_id, summary_json FROM anomaly_pending WHERE rejected_code IS NULL ORDER BY created_at"
+            ).fetchall()  # fmt: skip
+        return sum(self.request_hold(str(r["cid"]), str(r["run_id"]), json.loads(r["summary_json"])) for r in rows)
+
+    def pending_hold(self, cid: str) -> dict[str, Any] | None:
+        with self.store.lock:
+            row = self.store.conn.execute("SELECT * FROM anomaly_pending WHERE cid = ?", (cid,)).fetchone()
+        return None if row is None else dict(row)
+
+    def pending_holds(self) -> list[dict[str, Any]]:
+        with self.store.lock:
+            rows = self.store.conn.execute(
+                "SELECT cid, run_id, created_at, rejected_code, attempts, last_attempt_at FROM anomaly_pending"
+                " ORDER BY created_at"
+            ).fetchall()  # fmt: skip
+        return [dict(r) for r in rows]
+
+    def clear_pending(self, cid: str) -> None:
+        """``ossctl egress release`` (root, TTY-confirmed): the owner lets the cid's jobs run again."""
+        with self.store.tx() as conn:
+            if conn.execute("DELETE FROM anomaly_pending WHERE cid = ?", (cid,)).rowcount == 0:
+                raise ApiError(404, "no_pending_hold")
+        log.warning("pending egress hold of %s cleared by the operator", cid,
+                    extra={"event": "hold_pending_cleared", "cid": cid})  # fmt: skip
 
     def _wait_running(self, name: str) -> None:
         deadline = time.monotonic() + EXEC_READY_TIMEOUT_S
@@ -497,6 +632,10 @@ class JobService:
             shutil.rmtree(staging, ignore_errors=True)
             outcome.error_class = "secret_in_output"
             self._pause("secret in output")
+            return outcome
+        if plan.run_id in self._anomaly:  # §13.2: nothing a job over its egress limits produced is kept
+            shutil.rmtree(staging, ignore_errors=True)
+            outcome.error_class = EGRESS_ANOMALY
             return outcome
         if plan.run_id in self._cancelled:
             outcome.error_class = "cancelled"

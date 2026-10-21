@@ -67,6 +67,9 @@ class NoGatekeeper:
                      verdict: str | None = None, attempts: int = 1) -> None:  # fmt: skip
         return None
 
+    def hold(self, cid: str, body: dict[str, Any]) -> None:  # the sandbox tests run no meter
+        return None
+
 
 @dataclass
 class Sandbox:
