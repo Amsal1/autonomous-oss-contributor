@@ -180,3 +180,56 @@ Decision:
 - Tests: `tests/telegram/test_implicit_topics.py`.
 
 Live result (2026-10-21, after `bootstrap.ps1 -Only provision`): the owner sent `/status` in All several times. All three journal pairs matched (`order=topic_first`, `gap_ms` 314, 1255 and 317, `name_matches_command=True`, `implicit=True`, `action=delete`) and each was followed by `stray_topic_deleted`, with no failure. The card landed in All, and the topic disappeared within about 2 s. Client cache: the Telegram client may keep showing a deleted topic until the chat is left and reopened. That is client rendering, not server state, and the bot cannot affect it.
+
+## Implementation addendum (post-v1, 2026-10-21): can the bot prevent the implicit topic in "All"? (research and live probe)
+
+The owner asked for prevention, not delete-afterwards. `/chat <subject>`, and extending the cleanup to plain text, were to be built only if prevention exists for **commands and plain text typed in All** (`.ossbot-local/postv1/followups.md`).
+
+**Research (sources, 2026-10-21).** Client source was read at pinned commits, and none of it was run:
+- tdesktop `78ceaa54`: `HistoryWidget::prepareSendAction`, `HistoryItem::topicRootId`, `Data::Histories::sendCreateTopicRequest`.
+- Telegram-Android `0aae9598`: `BotForumHelper.beforeSendingFinalRequest`, `ChatActivity.checkBotKeyboard`.
+- Telegram-iOS `f1dd7a2d`: `ChatControllerNode`, `MessageUtils.requestsSetupReply`.
+- TDLib `175048b6`: `telegram_api.tl`, `title_missing`, `bot_forum_can_manage_topics`.
+
+What the source shows:
+- The topic is created by the **client** (`messages.createForumTopic` with `title_missing`), and only for an outgoing message that is **not a reply**.
+- A reply to an off-thread message goes out off-thread.
+- `ForceReply` (https://core.telegram.org/bots/api#forcereply) should open that reply state on its own.
+
+Other projects and trackers handle All without prevention:
+- Bot API changelog 9.3-10.3: no send parameter or bot setting stops implicit creation while users may create topics.
+- OpenClaw #169443/#169969 keep the topic, the opposite of our goal.
+- Hermes `gateway/run_topics.py` treats the root DM as a lobby.
+- PTB, aiogram, grammY, telegraf and pyTelegramBotAPI only type the fields.
+- bugs.telegram.org #58238 and #59731.
+
+The only prevention used in production elsewhere is turning off "allow users to create topics" in @BotFather (e.g. Telegram-Thread-Vault). The owner keeps that setting ON.
+
+**Live probe (2026-10-21, 01:30-01:35Z).**
+- **Setup:** a temporary, flag-guarded `/probe_all` in the gatekeeper, deployed with one `bootstrap.ps1 -Only provision`. It sent a 7-step chain of `ForceReply` messages to All and logged `reply_to_message_id` (ids and flags only). Replies to probe messages skipped the delete, so created topics stayed visible.
+- **Session state:** `getMe` was `has_topics_enabled` true and `allows_users_to_create_topics` true (`probe_all_start mode=topics allows_user_topics=True`).
+- **Journal:** `ossctl.ps1 logs gatekeeper`, events `tg_thread_fields`, `probe_all_reply`, `implicit_topic_*` and `stray_topic_deleted`. Message ids:
+
+| Owner action in All | Message | `reply_to_message_id` | `forum_topic_created` before it | Result |
+|---|---|---|---|---|
+| `/probe_all` typed (control) | 605 | none | 604, thread 125089 | topic created, then deleted (9884df9) |
+| `/status` typed after step 1 arrived | 608 | none | 607, thread 125092 | topic created, then deleted |
+| tapped the `/status` command link inside the step-1 bot message (606) | 610 | **606** | **none** | **no topic** |
+| "probe two" typed | 613 | none | 612, thread 125097 (name_len 9) | topic created and kept (plain text is never deleted) |
+| `/help` typed | 616 | none | 615, thread 125100 | topic created, then deleted |
+| "probe four" typed | 619 | none | 618, thread 125103 (name_len 10) | topic created and kept |
+| `/probe_all` typed again | 622 | none | 621, thread 125106 | topic created, then deleted |
+| `/status` typed | 625 | none | 624, thread 125109 | topic created, then deleted |
+
+- **ForceReply:** the reply bar did **not** open by itself on the owner's client, so no typed message went out as a reply.
+- **Command link:** a tapped `/command` link inside a bot message was sent as a reply to that message (610 → 606), and no topic was created.
+- **Stray topics:** 125097 and 125103 still exist. They should be deleted once, by hand or by the bot, only after the owner confirms.
+
+**Result: prevention for typed input does not work.**
+- **Typed text:** a message typed in All without a reply always creates an implicit topic, whether it is a command or plain text, and ForceReply is not a reliable way to turn it into a reply.
+- **What does prevent a topic:** actions started from the bot's own UI. These are inline-keyboard buttons (a callback sends no message) and `/command` links inside bot messages, which the client sends as replies (msg 610).
+
+**Consequence under the owner decision of 2026-10-21:**
+- Behaviour stays as it is. Typed commands in All keep 9884df9's delete-and-answer, plain text in All is unchanged, and no `/chat` topics are added.
+- Proposal for the next plan step, not built: make the common commands tappable in All (buttons and command links on the dashboard, `/help` and All replies). Treat the implicit topic of typed plain text as that conversation's own resumable Hermes session, with no deletion.
+- The probe code was removed from the working tree after the run. The next redeploy restores the deployed copy.
