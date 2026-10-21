@@ -864,6 +864,28 @@ Verified facts V1-V11 (open-discovery design §15, web-research rule; sources an
 
 Close-out live check (one redeploy, read-only; not part of the build): (1) `ossctl egress status`, note the mode; (2) `scripts\bootstrap.ps1 -Only provision` (the config hash changes, so open gate-1/gate-2 cards are invalidated `config_snapshot_changed`; nothing is written to GitHub); (3) `ossctl egress status` shows the same mode (default `open`); (4) `ROOT bash tests/system/test_proxy_log_bytes.sh` (V10/V11; on a failure stop and ask the owner before `sandbox_open` is offered, and report "do not switch to sandbox_open"), `ROOT bash tests/system/test_egress_surface.sh` (restores the found mode; `sandbox_open` SKIPs unless already active), `ROOTDEV pytest tests/sandbox/test_profiles.py tests/sandbox/test_cfn_lint_on_demand.py`; (5) `ROOT /opt/ossbot/app/.venv/bin/ossctl targets search --top 10`, `ossctl targets discovered` shows no new rows, no Telegram message; (6) never a discovery cycle, `/work`, `ossctl discover`, an egress switch, a `mode_default` edit or `/reload`.
 
+### Open discovery close-out (2026-10-22 about 03:17-03:40 +07)
+
+At 38ead22, then ebd39c5 (the one fix). Dry-run is OFF (owner); zero GitHub writes, no discovery cycle, `/work`, runner stage, egress switch or `/reload`; no secret value read or printed. Logs under `.ossbot-local/logs/open-discovery-closeout-*.log` (gitignored).
+
+| Check | Command | Result |
+|---|---|---|
+| Hermetic bar (38ead22) | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4577 passed, 0 failed in 149 s |
+| Lint gate (38ead22 and ebd39c5) | `DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports` | clean; 578 files formatted; mypy 267 files; 16 contracts kept |
+| Hygiene | `DEV ossctl lint personal`; `DEV ossctl docs commands --check`; `ROOT gitleaks git --redact --config .gitleaks.toml .` | 0 hits (980 files); command table current; 313 commits, no leaks |
+| Redeploy 1 (38ead22) | `scripts\bootstrap.ps1 -Only provision` | FAIL in step `firewall`: the live squid.conf named an old snapshot and the current snapshot (older than the restart grace) was rejected by the new schema too (`modes` lacks `sandbox_open`), so `ossbot-firewall --check` reported `firewall_drift:squid_mode` before the gatekeeper restart could write a valid snapshot. The watchdog then soft-killed the bot at 2026-10-21T20:21:22Z with reason `firewall_drift:squid_mode` (fail closed, as designed) |
+| Fix OD-D1 (ebd39c5, owner-approved second provision) | `DEV pytest tests/unit/ctl -m unit` | 288 passed (2 new: tolerated before the gatekeeper starts, strict once a valid snapshot is current; a tampered conf naming an accepted snapshot still fails). Render output unchanged, so the proxy/egress-surface system tests were not re-run |
+| Redeploy 2 (ebd39c5) | `scripts\bootstrap.ps1 -Only provision` | exit 0; gatekeeper restarted on the new code and wrote a valid snapshot; `enable-start` kept the kill-stopped units down (`killed (level soft)`) |
+| Doctor | `ROOT ossctl doctor`, `scripts\ossctl.ps1 doctor` | FAIL 1 (safety probes: sandboxd stopped by the kill), WARN 2 (Hermes stopped, chat relay off: kill), PASS 43 incl. `firewall --check` and `squid.conf verifiable`; `commit signing (SSH)` SKIP "no GITHUB_COMMIT_SIGNING_KEY" (awaiting the owner's key) |
+| cfn-lint (F1) | `ROOTDEV pytest tests/sandbox/test_cfn_lint_on_demand.py` | not run: the sandbox fixture refuses while killed and resume is the owner's; the image still ships no cfn-lint (follow-up F1b) |
+| Live read-only search | `ROOT ossctl targets search --top 12 --all` | exit 0; 15 `GET /search/repositories` (one per effective topic; the dry run is not bound by the per-cycle `search_budget` 10), no rate limit; top 12 below |
+| Default-branch facts | `ROOT ossctl targets facts` (2 × 5 repos) | every top-10 repo had a default-branch commit 0-4 d ago; AI policy: uptime-kuma and gitea banned (vet would skip them), others allowed / not stated / unclear |
+| Nothing created | `ossctl targets discovered`; `GET /v1/contributions` (operator) | 0 discovered rows; 155 contributions, newest `updated_at` 2026-10-21T15:30Z (before the close-out); egress mode `open` unchanged |
+
+Top of the open search (★, language, CI on merged PRs, last default-branch commit): kubernetes/kubernetes 128467 Go yes 0 d; louislam/uptime-kuma 92726 JavaScript yes 1 d; koala73/worldmonitor 89084 TypeScript yes 0 d; netdata/netdata 81079 Go yes 0 d; grafana/grafana 77405 TypeScript yes 0 d; prometheus/prometheus 66683 Go yes 0 d; traefik/traefik 65310 Go yes 1 d; go-gitea/gitea 58616 Go yes 0 d; etcd-io/etcd 52411 Go yes 0 d; LibreChat-AI/LibreChat 46125 TypeScript yes 4 d (then istio/istio, dgtlmoon/changedetection.io). Rejects were mostly `excluded` (seed targets such as argo-cd, helm, trivy) and `license_not_osi` (GitHub reports NOASSERTION, e.g. xonsh, fail2ban), plus `no_contributing` (k9s, seaweedfs), `pr_creation_restricted` and `issues_disabled`.
+
+The redeploy changed the config hash, so the open gate-2 approval of the grafana/loki contribution (c_D1BVZ6N1HZ, still `AWAITING_APPROVAL`) was invalidated as expected; it was not touched otherwise. The bot stays killed until the owner resumes it (`/resume` two-tap in Telegram or `ROOT ossctl resume` with its TTY confirm).
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
