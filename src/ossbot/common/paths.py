@@ -80,6 +80,11 @@ class Paths:
     def audit_anchors_log(self) -> Path:
         return self.logs_dir / "audit-anchors.log"
 
+    # root housekeeping (DESIGN §18.10): the last `ossctl gc` report (root 0755 dir, 0644 file)
+    @property
+    def gc_last(self) -> Path:
+        return self.var_lib / "gc" / "last.json"
+
     # control dir (gatekeeper:osscontrol 0750, files 0640)
     @property
     def control_dir(self) -> Path:

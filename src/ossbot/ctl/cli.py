@@ -1356,6 +1356,62 @@ def restore(
     typer.echo("Restored. Run ossctl doctor, then /resume on Telegram.")
 
 
+# ------------------------------------------------------------- retention (DESIGN §18.10)
+GC_STORE_HELP = "store (repeatable): tmp, gatekeeper, artifacts, run-logs, hermes-sessions, images, build-cache, fstrim"
+
+
+@app.command("gc")
+def gc(
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="report what would go; delete nothing")] = False,
+    only: Annotated[list[str] | None, typer.Option("--only", help=GC_STORE_HELP)] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="JSON report")] = False,
+    build_cache_until_hours: Annotated[int | None, typer.Option(
+        "--build-cache-until-hours", help="unused for N h (0 = every unused record; default: policy)")] = None,
+) -> None:  # fmt: skip
+    """Retention and housekeeping (root; DESIGN §18.10): /tmp leftovers, gatekeeper rows and repos (through
+    the gatekeeper), artifacts of old terminal contributions, run logs, idle Hermes session files, dangling
+    images, then fstrim; build cache only with --only build-cache (weekly timer). Never the audit log or
+    anything open or awaiting approval. Exit 0 ok, 1 a store failed, 2 config error, 3 stopped by kill/pause."""
+    from ossbot.common.logging import setup_logging  # noqa: PLC0415
+    from ossbot.common.schemas import RetentionReport  # noqa: PLC0415
+    from ossbot.ctl import gc as gcm  # noqa: PLC0415
+
+    if os.geteuid() != 0:
+        _fail("gc runs as root (sudo ossctl gc)", 2)
+    stores = tuple(dict.fromkeys(only)) if only else gcm.DEFAULT_STORES
+    unknown = [s for s in stores if s not in gcm.STORES]
+    if unknown:
+        _fail(f"unknown store {', '.join(unknown)} ({GC_STORE_HELP})", 2)
+    if build_cache_until_hours is not None and not 0 <= build_cache_until_hours <= 8760:
+        _fail("--build-cache-until-hours is 0..8760", 2)
+    paths = Paths.default()
+    try:
+        snapshot, policy = gcm.load_policy(paths.snapshot_root)
+    except gcm.GcConfigError as exc:
+        _fail(f"no usable retention policy in the config snapshot ({exc}); nothing deleted", gcm.EXIT_CONFIG)
+
+    def gatekeeper(want_dry_run: bool) -> RetentionReport:
+        try:
+            code, data = api("POST", "/v1/retention/run", {"dry_run": want_dry_run}, timeout=900.0)
+        except GatekeeperDown as exc:
+            raise gcm.GatekeeperUnreachable(str(exc)) from exc
+        if code != 200:
+            reason = data.get("error") if isinstance(data, dict) else None
+            raise gcm.GatekeeperRefused(f"HTTP {code}" + (f" {reason}" if reason else ""))
+        return RetentionReport.model_validate(data)
+
+    if not sys.stderr.isatty():  # the timer's run: one gc_store JSON line per store in the journal
+        setup_logging("ossctl-gc")
+    roots = gcm.Roots(artifacts=paths.artifacts_dir, run_logs=paths.logs_dir / "runs", state_file=paths.gc_last)
+    report = gcm.run_gc(
+        stores, dry_run, policy, snapshot, gk_call=gatekeeper, runner=gcm.run_argv,
+        flags_reader=lambda: read_flags(paths.control_dir), clock=time.time, roots=roots,
+        build_cache_hours=build_cache_until_hours,
+    )  # fmt: skip
+    typer.echo(gcm.render_json(report) if as_json else gcm.render_text(report), nl=False)
+    raise typer.Exit(report.exit_code)
+
+
 docs_app = typer.Typer(no_args_is_help=True, help="generated documentation (README command table)")
 app.add_typer(docs_app, name="docs")
 lint_app = typer.Typer(no_args_is_help=True, help="repository lints (personal values)")
