@@ -756,6 +756,22 @@ Part B (PV1-V2, PV1-V4, CI on PRs and `ossctl targets facts`; PV1-V3 watcher fin
 | Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits over 921 files; command table current |
 | S1 goldens | `tests/telegram/test_card_goldens.py` | only `s1_open_pr_ai_conditions_live.html` changed (the line gains `· CI on PRs: ✅ tests, lint (8/10 merged PRs) · runs after maintainer approval`), reviewed |
 
+Close-out (Parts A and B, 2026-10-21, HEAD 2b3316a, tree clean before the run): one hermetic run, one redeploy (the second "unchanged" provision run of working rule 5 skipped, owner asked for one), live read-only checks only. Dry-run is OFF (owner); no `/work`, no `ossctl discover`, no runner cycle triggered, no Telegram approval, no GitHub write.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all passed; 540 files formatted; mypy 255 files no issues; 14 contracts kept, 0 broken |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4029 passed in 52 s (`.ossbot-local/logs/postv1-closeout-hermetic.log`) |
+| Hygiene | `DEV ossctl lint personal`; `DEV ossctl docs commands --check`; `ROOT gitleaks git --redact --no-banner --config .gitleaks.toml .` | 0 hits over 925 files; command table current; 268 commits (~9.9 MB) scanned, no leaks |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | exit 0; changed: app-deploy, images, firewall, enable-start; doctor PASS 40, WARN 2 (safety probes not run for the new tuple; hermes tool surface ConnectError while Hermes restarted) |
+| Probes | `ROOT ossctl doctor --probes` | PASS 47, 0 WARN; safety probes passed for tuple 03960e59a080 (roles.test, all five); hermes-side probe clean |
+| Services | `systemctl is-active` runner, gatekeeper, sandboxd, hermes; `journalctl --grep Traceback` since the restart | all `active`; 0 tracebacks |
+| Targets | `ROOT ossctl targets verify` | 73 enabled targets: 73 PASS, 0 WARN, 0 FAIL |
+| Earlier AI skips | `GET /v1/contributions?state=SKIPPED&limit=200` (operator socket, gitignored read-only script) | 145 SKIPPED rows, 84 `ai_policy_unclear` over 14 repos (top: Arize-ai/phoenix 40, BerriAI/litellm 14, langfuse/langfuse 5) |
+| Dry vet | `ROOT ossctl targets facts Arize-ai/phoenix BerriAI/litellm langfuse/langfuse` | exit 0; all three `AI policy: unclear (allowed by your rule)` (no ban, so no longer skipped); `CI on PRs: ✅ tests, lint, build (10/10 merged PRs)` for all three; langfuse `runs after a maintainer label or /ok-to-test`. The read token reads check-runs and statuses of public targets (the [VERIFY] live check) |
+
+Owner notes: `/reload` records the new `policy.yaml` keys (`vet.ai_policy`, `discovery.ci_on_pr_weight`, `discovery.ci_facts_ttl_hours`) in the snapshot; the code defaults already equal the file values (`text.project_url` is not in the file and uses its default). The earlier `ai_policy_unclear` skips are re-discoverable from the next scheduled discovery cycle and still need gate 1 and gate 2. Follow-ups: PV1-V3 (watcher does not read check runs, so a failing CI check drafts no fix by itself); check names truncated to 40 characters can repeat in the Details list (phoenix shows "Phoenix Client Canary Tests for Third-Pa" three times), cosmetic.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
