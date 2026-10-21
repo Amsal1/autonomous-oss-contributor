@@ -263,7 +263,8 @@ TOOLS: list[tuple[dict[str, Any], Any]] = [
     (
         _schema(
             "ossbot_request_discovery",
-            "Ask ossbot to look at a GitHub issue URL of an enabled target; the owner still approves any work.",
+            "Suggest a GitHub repo or issue URL for ossbot to check. Repos outside the targets are checked by"
+            " fixed rules (stars, license, CONTRIBUTING, …); the owner still approves any work.",
             {"url": _STR},
             ("url",),
         ),

@@ -12,15 +12,16 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from ossbot.common.config import resolve_target
-from ossbot.common.schemas import ActionCreate, DiscoveryRequest, ProbeResult
+from ossbot.common.config import REPO_RE, resolve_target
+from ossbot.common.schemas import DISCOVERY_URL_RE, ActionCreate, DiscoveryRequest, ProbeResult
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.action_requests import ActionRefused, request_action
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 
 router = APIRouter(prefix="/v1")
-ISSUE_URL_RE = re.compile(r"^https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)$")
+DISCOVERY_URL = re.compile(DISCOVERY_URL_RE)
+REPO_SLUG = re.compile(REPO_RE)
 
 
 @router.post("/actions", status_code=201)
@@ -61,13 +62,29 @@ async def discovery_request(
     body: DiscoveryRequest,
     caller: Annotated[Caller, Depends(require(Role.REQUESTER, Role.OPERATOR))],
 ) -> Any:
+    """A Hermes suggestion (design §11; untrusted input). Only the slug and the issue number are used or
+    stored; nothing here approves anything (both gates still apply to whatever gets created)."""
     c = ctx(request)
-    match = ISSUE_URL_RE.match(body.url)
-    if match is None:
-        raise HTTPException(status_code=400, detail="not an issue URL")
-    repo, number = match.group(1), int(match.group(2))
+    match = DISCOVERY_URL.fullmatch(body.url)
+    repo = f"{match['owner']}/{match['repo']}" if match is not None else ""
+    if match is None or REPO_SLUG.fullmatch(repo) is None:  # no echo of the input
+        detail = [{"loc": ["body", "url"], "msg": "not a repo"}]
+        return JSONResponse(status_code=400, content={"error": "schema_error", "detail": detail})
+    number = int(match["n"]) if match["n"] else None
     target = resolve_target(c.config.targets, repo)
-    if target is None or not target.enabled or not target.discovery:
-        return JSONResponse(status_code=400, content={"error": "not_an_enabled_target"})
-    cid = c.contributions.create(repo, number, "hermes_request", None, caller.actor)
-    return {"cid": cid}
+    if target is not None:  # a config target: unchanged for issues
+        if number is None:
+            return JSONResponse(status_code=400, content={"error": "already_a_target"})
+        if not target.enabled or not target.discovery:
+            return JSONResponse(status_code=400, content={"error": "not_an_enabled_target"})
+        return {"cid": c.contributions.create(target.repo, number, "hermes_request", None, caller.actor)}
+    found = c.discovered.get(repo)
+    if found is not None and found.status in ("candidate", "kept"):
+        if number is None:
+            return JSONResponse(status_code=200, content={"repo": found.repo, "status": found.status})
+        limit = c.discovery_prefs.effective(found.repo).filters.max_open_prs_by_me_per_repo
+        if c.discovered.open_pr_count(found.repo) >= limit:  # plan D1 (review-3 M2): one open PR per repo
+            return JSONResponse(status_code=409, content={"error": "repo_has_open_pr"})
+        return {"cid": c.contributions.create(found.repo, number, "hermes_request", None, caller.actor)}
+    view = c.discovered.suggest(repo, number, caller.actor)  # never/skipped/denied/limits raise DiscoveredRefused
+    return JSONResponse(status_code=202, content={"queued": True, "repo": view.repo, "status": view.status})

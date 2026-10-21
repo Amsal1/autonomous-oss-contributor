@@ -272,9 +272,10 @@ async def test_discovery_request(ctx: AppContext) -> None:
         ok = await c.post("/v1/discovery-requests", json={"url": "https://github.com/langfuse/langfuse/issues/9"})
         assert ok.status_code == 201
         pr = await c.post("/v1/discovery-requests", json={"url": "https://github.com/langfuse/langfuse/pull/9"})
-        assert pr.status_code == 400
+        assert pr.status_code == 400 and pr.json()["error"] == "schema_error"
+        # post-v1 open discovery (design §11): a non-target repo becomes a suggestion the runner checks
         other = await c.post("/v1/discovery-requests", json={"url": "https://github.com/nobody/x/issues/1"})
-        assert other.status_code == 400
+        assert other.status_code == 202 and other.json() == {"queued": True, "repo": "nobody/x", "status": "suggested"}
 
 
 async def test_schema_errors_are_400(ctx: AppContext) -> None:
