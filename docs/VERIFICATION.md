@@ -652,6 +652,19 @@ Commits 8d3fb14 (`ctl/gc.py`, `ossctl gc`, contract "only `ctl.cli` imports `ctl
 | Live dry run | `ROOT ossctl gc --dry-run`; `systemctl list-timers` | every store 0 items (the gatekeeper's dry run included), `keep set 8 refs intact`, build-cache SKIP weekly, fstrim SKIP dry run; next runs Thu 04:40 (gc) and Sun 05:09 (docker-prune) local time |
 | Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits; command table current |
 
+## Post-v1 Telegram shortcuts (PV1-T1, 2026-10-21)
+
+Commits 3544da9 (`telegram.yaml` `all_text_mode` and `command_shortcuts`) and 46677cf (`telegram/shortcuts.py`, dashboard rows, /help menu, compact row in All, regenerated demo media) on `main`. Hermetic only, no redeploy (the close-out's). Dry-run stayed ON, no GitHub write, no Telegram message.
+
+| Check | Command | Result |
+|---|---|---|
+| [VERIFY] V8 inline keyboard limits | core.telegram.org/bots/api#inlinekeyboardmarkup (2026-10-21) | `callback_data` 1-64 bytes (ours: 24, `t:` + 22); no per-row or per-message button count is documented; `ui/limits.py` (≤ 3 per row, ≤ 6 rows) is stricter, so the planned 5-button dashboard row is two rows (Work/Size/Filters, Model/Help) |
+| Lint gate | `ruff check src tests`; `ruff format --check src tests`; `mypy`; `lint-imports` | all clean; 529 files formatted, mypy 250 files, 14 contracts kept |
+| Targeted tests | `pytest tests/telegram/test_shortcuts.py tests/telegram/test_dashboard.py tests/telegram/test_status_is_dashboard.py tests/unit/common/test_telegram_config.py tests/telegram/test_kit_builders.py -x --timeout=120` | 90 passed: keyboards with the flag on and off (goldens), text unchanged classic and rich, token set re-minted once on toggle, /help menu with the same lines and no Kill, compact row in All only (not Control, a user topic, flat mode or replies with rows), each `sc_*` tap equals the typed command and replies in the tapped thread, Pause immediate without touching the menu, Resume and Model keep their confirms, killed mode as typed |
+| Hermetic suite | `pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120` | 3862 passed in 46 s (`.ossbot-local/logs/feat003-suite.log`) |
+| Demo media | `scripts\dev\make-demo.ps1`, then `-Check` | regenerated (stills 01-07, GIF, MP4 changed; demo.gif 665,955 bytes, 720x820, 18.3 s); `-Check` PASS, every page passed assert_faithful, personal_check 0 hits |
+| Hygiene | `ossctl lint personal`; `ossctl docs commands --check` | 0 hits; command table current (no command added) |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
