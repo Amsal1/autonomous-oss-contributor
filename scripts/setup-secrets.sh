@@ -5,10 +5,14 @@
 #   bash -s -- --selftest     validate + write against a temp root only (fake well-formed values)
 # Record entries are KEY=VALUE, NUL-terminated. An empty VALUE keeps the existing one. Keys:
 #   TELEGRAM_BOT_TOKEN GITHUB_WRITE_TOKEN GITHUB_READ_TOKEN KIRO_API_KEY_SANDBOX KIRO_API_KEY_HERMES
-#   REVERSE_IMAGE_SEARCH_KEY GITHUB_REVIEW_MIRROR_TOKEN (optional)
+#   REVERSE_IMAGE_SEARCH_KEY GITHUB_REVIEW_MIRROR_TOKEN GITHUB_COMMIT_SIGNING_KEY (optional)
+# GITHUB_COMMIT_SIGNING_KEY is the one multi-line value (an OpenSSH private-key block; NUL-separated
+# records carry newlines): it is checked with ssh-keygen (ed25519, no passphrase) and stored as the
+# single-line base64 body of the block.
 # Files (root:<svc> 0640): gatekeeper.env (GITHUB_WRITE_TOKEN, TELEGRAM_BOT_TOKEN, HERMES_API_KEY,
 # OSSBOT_TOKEN_PEPPER, KIRO_KEY_SHA256 = sha256 of both Kiro keys and the read token, comma-separated,
-# REVERSE_IMAGE_SEARCH_KEY, GITHUB_REVIEW_MIRROR_TOKEN and TELEGRAPH_ACCESS_TOKEN when set), runner.env
+# REVERSE_IMAGE_SEARCH_KEY, GITHUB_REVIEW_MIRROR_TOKEN, GITHUB_COMMIT_SIGNING_KEY and
+# TELEGRAPH_ACCESS_TOKEN when set), runner.env
 # (GITHUB_READ_TOKEN), sandboxd.env (KIRO_API_KEY, GITHUB_READ_TOKEN for the MCP jobs), hermes.env
 # (API_SERVER_ENABLED, API_SERVER_KEY = HERMES_API_KEY, KIRO_API_KEY, GITHUB_READ_TOKEN). The seeded randoms (OSSBOT_TOKEN_PEPPER, HERMES_API_KEY) are kept.
 # Values are never printed. Exit 0 ok, 1 validation error, 2 usage.
@@ -16,7 +20,9 @@ set -uo pipefail
 
 SECRETS_DIR=${OSSBOT_SECRETS_DIR:-/etc/ossbot/secrets}
 KEYS=(TELEGRAM_BOT_TOKEN GITHUB_WRITE_TOKEN GITHUB_READ_TOKEN KIRO_API_KEY_SANDBOX KIRO_API_KEY_HERMES
-  REVERSE_IMAGE_SEARCH_KEY GITHUB_REVIEW_MIRROR_TOKEN)
+  REVERSE_IMAGE_SEARCH_KEY GITHUB_REVIEW_MIRROR_TOKEN GITHUB_COMMIT_SIGNING_KEY)
+# GITHUB_COMMIT_SIGNING_KEY: optional (ADR-0006 addendum): the gatekeeper SSH-signs packaged commits
+# with it; gatekeeper.env only, never the runner, sandboxd or Hermes.
 # GITHUB_REVIEW_MIRROR_TOKEN: optional (ADR-0019 C, off by default): a fine-grained PAT scoped to the one
 # private mirror repo; gatekeeper.env only, never Hermes or a sandbox. It must not be the read token.
 # REVERSE_IMAGE_SEARCH_KEY: optional hook for the reverse image search feature (DESIGN §14.12.7,
@@ -30,8 +36,11 @@ declare -A PATTERN=(
   [KIRO_API_KEY_HERMES]='^ksk_[A-Za-z0-9_-]{16,}$'
   [REVERSE_IMAGE_SEARCH_KEY]='^[A-Za-z0-9_.:-]{16,256}$'
   [GITHUB_REVIEW_MIRROR_TOKEN]='^github_pat_[A-Za-z0-9_]{20,}$'
+  [GITHUB_COMMIT_SIGNING_KEY]='^[A-Za-z0-9+/]{64,8000}={0,2}$'
 )
 declare -A NEW=()
+SIGNING_HEAD='-----BEGIN OPENSSH PRIVATE KEY-----'
+SIGNING_TAIL='-----END OPENSSH PRIVATE KEY-----'
 
 log() { printf 'setup-secrets: %s\n' "$*"; }
 
@@ -49,8 +58,41 @@ read_record() {
   return 0
 }
 
+# signing_key_body: NEW[GITHUB_COMMIT_SIGNING_KEY] (a private-key block, or already its one-line body)
+# -> the one-line body, once ssh-keygen confirmed an ed25519 key without a passphrase. The scratch copy
+# lives in a 0700 temp dir for the one ssh-keygen call. Nothing about the key is printed.
+signing_key_body() {
+  local v=${NEW[GITHUB_COMMIT_SIGNING_KEY]} tmp pub rc
+  v=${v//$'\r'/}
+  if [[ ${v%%$'\n'*} == "$SIGNING_HEAD" ]]; then
+    v=${v#"$SIGNING_HEAD"}
+    if [[ $v != *"$SIGNING_TAIL"* || -n ${v#*"$SIGNING_TAIL"} && -n ${v#*"$SIGNING_TAIL"$'\n'} ]]; then
+      log "invalid format: GITHUB_COMMIT_SIGNING_KEY (not a complete OpenSSH private-key block)"
+      return 1
+    fi
+    v=${v%%"$SIGNING_TAIL"*}
+    v=${v//[$'\n' ]/}
+  fi
+  [[ $v =~ ${PATTERN[GITHUB_COMMIT_SIGNING_KEY]} ]] || { log "invalid format: GITHUB_COMMIT_SIGNING_KEY"; return 1; }
+  tmp=$(mktemp -d)
+  chmod 0700 "$tmp"
+  { printf '%s\n' "$SIGNING_HEAD"; printf '%s\n' "$v" | fold -w 70; printf '%s\n' "$SIGNING_TAIL"; } >"$tmp/key"
+  chmod 0600 "$tmp/key"
+  pub=$(ssh-keygen -y -P '' -f "$tmp/key" 2>/dev/null)
+  rc=$?
+  rm -rf "$tmp"
+  if ((rc != 0)) || [[ $pub != "ssh-ed25519 "* ]]; then
+    log "GITHUB_COMMIT_SIGNING_KEY must be an OpenSSH ed25519 private key without a passphrase"
+    return 1
+  fi
+  NEW[GITHUB_COMMIT_SIGNING_KEY]=$v
+}
+
 validate() {
   local key bad=0
+  if [[ -n ${NEW[GITHUB_COMMIT_SIGNING_KEY]:-} ]]; then
+    signing_key_body || return 1
+  fi
   for key in "${!NEW[@]}"; do
     [[ -z ${NEW[$key]} ]] && continue
     if [[ ! ${NEW[$key]} =~ ${PATTERN[$key]} ]]; then
@@ -90,7 +132,7 @@ sha() { printf '%s' "$1" | sha256sum | cut -d' ' -f1; }
 apply() {
   local d=$SECRETS_DIR gk=$SECRETS_DIR/gatekeeper.env
   install -d -o root -g root -m 0751 "$d"
-  local pepper hkey telegram write read ksb khe ris mirror tgph hashes=""
+  local pepper hkey telegram write read ksb khe ris mirror signing tgph hashes=""
   pepper=$(env_get "$gk" OSSBOT_TOKEN_PEPPER); [[ -n $pepper ]] || pepper=$(random_token)
   hkey=$(env_get "$gk" HERMES_API_KEY); [[ -n $hkey ]] || hkey=$(random_token)
   telegram=${NEW[TELEGRAM_BOT_TOKEN]:-$(env_get "$gk" TELEGRAM_BOT_TOKEN)}
@@ -100,6 +142,7 @@ apply() {
   khe=${NEW[KIRO_API_KEY_HERMES]:-$(env_get "$d/hermes.env" KIRO_API_KEY)}
   ris=${NEW[REVERSE_IMAGE_SEARCH_KEY]:-$(env_get "$gk" REVERSE_IMAGE_SEARCH_KEY)}
   mirror=${NEW[GITHUB_REVIEW_MIRROR_TOKEN]:-$(env_get "$gk" GITHUB_REVIEW_MIRROR_TOKEN)}
+  signing=${NEW[GITHUB_COMMIT_SIGNING_KEY]:-$(env_get "$gk" GITHUB_COMMIT_SIGNING_KEY)}
   tgph=$(env_get "$gk" TELEGRAPH_ACCESS_TOKEN)  # written by ossctl telegraph setup|rotate, kept here
   [[ -n $ksb ]] && hashes=$(sha "$ksb")
   [[ -n $khe ]] && hashes=${hashes:+$hashes,}$(sha "$khe")
@@ -107,7 +150,8 @@ apply() {
   [[ -n $read ]] && hashes=${hashes:+$hashes,}$(sha "$read")
   write_env "$gk" gatekeeper "GITHUB_WRITE_TOKEN=$write" "TELEGRAM_BOT_TOKEN=$telegram" \
     "HERMES_API_KEY=$hkey" "OSSBOT_TOKEN_PEPPER=$pepper" "KIRO_KEY_SHA256=$hashes" \
-    "REVERSE_IMAGE_SEARCH_KEY=$ris" "GITHUB_REVIEW_MIRROR_TOKEN=$mirror" "TELEGRAPH_ACCESS_TOKEN=$tgph"
+    "REVERSE_IMAGE_SEARCH_KEY=$ris" "GITHUB_REVIEW_MIRROR_TOKEN=$mirror" "GITHUB_COMMIT_SIGNING_KEY=$signing" \
+    "TELEGRAPH_ACCESS_TOKEN=$tgph"
   write_env "$d/runner.env" ossrunner "GITHUB_READ_TOKEN=$read"
   # GHMCP-2/4: the read-only GitHub MCP server of the scout/reviewer jobs and of Hermes
   write_env "$d/sandboxd.env" ossbox "KIRO_API_KEY=$ksb" "GITHUB_READ_TOKEN=$read"
@@ -126,9 +170,9 @@ restart_services() {
   done
 }
 
-# shellcheck disable=SC2016  # the check expressions are eval'd later on purpose
+# shellcheck disable=SC2016,SC2034  # the check expressions (and the variables they read) are eval'd on purpose
 selftest() {
-  local root fail=0 mode
+  local root fail=0 mode body
   root=$(mktemp -d)
   SECRETS_DIR=$root/secrets
   mkdir -p "$SECRETS_DIR"
@@ -181,6 +225,31 @@ selftest() {
   apply >/dev/null
   check "mirror token in gatekeeper.env only" \
     '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" GITHUB_REVIEW_MIRROR_TOKEN) == github_pat_FAKE_MIRROR_ONLY_0000000 && -z $(env_get "$SECRETS_DIR/hermes.env" GITHUB_REVIEW_MIRROR_TOKEN) && -z $(env_get "$SECRETS_DIR/sandboxd.env" GITHUB_REVIEW_MIRROR_TOKEN) ]]'
+  # SSH commit-signing key (ADR-0006 addendum): a multi-line record value, one line in gatekeeper.env only.
+  ssh-keygen -q -t ed25519 -N '' -C '' -f "$root/sign" </dev/null >/dev/null 2>&1
+  body=$(sed '1d;$d' "$root/sign" | tr -d '\n')
+  NEW=()
+  { printf 'GITHUB_COMMIT_SIGNING_KEY='; cat "$root/sign"; printf '\0'; } >"$root/record2"
+  read_record <"$root/record2" || fail=1
+  check "multi-line signing key read from the record" \
+    '[[ ${#NEW[@]} -eq 1 && ${NEW[GITHUB_COMMIT_SIGNING_KEY]} == "$(cat "$root/sign")"* ]]'
+  check "signing key accepted" 'validate'
+  check "signing key normalised to its one-line body" '[[ ${NEW[GITHUB_COMMIT_SIGNING_KEY]} == "$body" ]]'
+  apply >/dev/null
+  check "signing key in gatekeeper.env only" \
+    '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" GITHUB_COMMIT_SIGNING_KEY) == "$body" && -z $(grep -l GITHUB_COMMIT_SIGNING_KEY "$SECRETS_DIR/runner.env" "$SECRETS_DIR/sandboxd.env" "$SECRETS_DIR/hermes.env") ]]'
+  NEW=([TELEGRAM_BOT_TOKEN]='')
+  apply >/dev/null
+  check "signing key kept when not re-entered" \
+    '[[ $(env_get "$SECRETS_DIR/gatekeeper.env" GITHUB_COMMIT_SIGNING_KEY) == "$body" ]]'
+  ssh-keygen -q -t ed25519 -N 'selftest passphrase' -C '' -f "$root/locked" </dev/null >/dev/null 2>&1
+  NEW=([GITHUB_COMMIT_SIGNING_KEY]="$(cat "$root/locked")")
+  check "a passphrase-protected key is refused" '! validate >/dev/null'
+  ssh-keygen -q -t rsa -b 2048 -N '' -C '' -f "$root/rsa" </dev/null >/dev/null 2>&1
+  NEW=([GITHUB_COMMIT_SIGNING_KEY]="$(cat "$root/rsa")")
+  check "a non-ed25519 key is refused" '! validate >/dev/null'
+  NEW=([GITHUB_COMMIT_SIGNING_KEY]="$SIGNING_HEAD")
+  check "a truncated key block is refused" '! validate >/dev/null'
   check "no temp files left" '[[ -z $(find "$SECRETS_DIR" -name ".tmp-*") ]]'
   check "real secrets dir untouched" '[[ $SECRETS_DIR != /etc/ossbot/secrets ]]'
   rm -rf "$root"

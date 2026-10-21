@@ -17,7 +17,7 @@ from ossbot.runner.gk_client import GkError
 from ossbot.runner.llm import StageFailed
 from ossbot.runner.outputs import SCHEMA_HINTS, ImplementReport
 from ossbot.runner.pipeline import StageContext, StageRun
-from ossbot.runner.stages.common import issue_text, job, owner_notes
+from ossbot.runner.stages.common import issue_text, job, owner_notes, write_inputs
 
 STAGE = "implement"
 ENTRY = ("PLANNED", "VALIDATION_FAILED", "REVISE", "CHANGES_REQUESTED")
@@ -28,8 +28,12 @@ def _unbundle(sc: StageContext, c: dict[str, Any]) -> None:
     """Fix round on a live PR: the approved bundle back into the task volume (§9.8, M9)."""
     cid, rev = str(c["id"]), int(c["artifact_rev"])
     bundle = sc.inputs_root.parent.parent / "artifacts" / cid / str(rev) / "change.bundle"
+    inputs = {"change.bundle": str(bundle)}
+    signed = sc.gk.head_bundle(cid, rev)  # a signed head (ADR-0006 addendum): the gatekeeper's twin of it
+    if signed is not None:
+        inputs = write_inputs(sc, cid, STAGE, {"change.bundle": signed})
     args = {"mode": "fix_round", "bundle_ref": "refs/heads/ossbot-change", "checkout_sha": c["head_sha"], "rev": rev}
-    job(sc, cid, "implement", "package", "unbundle", args, "rw", inputs={"change.bundle": str(bundle)},
+    job(sc, cid, "implement", "package", "unbundle", args, "rw", inputs=inputs,
         timeout_s=UNBUNDLE_TIMEOUT_S)  # fmt: skip
 
 

@@ -730,6 +730,52 @@ def check_github(quick: bool) -> list[Result]:
     return out
 
 
+# public, read-only, no authentication (docs.github.com/en/rest/users/ssh-signing-keys, read 2026-10-22)
+SIGNING_KEYS_URL = "https://api.github.com/users/{login}/ssh_signing_keys?per_page=100"
+SIGNING_HINT = "GitHub Settings → SSH and GPG keys → New SSH key → Key type: Signing Key (docs/SETUP.md)"
+
+
+def check_commit_signing(quick: bool) -> list[Result]:
+    """ADR-0006 addendum: the optional SSH signing key is usable (sign + ``git verify-commit`` on a
+    throw-away commit) and, unless ``quick``, listed among the login's GitHub SSH signing keys."""
+    import tempfile  # noqa: PLC0415
+
+    from ossbot.gatekeeper import signing  # noqa: PLC0415 - only this check needs the gatekeeper's signer
+
+    name = "commit signing (SSH)"
+    if not _is_root():
+        return [Result(WARN, name, "not readable as this user", "run as root: sudo ossctl doctor")]
+    body = env_value("gatekeeper.env", signing.SIGNING_ENV)
+    if body is None:
+        return [Result(SKIP, name, "no GITHUB_COMMIT_SIGNING_KEY: packaged commits are not signed",
+                       "optional: scripts\\setup-secrets.ps1 (docs/SETUP.md)")]  # fmt: skip
+    try:
+        signer = signing.CommitSigner(body)
+        with tempfile.TemporaryDirectory(prefix="ossbot-signing-") as tmp:
+            verified = signer.selftest(Path(tmp))
+    except (signing.SigningError, OSError, subprocess.SubprocessError) as exc:
+        return [Result(FAIL, name, f"{type(exc).__name__}: {str(exc)[:200]}", "re-run scripts\\setup-secrets.ps1")]
+    out = [Result(PASS if verified else FAIL, name, f"key {signer.fingerprint}; selftest commit "
+                  + ("signed and verified" if verified else "did not verify"))]  # fmt: skip
+    if quick:
+        return out
+    login = _top_profile_value("github_login")
+    if login is None:
+        return [*out, Result(WARN, "commit signing key on GitHub", "no github_login in profile.yaml")]
+    try:
+        resp = httpx.get(SIGNING_KEYS_URL.format(login=login), headers={"X-GitHub-Api-Version": "2022-11-28"},
+                         timeout=15)  # fmt: skip
+        keys = resp.json() if resp.status_code == 200 else None
+    except (httpx.HTTPError, ValueError) as exc:
+        return [*out, Result(WARN, "commit signing key on GitHub", type(exc).__name__)]
+    if not isinstance(keys, list):
+        return [*out, Result(WARN, "commit signing key on GitHub", f"HTTP {resp.status_code}")]
+    listed = any(isinstance(k, dict) and signing.same_key(str(k.get("key", "")), signer.public_key) for k in keys)
+    detail = f"{signer.fingerprint} {'is' if listed else 'is not'} among {login}'s {len(keys)} SSH signing key(s)"
+    hint = "" if listed else SIGNING_HINT
+    return [*out, Result(PASS if listed else FAIL, "commit signing key on GitHub", detail, hint)]
+
+
 GITHUB_MCP_WRAPPER = Path("/opt/ossbot/bin/ossbot-github-mcp")
 GITHUB_MCP_PUBLIC_REPO = "github/github-mcp-server"  # any public repository; its root listing is read
 
@@ -907,6 +953,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps += [
         check_firewall, check_squid_verifiable, check_gatekeeper, check_egress_mode, check_hermes_tier,
         lambda: check_github(quick),
+        lambda: check_commit_signing(quick),
         lambda: check_github_mcp(quick),
         lambda: check_telegram(quick),
         check_identity_snapshot, check_audit, check_disk, check_disk_usage, check_lock_drift,

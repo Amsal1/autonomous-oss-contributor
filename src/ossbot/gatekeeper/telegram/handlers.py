@@ -35,7 +35,7 @@ from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.control_flags import Blocked
 from ossbot.common.ids import new_action_id
 from ossbot.common.schemas import State
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import db, signing
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
@@ -546,6 +546,15 @@ class Handlers:
         if lifecycle is not None:
             log.warning("approve refused while %s", lifecycle, extra={"event": "callback_rejected"})
             await query.answer(f"ossbot is {lifecycle}: nothing was approved. The card stays valid; retry after up.")
+            return
+        # ADR-0006 addendum: an unsigned rev for a repo that requires signed commits is never armed
+        tapped = self.ctx.approvals.check_token(token, ("approve",), chat_id=chat_id, message_id=message_id)
+        refusal = signing.refusal_for_approval(self.ctx.conn, str(tapped["approval_id"]))
+        if refusal is not None:
+            log.warning("approve refused: unsigned commit, the repo requires signed commits",
+                        extra={"event": "unsigned_refused"})  # fmt: skip
+            ui_send.deliver(self.ctx, k.plain("fyi", (k.Const(refusal),)))
+            await query.answer("Not approved: this repo requires signed commits.")
             return
         arm = self.ctx.approvals.approve(token, tg_user_id=user_id, chat_id=chat_id, message_id=message_id)
         text = self.confirm_panel(arm.approval_id, arm.confirm_text, arm.live)

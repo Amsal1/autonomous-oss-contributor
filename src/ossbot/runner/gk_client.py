@@ -110,6 +110,22 @@ class Gatekeeper:
         data = self._call("GET", f"/v1/contributions/{cid}/import-bundle")
         return data if isinstance(data, bytes) else base64.b64decode(data)
 
+    # --------------------------------------------------------------- commit signing (ADR-0006 addendum)
+    def signing(self) -> dict[str, Any]:
+        """``{"mode", "available", "fingerprint"}``: will the gatekeeper SSH-sign packaged commits?"""
+        doc: dict[str, Any] = self._call("GET", "/v1/signing")
+        return doc
+
+    def head_bundle(self, cid: str, rev: int) -> bytes | None:
+        """The signed head of ``rev`` as a bundle (fix rounds), None when that rev was not signed."""
+        try:
+            data = self._call("GET", f"/v1/contributions/{cid}/head-bundle", params={"rev": rev})
+        except GkError as exc:
+            if exc.status == 404 and exc.code == "not_signed":
+                return None
+            raise
+        return data if isinstance(data, bytes) else None
+
     # --------------------------------------------------------------- gate 1
     def submit_proposal(
         self, cid: str, proposal: dict[str, Any], revises: int | None, feedback: str | None

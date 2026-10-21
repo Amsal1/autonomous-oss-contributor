@@ -83,6 +83,21 @@ async def test_pr_text_section_shows_the_title_verbatim(rig: TgRig) -> None:
     assert "Disclosure ✅" in shown
 
 
+async def test_summary_says_whether_the_commit_is_signed(rig: TgRig) -> None:
+    """ADR-0006 addendum: section 1 reads the signature from the gatekeeper's derived meta.json."""
+    card, mid = await _explore(rig)
+    assert "⚠️ Commit not signed" in text(rig, mid)
+    meta_path = rig.ctx.gitops.derived_dir(card.cid, 1) / "meta.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_text(json.dumps({**meta, "signature": {"format": "ssh", "fingerprint": "SHA256:AbC123"}}))
+    await rig.tap(token(rig, mid, "▶"), message=mid)
+    await rig.tap(token(rig, mid, "2/9 ▾"), message=mid)
+    await rig.tap(token(rig, mid, "1"), message=mid)
+    shown = text(rig, mid)
+    assert "🔏 Commit signed (SSH, key SHA256:AbC123)" in shown and "not signed" not in shown
+
+
 async def test_navigation_survives_cancel(rig: TgRig) -> None:
     card, mid = await _explore(rig)
     await rig.tap(token(rig, card.message_id, "✅ Approve"), message=card.message_id)

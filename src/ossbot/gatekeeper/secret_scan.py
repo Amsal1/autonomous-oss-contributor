@@ -25,6 +25,7 @@ from typing import Any
 from ossbot.common.config import ConfigBundle
 from ossbot.common.hashing import sha256_text
 from ossbot.common.redact import DEFAULT_SECRET_PATTERNS, REDACTED
+from ossbot.gatekeeper.signing import SIGNING_ENV, key_needles
 
 HOLD_BACK = 256
 MIN_VALUE_LEN = 8
@@ -154,6 +155,8 @@ def build(bundle: ConfigBundle, env: Mapping[str, str]) -> SecretScanner:
             raise SecretScanError(f"{key}: a secret value must be free of whitespace and shorter than {HOLD_BACK}")
         if len(value) >= MIN_VALUE_LEN:
             values.append(value)
+    # the SSH signing key is one long line: its 70-column lines are the values (``signing.key_needles``)
+    values += key_needles((env.get(SIGNING_ENV) or "").strip())
     extra = list(bundle.policy.secrets.extra_patterns)
     for pattern in extra:
         if can_match_whitespace(pattern):

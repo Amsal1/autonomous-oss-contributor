@@ -8,10 +8,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import db, signing
 from ossbot.gatekeeper.policy import DISCLOSURE_MARKER, DISCLOSURE_PHRASE
+from ossbot.gatekeeper.signing import Signature
 from ossbot.gatekeeper.telegram.review import patchview
 from ossbot.gatekeeper.telegram.review.patchview import FilePatch
 from ossbot.gatekeeper.telegram.ui import kit as k
@@ -37,6 +39,7 @@ class Subject:
     files: list[FilePatch]
     source: str = "change"  # "interdiff": the files come from interdiff.patch (§14.11.7 INTERDIFF mode)
     mirror: str | None = None  # §14.11.14: "🐙 Mirror PR #12 · tree-equal ✅" (section 1) while the mirror is on
+    signature: Signature | None = None  # derived meta.json: the packaged commit's SSH signature (section 1)
 
     def arg(self, **extra: Any) -> dict[str, Any]:
         out = {"cid": self.cid, "rev": self.rev, "action_id": self.action_id, **extra}
@@ -56,7 +59,15 @@ def subject(conn: sqlite3.Connection, derived_dir: Any, cid: str, rev: int, acti
     from ossbot.gatekeeper import review_mirror  # noqa: PLC0415 - the mirror imports the review modules lazily
 
     return Subject(cid, rev, action_id, kind, str(contrib["upstream"]), contrib, patchview.load(derived_dir),
-                   mirror=review_mirror.explorer_line(conn, cid, rev))  # fmt: skip
+                   mirror=review_mirror.explorer_line(conn, cid, rev), signature=_signature(derived_dir))  # fmt: skip
+
+
+def _signature(derived_dir: Any) -> Signature | None:
+    try:
+        meta = json.loads((Path(derived_dir) / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return None
+    return signing.from_meta(meta) if isinstance(meta, dict) else None
 
 
 def _json(value: Any) -> dict[str, Any]:
@@ -89,6 +100,8 @@ def _section_lines(s: Subject, section: int, page: int) -> SectionOut:
         report = _json(c["size_report_json"])
         if report.get("measured_class"):
             lines.append(k.line(f"Size ✅ {report['measured_class']}"))
+        if s.kind in {"open_pr", "push_update"}:
+            lines.append(k.line(signing.card_text(s.signature)))
         if s.mirror:
             lines.append(k.line(s.mirror))
     elif section == 2:

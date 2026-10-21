@@ -43,6 +43,8 @@ text:
   commit_subject_max: 100
   confidentiality_denylist: []   # generic extras; personal strings go in profile.yaml confidentiality_floor
   require_disclosure: true
+commit:
+  signing: auto                    # auto | required | off: SSH-sign packaged commits with GITHUB_COMMIT_SIGNING_KEY (gatekeeper.env)
 secrets:
   gitleaks: true
   extra_patterns: ["ksk_[A-Za-z0-9_\\-]{16,}", "gh[pousr]_[A-Za-z0-9]{36,}", "github_pat_[A-Za-z0-9_]{60,}", "\\d{6,12}:[A-Za-z0-9_-]{30,}"]

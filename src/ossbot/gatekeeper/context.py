@@ -15,7 +15,7 @@ from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
 from ossbot.common.schemas import HoldView
-from ossbot.gatekeeper import db, policy, proposals, secret_scan
+from ossbot.gatekeeper import db, policy, proposals, secret_scan, signing
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
 from ossbot.gatekeeper.approvals import ApprovalService, ArtifactSource, Invalidated
@@ -109,6 +109,18 @@ class AppContext:
 
     def reset_secret_scanner(self) -> None:
         self.__dict__.pop("_scanner", None)
+
+    @property
+    def signer(self) -> signing.CommitSigner | None:
+        """The optional SSH commit signer of ``gatekeeper.env`` (None = no key); ``SigningError`` when the
+        key is set but unusable, so ``/package`` fails closed instead of silently not signing."""
+        body = (self.env.get(signing.SIGNING_ENV) or "").strip()
+        cached = self.__dict__.get("_signer")
+        if cached is None or cached[0] != body:
+            cached = (body, signing.load(self.env))
+            self.__dict__["_signer"] = cached
+        signer: signing.CommitSigner | None = cached[1]
+        return signer
 
     @property
     def telegram_chat_id(self) -> int:

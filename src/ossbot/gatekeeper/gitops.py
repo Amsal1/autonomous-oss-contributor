@@ -296,6 +296,10 @@ class GitOps:
     def work_bundle(self, cid: str, rev: int) -> Path:
         return self.root / "work" / f"{cid}-r{rev}.bundle"
 
+    def signed_bundle(self, cid: str, rev: int) -> Path:
+        """The signed head of rev ``rev`` as a one-ref bundle for the next fix round (``signing``)."""
+        return self.root / "work" / f"{cid}-r{rev}.signed.bundle"
+
     def derived_dir(self, cid: str, rev: int) -> Path:
         return self.root / "derived" / cid / str(rev)
 
@@ -399,6 +403,7 @@ class GitOps:
             if path.exists():
                 shutil.rmtree(path)
         self.work_bundle(cid, rev).unlink(missing_ok=True)
+        self.signed_bundle(cid, rev).unlink(missing_ok=True)
 
     def revs_on_disk(self, upstream: str, cid: str) -> set[int]:
         base = self.root / "mirrors" / repo_key(upstream)

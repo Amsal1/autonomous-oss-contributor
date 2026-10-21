@@ -31,6 +31,9 @@ from ossbot.common.clock import from_iso
 from ossbot.common.gitcmd import NumstatEntry
 from ossbot.common.schemas import OutboundKind
 from ossbot.gatekeeper import db
+from ossbot.gatekeeper.signing import Signature
+from ossbot.gatekeeper.signing import card_text as card_signature
+from ossbot.gatekeeper.signing import from_payload as signature_of
 from ossbot.gatekeeper.telegram.escape import b, esc, make_visible
 from ossbot.gatekeeper.telegram.review.size_line import size_lines
 from ossbot.gatekeeper.telegram.ui import classic, icons
@@ -99,6 +102,7 @@ class CardView:
     asked: tuple[AskedItem, ...] = ()
     asked_total: int = 0
     vetting: dict[str, Any] = field(default_factory=dict)  # vetting_json: the repo_policy line (open_pr)
+    signature: Signature | None = None  # the packaged commit's SSH signature (ADR-0006 addendum)
 
 
 @dataclass(frozen=True)
@@ -245,7 +249,8 @@ def card_view_kit(view: CardView, *, body_part_count: int = 0) -> k.View:
                   k.Text(view.identity or "", 160))  # fmt: skip
         target = f"{view.fork_owner}/" + view.upstream.split("/", 1)[-1]
         branch = (k.Const("Branch "), k.Code(k.Text(view.branch or "", 120)), k.Const(" → "), k.Text(target, 150))
-        blocks.append(k.Block((k.Lines((commit, branch)),), required=False, priority=6, name="commit"))
+        signed = k.line(card_signature(view.signature))  # gatekeeper fact: fixed text + the public fingerprint
+        blocks.append(k.Block((k.Lines((commit, branch, signed)),), required=False, priority=6, name="commit"))
     repo_policy = _repo_policy_block(view)
     if repo_policy is not None:
         blocks.append(repo_policy)
@@ -404,6 +409,7 @@ def view_for_action(conn: sqlite3.Connection, action_id: str, dry_run: bool,
         asked=asked,
         asked_total=asked_total,
         vetting=_json(contrib["vetting_json"]) if "vetting_json" in keys else {},
+        signature=signature_of(payload),
         **common,
     )
 

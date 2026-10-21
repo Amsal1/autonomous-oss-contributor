@@ -12,6 +12,8 @@ autonomous items; 👤 items continue and the Start-work confirm says so. ``requ
 from CONTRIBUTING (``ASSIGNMENT_RE``) or the vetter; the claim is created only after gate 1 (§9.2).
 A VETTED item also records the repo's CI-on-PR facts (``ci_on_pr``, ``ci_kinds``, ``ci_checks``,
 ``ci_gating``, …; ``runner/ci_detect.py``, shared cache with discovery) for the cards; never a skip.
+A repo whose CONTRIBUTING requires signed commits (``SIGNED_RE``) is SKIPPED ``signed_commits_required``
+only when the gatekeeper will not SSH-sign the commit (``GET /v1/signing``; ADR-0006 addendum).
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ from ossbot.common import ai_policy
 from ossbot.common.ai_policy import AI_SECTION_RE, Classification
 from ossbot.common.config import AiPolicyRules, effective_ai_rules, resolve_target
 from ossbot.runner import ci_detect, prompts
+from ossbot.runner.gk_client import GkError
 from ossbot.runner.outputs import SCHEMA_HINTS, IssueVetting
 from ossbot.runner.pipeline import StageContext, StageRun
 from ossbot.runner.repo_docs import fetch_policy_docs, maintainer_docs
@@ -35,7 +38,24 @@ ASSIGNMENT_RE = re.compile(
     r"|comment .{0,40}before (opening|submitting|starting)|claim (the|an) issue)",
     re.IGNORECASE,
 )
-SIGNED_RE = re.compile(r"\b(signed commits|gpg[- ]sign|commit signing) (is |are )?(required|mandatory)", re.I)
+# A repo that requires cryptographically signed commits (owner addition 2026-10-21). DCO wording
+# ("Signed-off-by", "signed off") and CLA wording ("sign the CLA") are not commit signing.
+_SIGNED = r"signed(?![-\s]*off)\b"
+SIGNED_RE = re.compile(
+    r"\brequire[sd]?\s+(?:all\s+)?(?:(?:gpg|ssh|cryptographically)[-\s]?)?" + _SIGNED + r"\s+commits\b"
+    r"|\brequire[sd]?\s+(?:all\s+)?commits\s+to\s+be\s+(?:(?:gpg|ssh|cryptographically)[-\s]?)?"
+    + _SIGNED
+    + r"|\b(?:gpg|ssh)(?:\s*/\s*(?:gpg|ssh))?[-\s]"
+    + _SIGNED
+    + r"\s+commits\b"
+    r"|\bsigned\s+commits\s+(?:are|is)\s+(?:required|mandatory)\b"
+    r"|\bunsigned\s+commits\b[^.\n]{0,80}?\b(?:rejected|closed|not\s+accepted|refused)\b"
+    r"|\bcommit\s+signature\s+verification\b"
+    r"|\bcommits?\s+(?:\w+\s+){0,3}must\s+be\s+(?:(?:gpg|ssh|cryptographically)[-\s]?)?"
+    + _SIGNED
+    + r"|\b(?:gpg[-\s]sign(?:ing)?|commit\s+signing)\s+(?:is\s+|are\s+)?(?:required|mandatory)\b",
+    re.IGNORECASE,
+)
 FULL_TEXT_GROUPS = ("contributing", "ai_policy")  # quoted in full; the other docs only by their AI lines
 PRIVATE_FACTS = {"contributing", "ai_policy_text", "docs", "classification"}  # not in facts.json
 
@@ -58,8 +78,10 @@ def _facts(sc: StageContext, repo: str, maintainer: list[ai_policy.PolicyDoc]) -
 
 
 def merge(vetting: IssueVetting, facts: dict[str, Any], *, user: bool, ai_allowed: bool, cla_signed: bool,
-          rules: AiPolicyRules | None = None) -> tuple[str | None, dict[str, Any]]:  # fmt: skip
-    """The deterministic, conservative merge (§9.5). Returns (skip reason or None, stored vetting)."""
+          rules: AiPolicyRules | None = None,
+          signing_available: bool = False) -> tuple[str | None, dict[str, Any]]:  # fmt: skip
+    """The deterministic, conservative merge (§9.5). Returns (skip reason or None, stored vetting).
+    ``signed_commits_required`` skips only when the gatekeeper will not SSH-sign (no key, or off)."""
     rules = rules or AiPolicyRules()
     det: Classification = facts["classification"]
     doc_texts = [d.text for d in facts.get("docs", {}).values()]
@@ -84,11 +106,21 @@ def merge(vetting: IssueVetting, facts: dict[str, Any], *, user: bool, ai_allowe
         return f"ai_policy_{policy}", stored
     if vetting.claim_status == "claimed_by_other":
         return "claimed_by_other", stored
-    if stored["signed_commits_required"]:
+    if stored["signed_commits_required"] and not signing_available:
         return "signed_commits_required", stored
     if vetting.cla_required and not cla_signed and not user:
         return "cla_required", stored
     return None, stored
+
+
+def _signing_available(sc: StageContext) -> bool:
+    """Will the gatekeeper SSH-sign the packaged commit? Unknown (gatekeeper refused) = no: fail closed."""
+    try:
+        return bool(sc.gk.signing().get("available"))
+    except GkError as exc:
+        if exc.status >= 500:
+            raise
+        return False
 
 
 def _doc_sections(repo: str, docs: dict[str, ai_policy.PolicyDoc]) -> list[str]:
@@ -124,8 +156,8 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
                                   schema_hint=SCHEMA_HINTS["vetter"])  # fmt: skip
         run_.model_actual = result.model_actual
         reason, stored = merge(result.value, facts, user=user, ai_allowed=tgt.ai_policy_override == "allowed",
-                               cla_signed=tgt.cla_signed,
-                               rules=effective_ai_rules(sc.config().policy, tgt))  # fmt: skip
+                               cla_signed=tgt.cla_signed, rules=effective_ai_rules(sc.config().policy, tgt),
+                               signing_available=facts["signed_commits"] and _signing_available(sc))  # fmt: skip
         if reason is None:  # CI on PRs (cached with discovery): shown on the cards, never a skip reason
             ttl = sc.config().policy.discovery.ci_facts_ttl_hours
             stored.update(ci_detect.cached(sc, repo, ttl, contributing=facts["contributing"]).stored())

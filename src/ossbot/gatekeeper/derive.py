@@ -117,8 +117,12 @@ def derive(ops: GitOps, mirror: Path, base: str, head: str) -> Derived:
     )
 
 
-def store(ops: GitOps, cid: str, rev: int, derived: Derived, cumulative: str | None = None) -> Path:
-    """``derived/<cid>/<rev>/`` (gatekeeper-only); display reads these, the binding re-derives."""
+def store(
+    ops: GitOps, cid: str, rev: int, derived: Derived, cumulative: str | None = None,
+    signature: dict[str, str] | None = None,
+) -> Path:  # fmt: skip
+    """``derived/<cid>/<rev>/`` (gatekeeper-only); display reads these, the binding re-derives.
+    ``signature`` (``signing.Signature.as_dict``) is null for an unsigned head."""
     out = ops.derived_dir(cid, rev)
     out.mkdir(parents=True, exist_ok=True)
     (out / "change.patch").write_bytes(derived.patch)
@@ -131,6 +135,7 @@ def store(ops: GitOps, cid: str, rev: int, derived: Derived, cumulative: str | N
         "committer": derived.identity.committer,
         "signoff": derived.identity.signoff,
         "cumulative_numstat": cumulative,
+        "signature": signature,
     }
     (out / "meta.json").write_text(json.dumps(meta, sort_keys=True), encoding="utf-8")
     return out

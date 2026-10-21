@@ -39,6 +39,15 @@ $values = [ordered]@{
     REVERSE_IMAGE_SEARCH_KEY = Read-Secret 'Optional: reverse image search provider key (none wired yet)'
     # Optional (ADR-0019 C, off by default): fine-grained PAT, only the private mirror repo selected.
     GITHUB_REVIEW_MIRROR_TOKEN = Read-Secret 'Optional: review mirror fine-grained PAT, only the private mirror repo (github_pat_...)'
+    # Optional (ADR-0006 addendum): SSH commit signing. The key is multi-line, so it is read from a
+    # file (OpenSSH ed25519, no passphrase) and streamed in the record; nothing is written on Windows.
+    GITHUB_COMMIT_SIGNING_KEY = ''
+}
+$keyPath = Read-Host -Prompt 'Optional: path to the SSH commit-signing private key file (ed25519, no passphrase; empty = keep)'
+$keyPath = $keyPath.Trim().Trim('"')
+if ($keyPath) {
+    if (-not (Test-Path -LiteralPath $keyPath -PathType Leaf)) { Write-Host "signing key file not found: $keyPath"; exit 1 }
+    $values['GITHUB_COMMIT_SIGNING_KEY'] = [IO.File]::ReadAllText($keyPath).Replace("`r", '')
 }
 
 # Telegram user id -> config/profile.yaml (pre-filled from the existing profile).

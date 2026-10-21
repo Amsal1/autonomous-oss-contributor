@@ -29,7 +29,7 @@ from ossbot.common.clock import to_iso
 from ossbot.common.control_flags import Blocked
 from ossbot.common.hashing import sha256_text
 from ossbot.common.schemas import OutboundKind, State
-from ossbot.gatekeeper import db, live_checks, policy
+from ossbot.gatekeeper import db, live_checks, policy, signing
 from ossbot.gatekeeper.anomaly import Signal
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
@@ -89,6 +89,7 @@ class Snapshot:
     issue_number: int | None = None
     target_number: int | None = None
     since: str | None = None
+    unsigned_refusal: str | None = None  # an unsigned rev for a repo that requires signed commits
 
 
 @dataclass
@@ -155,6 +156,8 @@ class Submitter:
             since=vetting.get("vetted_at") or row["created_at"], action_id=row["action_id"],
         )  # fmt: skip
         failed: list[str] = []
+        if kind in PR_KINDS and signing.unsigned_refusal(row["upstream"], vetting, payload) is not None:
+            failed.append("unsigned_commit")  # ADR-0006 addendum: the repo requires signed commits
         try:
             if kind == "open_pr":
                 mirror = ctx.gitops.mirror_dir(row["upstream"], row["id"], int(payload["rev"]))
@@ -251,6 +254,9 @@ class Submitter:
                 **common, body=body, target_number=int(payload["target_number"]),
                 since=vetting.get("vetted_at") or contrib["created_at"],
             )  # fmt: skip
+        common["unsigned_refusal"] = signing.unsigned_refusal(
+            contrib["upstream"], json.loads(contrib["vetting_json"] or "{}"), payload
+        )
         if kind == "open_pr":
             title = contrib["pr_title_override"] if contrib["pr_title_override"] is not None else contrib["pr_title"]
             body = contrib["pr_body_override"] if contrib["pr_body_override"] is not None else contrib["pr_body"]
@@ -353,6 +359,9 @@ class Submitter:
         raise SubmitFailed(f"{what}_failed")  # pragma: no cover - loop always returns or raises
 
     async def _run(self, snap: Snapshot, progress: Progress) -> None:
+        if snap.unsigned_refusal is not None:  # before any read or write (ADR-0006 addendum)
+            self.ctx.notify(snap.unsigned_refusal)
+            raise SubmitFailed("unsigned_commit", "the repo requires signed commits")
         await self._identity()
         await self._live(snap)
         login = self.ctx.config.profile.github_login

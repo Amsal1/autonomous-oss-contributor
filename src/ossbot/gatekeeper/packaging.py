@@ -15,6 +15,7 @@ import re
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ossbot.common import ai_policy
@@ -25,7 +26,7 @@ from ossbot.common.hashing import sha256_hex
 from ossbot.common.ids import new_action_id
 from ossbot.common.schemas import TERMINAL_STATES, OutboundKind, PackageArtifactName, PackageRequest, State
 from ossbot.common.size import SIZE_CLASSES, classify, path_matches, split_numstat
-from ossbot.gatekeeper import db, derive, interdiff, outcomes, policy
+from ossbot.gatekeeper import db, derive, interdiff, outcomes, policy, signing
 from ossbot.gatekeeper.anomaly import Signal
 from ossbot.gatekeeper.approvals import normalize_text
 from ossbot.gatekeeper.context import AppContext
@@ -180,6 +181,59 @@ class Packager:
         fork = json.loads(row["result_json"] or "{}").get("fork") if row else None
         return str(fork) if fork else f"{self.ctx.config.profile.github_login}/{upstream.split('/', 1)[1]}"
 
+    def _signer(self) -> signing.CommitSigner | None:
+        """``policy.commit.signing``: off -> None; auto -> the key when set; required -> the key or refuse."""
+        mode = self.ctx.config.policy.commit.signing
+        if mode == "off":
+            return None
+        try:
+            signer = self.ctx.signer
+        except signing.SigningError as exc:  # a set but broken key fails closed, it never silently skips
+            raise PackageRefused(503, "signing_key_invalid", str(exc)) from exc
+        if signer is None and mode == "required":
+            raise PackageRefused(409, "signing_key_missing", "policy.commit.signing is required")
+        return signer
+
+    def _sign(
+        self, signer: signing.CommitSigner, mirror: Path, cid: str, rev: int, round_base: str, head: str,
+        unsigned: derive.Derived,
+    ) -> tuple[str, derive.Derived]:  # fmt: skip
+        """The signed twin of ``head``, verified and re-derived; ``refs/ossbot/r<rev>`` moves to it."""
+        ops = self.ops
+        try:
+            signed = signer.sign_commit(ops.git, mirror, head)
+        except (signing.SigningError, GitError) as exc:
+            raise PackageRefused(503, "signing_failed", str(exc)[:300]) from exc
+        email = self.ctx.config.profile.commit_email
+        if not signer.verify(ops.git, mirror, signed, email):
+            raise PackageRefused(503, "signing_failed", "git verify-commit refused the signed commit")
+
+        def tree(sha: str) -> str:
+            return ops.git.out(["rev-parse", f"{sha}^{{tree}}"], cwd=mirror)
+
+        if (
+            tree(signed) != tree(head)
+            or ops.rev_count(mirror, round_base, signed) != 1
+            or ops.rev_parse(mirror, f"{signed}^") != round_base
+        ):
+            raise PackageRefused(503, "signing_failed", "the signed commit differs from the verified one")
+        derived = derive.derive(ops, mirror, round_base, signed)
+        if (derived.numstat_text, derived.commit_message, derived.identity, derived.entries) != (
+            unsigned.numstat_text, unsigned.commit_message, unsigned.identity, unsigned.entries,
+        ):  # fmt: skip
+            raise PackageRefused(503, "signing_failed", "the signed commit derives differently")
+        ops.git.run(["update-ref", f"refs/ossbot/r{rev}", signed, head], cwd=mirror)
+        # the next fix round's unbundle needs the signed head (the sandbox only has the unsigned one)
+        ops.git.run(["update-ref", CHANGE_REF, signed], cwd=mirror)
+        bundle = ops.signed_bundle(cid, rev)
+        bundle.parent.mkdir(parents=True, exist_ok=True)
+        bundle.unlink(missing_ok=True)
+        ops.git.run(["bundle", "create", "-q", str(bundle), CHANGE_REF, f"^{round_base}"], cwd=mirror)
+        os.chmod(bundle, 0o600)
+        log.info("%s r%d: packaged commit signed (key %s)", cid, rev, signer.fingerprint,
+                 extra={"event": "commit_signed"})  # fmt: skip
+        return signed, derived
+
     def _repo_state(self, contrib: Any) -> policy.RepoState:
         vetting = json.loads(contrib["vetting_json"] or "{}")
         override = db.one(
@@ -304,11 +358,20 @@ class Packager:
         if req.claimed_head_sha != head:
             raise PackageRefused(422, "claimed_head_mismatch")
 
+        # step 4b (owner addition 2026-10-21, ADR-0006 addendum): SSH-sign the verified commit in the
+        # mirror; the signed twin (same tree, parent, identities, message) is what is shown, bound and pushed
+        unsigned = derived
+        signature: signing.Signature | None = None
+        signer = self._signer()
+        if signer is not None:
+            head, derived = self._sign(signer, mirror, cid, req.rev, round_base, head, unsigned)
+            signature = signer.signature
+
         # step 5: store the derivation
         cumulative = None
         if kind == "push_update":
             cumulative = derive.derive(self.ops, mirror, base_sha, head).numstat_text
-        derive.store(self.ops, cid, req.rev, derived, cumulative)
+        derive.store(self.ops, cid, req.rev, derived, cumulative, signature.as_dict() if signature else None)
         if kind == "open_pr" and req.rev >= 2:  # S6 (§14.11.7): what changed since the card you last saw
             previous = interdiff.read_meta(self.ops, cid, req.rev - 1)
             current = interdiff.read_meta(self.ops, cid, req.rev)
@@ -318,7 +381,7 @@ class Packager:
                 interdiff.write_unavailable(self.ops, cid, req.rev, "previous revision gone")
 
         # step 6: compare with the sandbox's outputs (never displayed)
-        result = derive.compare(self.ops, derived, side["change.patch"], side["diffstat.json"])
+        result = derive.compare(self.ops, unsigned, side["change.patch"], side["diffstat.json"])
         if result == "equivalent":
             log.info("sandbox patch differs only in non-content bytes", extra={"event": "patch_equivalent"})
         elif result in {"mismatch", "unreadable"}:
@@ -392,6 +455,8 @@ class Packager:
             "rev": req.rev, "head_sha": head, "branch": branch, "fork_owner": profile.github_login,
             "identity": identity,
         }  # fmt: skip
+        if signature is not None:  # the card line; the binding covers it through head_sha
+            payload["signature"] = signature.as_dict()
         if kind == "push_update":
             payload.update({"pr_number": contrib["pr_number"], "old_head_sha": old_head, "fork_repo": fork_repo})
         vetting = json.loads(contrib["vetting_json"] or "{}")
@@ -423,7 +488,8 @@ class Packager:
             ctx.audit.append(
                 actor, "package_verified",
                 {"rev": req.rev, "head": head, "kind": kind, "bundle_sha256": copy.sha256,
-                 "patch_sha256": derived.patch_sha256, "comparison": result},
+                 "patch_sha256": derived.patch_sha256, "comparison": result,
+                 **({"signed": signature.fingerprint, "unsigned_head": unsigned.head} if signature else {})},
                 cid,
             )  # fmt: skip
             if kind == "open_pr" and vetting.get("requires_claim_comment") and not dry_run:

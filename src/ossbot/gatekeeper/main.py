@@ -21,6 +21,7 @@ from ossbot.common.config import ConfigError
 from ossbot.common.logging import setup_logging
 from ossbot.common.paths import Paths
 from ossbot.common.redact import Redactor
+from ossbot.gatekeeper import signing
 from ossbot.gatekeeper.app import Service, create_app
 from ossbot.gatekeeper.authz import PeerCredH11Protocol, resolve_role_map
 from ossbot.gatekeeper.context import AppContext, build_context
@@ -102,6 +103,10 @@ def main() -> int:
         value = os.environ.get(name)
         if value:
             redactor.add_secret(value)
+    signing_key = (os.environ.get(signing.SIGNING_ENV) or "").strip()
+    for needle in [signing_key, *signing.key_needles(signing_key)]:  # never logged, whole or line by line
+        if needle:
+            redactor.add_secret(needle)
     setup_logging("gatekeeper", redactor)
     paths = Paths.default()
     ctx = build_context(paths, resolve_role_map())
@@ -112,6 +117,13 @@ def main() -> int:
         return 2
     report = ctx.control.reconcile()
     log.info("control state %s (alerts: %s)", report.state, list(report.alerts), extra={"event": "started"})
+    try:
+        signer = ctx.signer
+    except signing.SigningError as exc:  # /package refuses until the key is fixed (fail closed)
+        log.error("commit signing key unusable: %s", exc, extra={"event": "signing_key_invalid"})
+    else:
+        state = f"on (key {signer.fingerprint})" if signer else "off (no GITHUB_COMMIT_SIGNING_KEY)"
+        log.info("commit signing %s", state, extra={"event": "commit_signing"})
     sock = bind_socket(paths.gatekeeper_sock)
     config = uvicorn.Config(
         create_app(ctx, services=build_services(ctx)), http=PeerCredH11Protocol, lifespan="on", log_config=None,

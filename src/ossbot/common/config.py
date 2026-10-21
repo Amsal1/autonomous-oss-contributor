@@ -112,6 +112,16 @@ class TextPolicy(Strict):
     )
 
 
+CommitSigning = Literal["auto", "required", "off"]
+
+
+class CommitPolicy(Strict):
+    # owner addition 2026-10-21 (ADR-0006 addendum): SSH-sign the packaged commit with the optional
+    # gatekeeper-held GITHUB_COMMIT_SIGNING_KEY. auto: sign when the key is set; required: /package
+    # refuses without the key; off: never sign.
+    signing: CommitSigning = "auto"
+
+
 class SecretsPolicy(Strict):
     gitleaks: bool = True
     extra_patterns: list[str] = Field(default_factory=list)
@@ -374,6 +384,7 @@ class PolicyConfig(Strict):
     limits: Limits = Limits()
     diff: DiffPolicy = DiffPolicy()
     text: TextPolicy = TextPolicy()
+    commit: CommitPolicy = CommitPolicy()
     secrets: SecretsPolicy = SecretsPolicy()
     anomaly: AnomalyPolicy = AnomalyPolicy()
     validation: ValidationPolicy = ValidationPolicy()

@@ -97,6 +97,20 @@ async def test_approve_confirm_happy_path_dry_run(ctx: AppContext, bot: Bot) -> 
     assert "answerCallbackQuery" in bot.req.methods()
 
 
+async def test_approve_refuses_an_unsigned_rev_for_a_signed_commits_repo(ctx: AppContext, bot: Bot) -> None:
+    """ADR-0006 addendum: vet flagged signed_commits_required and the packaged rev is unsigned."""
+    cid, approval, tokens = card(ctx)
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE contributions SET vetting_json = ? WHERE id = ?",
+                         ('{"ai_policy": "allowed", "signed_commits_required": true}', cid))  # fmt: skip
+    await bot.tap(tokens["approve"])
+    assert status(ctx, approval) == "pending"
+    assert "requires signed commits" in bot.req.last("answerCallbackQuery").get("text", "")
+    sent = [r["payload_json"] for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox")]
+    assert any("requires signed commits" in p and "nothing was published" in p for p in sent)
+    assert bot.submitted == []
+
+
 async def test_confirm_text_states_live_computed_now(ctx: AppContext, bot: Bot) -> None:
     _, old, old_tokens = card(ctx)
     invalidated = ctx.control.set_dry_run(False, "uid:1000/operator")

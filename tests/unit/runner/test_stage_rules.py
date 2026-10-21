@@ -12,6 +12,7 @@ import pytest
 from ossbot.common.ai_policy import PolicyDoc, classify
 from ossbot.common.config import AiPolicyRules
 from ossbot.runner import github_read, prompts, squidlog
+from ossbot.runner.gk_client import GkError
 from ossbot.runner.outputs import IssueVetting, Plan, ReviewVerdict
 from ossbot.runner.stages import plan, review, vet
 
@@ -62,6 +63,81 @@ def test_vet_merge(over: dict[str, object], fx: dict[str, Any], user: bool, ai_a
     got, _stored = vet.merge(vetting(**over), facts(**fx), user=user, ai_allowed=ai_allowed, cla_signed=cla,
                              rules=rules)  # fmt: skip
     assert got == reason
+
+
+# grafana/loki CONTRIBUTING (owner addition 2026-10-21), verbatim
+LOKI_SIGNED = [
+    "all Grafana Labs repositories will require signed commits",
+    "Unsigned commits and pull requests will be rejected and closed. This includes pull requests that have been"
+    " authored by Agents.",
+]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        *LOKI_SIGNED,
+        "This project requires signed commits.",
+        "We require all commits to be signed.",
+        "Signed commits are required for every pull request.",
+        "Signed commits are mandatory.",
+        "All commits must be signed with a GPG or SSH key.",
+        "Commits must be GPG-signed.",
+        "Please use GPG/SSH-signed commits.",
+        "Branch protection enforces commit signature verification.",
+        "GPG signing is required.",
+        "Commit signing is mandatory.",
+        "Unsigned commits are not accepted.",
+    ],
+)
+def test_signed_commits_wording_is_detected(text: str) -> None:
+    assert vet.SIGNED_RE.search(text), text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Every commit needs a Signed-off-by line (DCO).",
+        "All commits must be signed off (git commit -s).",
+        "Commits must be signed-off-by the author.",
+        "We require a Signed-off-by trailer on each commit.",
+        "Please sign the CLA before we can merge your pull request.",
+        "You must sign the Contributor License Agreement.",
+        "The release tags are signed by the maintainers.",
+    ],
+)
+def test_dco_and_cla_wording_is_not_commit_signing(text: str) -> None:
+    assert not vet.SIGNED_RE.search(text), text
+
+
+def test_signed_commits_skip_only_without_a_signing_key() -> None:
+    """With the gatekeeper's SSH key a signed-commits repo is allowed; the flag is kept for submit."""
+    fx = facts(signed_commits=True)
+    got, stored = vet.merge(vetting(), fx, user=False, ai_allowed=True, cla_signed=True)
+    assert got == "signed_commits_required"
+    got, stored = vet.merge(vetting(), fx, user=False, ai_allowed=True, cla_signed=True, signing_available=True)
+    assert got is None and stored["signed_commits_required"] is True
+
+
+def test_signing_availability_comes_from_the_gatekeeper() -> None:
+    class Gk:
+        def __init__(self, answer: object) -> None:
+            self.answer = answer
+
+        def signing(self) -> dict[str, object]:
+            if isinstance(self.answer, Exception):
+                raise self.answer
+            return dict(self.answer)  # type: ignore[call-overload]
+
+    class Sc:
+        def __init__(self, answer: object) -> None:
+            self.gk = Gk(answer)
+
+    assert vet._signing_available(Sc({"available": True}))  # type: ignore[arg-type]
+    assert not vet._signing_available(Sc({"available": False}))  # type: ignore[arg-type]
+    assert not vet._signing_available(Sc(GkError(404, "not_found")))  # type: ignore[arg-type]  # unknown: skip
+    with pytest.raises(GkError):
+        vet._signing_available(Sc(GkError(503, "gatekeeper_unreachable")))  # type: ignore[arg-type]
 
 
 def test_vet_merge_records_status_and_conditions() -> None:

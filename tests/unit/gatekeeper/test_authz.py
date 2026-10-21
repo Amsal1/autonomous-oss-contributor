@@ -56,6 +56,9 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/contributions"): frozenset({W}),
     ("POST", "/v1/contributions/import"): frozenset({O}),
     ("GET", "/v1/contributions/{cid}/import-bundle"): frozenset({W}),
+    # ADR-0006 addendum: commit signing status (never the key) and the signed head of a rev (fix rounds)
+    ("GET", "/v1/signing"): frozenset({W, O}),
+    ("GET", "/v1/contributions/{cid}/head-bundle"): frozenset({W}),
     ("POST", "/v1/contributions/{cid}/transition"): frozenset({W}),
     ("POST", "/v1/contributions/{cid}/package"): frozenset({W}),
     ("POST", "/v1/contributions/{cid}/package-ts"): frozenset({W}),
