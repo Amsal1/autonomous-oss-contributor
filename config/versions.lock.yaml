@@ -144,3 +144,12 @@ chrome_headless:
   verified_version: "155.0.8059.85"
   path: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
   source: "developer.chrome.com/docs/chromium/headless (new headless since 132.0.6793.0) and /docs/automation-and-testing/headless-cli (--screenshot, --window-size, --dump-dom), checked 2026-10-21; version probed from chrome.exe VersionInfo 2026-10-21"
+
+spdx_license_list:
+  # Post-v1 open discovery rule "OSI license" (design §5.2, §15 V5): src/ossbot/common/osi_licenses.py is
+  # generated from this file (ids with isOsiApproved: true, deprecated ids included). Never fetched at runtime.
+  version: "3.29.0"
+  url: "https://raw.githubusercontent.com/spdx/license-list-data/v3.29.0/json/licenses.json"
+  sha256: "47d1cc681abe31166b342b6cc4aab13a6ba8ea5c48794697fe3bf8b1dbaf509a"
+  osi_ids: "154"
+  source: "read-only GET 2026-10-21 (licenseListVersion 3.29.0, releaseDate 2026-09-16); Get-FileHash equals the design's sha256; 154 ids with isOsiApproved: true"
