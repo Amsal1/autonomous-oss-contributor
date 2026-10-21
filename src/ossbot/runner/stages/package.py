@@ -3,6 +3,7 @@
 REVIEW_PASSED -> PACKAGING; the gatekeeper verifies everything itself (§12.5) and moves the item
 to AWAITING_APPROVAL (or RESCOPE_REQUIRED for the ceiling / ``reapprove``, or keeps it in PACKAGING
 awaiting a live claim). The PR body is the summarizer text + ``Fixes #N`` + the validation summary +
+the repo's AI-policy checklist (only when vet recorded conditions; a title tag goes into the title) +
 the exact disclosure block (§12.3). ``package_ts`` is fixed per rev, so retries give the same SHA.
 """
 
@@ -10,8 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Sequence
 from typing import Any
 
+from ossbot.common import ai_policy
+from ossbot.common.ai_policy import AiCondition
 from ossbot.runner import prompts
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.llm import StageFailed
@@ -31,14 +35,30 @@ def validation_summary(validation: dict[str, Any]) -> str:
     return f"{passed}/{len(cmds)} commands passed ({', '.join(str(cmd.get('name')) for cmd in cmds[:8])})"
 
 
+def ai_conditions(c: dict[str, Any]) -> tuple[AiCondition, ...]:
+    """The repo's AI-policy conditions vet recorded (§9.5); invalid entries are dropped."""
+    try:
+        vetting = json.loads(c.get("vetting_json") or "{}")
+    except ValueError:
+        return ()
+    return ai_policy.parse_conditions(vetting.get("ai_conditions")) if isinstance(vetting, dict) else ()
+
+
+def pr_title(draft: PrDraft, conditions: Sequence[AiCondition] = ()) -> str:
+    return ai_policy.apply_title_tag(draft.pr_title.strip()[:256], conditions)
+
+
 def pr_body(draft: PrDraft, c: dict[str, Any], *, validation: dict[str, Any], models: dict[str, str],
-            login: str) -> str:  # fmt: skip
+            login: str, conditions: Sequence[AiCondition] = ()) -> str:  # fmt: skip
     lines = [draft.pr_body.strip()]
     if c.get("issue_number"):
         lines.append(f"Fixes #{c['issue_number']}")
     lines.append("### How this was validated\n" + "\n".join(
         f"- `{cmd.get('name')}`: exit {cmd.get('exit_code')}" for cmd in validation.get("commands", [])[:20]
     ) or "- relies on upstream CI")  # fmt: skip
+    # the repo's AI-policy conditions, as fixed sentences (the gatekeeper checks them at /package)
+    lines.append(ai_policy.checklist_block(conditions, login=login, coder_model=models.get("coder", "?"),
+                                           reviewer_model=models.get("reviewer", "?")))  # fmt: skip
     lines.append(prompts.disclosure(coder_model=models.get("coder", "?"), reviewer_model=models.get("reviewer", "?"),
                                     github_login=login, validation_summary=validation_summary(validation),
                                     cid=c["id"]).strip())  # fmt: skip
@@ -87,12 +107,12 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         "base_sha": str(c["base_sha"]), "validation": notes.get("validation", {}), "review": notes.get("review", {}),
     }  # fmt: skip
     if not fix_round:
+        conditions = ai_conditions(c)
         body.update(
-            pr_title=draft.pr_title.strip()[:256],
-            pr_body=pr_body(
-                draft, c, validation=notes.get("validation", {}), models=models, login=profile.github_login
-            ),
-        )
+            pr_title=pr_title(draft, conditions),
+            pr_body=pr_body(draft, c, validation=notes.get("validation", {}), models=models,
+                            login=profile.github_login, conditions=conditions),
+        )  # fmt: skip
     sc.save(cid, package_body=body)
     _post(sc, c, body)
 

@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from ossbot.common.ai_policy import AiCondition, checklist_block
 from ossbot.common.gitcmd import NumstatEntry
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
@@ -91,6 +92,23 @@ def test_open_pr_card_layout() -> None:
     assert '⏳ Approval expires <tg-time unix="1792497600"' in out.card
     assert out.part_kinds == ["body_part", "commit_msg"]
     assert out.parts[0].startswith("<b>PR body (1/1)</b>\n<pre>")
+
+
+def test_ai_policy_line_on_the_open_pr_card() -> None:
+    """Post-v1 (§14.11.1): fixed wording from the stored vetting; nothing without one (old rows)."""
+    assert "AI policy" not in cards.render(view()).card
+    silent = cards.render(view(vetting={"ai_policy": "unstated"})).card
+    assert "✅ AI policy: not stated" in silent and "checklist" not in silent
+    conds = [AiCondition(kind="human_review"), AiCondition(kind="title_tag", value="[AI]")]
+    vetting = {"ai_policy": "allowed_with_conditions", "ai_conditions": [c.model_dump() for c in conds]}
+    body = checklist_block(conds, login="bot", coder_model="a", reviewer_model="b")
+    ok = cards.render(view(title="[AI] Fix", body=body, vetting=vetting)).card
+    assert "allowed with conditions (human review, title tag) · checklist ✅ 2/2" in ok
+    edited = cards.render(view(title="Fix", body=body, vetting=vetting)).card  # a human edit dropped the tag
+    assert "checklist ⚠️ missing: title tag" in edited
+    hostile = {"ai_policy": "<b>allowed</b>", "ai_conditions": [{"kind": "label", "value": "@x <b>"}]}
+    assert "AI policy: not recorded" in cards.render(view(vetting=hostile)).card
+    assert "AI policy" not in cards.render(view(kind="push_update", pr_number=1, vetting=vetting)).card
 
 
 def test_user_directed_marker_and_notes() -> None:

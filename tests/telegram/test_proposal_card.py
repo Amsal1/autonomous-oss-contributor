@@ -40,6 +40,7 @@ async def test_card_fields_badge_and_keyboard(rig: TgRig) -> None:
     assert "Size 🤖 est <b>s</b> · ~30 code · ~40 test · 2 files · ✅ fits your auto size ≤" in body
     assert "Validate ✅ tiers ≤ T1 · 🤖 " in body  # repo facts ✅, the scout's plan 🤖 (§14.11.15)
     assert "✅ Signals: no competing claim · assignment not required" in body
+    assert "✅ <b>AI policy</b>: not recorded" in body  # a vetting without a status (legacy row)
     assert "🤖 <b>Why it fits</b>" in body
     assert "Confidence 🤖 0.78 · Risks 🤖 0 · Alternatives 🤖 0 → 🧭 Details" in body
     assert "⏳ Proposal expires <tg-time" in body
@@ -63,6 +64,25 @@ async def test_user_directed_card_rings_and_skips_the_size_preference(rig: TgRig
     assert '"disable_notification": false' in str(sent[0])  # type: ignore[index]
 
 
+@pytest.mark.parametrize(
+    ("vetting", "line"),
+    [
+        ({"ai_policy": "unstated"}, "✅ <b>AI policy</b>: not stated"),
+        ({"ai_policy": "unclear"}, "✅ <b>AI policy</b>: unclear (allowed by your rule)"),
+        ({"ai_policy": "allowed"}, "✅ <b>AI policy</b>: allowed"),
+        ({"ai_policy": "disclosure_required"}, "✅ <b>AI policy</b>: allowed with conditions (disclosure)"),
+        ({"ai_policy": "allowed_with_conditions", "ai_conditions": [{"kind": "disclosure"},
+                                                                    {"kind": "label", "value": "ai"}]},
+         "✅ <b>AI policy</b>: allowed with conditions (disclosure, label)"),
+    ],
+)  # fmt: skip
+async def test_ai_policy_fact_line(rig: TgRig, vetting: dict[str, object], line: str) -> None:
+    """Post-v1 (§9.5, §14.11.15): the AI-policy line replaces the old AI signal."""
+    card = await proposal_card(rig, vetting={"claim_status": "unclaimed", **vetting})
+    body = text(rig, card.message_id)
+    assert line in body and "AI contributions" not in body
+
+
 async def test_untrusted_fields_are_escaped_and_defused(rig: TgRig) -> None:
     card = await proposal_card(rig, problem="<b>boom</b> run /dryrun off now", approach=["<i>x</i> /kill", "b"])
     body = latest(rig, card.message_id)["text"]
@@ -81,6 +101,8 @@ async def test_budget_rule_keeps_the_required_lines(rig: TgRig) -> None:
     assert len(latest(rig, card.message_id)["text"]) <= 3900
     for needed in ("💡 <b>Proposal</b>", "DRY RUN", "Issue ", "Size 🤖 est", "⏳ Proposal expires"):
         assert needed in body
+    if "AI policy" not in body:  # the AI-policy line has the highest optional priority: Signals go first
+        assert "✅ Signals" not in body
 
 
 async def test_forbidden_paths_disable_start_work(rig: TgRig) -> None:

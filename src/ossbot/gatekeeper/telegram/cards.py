@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from ossbot.common import ai_policy
 from ossbot.common.clock import from_iso
 from ossbot.common.gitcmd import NumstatEntry
 from ossbot.common.schemas import OutboundKind
@@ -97,6 +98,7 @@ class CardView:
     interdiff: dict[str, Any] | None = None  # derived/<cid>/<rev>/interdiff.json
     asked: tuple[AskedItem, ...] = ()
     asked_total: int = 0
+    vetting: dict[str, Any] = field(default_factory=dict)  # vetting_json: the repo_policy line (open_pr)
 
 
 @dataclass(frozen=True)
@@ -244,6 +246,9 @@ def card_view_kit(view: CardView, *, body_part_count: int = 0) -> k.View:
         target = f"{view.fork_owner}/" + view.upstream.split("/", 1)[-1]
         branch = (k.Const("Branch "), k.Code(k.Text(view.branch or "", 120)), k.Const(" → "), k.Text(target, 150))
         blocks.append(k.Block((k.Lines((commit, branch)),), required=False, priority=6, name="commit"))
+    repo_policy = _repo_policy_block(view)
+    if repo_policy is not None:
+        blocks.append(repo_policy)
     if view.kind == "open_pr":
         title: list[k.Span] = [k.Const("PR title: "), k.Code(k.Verbatim(view.title or "", "pr_title"))]
         if view.edited:
@@ -398,8 +403,29 @@ def view_for_action(conn: sqlite3.Connection, action_id: str, dry_run: bool,
         interdiff=info,
         asked=asked,
         asked_total=asked_total,
+        vetting=_json(contrib["vetting_json"]) if "vetting_json" in keys else {},
         **common,
     )
+
+
+def _repo_policy_block(view: CardView) -> k.Block | None:
+    """``✅ AI policy: allowed with conditions (label) · checklist ⚠️ missing: label`` (§14.11.1): the
+    status in fixed wording and the conditions checked by the gatekeeper on the card's own title/body
+    (a human edit may remove a line; that is shown, not blocked)."""
+    if view.kind != "open_pr" or not view.vetting:
+        return None
+    conditions = ai_policy.parse_conditions(view.vetting.get("ai_conditions"))
+    text = f"AI policy: {ai_policy.display(view.vetting.get('ai_policy'), conditions)}"
+    shown = [c for c in conditions if not (c.kind in ai_policy.VALUE_KINDS and not ai_policy.sanitize_value(c.value))]
+    if shown:
+        missing = ai_policy.missing_conditions(view.title or "", view.body or "", shown)
+        kinds = {c.kind for c in shown}
+        if missing:
+            text += " · checklist ⚠️ missing: " + ", ".join(ai_policy.KIND_LABELS[m] for m in missing)
+        else:
+            text += f" · checklist ✅ {len(kinds)}/{len(kinds)}"
+    line: k.Line = (k.Const("✅ "), k.Const(text))
+    return k.Block((k.Lines((line,)),), required=False, priority=8, name="repo_policy")
 
 
 TOUCH_WINDOW = 3  # "✅ touched" = the interdiff changes the commented lines ± 3 (new side, §14.11.7)

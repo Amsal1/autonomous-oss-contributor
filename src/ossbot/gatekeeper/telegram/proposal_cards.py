@@ -19,6 +19,7 @@ import sqlite3
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any
 
+from ossbot.common import ai_policy
 from ossbot.common.clock import from_iso
 from ossbot.common.size import SIZE_CLASSES
 from ossbot.gatekeeper import db
@@ -162,6 +163,9 @@ def card_view(ctx: AppContext, row: sqlite3.Row) -> k.View | None:
         blocks.append(k.Block((k.Lines((tuple(shown),)),), required=False, priority=4, name="files"))
     validate = _validate_line(ctx, str(contrib["upstream"]), vet, prop)
     blocks.append(k.Block((k.Lines((_size_line(ctx, contrib, prop, user), validate)),), name="size"))
+    repo_policy = policy_line(vet)
+    if repo_policy is not None:
+        blocks.append(k.Block((k.Lines((repo_policy,)),), required=False, priority=9, name="repo_policy"))
     facts = _signals(vet)
     if facts:
         blocks.append(k.Block((k.Lines(((k.Const("✅ Signals: "), k.Text(" · ".join(facts), 200)),)),),
@@ -239,9 +243,17 @@ def _signals(vet: dict[str, Any]) -> list[str]:
         out.append("assignment required")
     elif vet:
         out.append("assignment not required")
-    if vet.get("ai_policy") in {"allowed", "disclosure_required"}:
-        out.append("AI contributions " + ("allowed" if vet["ai_policy"] == "allowed" else "with disclosure"))
     return out[:3]
+
+
+def policy_line(vet: dict[str, Any]) -> k.Line | None:
+    """``✅ AI policy: not stated`` (§9.5, §14.11.15): the gatekeeper's fixed wording for the stored
+    status and condition kinds (closed sets, never repo text); None for a row that was never vetted.
+    Part B appends ``· CI on PRs: …`` to the same line."""
+    if not vet:
+        return None
+    text = ai_policy.display(vet.get("ai_policy"), ai_policy.parse_conditions(vet.get("ai_conditions")))
+    return (k.Const("✅ "), k.Bold(k.Const("AI policy")), k.Const(f": {text}"))
 
 
 def _warnings(ctx: AppContext, contrib: sqlite3.Row, vet: dict[str, Any], areas: list[str],

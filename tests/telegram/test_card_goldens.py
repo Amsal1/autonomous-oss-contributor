@@ -12,6 +12,7 @@ from typing import Any
 
 import pytest
 
+from ossbot.common.ai_policy import AiCondition, checklist_block
 from ossbot.common.gitcmd import NumstatEntry
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
@@ -70,6 +71,17 @@ def test_golden_s1_per_kind_and_mode(name: str, mode: str) -> None:
     assert badge in out.card.split("\n", 1)[0]
     text = "\n\n----- part -----\n".join([out.card, *out.parts]) + "\n"
     golden.check(f"s1_{name}_{mode}.html", text)
+
+
+def test_golden_s1_open_pr_with_ai_conditions() -> None:
+    """§14.11.1 (post-v1): the AI-policy line with the checklist computed on the card's own title/body."""
+    conds = [AiCondition(kind="disclosure"), AiCondition(kind="label", value="ai-assisted")]
+    body = "Body\n\n" + checklist_block(conds[:1], login="bot", coder_model="a", reviewer_model="b")
+    vetting = {"ai_policy": "allowed_with_conditions", "ai_conditions": [c.model_dump() for c in conds]}
+    out = cards.render(view("open_pr", False, body=body + "\n\nAI assistance disclosure", vetting=vetting))
+    assert "✅ AI policy: allowed with conditions (disclosure, label) · checklist ⚠️ missing: label" in out.card
+    text = "\n\n----- part -----\n".join([out.card, *out.parts]) + "\n"
+    golden.check("s1_open_pr_ai_conditions_live.html", text)
 
 
 # ----------------------------------------------------------------------------- published cards
