@@ -140,6 +140,34 @@ def test_signing_availability_comes_from_the_gatekeeper() -> None:
         vet._signing_available(Sc(GkError(503, "gatekeeper_unreachable")))  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize(("read", "want"), [("2026-10-01T00:00:00Z", "2026-10-01T00:00:00Z"), (None, None),
+                                            ("error", None)])  # fmt: skip
+def test_vet_reads_the_default_branch_date_for_the_card(monkeypatch: pytest.MonkeyPatch, read: str | None,
+                                                         want: str | None) -> None:  # fmt: skip
+    """Owner addition (2026-10-21): every vetted repo (seed too) records the default branch's last commit
+    for the proposal card; an unreadable date is left out, never a vet failure."""
+
+    def commit_at(gh: object, repo: str, branch: str) -> str | None:
+        assert (repo, branch) == ("o/r", "main")
+        if read == "error":
+            raise github_read.GitHubReadError("github_unavailable")
+        return read
+
+    class Gh:
+        def repo(self, repo: str) -> dict[str, object]:
+            return {"default_branch": "main", "archived": False}
+
+    class Sc:
+        gh = Gh()
+
+    monkeypatch.setattr(vet.open_discovery, "branch_commit_at", commit_at)
+    monkeypatch.setattr(vet, "fetch_policy_docs", lambda gh, repo: {})
+    fx = vet._facts(Sc(), "o/r", [])  # type: ignore[arg-type]
+    assert fx["default_branch_commit_at"] == want
+    _, stored = vet.merge(vetting(), fx, user=False, ai_allowed=True, cla_signed=True)
+    assert stored["default_branch_commit_at"] == want
+
+
 def test_vet_merge_records_status_and_conditions() -> None:
     _, silent = vet.merge(vetting(), facts(), user=False, ai_allowed=False, cla_signed=False)
     assert silent["ai_policy"] == "unstated" and silent["ai_conditions"] == []  # an unverified allow claim

@@ -314,6 +314,15 @@ async def test_seed_card_is_unchanged(rig: TgRig) -> None:
     golden.check("proposal_seed_card.html", _normalized(str(body), card.cid) + "\n")
 
 
+async def test_seed_card_shows_the_default_branch_activity_from_vet(rig: TgRig) -> None:
+    """Owner addition (2026-10-21): seed targets get the line too, from vet's read of the default branch."""
+    when = (rig.ctx.clock.now() - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    card = await proposal_card(rig, vetting={"claim_status": "unclaimed", "ai_policy": "unstated",
+                                             "default_branch_commit_at": when})  # fmt: skip
+    assert _header(text(rig, card.message_id)) == ["🌿 last commit on the default branch: 8 d ago"]
+    assert labels(rig, card.message_id) == SEED_LABELS
+
+
 async def test_keep_is_two_taps_and_changes_only_the_db(rig: TgRig) -> None:
     card = await open_card(rig)
     tracked = {p.name: p.read_bytes() for p in rig.ctx.paths.config_dir.glob("*.yaml")}

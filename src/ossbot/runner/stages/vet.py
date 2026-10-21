@@ -25,7 +25,8 @@ from typing import Any
 from ossbot.common import ai_policy
 from ossbot.common.ai_policy import AI_SECTION_RE, Classification
 from ossbot.common.config import AiPolicyRules, effective_ai_rules, resolve_target
-from ossbot.runner import ci_detect, prompts
+from ossbot.runner import ci_detect, open_discovery, prompts
+from ossbot.runner.github_read import GitHubReadError
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.outputs import SCHEMA_HINTS, IssueVetting
 from ossbot.runner.pipeline import StageContext, StageRun
@@ -62,13 +63,19 @@ PRIVATE_FACTS = {"contributing", "ai_policy_text", "docs", "classification"}  # 
 
 def _facts(sc: StageContext, repo: str, maintainer: list[ai_policy.PolicyDoc]) -> dict[str, Any]:
     info = sc.gh.repo(repo) or {}
+    commit_at = None  # the proposal card's activity line (owner addition 2026-10-21), seed repos included
+    if info.get("default_branch"):
+        try:
+            commit_at = open_discovery.branch_commit_at(sc.gh, repo, str(info["default_branch"]))
+        except GitHubReadError:
+            commit_at = None  # a display fact: an unreadable date is left out, never a vet failure
     docs = fetch_policy_docs(sc.gh, repo)
     contributing = docs["contributing"].text if "contributing" in docs else ""
     classification = ai_policy.classify([*docs.values(), *maintainer])
     return {
         "archived": bool(info.get("archived")), "default_branch": info.get("default_branch"),
         "language": info.get("language"), "stars": info.get("stargazers_count"),
-        "pushed_at": info.get("pushed_at"), "contributing": contributing,
+        "pushed_at": info.get("pushed_at"), "default_branch_commit_at": commit_at, "contributing": contributing,
         "ai_policy_text": docs["ai_policy"].text if "ai_policy" in docs else "",
         "policy_docs": sorted(d.path for d in docs.values()), "docs": docs,
         "ai_policy_status": classification.status, "classification": classification,
@@ -96,7 +103,7 @@ def merge(vetting: IssueVetting, facts: dict[str, Any], *, user: bool, ai_allowe
         "requires_assignment": bool(vetting.requires_assignment or facts["assignment_required"]),
         "requires_claim_comment": bool(vetting.requires_claim_comment or vetting.claim_status == "claim_required"),
         "signed_commits_required": bool(facts["signed_commits"]), "user_directed": user,
-        "cla_signed": cla_signed,
+        "cla_signed": cla_signed, "default_branch_commit_at": facts.get("default_branch_commit_at"),
     }  # fmt: skip
     if facts["archived"]:
         return "archived", stored

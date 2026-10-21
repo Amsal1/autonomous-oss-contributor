@@ -147,13 +147,15 @@ def discovery_line(found: DiscoveredView) -> k.Line:
     return tuple(spans)
 
 
-def activity_line(found: DiscoveredView, now: datetime) -> k.Line | None:
+def activity_line(found: DiscoveredView | str | None, now: datetime) -> k.Line | None:
     """Owner addition (2026-10-21): ``🌿 last commit on the default branch: 3 d ago`` from the stored
-    default-branch commit date; None when it is unknown."""
-    if not found.default_branch_commit_at:
+    default-branch commit date (the discovered row's, or vet's ISO timestamp for a seed repo); None
+    when it is unknown."""
+    when = found.default_branch_commit_at if isinstance(found, DiscoveredView) else found
+    if not when or not isinstance(when, str):
         return None
     try:
-        days = max(0, (now - from_iso(found.default_branch_commit_at)).days)
+        days = max(0, (now - from_iso(when)).days)
     except ValueError:
         return None
     return (k.Const(f"🌿 last commit on the default branch: {'today' if days == 0 else f'{days} d ago'}"),)
@@ -180,9 +182,11 @@ def card_view(ctx: AppContext, row: sqlite3.Row) -> k.View | None:
     found = discovered_of(ctx, str(contrib["upstream"]))
     if found is not None:
         lines.append(discovery_line(found))
-        activity = activity_line(found, ctx.clock.now())
-        if activity is not None:
-            lines.append(activity)
+    # discovered rows carry the date; seed repos get vet's read of it (owner addition 2026-10-21)
+    activity = activity_line(found if found is not None and found.default_branch_commit_at
+                             else vet.get("default_branch_commit_at"), ctx.clock.now())  # fmt: skip
+    if activity is not None:
+        lines.append(activity)
     if contrib["issue_number"]:
         issue: list[k.Span] = [k.Const("Issue ")]
         number = k.Const(f"#{contrib['issue_number']}")
