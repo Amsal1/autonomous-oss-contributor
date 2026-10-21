@@ -18,7 +18,7 @@ from tests.unit.sandboxd.conftest import Sbx
 def _fetch(run_id: str, cid: str) -> JobSpec:
     return JobSpec.model_validate(
         {"run_id": run_id, "cid": cid, "profile": "fetch", "entrypoint": "fetch", "args": {"repo": "owner/repo"},
-         "repo_mode": "rw", "timeout_s": 600}
+         "repo_mode": "rw", "timeout_s": 600, "egress": "mode"}
     )  # fmt: skip
 
 

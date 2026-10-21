@@ -41,6 +41,7 @@ from ossbot.runner.stages.common import (
     issue_text,
     job,
     owner_notes,
+    target,
 )
 
 STAGE = "scout"
@@ -147,7 +148,7 @@ def _scout(sc: StageContext, c: dict[str, Any], state: str, user: bool) -> str |
         else:
             depth_args = {"repo": repo, "clone_depth": 1, "prefetch": False}
             try:
-                clone = job(sc, cid, STAGE, "fetch", "fetch", depth_args, "rw")
+                clone = job(sc, cid, STAGE, "fetch", "fetch", depth_args, "rw", egress=target(sc, repo).egress)
             except StageFailed as exc:
                 if exc.error_class != "snapshot_too_large" or state != "SCOUTING":
                     raise

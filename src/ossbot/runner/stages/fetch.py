@@ -46,7 +46,7 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
     if c.get("source") == "operator":
         args.update(base_ref=c["base_ref"], base_sha=c["base_sha"])
     with StageRun(sc, cid, STAGE, profile="fetch"):
-        done = job(sc, cid, STAGE, "fetch", "fetch", args, "rw")
+        done = job(sc, cid, STAGE, "fetch", "fetch", args, "rw", egress=tgt.egress)
         info = artifact_json(done, "fetch.json")
     sc.save(cid, fetch=info, fetch_artifacts=done.get("artifact_dir"))
     sc.transition(cid, "FETCHING", "FETCHED", {"base_sha": info.get("base_sha"), "base_ref": info.get("base_ref"),

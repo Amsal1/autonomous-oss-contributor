@@ -63,9 +63,10 @@ def box(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Sandbox]:
 
 def submit(box: Sandbox, run_id: str, cid: str, profile: str, entrypoint: str, args: dict[str, Any],
            inputs: dict[str, str] | None = None, timeout_s: int = 600) -> dict[str, Any]:  # fmt: skip
+    egress = {"egress": "mode"} if profile in {"fetch", "validate"} else {}  # required there (design §12.3)
     spec = JobSpec.model_validate({"run_id": run_id, "cid": cid, "profile": profile, "entrypoint": entrypoint,
                                    "args": args, "repo_mode": "rw", "inputs": inputs or {},
-                                   "timeout_s": timeout_s})  # fmt: skip
+                                   "timeout_s": timeout_s, **egress})  # fmt: skip
     job = box.svc.submit(spec)
     assert job["state"] == "succeeded", (job, box.svc.logs(run_id, 200)[-3000:])
     return job

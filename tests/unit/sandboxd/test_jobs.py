@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ def _fetch(sbx: Sbx, run_id: str = "r1", cid: str = "c_01ABCDEFGH", **kw: Any) -
             "args": {"repo": "owner/repo"},
             "repo_mode": "rw",
             "timeout_s": 600,
+            "egress": "mode",
             **kw,
         }
     )
@@ -73,6 +75,57 @@ def test_fetch_lifecycle(sbx: Sbx) -> None:
     assert rt.containers == {}
     assert {"ossbot-in-r1", "ossbot-out-r1"} <= set(_names(rt, "remove_volume"))
     assert "ossbot-task-c_01abcdefgh" in rt.volumes
+
+
+@pytest.mark.parametrize("profile", ["fetch", "validate"])
+def test_repo_code_job_without_egress_is_refused(sbx: Sbx, profile: str) -> None:
+    """Open-discovery design §12.3: fail closed, the egress decision is required, never defaulted."""
+    body: dict[str, Any] = {"run_id": "r1", "cid": "c_01ABCDEFGH", "profile": profile, "entrypoint": profile,
+                            "args": {"repo": "owner/repo"} if profile == "fetch" else {}, "repo_mode": "rw",
+                            "timeout_s": 600}  # fmt: skip
+    with pytest.raises(ApiError) as exc:
+        sbx.jobs.submit(JobSpec.model_validate(body))
+    assert (exc.value.status, exc.value.error_class) == (400, "egress_required")
+    assert sbx.runtime.calls == []
+
+
+def test_egress_on_another_profile_is_refused(sbx: Sbx) -> None:
+    spec = _planner(sbx).model_copy(update={"egress": "mode"})
+    with pytest.raises(ApiError) as exc:
+        sbx.jobs.submit(spec)
+    assert (exc.value.status, exc.value.error_class) == (400, "egress_not_applicable")
+    assert sbx.runtime.calls == []
+
+
+@pytest.mark.parametrize(
+    ("profile", "egress", "network", "pool"),
+    [
+        ("fetch", "mode", "ossbot-t-c-01abcdefgh-fetch", "10.213.0.0/18"),
+        ("fetch", "strict", "ossbot-t-c-01abcdefgh-fetch-strict", "10.213.192.0/19"),
+        ("validate", "mode", "ossbot-t-c-01abcdefgh-validate", "10.213.0.0/18"),
+        ("validate", "strict", "ossbot-t-c-01abcdefgh-validate-strict", "10.213.192.0/19"),
+    ],
+)
+def test_strict_jobs_get_a_28_in_the_strict_pool(sbx: Sbx, profile: str, egress: str, network: str, pool: str) -> None:
+    """A strict job's network profile is <net>-strict (/28 in pool_strict, the base allowlist in every
+    egress mode); a mode job keeps fetch/validate in 10.213.0.0/18. The fake runtime runs the Docker
+    filter rules, so the -strict network name and subnet pass the real create checks."""
+    if profile == "fetch":
+        spec = _fetch(sbx, egress=egress)
+    else:
+        plan = sbx.runner_input("validate.json", b'{"commands": []}')
+        spec = JobSpec.model_validate({"run_id": "r1", "cid": "c_01ABCDEFGH", "profile": "validate",
+                                       "entrypoint": "validate", "args": {}, "repo_mode": "rw", "timeout_s": 600,
+                                       "inputs": {"validate.json": plan}, "egress": egress})  # fmt: skip
+    assert sbx.jobs.submit(spec)["state"] == "succeeded"
+    rt = sbx.runtime
+    assert network in rt.networks and (network, "ossbot-proxy", "proxy") in rt.connections
+    subnet = ipaddress.ip_network(rt.networks[network])
+    assert subnet.prefixlen == 28 and subnet.subnet_of(ipaddress.ip_network(pool))
+    other = network.removesuffix("-strict") if egress == "strict" else f"{network}-strict"
+    assert other not in rt.networks
+    allocated = sbx.jobs.networks.subnets.allocated("c_01ABCDEFGH")
+    assert set(allocated) == {network.removeprefix("ossbot-t-c-01abcdefgh-")}
 
 
 def test_one_job_per_cid(sbx: Sbx) -> None:

@@ -11,7 +11,7 @@ import json
 from typing import Any
 
 from ossbot.runner.pipeline import StageContext, StageRun
-from ossbot.runner.stages.common import artifact, artifact_json, job, write_inputs
+from ossbot.runner.stages.common import artifact, artifact_json, job, target, write_inputs
 
 STAGE = "validate"
 DIFF_CMD = (
@@ -48,8 +48,10 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
     base = str(c.get("head_sha") if c.get("pr_number") else c.get("base_sha") or "HEAD")
     cmds = commands(plan, list(notes.get("fetch", {}).get("ecosystems", [])), base)
     with StageRun(sc, cid, STAGE, profile="validate"):
+        egress = target(sc, str(c["upstream"])).egress  # the contribution's upstream (ValidateArgs has no repo)
         inputs = write_inputs(sc, cid, STAGE, {"validate.json": json.dumps({"commands": cmds})})
-        done = job(sc, cid, STAGE, "validate", "validate", {"plan_file": "validate.json"}, "rw", inputs=inputs)
+        done = job(sc, cid, STAGE, "validate", "validate", {"plan_file": "validate.json"}, "rw", inputs=inputs,
+                   egress=egress)  # fmt: skip
         result = artifact_json(done, "validation.json")
         try:
             diff = artifact(done, "logs/ossbot-diff.log").read_text(encoding="utf-8", errors="replace")

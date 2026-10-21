@@ -38,6 +38,7 @@ async def test_runner_can_submit_and_read(sbx: Sbx) -> None:
         "args": {"repo": "owner/repo"},
         "repo_mode": "rw",
         "timeout_s": 60,
+        "egress": "mode",
     }
     async with _client(sbx, RUNNER_UID) as client:
         resp = await client.post("/v1/jobs", json=body)

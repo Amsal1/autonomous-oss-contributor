@@ -28,6 +28,7 @@ TEST_PATH_RE = re.compile(
 
 
 log = logging.getLogger(__name__)
+EGRESS_JOB_PROFILES = frozenset({"fetch", "validate"})  # repo-code jobs: sandboxd requires their egress
 
 
 def note_volume(sc: StageContext, cid: str, present: bool) -> None:
@@ -80,13 +81,21 @@ def target(sc: StageContext, repo: str) -> ResolvedTarget:
 
 def job(
     sc: StageContext, cid: str, stage: str, profile: str, entrypoint: str, args: dict[str, Any], repo_mode: str,
-    inputs: dict[str, str] | None = None, timeout_s: int | None = None,
+    inputs: dict[str, str] | None = None, timeout_s: int | None = None, *, egress: str | None = None,
 ) -> dict[str, Any]:  # fmt: skip
     """Run one sandbox job to its end; a failed job fails the stage with sandboxd's error class
-    (an interrupted job or a sandboxd stop/outage interrupts it instead, ``errors.sandbox_run``)."""
+    (an interrupted job or a sandboxd stop/outage interrupts it instead, ``errors.sandbox_run``).
+
+    ``egress`` (the target's ``ResolvedTarget.egress``: ``mode`` | ``strict``) is required for fetch and
+    validate jobs and never defaulted (open-discovery design §12.3, fail closed); sandboxd refuses it
+    for any other profile."""
+    if profile in EGRESS_JOB_PROFILES and egress is None:
+        log.error("egress_required", extra={"cid": cid, "stage": stage, "profile": profile})
+        raise StageFailed("egress_required", profile)  # a runner bug: no repo-code job without a decision
     spec = {
         "run_id": new_run_id(stage), "cid": cid, "profile": profile, "entrypoint": entrypoint, "args": args,
         "repo_mode": repo_mode, "inputs": inputs or {}, "timeout_s": timeout_s or STAGE_TIMEOUT_S.get(stage, 1800),
+        **({"egress": egress} if egress is not None else {}),
     }  # fmt: skip
     note_volume(sc, cid, True)  # task volume and/or per-task networks: the sweep destroys them later
     done = sandbox_run(sc.sbx, spec, sc.tick)

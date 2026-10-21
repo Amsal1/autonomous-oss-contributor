@@ -80,11 +80,25 @@ POOLS: dict[str, str] = {
     "research": "10.213.64.0/18",
     "llm": "10.213.128.0/18",
     "catalog": "10.213.128.0/18",
+    # strict repos (open-discovery design §12.3): squid's pool_strict gives the fetch base list in
+    # every egress mode; 10.213.224.0/19 stays reserved for the Phase-2 stack profile
+    "fetch-strict": "10.213.192.0/19",
+    "validate-strict": "10.213.192.0/19",
 }
 # network profile -> the egress.yaml sandbox profile whose categories apply
 EGRESS_PROFILE: dict[str, str] = {
     "fetch": "fetch", "validate": "validate", "research": "research", "llm": "agent-llm", "catalog": "catalog",
+    "fetch-strict": "fetch", "validate-strict": "validate",
 }  # fmt: skip
+# fetch/validate run repo code; their spec must say which egress applies (fail closed, never defaulted)
+EGRESS_PROFILES = frozenset({"fetch", "validate"})
+JobEgress = Literal["mode", "strict"]
+
+
+def network_profile(network: str, egress: JobEgress | None) -> str:
+    """The network profile of a job: ``<net>-strict`` for a strict fetch/validate job, else ``network``."""
+    return f"{network}-strict" if egress == "strict" and network in EGRESS_PROFILES else network
+
 
 ROLE_REPO_MODE: dict[str, RepoMode] = {
     "vetter": "none", "summarizer": "none", "scout": "snapshot", "planner": "snapshot", "reviewer": "snapshot",
@@ -225,10 +239,17 @@ class JobSpec(BaseModel):
     timeout_s: Annotated[int, Field(ge=1)]
     cpus: Annotated[float, Field(gt=0, le=MAX_CPUS)] = 2.0
     memory_mb: Annotated[int, Field(ge=MIN_MEMORY_MB, le=MAX_MEMORY_MB)] = 4096
+    # required for fetch/validate, refused for every other profile (validate_job): "strict" puts the
+    # job's /28 in pool_strict (the base allowlist in every egress mode), "mode" follows the egress mode
+    egress: JobEgress | None = None
 
 
 class SpecError(ValueError):
-    """A JobSpec that is well-formed JSON but violates the per-profile rules (HTTP 400)."""
+    """A JobSpec that is well-formed JSON but violates the per-profile rules (HTTP 400, ``code``)."""
+
+    def __init__(self, message: str, code: str = "bad_spec") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def _parse_args(entrypoint: str, args: dict[str, Any]) -> Strict:
@@ -259,6 +280,10 @@ def validate_job(spec: JobSpec) -> ValidatedJob:
         raise SpecError("probe jobs are created only by POST /v1/probes/run")
     if spec.entrypoint not in PROFILE_ENTRYPOINTS[spec.profile]:
         raise SpecError(f"entrypoint {spec.entrypoint} is not allowed in profile {spec.profile}")
+    if spec.profile in EGRESS_PROFILES and spec.egress is None:
+        raise SpecError(f"{spec.profile} jobs need egress (mode or strict)", "egress_required")
+    if spec.profile not in EGRESS_PROFILES and spec.egress is not None:
+        raise SpecError(f"egress applies to fetch and validate jobs only, not {spec.profile}", "egress_not_applicable")
     args = _parse_args(spec.entrypoint, spec.args)
     if isinstance(args, KiroArgs):
         expected_role_profile = "coder" if args.role == "coder" else "research"

@@ -223,7 +223,7 @@ def test_scout_fetch_env_only_when_prefetch_is_off() -> None:
     from ossbot.sandboxd.profiles import validate_job
 
     base = {"run_id": "r1", "cid": "c_01ABCDEFGH", "profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw",
-            "timeout_s": 600}  # fmt: skip
+            "timeout_s": 600, "egress": "mode"}  # fmt: skip
     normal = _env_for(validate_job(JobSpec.model_validate({**base, "args": {"repo": "o/r"}})), "ids")
     scout = _env_for(
         validate_job(JobSpec.model_validate({**base, "args": {"repo": "o/r", "clone_depth": 1, "prefetch": False}})),
@@ -313,14 +313,37 @@ def _spec(**kw: Any) -> JobSpec:
         ({"profile": "stack", "entrypoint": "validate", "args": {}, "repo_mode": "rw"}, False),
         ({"entrypoint": "probe", "args": {}}, False),
         ({"timeout_s": 99999}, False),
-        ({"profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw", "args": {"repo": "a/b"}}, True),
-        ({"profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw", "args": {"repo": "a/b", "extra": 1}}, False),
+        (
+            {"profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw", "args": {"repo": "a/b"}, "egress": "mode"},
+            True,
+        ),
+        (
+            {"profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw", "args": {"repo": "a/b"}, "egress": "strict"},
+            True,
+        ),
+        ({"profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw", "args": {"repo": "a/b"}}, False),
+        (
+            {"profile": "fetch", "entrypoint": "fetch", "repo_mode": "rw", "args": {"repo": "a/b"}, "egress": "open"},
+            False,
+        ),
+        ({"egress": "mode"}, False),
+        (
+            {
+                "profile": "fetch",
+                "entrypoint": "fetch",
+                "repo_mode": "rw",
+                "args": {"repo": "a/b", "extra": 1},
+                "egress": "mode",
+            },
+            False,
+        ),
         (
             {
                 "profile": "fetch",
                 "entrypoint": "fetch",
                 "repo_mode": "rw",
                 "args": {"repo": "a/b", "base_sha": "1" * 40},
+                "egress": "mode",
             },
             False,
         ),

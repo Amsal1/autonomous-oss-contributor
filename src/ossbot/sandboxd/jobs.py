@@ -56,6 +56,7 @@ from ossbot.sandboxd.profiles import (
     TEMPLATES,
     TRUST_TOOLS,
     FetchArgs,
+    JobEgress,
     JobSpec,
     KiroArgs,
     PackageArgs,
@@ -65,6 +66,7 @@ from ossbot.sandboxd.profiles import (
     ValidateArgs,
     ValidatedJob,
     cid_slug,
+    network_profile,
     validate_job,
 )
 from ossbot.sandboxd.runtime.base import ContainerRuntime, Mount, RuntimeFailure
@@ -132,6 +134,7 @@ class Plan:
     create_task_volume: bool = False
     release_network: bool = False
     exec_env: dict[str, str] = field(default_factory=dict)
+    egress: JobEgress | None = None  # fetch/validate only: "strict" -> the <net>-strict network profile
 
 
 @dataclass
@@ -226,7 +229,7 @@ class JobService:
         try:
             job = validate_job(spec)
         except SpecError as exc:
-            raise ApiError(400, "bad_spec", str(exc)) from exc
+            raise ApiError(400, exc.code, str(exc)) from exc
         try:
             require_running(self.settings.control_dir, f"sandbox_job:{spec.entrypoint}")
         except Blocked as exc:
@@ -262,6 +265,7 @@ class JobService:
             inputs={k: Path(v) for k, v in spec.inputs.items()}, timeout_s=spec.timeout_s, cpus=spec.cpus,
             memory_mb=spec.memory_mb, dest=dest,
             create_task_volume=spec.entrypoint == "fetch", release_network=spec.cid == CATALOG_CID,
+            egress=spec.egress,
         )  # fmt: skip
 
     def submit(self, spec: JobSpec) -> dict[str, Any]:
@@ -402,9 +406,9 @@ class JobService:
         self.runtime.remove(spec.name)
         created.remove(spec.name)
 
-    def _network(self, template: str, cid: str) -> str:
+    def _network(self, template: str, cid: str, egress: JobEgress | None = None) -> str:
         net = TEMPLATES[template].network
-        return "none" if net == "none" else self.networks.ensure(cid, net)
+        return "none" if net == "none" else self.networks.ensure(cid, network_profile(net, egress))
 
     def _run_main(
         self, plan: Plan, vols: Volumes, labels: dict[str, str], volumes: list[str], created: list[str]
@@ -437,7 +441,7 @@ class JobService:
         template = TEMPLATES[plan.template]
         spec = job_spec(
             plan.template, run_id=plan.run_id, cid=plan.cid, entrypoint=plan.entrypoint,
-            image_ref=self._image(template.image), network=self._network(plan.template, plan.cid),
+            image_ref=self._image(template.image), network=self._network(plan.template, plan.cid, plan.egress),
             repo_mode=plan.repo_mode, env=plan.env, cpus=plan.cpus, memory_mb=plan.memory_mb,
         )  # fmt: skip
         self.runtime.run(spec)

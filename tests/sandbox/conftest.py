@@ -30,6 +30,7 @@ from ossbot.sandboxd.jobs import JobService, Outcome, Plan, Settings
 from ossbot.sandboxd.keyscan import KeyScanner
 from ossbot.sandboxd.models import CatalogCache
 from ossbot.sandboxd.networks import Networks
+from ossbot.sandboxd.profiles import JobEgress
 from ossbot.sandboxd.runtime.base import Mount
 from ossbot.sandboxd.runtime.docker_cli import FILTER_SOCKET, DockerCliRuntime
 from ossbot.sandboxd.subnets import SubnetAllocator
@@ -76,12 +77,13 @@ class Sandbox:
 
     def plan(self, cid: str, template: str, entrypoint: str = "probe", repo_mode: str = "none",
              env: dict[str, str] | None = None, inputs: dict[str, Path] | None = None,
-             create_task: bool = False, timeout: int = 600) -> Plan:  # fmt: skip
+             create_task: bool = False, timeout: int = 600, egress: JobEgress | None = None) -> Plan:  # fmt: skip
         run_id = f"smk-{template.replace('_', '-')}-{secrets.token_hex(3)}"
         return Plan(
             run_id=run_id, cid=cid, template=template, entrypoint=entrypoint, repo_mode=repo_mode, env=env or {},
             inputs=inputs or {}, timeout_s=timeout, cpus=1.0, memory_mb=1024,
             dest=self.svc.settings.artifacts_dir / cid / "runs" / run_id, create_task_volume=create_task,
+            egress=egress,
         )  # fmt: skip
 
     def run(self, plan: Plan) -> Outcome:

@@ -9,6 +9,7 @@ Every bullet that needs no Kiro key runs on this suite's own JobService (no key)
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import re
 import subprocess
@@ -19,13 +20,14 @@ import pytest
 
 from tests.sandbox.conftest import Sandbox, proxy_ip_on
 
-Pool = Literal["fetch", "research", "llm"]
+Pool = Literal["fetch", "strict", "research", "llm"]
 SQUID_CONF = Path("/etc/ossbot/proxy/squid.conf")
 
 CID = "c_SMOKETEST1"
 PEER_CID = "c_SMOKETEST2"
 SNAP_CID = "c_SMOKETEST3"
 FETCH_CID = "c_SMOKETEST4"
+STRICT_CID = "c_SMOKETEST5"
 LIVE_SANDBOXD = Path("/run/ossbot/sandboxd.sock")
 OSSCTL = Path("/opt/ossbot/app/.venv/bin/ossctl")
 _cache: dict[str, dict[str, Any]] = {}
@@ -42,20 +44,25 @@ def facts(sandbox: Sandbox, template: str, **kw: Any) -> dict[str, Any]:
 
 def live_mode() -> str:
     """The egress mode the live proxy was rendered for (header line of the rendered squid.conf)."""
-    match = re.search(r"^# Egress mode: (allowlist|research|open) ", SQUID_CONF.read_text(encoding="utf-8"), re.M)
+    match = re.search(
+        r"^# Egress mode: (allowlist|research|open|sandbox_open) ", SQUID_CONF.read_text(encoding="utf-8"), re.M
+    )
     assert match, f"{SQUID_CONF} names no egress mode (redeploy)"
     return match.group(1)
 
 
 def expected_egress(pool: Pool, mode: str) -> tuple[bool, bool]:
-    """(web_public, github_user_content) of a source pool in an egress mode (DESIGN §11.3, §11.5):
-    research has github_user_content in every mode and web_public outside allowlist; the llm pool
-    (agent-llm, catalog) has web_public (which covers github.io and gists) only in open; fetch and
-    validate never get either."""
+    """(web_public, github_user_content) of a source pool in an egress mode (DESIGN §11.3, §11.5;
+    open-discovery design §12.2): research has github_user_content in every mode and web_public outside
+    allowlist; the llm pool (agent-llm, catalog) has web_public (which covers github.io and gists) in
+    open and sandbox_open; the fetch pool (fetch/validate) only in sandbox_open; the strict pool never."""
     if pool == "research":
         return mode != "allowlist", True
     if pool == "llm":
-        return mode == "open", mode == "open"
+        web = mode in {"open", "sandbox_open"}
+        return web, web
+    if pool == "fetch":
+        return mode == "sandbox_open", mode == "sandbox_open"
     return False, False
 
 
@@ -108,6 +115,22 @@ def test_fetch_validate(sandbox: Sandbox, peer_ip: str, template: str) -> None:
     assert f["volume_modes"]["/io/output"] == "10001:700"
 
 
+@pytest.mark.parametrize("template", ["fetch", "validate"])
+def test_strict_pool_keeps_the_base_list_in_every_mode(sandbox: Sandbox, template: str) -> None:
+    """Open-discovery design §12.3: a strict job's /28 is in pool_strict (10.213.192.0/19): github_read
+    and the package categories, never web_public, whatever the live egress mode."""
+    try:
+        f = sandbox.smoke(STRICT_CID, template, repo_mode="rw", create_task=True, egress="strict")
+        assert_common(f, networked=True, pool="strict")
+        assert f["github"]["connect"] == "200"
+        assert "KIRO_API_KEY" not in f["env_names"]
+        allocated = sandbox.svc.networks.subnets.allocated(STRICT_CID)
+        assert set(allocated) == {f"{template}-strict"}
+        assert ipaddress.ip_network(allocated[f"{template}-strict"]).subnet_of(ipaddress.ip_network("10.213.192.0/19"))
+    finally:
+        sandbox.cleanup(STRICT_CID)
+
+
 def test_research(sandbox: Sandbox) -> None:
     f = facts(sandbox, "research")
     assert_common(f, networked=True, pool="research")
@@ -122,7 +145,7 @@ def test_agent_llm_and_catalog(sandbox: Sandbox) -> None:
     for template, cid in (("catalog", "sys-catalog"),):
         f = facts(sandbox, template, cid=cid)
         assert_common(f, networked=True, pool="llm")
-        # no github_read for the llm pool; github.com only through web_public in egress mode open
+        # no github_read for the llm pool; github.com only through web_public in egress mode open/sandbox_open
         assert f["github"]["connect"] == ("200" if expected_egress("llm", live_mode())[0] else "403")
         assert f["tmp_exec"] != 0
         assert f["mounts_task"] is False and f["mounts_ro"] is False
