@@ -33,7 +33,7 @@ def test_section_order() -> None:
 
 def test_every_relative_link_and_image_exists() -> None:
     targets = _targets()
-    assert "docs/media/demo.gif" in targets and "docs/media/demo.mp4" in targets
+    assert "docs/media/demo.gif" in targets
     for target in targets:
         assert (ROOT / target.split("#", 1)[0]).exists(), target
 

@@ -16,11 +16,6 @@ it spends effort and before it publishes anything.**
   <img src="docs/media/demo.gif" width="720" alt="Animated walkthrough of ossbot in Telegram: a proposal card, Start work and Confirm, the PR preview with size estimate versus actual and code/test split, the diff explorer, Approve and Confirm labelled DRY RUN, a submitted PR with its live status card, the pinned dashboard and /status, a streamed assistant answer, and /kill">
 </p>
 
-<p align="center"><sub>Every frame is rendered from the Telegram payloads the gatekeeper sent during the
-hermetic end-to-end test (fictional repo <code>acme/widgets</code>, fake GitHub, test profile), not drawn by hand.
-Also as <a href="docs/media/demo.mp4">MP4</a> and <a href="docs/media/stills/">PNG stills</a> (light and dark);
-regenerate with <code>scripts/dev/make-demo.ps1</code>.</sub></p>
-
 ## Why
 
 - **Contributing takes time you may not have.** ossbot finds issues worth fixing in the projects you
