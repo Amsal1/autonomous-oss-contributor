@@ -18,7 +18,11 @@ item stays in that state (the owner's next decision is dispatched at once). GitH
 network errors and 5xx themselves (``github_read``, then ``github_unavailable``); a rate limit
 delays the stage, or the discovery cycle, until the reset (§20). Discovery runs on the tick before
 dispatch, so ``github_unavailable`` ends the cycle (not just the target) and the cycle runs again
-after ``DISCOVER_UNAVAILABLE_RETRY``: an outage costs one read's retries, not one per target. Interruptions
+after ``DISCOVER_UNAVAILABLE_RETRY``: an outage costs one read's retries, not one per target. A cut full
+cycle (a stop, a rate limit, an outage, a gatekeeper 503) keeps its ``discover.CycleProgress`` in memory
+and resumes, no sooner than ``DISCOVER_RESUME_MIN`` (or the reset; 503: ``DISCOVER_GK_RETRY``), without
+re-reading the targets it finished; progress older than ``interval_hours`` is dropped, and a fresh full
+cycle never starts within ``FULL_RESCAN_MIN_GAP`` of the previous one's start. Interruptions
 (control state, a sandbox job cut by a drain or crash, sandboxd unreachable) only end the stage
 run as ``interrupted`` and the next tick re-queues it (max 3 by the gatekeeper). On start, stage
 runs left ``running`` by a crashed runner become ``interrupted``; ``resumed`` counts them
@@ -69,6 +73,9 @@ GATE_1 = frozenset({"PROPOSED", "RESCOPE_REQUIRED"})  # NO_FAIL states with a st
 HELD_RETRY = timedelta(minutes=10)  # first retry of a stage that failed in a NO_FAIL state (re-scout)
 HELD_RETRY_MAX = timedelta(hours=6)  # doubling up to this
 DISCOVER_UNAVAILABLE_RETRY = timedelta(minutes=15)  # a cycle ended by github_unavailable runs again after this
+DISCOVER_RESUME_MIN = timedelta(minutes=1)  # a cut cycle resumes no sooner than this (or the rate-limit reset)
+DISCOVER_GK_RETRY = timedelta(minutes=5)  # a full cycle cut by a gatekeeper 503 resumes after this
+FULL_RESCAN_MIN_GAP = timedelta(minutes=30)  # a fresh full cycle never starts sooner after the last one's start
 
 
 @dataclasses.dataclass
@@ -103,6 +110,10 @@ class Scheduler:
         # against what is left of discovery.proposals_per_cycle, not a fresh budget (DESIGN 9.5b)
         self.cycle_created: list[str] = []
         self.cycle_cut = False
+        # what a cut full cycle has read (in memory only: a restart starts a fresh cycle); the re-run
+        # resumes it instead of re-scanning every target (discovery pacing, 2026-10-22)
+        self.cycle_progress: discover.CycleProgress | None = None
+        self.last_full_start: datetime | None = None
         self.resumed = 0
         # cid -> (state, failures, next try): a stage error in a NO_FAIL state cannot fail the item,
         # so it is retried with backoff and the owner is told once instead of a silent retry every
@@ -264,31 +275,73 @@ class Scheduler:
         self._dispatch(out)
         return out
 
+    def _start_full(self, now: datetime) -> discover.CycleProgress | None:
+        """The progress a full cycle runs with: the cut cycle's (resumed), or a fresh one. A cycle that
+        was not cut, or whose progress is older than ``interval_hours``, starts fresh (refusals and
+        spent budget cleared), but never within ``FULL_RESCAN_MIN_GAP`` of the last fresh start
+        (None: not yet, ``discover_after`` is set)."""
+        interval = timedelta(hours=self.sc.config().policy.discovery.interval_hours)
+        progress = self.cycle_progress
+        if self.cycle_cut and progress is not None and now - progress.started_at < interval:
+            return progress  # a cut cycle's re-run keeps its refusals, its spent budget and what it read
+        if self.last_full_start is not None and now - self.last_full_start < FULL_RESCAN_MIN_GAP:
+            self.discover_after = self.last_full_start + FULL_RESCAN_MIN_GAP
+            self.last_discovery = None  # it runs once the gap has passed
+            log.info("full discovery re-scan waits until %s", self.discover_after,
+                     extra={"event": "discover_rescan_gap"})  # fmt: skip
+            return None
+        self.refused.clear()  # refusals are cached for one discovery cycle
+        self.cycle_created = []
+        self.cycle_progress = discover.CycleProgress(now)
+        self.last_full_start = now
+        return self.cycle_progress
+
+    def _cut(self, until: datetime) -> None:
+        """A full cycle cut short: it resumes from its progress, not before ``until``."""
+        self.last_discovery = None  # the full cycle runs again once open
+        self.cycle_cut = True
+        self.discover_after = until
+
     def discover(self, repos: list[str] | None = None) -> list[str]:
-        if repos is None:
-            self.last_discovery = self.now()
-            if not self.cycle_cut:  # a cut cycle's re-run keeps its refusals and its spent budget
-                self.refused.clear()  # refusals are cached for one discovery cycle
-                self.cycle_created = []
+        now = self.now()
+        full = repos is None
+        progress: discover.CycleProgress | None = None
+        if full:
+            progress = self._start_full(now)
+            if progress is None:
+                return []
+            self.last_discovery = now
             self.cycle_cut = False
         try:
-            return discover.run(self.sc, repos=repos, refused=self.refused,
-                                created=self.cycle_created if repos is None else None)  # fmt: skip
+            out = discover.run(self.sc, repos=repos, now=now, refused=self.refused,
+                               created=self.cycle_created if full else None, progress=progress)  # fmt: skip
         except (Interrupted, Deferred) as exc:  # stopped or rate limited mid-cycle: it runs again later
-            if repos is None:
-                self.last_discovery = None  # the full cycle runs again once open
-                self.cycle_cut = True
+            if isinstance(exc, discover.GitHubUnavailable):
+                until = now + DISCOVER_UNAVAILABLE_RETRY
+            elif isinstance(exc, GitHubRateLimited):
+                until = max(datetime.fromtimestamp(exc.until, UTC), now + DISCOVER_RESUME_MIN)
+            else:
+                until = now + DISCOVER_RESUME_MIN
+            if full:
+                self._cut(until)
             else:
                 self.pending_discover = repos  # the claimed ossctl discover request is not lost
-            if isinstance(exc, GitHubRateLimited):
-                self.discover_after = datetime.fromtimestamp(exc.until, UTC)
-            elif isinstance(exc, discover.GitHubUnavailable):
-                self.discover_after = self.now() + DISCOVER_UNAVAILABLE_RETRY
+                if isinstance(exc, GitHubRateLimited | discover.GitHubUnavailable):
+                    self.discover_after = until
             log.info("discovery interrupted: %s", exc, extra={"event": "discover_interrupted"})
             return []
         except GkError as exc:
+            if full and exc.status == 503:  # the gatekeeper restarting: resume soon, keep what was read
+                self._cut(now + DISCOVER_GK_RETRY)
+                log.info("discovery interrupted: %s", exc, extra={"event": "discover_interrupted"})
+                return []
+            if full:
+                self.cycle_progress = None
             log.warning("discovery skipped: %s", exc, extra={"event": "discover_skipped"})
             return []
+        if full:
+            self.cycle_progress = None  # finished: the next full cycle starts fresh
+        return out
 
     def _eligible(self, c: dict[str, Any], stage: object) -> bool:
         state = str(c.get("state"))

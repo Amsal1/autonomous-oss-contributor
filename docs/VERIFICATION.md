@@ -1001,6 +1001,20 @@ Close-out (2026-10-22, HEAD `5d99ba0`):
 | Live state | `ROOT ossctl status`, GET-only contribution facts | lifecycle up, state running, dry_run false (unchanged), no running stages or pending approvals; grafana/loki `c_D1BVZ6N1HZ` still WATCHING (updated 2026-10-22T00:09:04Z) |
 | Live scout read | `ROOTDEV pytest -m sandbox tests/sandbox/test_scout_reads_snapshot.py tests/sandbox/test_profiles.py -k "scout_reads or scout_lists or symlink_snapshot or fetch_clones" --timeout=900` | 3 passed in 32.8 s: a scout-profile research job listed `/work/repo`, read `README.md` (`repo_inspection` ≥ 2), with no key-shaped text in its events |
 
+## Post-v1 discovery fix, part A (fixes 1-4, 2026-10-22)
+
+Owner message 12 ("no good proposal today"); diagnosis `.agents/tasks/discovery-no-proposals-2026-10-22.md`; plan `.ossbot-local/postv1/plan-discovery-fix.md` Part A; ADR-0003 addendum "discovery pacing"; TRACEABILITY `DF-1`…`DF-4` (OD-7, OD-13 amended). Hermetic code only: no redeploy, no live GitHub call, no `/reload`, dry-run and contributions untouched, `ossctl targets discovered --untry` not run. Details: `.ossbot-local/postv1/discovery-fix/verify-a.md` (not tracked). DEV = `wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen`.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all checks passed; 596 files formatted; no issues in 271 files; 16 contracts kept, 0 broken |
+| Hygiene | `DEV ossctl docs commands --check`; `DEV ossctl lint personal` | README command table current; 0 hits |
+| Part A targeted | `DEV pytest tests/unit/runner/test_github_read.py tests/unit/runner/test_discover.py tests/unit/runner/test_discover_open.py tests/unit/runner/test_open_discovery.py tests/unit/runner/test_scheduler.py tests/unit/runner/test_stage_flow.py tests/unit/gatekeeper/test_discovered_targets.py tests/unit/gatekeeper/test_discovered_targets_writer.py tests/unit/gatekeeper/test_api_discovered.py tests/unit/gatekeeper/test_authz.py tests/unit/gatekeeper/test_import_contracts.py tests/unit/ctl/test_cli_pipeline.py --timeout=120 -q` | 229 passed |
+| e2e scenarios 5, 5b | `DEV pytest tests/e2e/test_e2e_open_discovery.py -m e2e --timeout=120 -q` | 7 passed |
+| Affected packages | `DEV pytest tests/unit/runner tests/unit/ctl tests/unit/gatekeeper tests/e2e -m "unit or e2e" -n auto --timeout=120 -q` | 2632 passed |
+
+Not run in this step (close-out): the full hermetic suite, the redeploy and the live `GET /rate_limit` read (Part B / close-out).
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

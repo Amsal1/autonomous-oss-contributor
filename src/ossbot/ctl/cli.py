@@ -1244,11 +1244,54 @@ def targets_strict(
     _decided(_decide(repo, "unstrict" if off else "strict"), "egress follows the mode" if off else "strict egress")
 
 
+UNTRY_SHOW_MAX = 20  # repos listed in the --untry preview
+
+
+def _untry(since: str) -> None:
+    """``--untry --since D``: preview, TTY UNTRY, apply (operator route; audited and announced)."""
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", since):
+        _fail("--since must be a date, YYYY-MM-DD")
+    texts = {"bad_since": "--since must be within the last 30 days and not in the future"}
+    body = {"since": f"{since}T00:00:00Z", "apply": False}
+    code, data = api("POST", "/v1/discovered-targets/untry", body)
+    if code != 200 or not isinstance(data, dict):
+        error = data.get("error") if isinstance(data, dict) else None
+        _fail(texts.get(str(error), f"gatekeeper answered {code}: {data}"))
+    repos = [str(r) for r in data.get("repos") or []]
+    if not repos:
+        typer.echo(f"nothing to untry: no candidate repo tried since {since} is without a contribution")
+        return
+    typer.echo(
+        f"{len(repos)} candidate repos tried since {since} have no contribution since then; untry makes open "
+        "discovery take them first again (tried_at and the cooldown cleared). Nothing is posted."
+    )
+    for repo in repos[:UNTRY_SHOW_MAX]:
+        typer.echo(f"  {repo}")
+    if len(repos) > UNTRY_SHOW_MAX:
+        typer.echo(f"  … and {len(repos) - UNTRY_SHOW_MAX} more")
+    _confirm("UNTRY")
+    code, data = api("POST", "/v1/discovered-targets/untry", {**body, "apply": True})
+    if code != 200 or not isinstance(data, dict):
+        error = data.get("error") if isinstance(data, dict) else None
+        _fail(texts.get(str(error), f"gatekeeper answered {code}: {data}"))
+    typer.echo(f"untried {data.get('count')} discovered repos")
+
+
 @targets_app.command("discovered")
 def targets_discovered(
     status: Annotated[str | None, typer.Option(help="suggested | candidate | kept | never | skipped")] = None,
+    untry: Annotated[
+        bool, typer.Option("--untry", help="candidates tried since --since without a contribution: untried again")
+    ] = False,
+    since: Annotated[str | None, typer.Option(help="with --untry: YYYY-MM-DD (UTC, within 30 days)")] = None,
 ) -> None:
-    """Discovered repos (open discovery): status, source, facts and the skip reason."""
+    """Discovered repos (open discovery): status, source, facts and the skip reason; ``--untry --since D``
+    clears ``tried`` and the cooldown of candidates tried since D that produced no contribution."""
+    if untry or since is not None:
+        if not untry or since is None:
+            _fail("--untry and --since go together: ossctl targets discovered --untry --since YYYY-MM-DD")
+        _untry(since)
+        return
     if status is not None and status not in {"suggested", "candidate", "kept", "never", "skipped"}:
         _fail("status must be suggested, candidate, kept, never or skipped")
     code, rows = api("GET", "/v1/discovered-targets" + (f"?status={status}" if status else ""))

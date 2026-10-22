@@ -64,6 +64,9 @@ class FakeGitHub:
     community: dict[str, dict[str, Any]] = field(default_factory=dict)
     commit_dates: dict[str, str] = field(default_factory=dict)
     mentions: dict[tuple[str, int], int] = field(default_factory=dict)
+    # discovery pacing (2026-10-22): headers merged into every non-search 2xx answer, e.g.
+    # {"x-ratelimit-remaining": "900"} for the core floor
+    core_headers: dict[str, str] = field(default_factory=dict)
     router: respx.MockRouter = field(init=False)
 
     def __post_init__(self) -> None:
@@ -111,6 +114,8 @@ class FakeGitHub:
             status, headers, doc = self.answers[key].pop(0)
             return httpx.Response(status, json=doc, headers=headers)
         response = self._dispatch(request.method, path, params, body)
+        if self.core_headers and not path.startswith("/search/") and 200 <= response.status_code < 300:
+            response.headers.update(self.core_headers)
         if request.method != "GET" and response.status_code < 300 and self.on_write is not None:
             self.on_write(key)
         return response
@@ -129,8 +134,9 @@ class FakeGitHub:
         return httpx.Response(200, json={"total_count": len(items), "incomplete_results": False, "items": items[:50]})
 
     def _search_issues(self, q: str) -> httpx.Response:
-        """The mention check (``repo:R is:pr is:open N`` -> ``mentions``) or an open-discovery issue
-        search (``repo:R is:issue … label:a,"b c"`` -> open issues of R with any of the labels)."""
+        """The mention check (``repo:R is:pr is:open N`` -> ``mentions``) or an issue search
+        (``repo:R is:issue … label:a,"b c"`` -> open issues of R with any of the labels; discovery no
+        longer sends one since 2026-10-22, kept for tests that pin that)."""
         repo_m = re.search(r"\brepo:(\S+)", q)
         repo = repo_m.group(1).lower() if repo_m else ""
         if "is:pr" in q:

@@ -54,12 +54,15 @@ def test_repo_query_is_exact() -> None:
     )
 
 
-def test_issue_query_quotes_labels_with_spaces_in_one_or_list(bundle: ConfigBundle) -> None:
+def test_issue_labels_are_one_case_insensitive_or_on_the_client(bundle: ConfigBundle) -> None:
+    """Discovery pacing (2026-10-22): no issue search any more; one issues page, labels OR-matched."""
     labels = bundle.policy.discovery.open.issue_labels
-    assert od.build_issue_query("acme/tool", labels) == (
-        "repo:acme/tool is:issue is:open no:assignee archived:false "
-        'label:"good first issue","help wanted",bug,documentation,docs'
-    )
+    assert od.has_any_label({"labels": [{"name": "Good First Issue"}]}, labels)
+    assert od.has_any_label({"labels": [{"name": "x"}, {"name": "docs"}]}, labels)
+    assert not od.has_any_label({"labels": [{"name": "enhancement"}]}, labels)
+    assert not od.has_any_label({"labels": None}, labels) and not od.has_any_label({}, labels)
+    assert od.has_any_label({"labels": []}, [])  # no configured labels: every issue
+    assert not hasattr(od, "build_issue_query")
 
 
 def test_select_topics_wraps_and_advances() -> None:
@@ -71,16 +74,14 @@ def test_select_topics_wraps_and_advances() -> None:
     assert od.select_topics([], 4, 3) == ([], 0)
 
 
-def test_search_budget_and_the_issue_search_stop() -> None:
+def test_search_budget() -> None:
     budget = od.SearchBudget(10)
     for _ in range(3):
         assert budget.take()
     assert budget.remaining == 7
-    allowed = []
-    while budget.issue_search_allowed(reserved_slots=1):
-        allowed.append(budget.take())
-    assert allowed == [True] * 5 and budget.remaining == 2  # stops at remaining <= reserved_slots + 1
-    assert budget.take() and budget.take() and not budget.take() and budget.remaining == 0
+    for _ in range(7):
+        assert budget.take()
+    assert not budget.take() and budget.remaining == 0
 
 
 def test_probe_window() -> None:

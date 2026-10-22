@@ -12,7 +12,13 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from ossbot.common.config import REPO_RE, resolve_target
-from ossbot.common.schemas import DiscoveredDecision, DiscoveredFacts, DiscoveredStatus, ResolvedTargetView
+from ossbot.common.schemas import (
+    DiscoveredDecision,
+    DiscoveredFacts,
+    DiscoveredStatus,
+    DiscoveredUntry,
+    ResolvedTargetView,
+)
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 
@@ -48,6 +54,13 @@ async def decision(
     request: Request, body: DiscoveredDecision, caller: Annotated[Caller, Depends(require(Role.OPERATOR))]
 ) -> dict[str, Any]:
     return ctx(request).discovered.decide(body.repo, body.decision, caller.actor)
+
+
+@router.post("/discovered-targets/untry")
+async def untry(
+    request: Request, body: DiscoveredUntry, caller: Annotated[Caller, Depends(require(Role.OPERATOR))]
+) -> dict[str, Any]:
+    return ctx(request).discovered.untry(body.since, body.apply, caller.actor)
 
 
 @router.get("/targets/resolve")

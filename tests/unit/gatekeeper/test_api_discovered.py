@@ -43,6 +43,27 @@ async def test_schema_errors_are_400(ctx: AppContext) -> None:
     async with client(ctx, UID_OPERATOR) as c:
         resp = await c.post("/v1/discovered-targets/decision", json={"repo": REPO, "decision": "approve"})
         assert resp.status_code == 400 and resp.json()["error"] == "schema_error"
+        for bad in ({"since": "2026-10-22"}, {"since": "yesterday", "apply": False},
+                    {"since": "2026-10-22T00:00:00Z", "apply": "yes"},
+                    {"since": "2026-10-22T00:00:00Z", "apply": False, "repo": REPO}):  # fmt: skip
+            resp = await c.post("/v1/discovered-targets/untry", json=bad)
+            assert resp.status_code == 400 and resp.json()["error"] == "schema_error", bad
+
+
+async def test_untry_is_operator_only(ctx: AppContext) -> None:
+    """Discovery pacing (2026-10-22): ``ossctl targets discovered --untry`` widens what discovery may pick,
+    so only the operator may call it; a preview writes nothing."""
+    since = ctx.clock.now().date().isoformat() + "T00:00:00Z"
+    for uid in (UID_WORKER, UID_REQUESTER, UID_SANDBOX):
+        async with client(ctx, uid) as c:
+            resp = await c.post("/v1/discovered-targets/untry", json={"since": since, "apply": True})
+            assert resp.status_code == 403, uid
+    async with client(ctx, UID_OPERATOR) as c:
+        resp = await c.post("/v1/discovered-targets/untry", json={"since": since, "apply": False})
+        assert resp.status_code == 200 and resp.json() == {"since": since.replace("Z", ".000000Z"), "repos": [],
+                                                           "count": 0, "applied": False}  # fmt: skip
+        resp = await c.post("/v1/discovered-targets/untry", json={"since": "2020-01-01T00:00:00Z", "apply": False})
+        assert (resp.status_code, resp.json()["error"]) == (400, "bad_since")
 
 
 async def test_refusals(ctx: AppContext) -> None:

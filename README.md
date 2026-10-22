@@ -323,8 +323,11 @@ suggests is approved without your taps.
 `/filters` page 5 **Open** turns open discovery on or off and edits its topics (`➕ Add topic…`) and
 preferred languages; the counts and the search budget are config-only (`policy.yaml discovery.open`).
 From a terminal: `ossctl targets search [--top N] [--topic T]` (a read-only dry run: ranked repos with
-language, ★ and CI on PRs; no DB row, no Telegram), `ossctl targets discovered [--status S]`, and
-`ossctl targets add|block|unblock|strict` (each asks for a typed confirmation).
+language, ★ and CI on PRs; no DB row, no Telegram), `ossctl targets discovered [--status S]`,
+`ossctl targets discovered --untry --since YYYY-MM-DD` (candidates tried since that date that produced
+no contribution become untried again, so open discovery takes them first; shows them, then asks for
+`UNTRY`), and `ossctl targets add|block|unblock|strict` (each asks for a typed confirmation). A repo
+counts as tried only once a discovery cycle actually used its issues.
 
 Size is a **preference** for what the bot picks on its own. Classes count non-test changed lines,
 excluding lockfiles, generated and vendored files: `xs` ≤ 20, `s` ≤ 80, `m` ≤ 250, `l` ≤ 500,

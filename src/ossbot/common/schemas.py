@@ -507,6 +507,15 @@ class DiscoveredDecision(ApiModel):
     decision: DiscoveredDecisionName
 
 
+class DiscoveredUntry(ApiModel):
+    """``POST /v1/discovered-targets/untry`` (operator, ``ossctl targets discovered --untry``): candidate
+    rows tried since ``since`` without a contribution since then become untried again. ``apply`` false
+    is the preview (nothing written)."""
+
+    since: IsoTs
+    apply: bool
+
+
 class DiscoveredView(ApiModel):
     """One ``discovered_targets`` row."""
 

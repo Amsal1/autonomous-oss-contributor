@@ -53,3 +53,5 @@ def test_writer_refuses_unknown_columns(ctx: AppContext) -> None:
         writer.set_status(ctx.conn, "a/b", "kept", "t", source="owner")
     with pytest.raises(writer.WriterError, match="no discovered_targets row"):
         writer.set_strict(ctx.conn, "a/missing", True, "t", "op")
+    with pytest.raises(writer.WriterError, match="no discovered_targets row"):
+        writer.clear_tried(ctx.conn, "a/missing", "t")  # discovery pacing (2026-10-22): --untry

@@ -18,7 +18,15 @@ Two buckets (post-v1 open discovery, design §7.4): ``limited_until`` (core) and
 read. A secondary limit without a reset or ``retry-after`` header (403/429 whose message says
 "secondary rate limit") waits ``60 * 2**k`` s, ``k`` = consecutive secondary answers on that bucket
 (reset by the next success), capped at 15 min. Searches never send ``advanced_search`` or
-``search_type`` (the default lexical syntax, under which a comma label list is an OR).
+``search_type`` (the default lexical syntax).
+
+Discovery pacing (ADR-0003 addendum 2026-10-22): a search called with a ``check`` (discovery's
+kill/pause/stop/drain check) waits out a search-bucket limit of at most ``SEARCH_WAIT_MAX_S`` instead
+of raising: outside the search lock, in slices of ``SEARCH_WAIT_SLICE_S`` with ``check()`` before each
+slice and after the last, at most ``SEARCH_WAITS_MAX`` waits per call. A longer limit, or a call
+without ``check`` (scout, ``ossctl targets search``), raises at once as before. ``core_remaining`` and
+``core_reset`` follow the ``x-ratelimit-*`` headers of core answers (discovery's core floor). Issues of
+a repo are read with one ``GET /repos/{r}/issues`` page of 100 (labels are matched by the caller).
 """
 
 from __future__ import annotations
@@ -45,6 +53,9 @@ RATE_LIMIT_DEFAULT_S = 60.0  # a limit answer without a usable reset or retry-af
 SECONDARY_BASE_S = 60.0  # §7.4: a secondary limit without headers waits 60 * 2**k s ...
 SECONDARY_MAX_S = 900.0  # ... capped at 15 min
 SECONDARY_MESSAGE = "secondary rate limit"
+SEARCH_WAIT_MAX_S = 65.0  # a search limit up to this long is waited out by a caller that passes ``check``
+SEARCH_WAIT_SLICE_S = 5.0  # the wait is slept in slices this long, ``check()`` before each one
+SEARCH_WAITS_MAX = 2  # waits per search call; the next limit raises
 UNAVAILABLE = "github_unavailable"
 Bucket = Literal["core", "search"]
 
@@ -92,6 +103,9 @@ class GitHubRead:
         self.limited_until = 0.0  # epoch seconds; core reads before it raise GitHubRateLimited
         self.search_limited_until = 0.0  # the same for search requests (§7.4: a separate bucket)
         self._secondary: dict[Bucket, int] = {"core": 0, "search": 0}  # consecutive secondary-limit answers
+        # the core bucket as GitHub last reported it (x-ratelimit-remaining / -reset); None = not seen yet
+        self.core_remaining: int | None = None
+        self.core_reset: float | None = None
 
     @staticmethod
     def _secondary_message(resp: httpx.Response) -> bool:
@@ -126,11 +140,31 @@ class GitHubRead:
             wait = RATE_LIMIT_DEFAULT_S
         return now + min(max(wait, 1.0), RATE_LIMIT_MAX_S)
 
-    def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    def _core_headers(self, resp: httpx.Response) -> None:
+        """Track the core bucket from a core answer's ``x-ratelimit-*`` headers (junk is ignored)."""
+        try:
+            remaining = resp.headers.get("x-ratelimit-remaining")
+            if remaining is not None:
+                self.core_remaining = int(remaining)
+            reset = resp.headers.get("x-ratelimit-reset")
+            if reset is not None:
+                self.core_reset = float(int(reset))
+        except ValueError:
+            return
+
+    def core_left(self) -> int | None:
+        """``core_remaining`` while it is current; None when unknown or its reset time has passed."""
+        if self.core_remaining is None or (self.core_reset is not None and self._wall() >= self.core_reset):
+            return None
+        return self.core_remaining
+
+    def _get(self, path: str, params: dict[str, Any] | None = None, *, after_wait: bool = False) -> Any:
+        """``after_wait``: the caller has just waited out the search bucket; the request is sent without
+        the local "still limited" short-circuit and GitHub decides."""
         search = path.startswith("/search/")
         for attempt in range(len(RETRY_DELAYS_S) + 1):
             blocked = self.search_limited_until if search else self.limited_until
-            if self._wall() < blocked:
+            if not after_wait and self._wall() < blocked:
                 raise GitHubRateLimited(blocked, f"GET {path}: rate limited")
             try:
                 resp = self._client.get(path, params=params)
@@ -138,9 +172,11 @@ class GitHubRead:
                 error = GitHubReadError(f"GET {path}: {type(exc).__name__}")
                 error.__cause__ = exc
             else:
+                bucket: Bucket = "search" if search or resp.headers.get("x-ratelimit-resource") == "search" else "core"
+                if bucket == "core":
+                    self._core_headers(resp)
                 if resp.status_code == 404:
                     return None
-                bucket: Bucket = "search" if search or resp.headers.get("x-ratelimit-resource") == "search" else "core"
                 if resp.status_code < 400:
                     self._secondary[bucket] = 0
                     return resp.json()
@@ -200,7 +236,9 @@ class GitHubRead:
         return self._list(f"/repos/{repo}/contents/{path}")
 
     # ----------------------------------------------------------------- issues
-    def issues(self, repo: str, label: str | None = None, per_page: int = 50) -> list[dict[str, Any]]:
+    def issues(self, repo: str, label: str | None = None, per_page: int = 100) -> list[dict[str, Any]]:
+        """Open issues (and PRs, which GitHub lists here too) by update time, one page. Discovery calls
+        it without ``label`` (a comma ``labels`` list is an AND) and OR-matches labels itself."""
         params: dict[str, Any] = {"state": "open", "sort": "updated", "per_page": per_page}
         if label:
             params["labels"] = label
@@ -256,18 +294,49 @@ class GitHubRead:
         return date if isinstance(date, str) and len(date) <= 40 else None
 
     # ----------------------------------------------------------------- search
-    def _search(self, path: str, params: dict[str, Any]) -> Any:
-        """Every search request: one lock, ``SEARCH_GAP_S`` apart (≤ 30 per minute)."""
-        with self._search_lock:
-            if self._last_search is not None:
-                wait = SEARCH_GAP_S - (self._monotonic() - self._last_search)
-                if wait > 0:
-                    self._sleep(wait)
-            self._last_search = self._monotonic()
-            return self._get(path, params)
+    def _wait_search(self, seconds: float, check: Callable[[], None], path: str) -> None:
+        """Sleep a search-bucket wait outside the lock, in slices, ``check()`` before each slice and after
+        the last (a stop, kill, pause or drain ends it without a request). The slices are counted, not
+        re-read from the wall clock, so the wait always ends."""
+        log.info("GitHub search limit on GET %s: waiting %d s", path, int(seconds) + 1,
+                 extra={"event": "github_search_wait", "seconds": round(seconds, 1)})  # fmt: skip
+        left = seconds
+        while left > 0:
+            check()
+            step = min(SEARCH_WAIT_SLICE_S, left)
+            self._sleep(step)
+            left -= step
+        check()
 
-    def _search_items(self, path: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        doc = self._search(path, params)
+    def _search(self, path: str, params: dict[str, Any], *, check: Callable[[], None] | None = None) -> Any:
+        """Every search request: one lock, ``SEARCH_GAP_S`` apart (≤ 30 per minute). With ``check``, a
+        search-bucket limit of ≤ ``SEARCH_WAIT_MAX_S`` is waited out (≤ ``SEARCH_WAITS_MAX`` times)."""
+        waits = 0
+        while True:
+            after_wait = False
+            blocked = self.search_limited_until - self._wall()
+            if check is not None and blocked > 0:
+                if blocked > SEARCH_WAIT_MAX_S or waits >= SEARCH_WAITS_MAX:
+                    raise GitHubRateLimited(self.search_limited_until, f"GET {path}: rate limited")
+                self._wait_search(blocked, check, path)
+                waits += 1
+                after_wait = True
+            try:
+                with self._search_lock:
+                    if self._last_search is not None:
+                        gap = SEARCH_GAP_S - (self._monotonic() - self._last_search)
+                        if gap > 0:
+                            self._sleep(gap)
+                    self._last_search = self._monotonic()
+                    return self._get(path, params, after_wait=after_wait)
+            except GitHubRateLimited as exc:
+                if check is None or waits >= SEARCH_WAITS_MAX or exc.until - self._wall() > SEARCH_WAIT_MAX_S:
+                    raise
+
+    def _search_items(
+        self, path: str, params: dict[str, Any], check: Callable[[], None] | None
+    ) -> list[dict[str, Any]]:
+        doc = self._search(path, params, check=check)
         if not isinstance(doc, dict):
             return []
         if doc.get("incomplete_results") is True:  # the items are used; GitHub timed out part of the search
@@ -276,16 +345,14 @@ class GitHubRead:
         items = doc.get("items")
         return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
 
-    def search_repos(self, q: str) -> list[dict[str, Any]]:
+    def search_repos(self, q: str, *, check: Callable[[], None] | None = None) -> list[dict[str, Any]]:
         """``GET /search/repositories`` by stars (open discovery, §5.1); the query is built by
         ``open_discovery.build_repo_query``."""
-        return self._search_items("/search/repositories", {"q": q, "sort": "stars", "order": "desc", "per_page": 50})
+        params = {"q": q, "sort": "stars", "order": "desc", "per_page": 50}
+        return self._search_items("/search/repositories", params, check)
 
-    def search_issues(self, q: str) -> list[dict[str, Any]]:
-        """``GET /search/issues`` by update time (open discovery, §6.1)."""
-        return self._search_items("/search/issues", {"q": q, "sort": "updated", "order": "desc", "per_page": 30})
-
-    def open_prs_mentioning(self, repo: str, number: int) -> int:
+    def open_prs_mentioning(self, repo: str, number: int, *, check: Callable[[], None] | None = None) -> int:
         """Open PRs that mention the issue (``repo:{r} is:pr is:open {n}``), rate-limited."""
-        doc = self._search("/search/issues", {"q": f"repo:{repo} is:pr is:open {number}", "per_page": 1})
+        params = {"q": f"repo:{repo} is:pr is:open {number}", "per_page": 1}
+        doc = self._search("/search/issues", params, check=check)
         return int(doc.get("total_count", 0)) if isinstance(doc, dict) else 0

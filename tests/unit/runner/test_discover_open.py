@@ -68,7 +68,47 @@ def searched(github: FakeGitHub, kind: str) -> list[str]:
 
 
 def issue_searches(github: FakeGitHub, repo: str) -> list[str]:
+    """Issue searches for ``repo`` (none since 2026-10-22: issues are one core read per repo)."""
     return [q for q in searched(github, "issues") if q.startswith(f"repo:{repo} is:issue")]
+
+
+def issue_reads(github: FakeGitHub, repo: str) -> list[dict[str, str]]:
+    """The params of every ``GET /repos/{repo}/issues``."""
+    return [r.params for r in github.requests if r.path == f"/repos/{repo}/issues"]
+
+
+def stepped(sc: StageContext, ctx: AppContext, github: FakeGitHub) -> tuple[list[float], list[float]]:
+    """``sc.gh`` on a wall clock that the fake ``sleep`` advances; returns (wall, sleeps)."""
+    wall = [float(int(now_of(ctx).timestamp()))]  # whole seconds: a reset header is an integer
+    slept: list[float] = []
+
+    def sleep(s: float) -> None:
+        slept.append(s)
+        wall[0] += s
+
+    sc.gh = GitHubRead(github.sync_client(), sleep=sleep, wall=lambda: wall[0], monotonic=lambda: wall[0])
+    return wall, slept
+
+
+def limit_answer(until: float) -> tuple[int, dict[str, str], dict[str, str]]:
+    headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(until)), "x-ratelimit-resource": "search"}
+    return 403, headers, {"message": "API rate limit exceeded"}
+
+
+def mention_checked_before_create(sc: StageContext, github: FakeGitHub,
+                                  monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, int]]:  # fmt: skip
+    """Wrap ``sc.gk.create``: each create must follow a mention-check request for the same issue."""
+    made: list[tuple[str, int]] = []
+    real = sc.gk.create
+
+    def create(repo: str, number: int, *args: Any) -> str:
+        checks = [r for r in github.requests if r.path == "/search/issues"]
+        assert checks and checks[-1].params["q"] == f"repo:{repo} is:pr is:open {number}", (repo, number)
+        made.append((repo, number))
+        return real(repo, number, *args)
+
+    monkeypatch.setattr(sc.gk, "create", create)
+    return made
 
 
 def row(ctx: AppContext, repo: str) -> dict[str, Any] | None:
@@ -127,10 +167,22 @@ def test_an_open_repo_becomes_one_contribution(sc: StageContext, ctx: AppContext
     assert searched(github, "repositories")[0] == (
         f"topic:devops stars:>=1000 pushed:>={(now_of(ctx) - timedelta(days=60)).date().isoformat()} "
         "archived:false mirror:false is:public")  # fmt: skip
-    assert issue_searches(github, OPEN) == [
-        f'repo:{OPEN} is:issue is:open no:assignee archived:false '
-        'label:"good first issue","help wanted",bug,documentation,docs']  # fmt: skip
+    # discovery pacing (2026-10-22): one core issues read, the issue_labels OR on the client, and search
+    # only for the mention checks
+    assert issue_reads(github, OPEN) == [{"state": "open", "sort": "updated", "per_page": "100"}]
+    assert issue_searches(github, OPEN) == []
+    assert all(" is:pr is:open " in q for q in searched(github, "issues")) and searched(github, "issues")
     assert github.writes == []
+
+
+def test_an_open_repo_issue_needs_one_of_the_issue_labels(sc: StageContext, ctx: AppContext,
+                                                          github: FakeGitHub) -> None:  # fmt: skip
+    open_repo(github, ctx)
+    issue(github, ctx, OPEN, 41, label="Help Wanted")  # case-insensitive
+    issue(github, ctx, OPEN, 42, label="enhancement")  # not in discovery.open.issue_labels
+    created = discover.run(sc, now=now_of(ctx))
+    assert [sc.gk.contribution(c)["issue_number"] for c in created] == [41]
+    assert len(issue_reads(github, OPEN)) == 1
 
 
 def test_rule_13_failure_is_recorded_skipped_with_a_cooldown(sc: StageContext, ctx: AppContext,
@@ -223,7 +275,7 @@ def test_an_unpaid_tier1_mention_check_gives_the_slot_back(sc: StageContext, ctx
                                                "created_at": iso(ctx, 2)}, priority=5, category=OPEN_CATEGORY,
                                         language="Go")  # fmt: skip
     result = od.OpenResult(spent, [cand], {}, {})
-    monkeypatch.setattr(discover, "_open_phase", lambda sc, **kw: result)
+    monkeypatch.setattr(discover, "_open_phase", lambda sc, **kw: (result, True))
     refused: set[str] = set()
     assert upstreams(sc, discover.run(sc, now=now_of(ctx), refused=refused)) == [SEED, SEED, SEED]
     assert f"{OPEN}#41" not in refused  # skipped for this cycle, not cached as refused
@@ -251,43 +303,107 @@ def test_open_disabled_by_prefs_and_ossctl_discover_skip_the_search(sc: StageCon
     assert discover.run(sc, now=now_of(ctx)) == [] and searched(github, "repositories") == []
 
 
-def test_a_search_limit_saves_search_until_and_defers(sc: StageContext, ctx: AppContext, github: FakeGitHub) -> None:
-    """Finding 1: the open phase saves ``_open.search_until`` and re-raises; nothing is created without
-    its mention check, earlier cids stay in ``created``; past the reset the cycle completes."""
-    wall = [now_of(ctx).timestamp()]
-    sc.gh = GitHubRead(github.sync_client(), sleep=lambda s: None, wall=lambda: wall[0], monotonic=lambda: wall[0])
+def test_a_short_search_limit_is_waited_out_and_the_cycle_finishes(
+    sc: StageContext, ctx: AppContext, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Discovery pacing fix 1: a 50 s search limit on the repo search is slept (5 s slices) and the cycle
+    creates both the open and the seed picks, each after its mention check."""
+    wall, slept = stepped(sc, ctx, github)
+    seed_issues(github, ctx, 2)
+    open_repo(github, ctx)
+    issue(github, ctx, OPEN, 41)
+    github.answers["GET /search/repositories"] = [limit_answer(wall[0] + 50)]
+    made = mention_checked_before_create(sc, github, monkeypatch)
+    created = discover.run(sc, now=now_of(ctx))
+    assert set(upstreams(sc, created)) == {OPEN, SEED} and len(made) == 3
+    assert [s for s in slept if s == 5.0] == [5.0] * 10  # 50 s in slices
+    assert sc.load(od.OPEN_NOTE).get("search_until") is None  # never deferred
+
+
+def test_a_long_search_limit_ends_only_the_open_phase(sc: StageContext, ctx: AppContext, github: FakeGitHub,
+                                                      monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
+    """Fix 1: a 600 s limit on the repo search saves ``_open.search_until`` and ends the open phase; the
+    seed candidates survive, but the seed pick's mention check is a search too: the cycle is cut there
+    (no contribution without its check) and resumes past the reset without re-reading the seed."""
+    wall, _ = stepped(sc, ctx, github)
     seed_issues(github, ctx, 2)
     open_repo(github, ctx)
     issue(github, ctx, OPEN, 41)
     reset = int(wall[0]) + 600
-    limited = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(reset)}
-    github.answers["GET /search/repositories"] = [(403, limited, {"message": "API rate limit exceeded"})]
+    github.answers["GET /search/repositories"] = [limit_answer(reset)]
+    made = mention_checked_before_create(sc, github, monkeypatch)
+    progress = discover.CycleProgress(now_of(ctx))
     earlier = ["c_EARLIER001"]
     with pytest.raises(GitHubRateLimited):
-        discover.run(sc, now=now_of(ctx), created=earlier)
+        discover.run(sc, now=now_of(ctx), created=earlier, progress=progress)
     assert earlier == ["c_EARLIER001"] and sc.load(od.OPEN_NOTE)["search_until"] == reset
+    assert progress.seed_finished and len(progress.candidates) == 2  # kept for the re-run
+    assert progress.opened is not None and progress.opened.ended == "rate_limited" and not progress.open_done
     assert db.one(ctx.conn, "SELECT COUNT(*) AS n FROM contributions")["n"] == 0  # type: ignore[index]
     ctx.clock.advance(seconds=601)  # type: ignore[attr-defined]
     wall[0] += 601
-    created = discover.run(sc, now=now_of(ctx), created=earlier)
-    assert sorted(upstreams(sc, created)) == [OPEN, SEED] and len(earlier) == 3
+    created = discover.run(sc, now=now_of(ctx), created=earlier, progress=progress)
+    assert sorted(upstreams(sc, created)) == [OPEN, SEED] and len(earlier) == 3 and len(made) == 2
+    assert len(issue_reads(github, SEED)) == 1  # the seed was read once
+    r = row(ctx, OPEN)
+    assert r is not None and r["tried_at"] is not None
+
+
+def test_a_long_limit_on_a_tier1_mention_check_cuts_the_cycle(sc: StageContext, ctx: AppContext,
+                                                               github: FakeGitHub,
+                                                               monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
+    """Fix 1 and 2: the seed picks are created (each after its 200 mention check), then the open pick's
+    check meets a 600 s limit: the run raises, the created cids stay, and the cut cycle records no
+    ``tried`` for the open repo."""
+    wall, _ = stepped(sc, ctx, github)
+    seed_issues(github, ctx, 2)
+    open_repo(github, ctx)
+    issue(github, ctx, OPEN, 41)
+    empty = (200, {}, {"total_count": 0, "items": []})
+    github.answers["GET /search/issues"] = [empty, empty, limit_answer(wall[0] + 600)]
+    made = mention_checked_before_create(sc, github, monkeypatch)
+    created: list[str] = []
+    with pytest.raises(GitHubRateLimited):
+        discover.run(sc, now=now_of(ctx), created=created)
+    assert upstreams(sc, created) == [SEED, SEED] and [r for r, _ in made] == [SEED, SEED]
+    r = row(ctx, OPEN)
+    assert r is not None and r["status"] == "candidate" and r["tried_at"] is None and r["cooldown_until"] is None
+
+
+def test_tried_only_for_repos_the_merge_used(sc: StageContext, ctx: AppContext, github: FakeGitHub) -> None:
+    """Fix 2: a finished cycle marks ``tried`` the open repo whose pick it reached and the one without a
+    ranked candidate; the repo beyond the filled budget stays an untried candidate and is carried over."""
+    seed_issues(github, ctx, 4)
+    open_repo(github, ctx, "acme/first", stars=90000)
+    issue(github, ctx, "acme/first", 41)
+    open_repo(github, ctx, "acme/second", stars=20000)
+    issue(github, ctx, "acme/second", 42)
+    open_repo(github, ctx, "acme/empty", stars=5000)  # no issue at all
+    created = discover.run(sc, now=now_of(ctx))
+    assert upstreams(sc, created) == [SEED, SEED, "acme/first"]  # budget 3, reserved_slots 1
+    first, second, empty = (row(ctx, r) for r in ("acme/first", "acme/second", "acme/empty"))
+    assert first is not None and first["tried_at"] is not None and first["cooldown_until"] is not None
+    assert empty is not None and empty["tried_at"] is not None
+    assert second is not None and second["status"] == "candidate" and second["tried_at"] is None
+    carried = discover.run(sc, now=now_of(ctx))  # the next cycle takes the untried one first
+    assert "acme/second" in upstreams(sc, carried) and len(issue_reads(github, "acme/second")) == 2
+    again = row(ctx, "acme/second")
+    assert again is not None and again["tried_at"] is not None
 
 
 def test_the_cursor_is_saved_after_the_repo_searches(sc: StageContext, ctx: AppContext, github: FakeGitHub) -> None:
-    """Finding 14: a search limit during the issue searches still moves the cursor, so the retried cycle
-    searches the next topics."""
+    """Finding 14: the cursor moves right after the repo searches, so the next cycle searches the next
+    topics. Fix 1: a 30 s limit on a repo search is waited out (the cycle is not cut)."""
     open_repo(github, ctx)
     issue(github, ctx, OPEN, 41)
-    github.answers["GET /search/issues"] = [(429, {"retry-after": "30"}, {"message": "slow down"})]
-    with pytest.raises(GitHubRateLimited):
-        discover.run(sc, now=now_of(ctx))
+    github.answers["GET /search/repositories"] = [(429, {"retry-after": "30"}, {"message": "slow down"})]
+    assert upstreams(sc, discover.run(sc, now=now_of(ctx))) == [OPEN]
     assert sc.load(od.OPEN_NOTE)["cursor"] == 3
     topics = [q.split()[0] for q in searched(github, "repositories")]
-    assert topics == ["topic:devops", "topic:platform-engineering", "topic:kubernetes"]
-    sc.save(od.OPEN_NOTE, search_until=0)
+    assert topics == ["topic:devops", "topic:devops", "topic:platform-engineering", "topic:kubernetes"]  # 1 retry
     sc.gh.search_limited_until = 0.0
     discover.run(sc, now=now_of(ctx))
-    assert [q.split()[0] for q in searched(github, "repositories")][3:] == [
+    assert [q.split()[0] for q in searched(github, "repositories")][4:] == [
         "topic:terraform", "topic:infrastructure-as-code", "topic:gitops"]  # fmt: skip
 
 

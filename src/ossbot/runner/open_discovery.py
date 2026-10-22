@@ -65,13 +65,16 @@ def build_repo_query(topic: str, min_stars: int, pushed_since: date) -> str:
             " is:public")  # fmt: skip
 
 
-def _label(label: str) -> str:
-    return f'"{label}"' if " " in label else label
-
-
-def build_issue_query(repo: str, labels: Iterable[str]) -> str:
-    """§6.1: a comma label list is an OR under the default (lexical) search syntax (V2)."""
-    return f"repo:{repo} is:issue is:open no:assignee archived:false label:{','.join(_label(x) for x in labels)}"
+def has_any_label(issue: Mapping[str, Any], wanted: Iterable[str]) -> bool:
+    """Discovery pacing (2026-10-22): the client-side label OR of one ``GET /repos/{r}/issues`` page
+    (the REST ``labels`` filter is an AND). Case-insensitive; an empty ``wanted`` takes every issue."""
+    want = {w.lower() for w in wanted}
+    if not want:
+        return True
+    labels = issue.get("labels")
+    if not isinstance(labels, list):
+        return False
+    return any(isinstance(lbl, dict) and str(lbl.get("name", "")).lower() in want for lbl in labels)
 
 
 def select_topics(topics: list[str], cursor: int, n: int) -> tuple[list[str], int]:
@@ -85,8 +88,8 @@ def select_topics(topics: list[str], cursor: int, n: int) -> tuple[list[str], in
 
 
 class SearchBudget:
-    """Every search request of the open part of a cycle (§5.1): repo and issue searches and the
-    tier-1 mention checks. ``take()`` is False once spent."""
+    """Every search request of the open part of a cycle (§5.1): the repo searches and the tier-1 mention
+    checks (open repos' issues are a core read since 2026-10-22). ``take()`` is False once spent."""
 
     def __init__(self, limit: int) -> None:
         self.limit = limit
@@ -101,10 +104,6 @@ class SearchBudget:
             return False
         self.spent += 1
         return True
-
-    def issue_search_allowed(self, reserved_slots: int) -> bool:
-        """§6.1 (finding 6): issue searches stop at ``remaining <= reserved_slots + 1``."""
-        return self.remaining > reserved_slots + 1
 
 
 def probe_window(new_repos_per_cycle: int) -> tuple[int, int]:
@@ -548,7 +547,8 @@ def hit_facts(hit: RepoHit, **kw: Any) -> dict[str, Any]:
 
 # ----------------------------------------------------------------------------- the open phase
 class OpenEnded(Exception):  # a control-flow signal, not an error
-    """A 4xx on a search ends the open phase for this cycle (a 422 would repeat every cycle)."""
+    """A 4xx on a search (a 422 would repeat every cycle) or a search limit longer than the bounded
+    wait ends the open phase for this cycle; the seed candidates and the merge go on."""
 
 
 @dataclass
@@ -571,6 +571,9 @@ class OpenResult:
     candidates: list[scoring.Candidate] = field(default_factory=list)
     hashes: dict[str, str] = field(default_factory=dict)
     sources: dict[str, str] = field(default_factory=dict)  # "repo#n" -> contribution source
+    # repos whose issues were read this cycle; ``mark_tried`` records them once the merge has used them
+    scanned: list[Selected] = field(default_factory=list)
+    ended: str | None = None  # "rate_limited" | "http_error" when a search ended the phase early
 
 
 REFUSED_CODES = frozenset({"never_repo", "is_target", "denied", "is_kept", "cooling", "not_kept"})
@@ -598,11 +601,26 @@ def record(sc: StageContext, body: dict[str, Any]) -> bool:
     return True
 
 
+def mark_tried(sc: StageContext, opened: OpenResult, *, reached: set[str], ranked: set[str]) -> None:
+    """Discovery pacing (2026-10-22, fix 2): called only after a cycle's merge ended normally. A scanned
+    repo is recorded ``tried`` (``tried_at`` and the cooldown) when the merge reached one of its tier-1
+    candidates (``reached``: mention check, cached refusal or an unpaid budget skip) or when it had no
+    ranked tier-1 candidate (``ranked``); both sets hold lower-cased repos. Any other scanned repo is
+    re-recorded without ``tried``, so it stays an untried candidate with fresh facts and the next cycle
+    carries it over. A cut cycle never gets here and records nothing."""
+    for sel in opened.scanned:
+        key = sel.repo.lower()
+        tried = key in reached or key not in ranked
+        record(sc, {**sel.facts, "tried": tried})
+
+
 class OpenPhase:
     """§5.4, §6.1, §7.1 step 3 for one cycle. ``check`` (kill/pause/stop/drain) runs before every repo,
-    every search and every CI read. A search rate limit saves ``_open.search_until`` and re-raises
-    (the stage is deferred; nothing is created without its mention check). M2: the ``active`` set
-    filters search hits, carry-over rows, suggestions and named issues, and leaves their rows alone."""
+    every search and every CI read, and during a bounded search wait. A search limit longer than that
+    wait saves ``_open.search_until`` and ends only the open phase (``ended = "rate_limited"``): the seed
+    candidates and the merge go on, and nothing is created without its mention check. Open repos' issues
+    are one core read each. M2: the ``active`` set filters search hits, carry-over rows, suggestions and
+    named issues, and leaves their rows alone."""
 
     def __init__(
         self, sc: StageContext, *, bundle: ConfigBundle, prefs_open: Mapping[str, Any] | None, active: set[str],
@@ -631,17 +649,19 @@ class OpenPhase:
         self.sc.save(OPEN_NOTE, search_until=until)
         log.info("open discovery rate limited until %d", int(until), extra={"event": "open_discovery_rate_limited"})
 
-    def _search(self, fn: Callable[[str], list[dict[str, Any]]], q: str) -> list[dict[str, Any]]:
+    def _search(self, fn: Callable[..., list[dict[str, Any]]], q: str) -> list[dict[str, Any]]:
         try:
-            return fn(q)
+            return fn(q, check=self.check)  # a limit of ≤ 65 s is waited out inside, with self.check
         except GitHubRateLimited as exc:
             self._save_until(exc.until)
-            raise
+            self.result.ended = "rate_limited"
+            raise OpenEnded(q) from exc
         except GitHubReadError as exc:
             if exc.error_class == UNAVAILABLE:
                 raise
             log.warning("open discovery search failed (%s): %s", exc.error_class, q[:200],
                         extra={"event": "open_search_failed"})  # fmt: skip
+            self.result.ended = "http_error"
             raise OpenEnded(q) from exc
 
     def _base(self, hit: RepoHit) -> float:
@@ -822,11 +842,16 @@ class OpenPhase:
                             extra={"event": "open_repo_read_failed"})  # fmt: skip
                 return
             issues = [issue] if issue is not None else []
-        else:
-            if not self.budget.issue_search_allowed(self.cfg.reserved_slots):
+        else:  # one core read (per_page 100), the issue_labels OR on the client; no search, no budget
+            try:
+                page = self.sc.gh.issues(sel.repo)
+            except GitHubReadError as exc:
+                if exc.error_class == UNAVAILABLE:
+                    raise
+                log.warning("open discovery read failed for %s: %s", sel.repo, exc,
+                            extra={"event": "open_repo_read_failed"})  # fmt: skip
                 return  # stays an untried candidate for the next cycle
-            self.budget.take()
-            issues = self._search(self.sc.gh.search_issues, build_issue_query(sel.repo, self.cfg.issue_labels))
+            issues = [i for i in page if has_any_label(i, self.cfg.issue_labels)]
         source = "hermes_request" if sel.source == "hermes" else "discover"
         seen: set[int] = set()
         for issue in issues:
@@ -840,7 +865,7 @@ class OpenPhase:
             self.result.candidates.append(scoring.candidate_from_issue(
                 sel.repo, issue, priority=OPEN_PRIORITY, category=OPEN_CATEGORY, language=sel.language,
                 repo_bonus=repo_bonus(sel.score)))  # fmt: skip
-        self._record({**sel.facts, "tried": True})
+        self.result.scanned.append(sel)  # tried only once the merge has used it (mark_tried)
 
     # ------------------------------------------------------------------ the cycle
     def run(self) -> OpenResult:

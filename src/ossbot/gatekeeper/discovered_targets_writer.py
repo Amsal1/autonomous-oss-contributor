@@ -82,6 +82,16 @@ def set_tried(conn: sqlite3.Connection, repo: str, tried_at: str, cooldown_until
     _one_row(cur, repo)
 
 
+def clear_tried(conn: sqlite3.Connection, repo: str, now: str) -> None:
+    """The owner's ``ossctl targets discovered --untry`` (discovery pacing, 2026-10-22): the candidate is
+    untried again, without a cooldown."""
+    cur = conn.execute(
+        "UPDATE discovered_targets SET tried_at = NULL, cooldown_until = NULL, updated_at = ? WHERE repo = ?",
+        (now, repo),
+    )
+    _one_row(cur, repo)
+
+
 def set_checked(conn: sqlite3.Connection, repo: str, checked_at: str, skip_reason: str | None) -> None:
     """A kept repo's re-check (§6.2): ``skip_reason`` set on a failure, cleared on a pass."""
     cur = conn.execute(

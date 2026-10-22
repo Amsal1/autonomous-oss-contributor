@@ -54,6 +54,7 @@ CREATABLE = frozenset({"candidate", "kept"})
 ACTIVE_PR_STATES: tuple[str, ...] = ("AWAITING_APPROVAL", "APPROVED", "SUBMITTING", "SUBMITTED", "WATCHING")
 MAX_SUGGESTED_ROWS = 20  # §11: rows in status suggested at any time
 MAX_SUGGESTIONS_PER_DAY = 10  # §11: per requester, rolling 24 h (audit rows)
+UNTRY_MAX_DAYS = 30  # ossctl targets discovered --untry --since: at most this far back
 # Fixed FYI texts for a Hermes suggestion that didn't pass (closed set; the code is shown otherwise).
 SKIP_TEXTS: dict[str, str] = {
     "not_found": "the repo was not found",
@@ -507,6 +508,44 @@ class DiscoveredTargets:
             self.audit.append(actor, "discovered_target_kept", {"repo": key, "from": before, "via": "work"})
             self.notify(f"⭐ Kept {key} as a target (open discovery, requested with /work): scanned every cycle.")
         return key, True
+
+    def _untry_rows(self, since: str) -> builtins.list[str]:
+        """Candidate rows tried at or after ``since`` whose repo got no contribution since then."""
+        rows = self.conn.execute(
+            "SELECT d.repo AS repo FROM discovered_targets d WHERE d.status = 'candidate' AND d.tried_at IS NOT NULL"
+            " AND d.tried_at >= ? AND NOT EXISTS (SELECT 1 FROM contributions c WHERE c.upstream = d.repo"
+            " COLLATE NOCASE AND c.created_at >= ?) ORDER BY d.repo",
+            (since, since),
+        )
+        return [str(r["repo"]) for r in rows]
+
+    def untry(self, since: str, apply: bool, actor: str) -> dict[str, Any]:
+        """Discovery pacing (2026-10-22, fix 2), the owner's ``ossctl targets discovered --untry``: candidate
+        rows tried since ``since`` (≤ 30 days back, not in the future; else 400 ``bad_since``) whose repo got
+        no contribution since then lose ``tried_at`` and the cooldown, so open discovery takes them first.
+        ``apply`` false previews; true writes, audits once and announces once (nothing when no row matches).
+        Kept, never, skipped and suggested rows are never touched."""
+        now_dt = self.clock.now()
+        try:
+            since_dt = from_iso(since)
+        except ValueError as exc:
+            raise DiscoveredRefused(400, "bad_since") from exc
+        if since_dt > now_dt or now_dt - since_dt > timedelta(days=UNTRY_MAX_DAYS):
+            raise DiscoveredRefused(400, "bad_since", f"within the last {UNTRY_MAX_DAYS} days")
+        since_iso = to_iso(since_dt)
+        if not apply:
+            repos = self._untry_rows(since_iso)
+            return {"since": since_iso, "repos": repos, "count": len(repos), "applied": False}
+        now = to_iso(now_dt)
+        with db.transaction(self.conn):
+            repos = self._untry_rows(since_iso)
+            for repo in repos:
+                writer.clear_tried(self.conn, repo, now)
+            if repos:
+                self.audit.append(actor, "discovered_targets_untried", {"since": since_iso, "count": len(repos)})
+                self.notify(f"↩️ {len(repos)} discovered repos are untried again (tried since {since_iso[:10]}, "
+                            "no contribution); open discovery takes them first.")  # fmt: skip
+        return {"since": since_iso, "repos": repos, "count": len(repos), "applied": True}
 
     def _announce(self, actor: str, event: str, repo: str, before: str | None, text: str) -> None:
         self.audit.append(actor, event, {"repo": repo, "from": before})

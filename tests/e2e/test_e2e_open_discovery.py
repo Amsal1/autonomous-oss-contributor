@@ -1,8 +1,10 @@
 """Post-v1 open discovery end to end (design §16 e2e scenarios 1-5 and 7): repos outside targets.yaml
 found by topic search, vetted and scouted like seed targets, shown on a proposal card with the
-open-discovery line and the Keep/Never row, Hermes suggestions, and a search rate limit that defers
-the cycle. Every component is real (scheduler, stages, gatekeeper, sandboxd on the fake runtime, the
-Telegram handlers over the fake Bot API); GitHub is ``tests/fakes/fake_github.py``.
+open-discovery line and the Keep/Never row, Hermes suggestions, and search rate limits (discovery
+pacing, 2026-10-22: a 600 s limit cuts the cycle, which resumes without re-reading the seed; a 50 s
+limit is waited out in the same cycle). Every component is real (scheduler, stages, gatekeeper,
+sandboxd on the fake runtime, the Telegram handlers over the fake Bot API); GitHub is
+``tests/fakes/fake_github.py``.
 
 Scenario 6 (design §13, ADR-0023): sandboxd's egress meter stops a validate job that uploaded 80 MB, the
 gatekeeper holds only that contribution (P1 card, 423 at stage open), the other one goes on, and the
@@ -29,6 +31,7 @@ from ossbot.gatekeeper.context import AppContext
 from ossbot.runner import open_discovery as od
 from ossbot.runner.errors import ContributionHeld
 from ossbot.runner.github_read import GitHubRead
+from ossbot.runner.scheduler import FULL_RESCAN_MIN_GAP
 from ossbot.runner.stages import discover, validate
 from ossbot.sandboxd.egress_meter import EgressMeter
 from tests.conftest import UID_REQUESTER
@@ -38,7 +41,7 @@ from tests.telegram.proposalkit import card_of
 from tests.telegram.reviewkit import labels, sent_with, text, token
 from tests.telegram.tgharness import TgRig, make_rig
 from tests.unit.gatekeeper.api_helpers import client
-from tests.unit.runner.test_discover_open import issue, issue_searches, open_repo, row
+from tests.unit.runner.test_discover_open import issue, issue_reads, issue_searches, open_repo, row
 
 pytestmark = pytest.mark.timeout(300)
 
@@ -58,8 +61,16 @@ class Rig:
         return self.e2e.ctx
 
     def cycle(self) -> list[str]:
-        """One full discovery cycle through the scheduler (the open phase included)."""
-        return self.e2e.ready_scheduler().discover()
+        """One full discovery cycle through the scheduler (the open phase included). A fresh cycle never
+        starts within ``FULL_RESCAN_MIN_GAP`` of the last one's start, so the test clock is moved past it
+        first; a cut cycle's re-run is left as it is."""
+        scheduler = self.e2e.ready_scheduler()
+        last = scheduler.last_full_start
+        if not scheduler.cycle_cut and last is not None:
+            wait = (last + FULL_RESCAN_MIN_GAP - self.ctx.clock.now()).total_seconds()
+            if wait > 0:
+                self.ctx.clock.advance(seconds=wait)  # type: ignore[attr-defined]
+        return scheduler.discover()
 
     async def card(self, cid: str) -> int:
         """Run the item to gate 1 and deliver its proposal card; returns the card's message id."""
@@ -319,7 +330,23 @@ async def test_a_search_rate_limit_defers_the_cycle(rig: Rig) -> None:
     assert scheduler.cycle_cut and scheduler.discover_after is not None
     assert rig.e2e.sc.load(od.OPEN_NOTE)["search_until"] == reset
     assert rig.ctx.conn.execute("SELECT COUNT(*) FROM contributions").fetchone()[0] == 0  # none without its check
+    assert len(issue_reads(rig.e2e.gh, SEED)) == 1
     rig.ctx.clock.advance(seconds=601)  # type: ignore[attr-defined]
-    created = rig.cycle()
+    created = rig.cycle()  # the cut cycle resumes: the seed is not read again, the open phase runs now
     assert sorted(rig.upstream(c) for c in created) == [OPEN, SEED]
+    assert len(issue_reads(rig.e2e.gh, SEED)) == 1
+    rig.untouched()
+
+
+# ---------------------------------------------------------------- scenario 5b (discovery pacing, 2026-10-22)
+async def test_a_short_search_rate_limit_is_waited_out(rig: Rig) -> None:
+    go_repo(rig)
+    reset = int(rig.ctx.clock.now().timestamp()) + 50
+    limited = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(reset), "x-ratelimit-resource": "search"}
+    rig.e2e.gh.answers["GET /search/repositories"] = [(403, limited, {"message": "API rate limit exceeded"})]
+    scheduler = rig.e2e.ready_scheduler()
+    created = rig.cycle()  # one cycle, no cut
+    assert sorted(rig.upstream(c) for c in created) == [OPEN, SEED]
+    assert not scheduler.cycle_cut and rig.e2e.sc.load(od.OPEN_NOTE).get("search_until") is None
+    assert len(issue_reads(rig.e2e.gh, SEED)) == 1
     rig.untouched()

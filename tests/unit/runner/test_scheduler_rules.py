@@ -297,8 +297,8 @@ def test_ossctl_discover_request_runs_one_cycle(
 ) -> None:
     seen: list[list[str] | None] = []
     monkeypatch.setattr(
-        scheduler_mod.discover, "run", lambda sc, repos=None, refused=None, created=None: seen.append(repos) or []
-    )
+        scheduler_mod.discover, "run", lambda sc, repos=None, refused=None, created=None, **kw: seen.append(repos) or []
+    )  # **kw: now and progress (discovery pacing, 2026-10-22)
     scheduler = ready(sc, ctx)
     scheduler.first_start_done = True
     scheduler.tick()

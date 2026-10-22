@@ -4,6 +4,7 @@ audit and FYI rules, cooldowns, routing for config targets and the M1 resolution
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -289,3 +290,56 @@ def test_open_pr_count(ctx: AppContext) -> None:
     contribution(ctx, REPO, "AWAITING_APPROVAL")
     contribution(ctx, REPO.upper(), "FETCHING", cid="c_0000000002")
     assert ctx.discovered.open_pr_count(REPO) == 1
+
+
+# ------------------------------------------------------------------ untry (discovery pacing, 2026-10-22)
+def untry_world(ctx: AppContext, clock: FakeClock) -> str:
+    """acme/old tried before ``since``; acme/burned and acme/used tried after it, acme/used with a
+    contribution since then; a kept, a never and a skipped row. Returns ``since``."""
+    ctx.discovered.record(facts("acme/old", tried=True), WORKER)
+    clock.advance(days=2)
+    since = to_iso(clock.now())
+    clock.advance(hours=1)
+    for repo in ("acme/burned", "acme/used"):
+        ctx.discovered.record(facts(repo, tried=True), WORKER)
+    contribution(ctx, "ACME/used")  # a contribution since then (case-insensitive)
+    ctx.discovered.decide("acme/kept", "keep", OPERATOR)
+    ctx.discovered.decide("acme/never", "never", OPERATOR)
+    ctx.discovered.record(skipped("acme/skipped"), WORKER)
+    return since
+
+
+def test_untry_preview_writes_nothing(ctx: AppContext, clock: FakeClock) -> None:
+    since = untry_world(ctx, clock)
+    before = [v.model_dump() for v in ctx.discovered.list()]
+    out = ctx.discovered.untry(since, False, OPERATOR)
+    assert (out["repos"], out["count"], out["applied"]) == (["acme/burned"], 1, False)
+    assert [v.model_dump() for v in ctx.discovered.list()] == before
+    assert events(ctx, "discovered_targets_untried") == [] and not any("untried again" in t for t in texts(ctx))
+
+
+def test_untry_clears_only_burned_candidates_audits_and_announces_once(ctx: AppContext, clock: FakeClock) -> None:
+    since = untry_world(ctx, clock)
+    before = {v.repo: v.model_dump() for v in ctx.discovered.list()}
+    clock.advance(minutes=5)
+    out = ctx.discovered.untry(since, True, OPERATOR)
+    assert (out["repos"], out["count"], out["applied"]) == (["acme/burned"], 1, True)
+    burned = ctx.discovered.get("acme/burned")
+    assert burned is not None and burned.status == "candidate" and burned.tried_at is None
+    assert burned.cooldown_until is None and burned.updated_at == to_iso(clock.now())
+    for repo in ("acme/old", "acme/used", "acme/kept", "acme/never", "acme/skipped"):
+        assert ctx.discovered.get(repo).model_dump() == before[repo], repo  # type: ignore[union-attr]
+    assert events(ctx, "discovered_targets_untried") == [{"since": since, "count": 1}]
+    assert [t for t in texts(ctx) if "untried again" in t] == [
+        f"↩️ 1 discovered repos are untried again (tried since {since[:10]}, no contribution); open discovery"
+        " takes them first."]  # fmt: skip
+    assert "acme/burned" in [v.repo for v in ctx.discovered.list("candidate", untried=True)]  # carried over next
+    again = ctx.discovered.untry(since, True, OPERATOR)  # nothing left: no second audit row or FYI
+    assert again["count"] == 0 and len(events(ctx, "discovered_targets_untried")) == 1
+
+
+@pytest.mark.parametrize(("delta_days", "text"), [(1, None), (-31, None), (0, "not a date")])
+def test_untry_refuses_a_bad_since(ctx: AppContext, clock: FakeClock, delta_days: int, text: str | None) -> None:
+    since = text or to_iso(clock.now() + timedelta(days=delta_days))
+    err = refused(ctx.discovered.untry, since, False, OPERATOR)
+    assert (err.status, err.code) == (400, "bad_since")

@@ -280,6 +280,56 @@ def test_targets_discovered_table(monkeypatch: pytest.MonkeyPatch) -> None:
     assert CliRunner().invoke(cli.app, ["targets", "discovered", "--status", "bogus"]).exit_code == 1
 
 
+def test_targets_discovered_untry_previews_confirms_then_applies(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Discovery pacing (2026-10-22): ``--untry --since D`` sends the preview, needs the TTY word UNTRY,
+    then the apply; without a TTY nothing is applied (exit 2)."""
+    sent: list[tuple[str, str, Any]] = []
+    repos = [f"acme/r{i}" for i in range(25)]
+
+    def api(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 30.0) -> tuple[int, Any]:
+        sent.append((method, path, body))
+        applied = bool(body and body["apply"])
+        return 200, {"since": "2026-10-22T00:00:00.000000Z", "repos": repos, "count": len(repos), "applied": applied}
+
+    monkeypatch.setattr(cli, "api", api)
+    argv = ["targets", "discovered", "--untry", "--since", "2026-10-22"]
+    refused = CliRunner().invoke(cli.app, argv)  # CliRunner's stdin is not a TTY
+    assert refused.exit_code == 2 and "interactive TTY confirm" in refused.output
+    preview = ("POST", "/v1/discovered-targets/untry", {"since": "2026-10-22T00:00:00Z", "apply": False})
+    assert sent == [preview]  # the preview only
+    sent.clear()
+    words: list[str] = []
+    monkeypatch.setattr(cli, "_confirm", words.append)
+    ok = CliRunner().invoke(cli.app, argv)
+    assert ok.exit_code == 0, ok.output
+    assert sent == [preview, ("POST", "/v1/discovered-targets/untry", {"since": "2026-10-22T00:00:00Z", "apply": True})]
+    assert words == ["UNTRY"]
+    assert "25 candidate repos" in ok.output and "acme/r19" in ok.output and "acme/r20" not in ok.output
+    assert "and 5 more" in ok.output and "untried 25 discovered repos" in ok.output
+
+
+def test_targets_discovered_untry_needs_since_and_explains_refusals(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[Any] = []
+    answers = [(400, {"error": "bad_since"}), (200, {"repos": [], "count": 0, "applied": False})]
+
+    def api(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 30.0) -> tuple[int, Any]:
+        sent.append(body)
+        return answers.pop(0)
+
+    monkeypatch.setattr(cli, "api", api)
+    monkeypatch.setattr(cli, "_confirm", lambda word: pytest.fail("no confirm without rows"))
+    alone = CliRunner().invoke(cli.app, ["targets", "discovered", "--untry"])
+    assert alone.exit_code == 1 and "--untry and --since go together" in alone.output
+    only_since = CliRunner().invoke(cli.app, ["targets", "discovered", "--since", "2026-10-22"])
+    assert only_since.exit_code == 1
+    bad = CliRunner().invoke(cli.app, ["targets", "discovered", "--untry", "--since", "22.10.2026"])
+    assert bad.exit_code == 1 and "YYYY-MM-DD" in bad.output and sent == []
+    old = CliRunner().invoke(cli.app, ["targets", "discovered", "--untry", "--since", "2020-01-01"])
+    assert old.exit_code == 1 and "within the last 30 days" in old.output
+    none = CliRunner().invoke(cli.app, ["targets", "discovered", "--untry", "--since", "2026-10-22"])
+    assert none.exit_code == 0 and "nothing to untry" in none.output and len(sent) == 2
+
+
 def test_targets_facts_refuses_more_than_five_repos(monkeypatch: pytest.MonkeyPatch) -> None:
     ran: list[list[str]] = []
     monkeypatch.setattr(cli, "_require_root", lambda what: None)

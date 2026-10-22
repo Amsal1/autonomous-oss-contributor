@@ -15,10 +15,10 @@ from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.runner import github_read, verify_targets
-from ossbot.runner.errors import Deferred, StageFailed
+from ossbot.runner.errors import Deferred, Interrupted, StageFailed
 from ossbot.runner.github_read import GitHubRateLimited, GitHubRead, GitHubReadError
 from ossbot.runner.pipeline import StageContext
-from ossbot.runner.scheduler import DISCOVER_UNAVAILABLE_RETRY, Scheduler
+from ossbot.runner.scheduler import DISCOVER_UNAVAILABLE_RETRY, FULL_RESCAN_MIN_GAP, Scheduler
 from ossbot.runner.stages import discover
 from tests.conftest import insert_contribution
 from tests.fakes.fake_github import FakeGitHub
@@ -217,11 +217,14 @@ def test_a_cut_cycle_keeps_its_spent_budget_for_the_rerun(
     """F006-R5-1: a full cycle that created one item and then hit github_unavailable re-runs with that
     item (and its refusals) carried, so it creates at most budget - 1 more; the next cycle starts fresh."""
     seen: list[tuple[list[str], set[str]]] = []
+    progresses: list[object] = []
 
-    def fake_run(sc_: StageContext, *, repos: list[str] | None = None, refused: set[str],
-                 created: list[str] | None = None) -> list[str]:  # fmt: skip
-        assert created is not None
+    def fake_run(sc_: StageContext, *, repos: list[str] | None = None, now: datetime | None = None,
+                 refused: set[str], created: list[str] | None = None,
+                 progress: discover.CycleProgress | None = None) -> list[str]:  # fmt: skip
+        assert created is not None and progress is not None
         seen.append((list(created), set(refused)))
+        progresses.append(progress)
         if len(seen) == 1:
             created.append("c1")
             refused.add("o/r#2")
@@ -232,9 +235,10 @@ def test_a_cut_cycle_keeps_its_spent_budget_for_the_rerun(
     scheduler = ready(sc, ctx)
     assert scheduler.discover() == []  # cut
     assert scheduler.discover() == []  # the re-run of the same cycle
-    assert seen[1] == (["c1"], {"o/r#2"})
+    assert seen[1] == (["c1"], {"o/r#2"}) and progresses[1] is progresses[0]  # its progress too
+    ctx.clock.advance(seconds=FULL_RESCAN_MIN_GAP.total_seconds())  # type: ignore[attr-defined]
     assert scheduler.discover() == []  # finished: the next full cycle has a fresh budget
-    assert seen[2] == ([], set())
+    assert seen[2] == ([], set()) and progresses[2] is not progresses[0]
 
 
 def test_a_requested_discover_cut_by_github_unavailable_is_kept(sc: StageContext, ctx: AppContext) -> None:
@@ -287,15 +291,19 @@ def test_search_methods_are_get_only_with_exact_params() -> None:
     gh, seen, _, _ = recording(answer)
     q = "topic:gitops stars:>=1000 pushed:>=2026-08-22 archived:false mirror:false is:public"
     assert gh.search_repos(q) == [{"full_name": "o/r"}]
-    assert gh.search_issues("repo:o/r is:issue") == [{"full_name": "o/r"}]
+    assert gh.open_prs_mentioning("o/r", 7) == 1
     assert gh.community_profile("o/r") == {"files": {"contributing": None}}
     assert gh.default_branch_commit_at("o/r", "main") == "2026-10-01T00:00:00Z"
+    gh.issues("o/r")
     assert {r.method for r in seen} == {"GET"}
     params = [dict(r.url.params) for r in seen]
     assert params[0] == {"q": q, "sort": "stars", "order": "desc", "per_page": "50"}
-    assert params[1] == {"q": "repo:o/r is:issue", "sort": "updated", "order": "desc", "per_page": "30"}
-    assert [r.url.path for r in seen[2:]] == ["/repos/o/r/community/profile", "/repos/o/r/commits"]
+    assert params[1] == {"q": "repo:o/r is:pr is:open 7", "per_page": "1"}
+    assert [r.url.path for r in seen[2:]] == ["/repos/o/r/community/profile", "/repos/o/r/commits",
+                                              "/repos/o/r/issues"]  # fmt: skip
     assert params[3] == {"sha": "main", "per_page": "1"}
+    assert params[4] == {"state": "open", "sort": "updated", "per_page": "100"}  # one page, no labels (AND)
+    assert not hasattr(gh, "search_issues")  # discovery's issue search is gone (2026-10-22)
     for p in params:
         assert "advanced_search" not in p and "search_type" not in p
 
@@ -323,7 +331,7 @@ def test_a_search_limit_sets_only_the_search_bucket() -> None:
     assert gh.repo("o/r") == {"full_name": "o/r"} and len(seen) == 2  # core reads go on
     wall.t = T0 + 300
     with pytest.raises(GitHubRateLimited):
-        gh.search_issues("repo:o/r")  # the reset passed: a request again (still limited here)
+        gh.search_repos("topic:y")  # the reset passed: a request again (still limited here)
     assert len(seen) == 3
 
 
@@ -378,7 +386,7 @@ def test_retry_after_wins_over_the_secondary_backoff() -> None:
         lambda r: httpx.Response(403, json={"message": "secondary rate limit"}, headers={"retry-after": "17"})
     )
     with pytest.raises(GitHubRateLimited) as info:
-        gh.search_issues("repo:o/r")
+        gh.open_prs_mentioning("o/r", 1)
     assert info.value.until == T0 + 17
 
 
@@ -401,11 +409,116 @@ def test_every_search_method_shares_the_gap() -> None:
     gh, seen, slept, wall = recording(lambda r: httpx.Response(200, json={"total_count": 0, "items": []}))
     gh.search_repos("topic:x")
     wall.t += 0.5
-    gh.search_issues("repo:o/r")
+    gh.open_prs_mentioning("o/r", 2)
     wall.t += 3.0
     gh.open_prs_mentioning("o/r", 1)
     gh.search_repos("topic:y")
     assert len(seen) == 4 and slept == [pytest.approx(1.6), pytest.approx(2.1)]
+
+
+# ------------------------------------------- discovery pacing (2026-10-22): the bounded search wait
+SEARCH_OK = {"total_count": 1, "items": [{"full_name": "o/r"}]}
+
+
+def limited_then(reset_in: float, *then: int) -> tuple[GitHubRead, list[httpx.Request], list[float], Wall]:
+    """A search limit with ``x-ratelimit-reset`` ``reset_in`` s ahead, then the given statuses (200 = ok,
+    403 = the same limit again), the last repeating."""
+    queue = [403, *then]
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        code = queue.pop(0) if len(queue) > 1 else queue[0]
+        if code == 200:
+            return httpx.Response(200, json=SEARCH_OK)
+        headers = {"x-ratelimit-remaining": "0", "x-ratelimit-reset": str(int(T0 + reset_in))}
+        return httpx.Response(403, json={"message": "API rate limit exceeded"}, headers=headers)
+
+    return recording(answer)
+
+
+def checker(log_: list[str], slept: list[float]) -> Callable[[], None]:
+    return lambda: log_.append(f"check@{len(slept)}")
+
+
+def test_a_short_search_limit_is_waited_out_in_slices_with_checks() -> None:
+    gh, seen, slept, _ = limited_then(50, 200)
+    calls: list[str] = []
+    assert gh.search_repos("topic:x", check=checker(calls, slept)) == [{"full_name": "o/r"}]
+    assert len(seen) == 2  # the limited request, then the one after the wait
+    assert slept[:-1] == [github_read.SEARCH_WAIT_SLICE_S] * 10  # 50 s in 5 s slices, outside the lock ...
+    assert slept[-1] == pytest.approx(github_read.SEARCH_GAP_S)  # ... then the usual 2.1 s gap
+    assert calls[0] == "check@0" and calls[-1] == "check@10" and len(calls) == 11  # before each slice, after the last
+
+
+def test_a_known_short_limit_waits_before_the_request() -> None:
+    gh, seen, slept, _ = recording(lambda r: httpx.Response(200, json={"total_count": 0, "items": []}))
+    gh.search_limited_until = T0 + 30
+    calls: list[str] = []
+    assert gh.open_prs_mentioning("o/r", 3, check=checker(calls, slept)) == 0
+    assert len(seen) == 1 and seen[0].url.params["q"] == "repo:o/r is:pr is:open 3"  # sent, GitHub decides
+    assert slept == [5.0] * 6 and calls[0] == "check@0" and calls[-1] == "check@6"
+
+
+def test_a_long_search_limit_raises_without_a_request_or_a_sleep() -> None:
+    gh, seen, slept, _ = limited_then(120)
+    with pytest.raises(GitHubRateLimited) as info:
+        gh.search_repos("topic:x", check=lambda: None)
+    assert info.value.until == T0 + 120 and len(seen) == 1 and slept == []
+    with pytest.raises(GitHubRateLimited):
+        gh.open_prs_mentioning("o/r", 1, check=lambda: None)  # known and > 65 s: no request at all
+    assert len(seen) == 1 and slept == []
+
+
+def test_a_stop_during_the_wait_propagates_and_sends_nothing() -> None:
+    gh, seen, slept, _ = limited_then(50, 200)
+    gh.search_limited_until = T0 + 50
+
+    def check() -> None:
+        if len(slept) == 3:
+            raise Interrupted("paused")
+
+    with pytest.raises(Interrupted):
+        gh.search_repos("topic:x", check=check)
+    assert seen == [] and len(slept) == 3
+
+
+def test_a_second_limit_is_waited_once_more_then_a_third_raises() -> None:
+    gh, seen, _, _ = limited_then(20, 403, 200)
+    assert gh.search_repos("topic:x", check=lambda: None) == [{"full_name": "o/r"}]
+    assert len(seen) == 3  # limit, wait, limit, wait, ok
+    gh2, seen2, _, _ = limited_then(20, 403, 403, 200)
+    with pytest.raises(GitHubRateLimited):
+        gh2.search_repos("topic:x", check=lambda: None)
+    assert len(seen2) == 3  # SEARCH_WAITS_MAX = 2 waits per call
+
+
+def test_without_check_a_short_limit_still_raises_at_once() -> None:
+    """Scout's mention check and ``ossctl targets search`` pass no check: today's behaviour."""
+    gh, seen, slept, _ = limited_then(10, 200)
+    with pytest.raises(GitHubRateLimited):
+        gh.open_prs_mentioning("o/r", 1)
+    with pytest.raises(GitHubRateLimited):
+        gh.search_repos("topic:x")
+    assert len(seen) == 1 and slept == [pytest.approx(github_read.SEARCH_GAP_S)]  # the gap only, no wait
+
+
+def test_core_remaining_follows_core_answers_only() -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/search/"):
+            return httpx.Response(200, json=SEARCH_OK, headers={"x-ratelimit-remaining": "3"})
+        headers = {"x-ratelimit-remaining": "812", "x-ratelimit-reset": str(int(T0) + 900)}
+        return httpx.Response(200, json={"full_name": "o/r"}, headers=headers)
+
+    gh, _, _, wall = recording(answer)
+    assert gh.core_remaining is None and gh.core_left() is None
+    gh.repo("o/r")
+    assert (gh.core_remaining, gh.core_reset, gh.core_left()) == (812, T0 + 900, 812)
+    gh.search_repos("topic:x")
+    assert gh.core_remaining == 812  # a search answer is another bucket
+    wall.t = T0 + 900
+    assert gh.core_left() is None  # past its reset the number is stale
+    junk, _, _, _ = recording(lambda r: httpx.Response(200, json={}, headers={"x-ratelimit-remaining": "lots"}))
+    junk.repo("o/r")
+    assert junk.core_remaining is None
 
 
 def test_readme_and_directory_listing_on_the_fake() -> None:
