@@ -946,6 +946,20 @@ Part C of `.ossbot-local/postv1/plan-terminal-fyi.md` (row OD-C4; diagnosis `.ag
 
 Pending (later step): redeploy, then count `pulls/25527` reads in the gatekeeper journal over 10 min (expect ≤ 3 cycles, was ~120) and confirm c_D1BVZ6N1HZ is still `WATCHING`.
 
+## Post-v1: terminal FYI and planner verdict (Parts A, B)
+
+Parts A and B of `.ossbot-local/postv1/plan-terminal-fyi.md` (rows OD-C5, OD-C6; diagnosis `.agents/tasks/stuck-after-gate1-2026-10-17.md` root causes 1 to 3; DESIGN §14.13.1, §9.7, §9.10, §14.21.1 BA-3; ADR-0022 addendum). Commits `26e2318` (A) and `cbfef67` (B) on baseline `3eb8320`. Part D is investigation only (the plan's recommendation; it edits pre-existing `.kiro/` agents and is unconfirmed, so not implemented). Targeted tests only, no redeploy (a later step), no live call, no Telegram message; dry-run, kill, pause and every contribution untouched. Details: `.ossbot-local/postv1/verify-ab-terminal-fyi.md`, not tracked.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `DEV ruff check` and `ruff format --check` on the touched py files (13 for A, 8 for B); `DEV mypy`; `DEV lint-imports` | clean; mypy no issues in 271 files; 16 contracts kept (state_machine imports no Telegram) |
+| A+B targeted | `DEV pytest tests/unit/gatekeeper/test_state_machine.py tests/unit/gatekeeper/test_dedupe_keys.py tests/telegram/test_terminal_fyi.py tests/unit/runner/test_stage_flow.py tests/unit/runner/test_stage_rules.py tests/unit/runner/test_output_parse.py tests/unit/runner/test_scheduler_rules.py -n auto` | 639 passed |
+| Affected suites (A) | `DEV pytest tests/e2e tests/telegram tests/unit/gatekeeper tests/unit/runner -n auto` | 3038 passed, 2 errors: `tests/e2e/test_e2e_docker.py` needs root (not hermetic) |
+| Affected suites (B) | `DEV pytest tests/unit/runner tests/e2e tests/unit/sandboxd --deselect tests/e2e/test_e2e_docker.py -n auto` | 792 passed |
+| Hygiene | `DEV ossctl lint personal`; `DEV ossctl docs commands --check`; `DEV pytest tests/unit/test_docs*.py` | 0 hits; command table current (no command changed); 5 passed |
+
+Not run: a live end-to-end check (it needs a real contribution to fail after gate 1). Pending (later step): the redeploy. The runner inlines `prompts/planner.md` from the deployed app; `sandbox/images/llm/Dockerfile` also copies `prompts/`, so a rebuilt sandbox-llm image gets a new digest and the safety probes run again for it before the next Kiro job (not checked in this step).
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
