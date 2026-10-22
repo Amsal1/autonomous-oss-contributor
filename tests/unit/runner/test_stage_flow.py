@@ -4,7 +4,9 @@ scheduler's dispatch rules (nothing before gate 1, scout concurrency, failures).
 
 from __future__ import annotations
 
+import dataclasses
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +20,8 @@ from ossbot.gatekeeper.proposals import ProposalService
 from ossbot.runner import stages
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.scheduler import Scheduler
-from ossbot.runner.stages import discover, fetch, plan, scout, vet
-from tests.conftest import insert_contribution
+from ossbot.runner.stages import discover, fetch, plan, review, scout, vet
+from tests.conftest import consumed_proposal, insert_contribution
 from tests.fakes.fake_github import FakeGitHub
 from tests.unit.gatekeeper.test_proposals import sample, start
 from tests.unit.runner.conftest import FakeSbx, fenced
@@ -278,15 +280,75 @@ def test_adjust_plan_re_scouts_a_new_version(sc: StageContext, ctx: AppContext, 
     assert "Revise proposal v1: keep the debug log, behind a flag" in task
 
 
-def test_scheduler_dispatch_and_failure(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
+def test_scheduler_dispatch_and_failure(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                       caplog: pytest.LogCaptureFixture) -> None:  # fmt: skip
     first = [insert_contribution(ctx, State.VETTED) for _ in range(3)]
     scheduler = Scheduler(sc, synchronous=True)
     scheduler.first_start_done = True
     scheduler.last_discovery = scheduler.now()
     scheduler.last_catalog = scheduler.now()
     sbx.handlers["fetch"] = lambda spec, out: 3  # the scout clone fails
-    tick = scheduler.tick()
+    with caplog.at_level(logging.WARNING, logger="ossbot.runner.scheduler"):
+        tick = scheduler.tick()
     assert set(tick.started) == set(first)  # synchronous: each finishes before the next starts
     assert {state(ctx, cid) for cid in first} == {"FAILED"}
     reasons = {r[0] for r in ctx.conn.execute("SELECT state_reason FROM contributions WHERE state = 'FAILED'")}
     assert reasons == {"fetch_exit_3"}
+    failed = [r for r in caplog.records if getattr(r, "event", None) == "stage_failed"]
+    assert sorted(getattr(r, "cid", "") for r in failed) == sorted(first)
+    assert {(r.levelno, getattr(r, "error_class", None)) for r in failed} == {(logging.WARNING, "fetch_exit_3")}
+
+
+# ------------------------------------------------- terminal outcomes after gate 1 (§14.13.1, §9.10)
+def _after_gate1(ctx: AppContext, github: FakeGitHub, state_: State, number: int, **cols: Any) -> str:
+    github.add_issue("langfuse/langfuse", number, title="Bug", body="b", labels=[{"name": "bug"}])
+    cid = insert_contribution(ctx, state_, issue_number=number, proposal_version=1, **cols)
+    consumed_proposal(ctx, cid)
+    return cid
+
+
+def _terminal(ctx: AppContext, cid: str) -> list[str]:
+    rows = ctx.conn.execute("SELECT payload_json FROM tg_outbox WHERE dedupe_key = ?", (f"terminal:{cid}",))
+    return [str(r[0]) for r in rows]
+
+
+def _evidence(ctx: AppContext, cid: str, to: str) -> dict[str, Any]:
+    for (payload,) in ctx.conn.execute(
+        "SELECT data_json FROM audit_events WHERE cid = ? AND event = 'transition' ORDER BY seq", (cid,)
+    ):
+        doc = json.loads(payload)
+        if doc.get("to") == to:
+            return dict(doc["evidence"])
+    raise AssertionError(f"no transition to {to}")
+
+
+def test_review_reject_after_gate_1_is_one_gatekeeper_fyi(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                          github: FakeGitHub) -> None:  # fmt: skip
+    said: list[str] = []
+    sc = dataclasses.replace(sc, notify=said.append)
+    cid = _after_gate1(ctx, github, State.VALIDATED, 91, review_rounds=0)
+    sc.save(cid, diff="diff --git a/src/a.py b/src/a.py\n+x\n", fetch={"has_test_suite": False})
+    verdict = {"verdict": "reject", "blocking": [{"issue": "wrong approach"}, {"issue": "breaks the API"}]}
+    sbx.kiro("reviewer", fenced(verdict))
+    review.run(sc, sc.gk.contribution(cid))
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("ABANDONED", "review_rejected")
+    assert said == []  # the runner's own FYI is gone: one message per outcome
+    shown = _terminal(ctx, cid)
+    assert len(shown) == 1 and "2 blocking" in shown[0] and "wrong approach" in shown[0]
+    assert "wrong approach; breaks the API" in _evidence(ctx, cid, "ABANDONED")["summary"]
+
+
+def test_needs_network_after_gate_1_is_one_gatekeeper_fyi(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                          github: FakeGitHub) -> None:  # fmt: skip
+    said: list[str] = []
+    sc = dataclasses.replace(sc, notify=said.append)
+    cid = _after_gate1(ctx, github, State.PLANNED, 92, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", fenced({"files_changed": ["src/a.py"], "needs_network": ["left-pad@1.3.0"]}))
+    Scheduler(sc, synchronous=True).run_one(cid)
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", "needs_network")
+    assert said == []
+    shown = _terminal(ctx, cid)
+    assert len(shown) == 1 and "left-pad@1.3.0" in shown[0]
+    assert "left-pad@1.3.0" in _evidence(ctx, cid, "FAILED")["summary"]

@@ -15,7 +15,7 @@ from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
-from ossbot.common.schemas import HoldView
+from ossbot.common.schemas import HoldView, State
 from ossbot.gatekeeper import auto_reissue, db, policy, proposals, secret_scan, signing
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
@@ -398,6 +398,14 @@ def build_context(
         hold_cards.queue_hold_card(ctx, view)
 
     holds.publish_hold = publish_hold
+
+    def on_terminal(row: sqlite3.Row, from_: State, to: State, reason: str | None, evidence: dict[str, Any]) -> None:
+        """The P2 terminal FYI after gate 1 (§14.13.1): injected, so state_machine.py never imports Telegram."""
+        from ossbot.gatekeeper.telegram import terminal_fyi  # noqa: PLC0415 - telegram imports the context
+
+        terminal_fyi.queue_terminal_fyi(ctx, row, from_, to, reason, evidence)
+
+    ctx.state_machine.on_terminal = on_terminal
     decisions.proposals.rows_hook = lambda approval_id, tokens: proposal_cards.card_rows(ctx, approval_id, tokens)
     ctx.skill_reviews = SkillReviews(conn, paths, clock, audit, decisions.skills, hermes_tier, owner_chat,
                                      on_card=lambda approval_id: ctx.on_approval_created(approval_id))  # noqa: PLW0108 - late-bound: the front-end replaces it  # fmt: skip

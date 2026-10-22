@@ -170,6 +170,18 @@ def insert_contribution(
     return cid
 
 
+def consumed_proposal(ctx: AppContext, cid: str, version: int = 1, status: str = "consumed") -> str:
+    """A proposal approval row for (cid, version) in ``status`` (gate 1 already decided)."""
+    pid = f"p_{cid[2:]}"
+    with db.transaction(ctx.conn):
+        ctx.conn.execute(
+            "INSERT INTO proposal_approvals (id, cid, version, binding_json, binding_hash, status, tg_chat_id,"
+            " created_at, expires_at) VALUES (?, ?, ?, '{}', 'h', ?, 1, 't', '2999-01-01T00:00:00Z')",
+            (pid, cid, version, status),
+        )
+    return pid
+
+
 def insert_action(
     ctx: AppContext,
     cid: str,

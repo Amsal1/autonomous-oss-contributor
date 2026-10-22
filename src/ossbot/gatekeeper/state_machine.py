@@ -12,11 +12,16 @@
 * CR-004 gate 1: VETTED -> SCOUTING -> PROPOSED (G, inside POST /proposal) -> PROPOSAL_APPROVED (H,
   Start work) -> FETCHING (W, guarded by the consumed approval of the current version and, behind
   gate 1, the claim guard). Decline edges and the two Undo edges are H; RESCOPE_REQUIRED is G.
+* Terminal FYI (§14.13.1, §9.10): a move to FAILED or ABANDONED of an item that passed gate 1, not
+  redirected and not made by the human, calls the injected ``on_terminal`` hook (the gatekeeper's P2
+  FYI, ``telegram/terminal_fyi.py``) inside the transition's transaction, under a savepoint: a failing
+  FYI is logged and rolled back alone, never the state change. The hook only reports; it decides nothing.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 from collections.abc import Callable
@@ -34,6 +39,11 @@ from ossbot.gatekeeper import db, outcomes
 from ossbot.gatekeeper.approvals import ApprovalService
 from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.control import ControlService
+
+log = logging.getLogger(__name__)
+
+# (row before the move, from, to, the stored state_reason, the transition evidence) -> None
+TerminalHook = Callable[[sqlite3.Row, State, State, str | None, dict[str, Any]], None]
 
 
 class Actor(StrEnum):
@@ -195,8 +205,20 @@ class StateMachine:
         self.limits = limits
         self.notify = notify or (lambda text: None)
         self.claim_comment = claim_comment  # policy proposal.claim_comment == 'on'
+        self.on_terminal: TerminalHook | None = None  # set by context.build_context (no Telegram import here)
 
     # ---------------------------------------------------------------- guards
+    def _passed_gate1(self, row: sqlite3.Row) -> bool:
+        """The current proposal version's Start work was consumed (same check as the FETCHING guard); a
+        re-scout after a snooze or expiry has a version but never passed gate 1, an import has none."""
+        if row["proposal_version"] is None:
+            return False
+        consumed = self.conn.execute(
+            "SELECT 1 FROM proposal_approvals WHERE cid = ? AND version = ? AND status = 'consumed' LIMIT 1",
+            (row["id"], row["proposal_version"]),
+        ).fetchone()
+        return consumed is not None
+
     def _recent_decline(self, row: sqlite3.Row) -> bool:
         at = row["declined_at"]
         return at is not None and self.clock.now() - from_iso(at) <= UNDO_WINDOW
@@ -329,23 +351,27 @@ class StateMachine:
                         self.control.require_running(f"transition {from_.value}->{target.to.value}")
                     except Blocked as exc:
                         raise TransitionError(423, exc.flags.state, str(exc)) from exc
-                self._apply(row, from_, target, evidence, who)
+                self._apply(row, from_, target, evidence, who, actor)
         if forbidden is not None:
             with db.transaction(self.conn):
                 self.audit.append(who, "forbidden_transition", {"from": from_.value, "to": to.value}, cid)
             raise forbidden
         return TransitionResponse(state=target.to, redirected_from=target.redirected_from)
 
-    def _apply(self, row: sqlite3.Row, from_: State, target: Target, evidence: dict[str, Any], who: str) -> None:
+    def _apply(
+        self, row: sqlite3.Row, from_: State, target: Target, evidence: dict[str, Any], who: str, actor: Actor
+    ) -> None:
         cid = str(row["id"])
         error_class = str(evidence.get("error_class", "unknown"))[:64]
         sets = {"state": "?", "state_reason": "?", "updated_at": "?"}
         params: list[Any] = [target.to.value]
+        stored_reason: str | None
         if target.redirected_from is not None:
-            params.append(f"fix_round_failed:{error_class}")
+            stored_reason = f"fix_round_failed:{error_class}"
         else:
             reason = evidence.get("reason") or evidence.get("error_class")
-            params.append(str(reason)[:200] if reason is not None else None)
+            stored_reason = str(reason)[:200] if reason is not None else None
+        params.append(stored_reason)
         params.append(to_iso(self.clock.now()))
         for column, expr in self._counter_updates(from_, target.to, target.redirected_from is not None).items():
             sets[column] = expr
@@ -386,6 +412,24 @@ class StateMachine:
             if error_class == "branch_moved":
                 note = f"branch has commits not made by ossbot; fixes disabled for PR #{row['pr_number']}"
             self.notify(note)
+        elif target.to in {S.FAILED, S.ABANDONED} and actor is not Actor.HUMAN and self._passed_gate1(row):
+            self._terminal_fyi(row, from_, target.to, stored_reason, evidence)
+
+    def _terminal_fyi(
+        self, row: sqlite3.Row, from_: State, to: State, reason: str | None, evidence: dict[str, Any]
+    ) -> None:
+        """The owner hears of every terminal outcome after gate 1, exactly once (dedupe ``terminal:<cid>``).
+        The FYI's rows sit under a savepoint: a failing hook is rolled back alone and logged."""
+        if self.on_terminal is None:
+            return
+        self.conn.execute("SAVEPOINT terminal_fyi")
+        try:
+            self.on_terminal(row, from_, to, reason, evidence)
+        except Exception:
+            self.conn.execute("ROLLBACK TO terminal_fyi")
+            log.exception("terminal FYI for %s not queued", row["id"],
+                          extra={"event": "terminal_fyi_failed", "cid": str(row["id"])})  # fmt: skip
+        self.conn.execute("RELEASE terminal_fyi")
 
     # ------------------------------------------------------------- expiry sweep
     def sweep_expired(self) -> list[str]:

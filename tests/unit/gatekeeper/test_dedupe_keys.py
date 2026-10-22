@@ -39,6 +39,7 @@ KEY_FORMATS: dict[str, bool] = {
     "status:{cid}:{content_hash}:{edited_at}": True,  # a status card edit (content can recur)
     "mirror_row4:{approval_id}": False,  # card row 4 once per approval (item 51)
     "topic_delete:{thread_id}": False,  # the implicit topic of a command typed in All, deleted once
+    "terminal:{cid}": False,  # post-v1: the terminal FYI after gate 1 (an item ends once)
 }
 
 

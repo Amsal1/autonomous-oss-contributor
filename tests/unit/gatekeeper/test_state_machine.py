@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import sqlite3
 from datetime import timedelta
 
 import pytest
@@ -21,7 +23,14 @@ from ossbot.gatekeeper.state_machine import (
     TransitionError,
     all_edges,
 )
-from tests.conftest import insert_action, insert_contribution, packaged_contribution, write_flag
+from ossbot.gatekeeper.telegram import terminal_fyi
+from tests.conftest import (
+    consumed_proposal,
+    insert_action,
+    insert_contribution,
+    packaged_contribution,
+    write_flag,
+)
 
 S = State
 EDGES = all_edges()
@@ -37,18 +46,6 @@ def guard_columns(from_: State, to: State) -> dict[str, object]:
     if from_ in {S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED} and to is S.PROPOSED:
         cols.update(declined_at=to_iso(FakeClock().now()), declined_reason="skipped")
     return cols
-
-
-def consumed_proposal(ctx: AppContext, cid: str, version: int = 1, status: str = "consumed") -> str:
-    """A proposal approval row for (cid, version) in ``status`` (gate 1 already decided)."""
-    pid = f"p_{cid[2:]}"
-    with db.transaction(ctx.conn):
-        ctx.conn.execute(
-            "INSERT INTO proposal_approvals (id, cid, version, binding_json, binding_hash, status, tg_chat_id,"
-            " created_at, expires_at) VALUES (?, ?, ?, '{}', 'h', ?, 1, 't', '2999-01-01T00:00:00Z')",
-            (pid, cid, version, status),
-        )
-    return pid
 
 
 def make(ctx: AppContext, state: State, **cols: object) -> str:
@@ -436,6 +433,96 @@ def test_stop_watching_human_only(ctx: AppContext) -> None:
     assert result.state is S.ABANDONED and result.redirected_from is None
     cid = make(ctx, S.WATCHING, pr_number=7)
     assert ctx.state_machine.transition(cid, S.WATCHING, S.FAILED, Actor.WORKER).state is S.WATCHING
+
+
+# ----------------------------------------------------------------- terminal FYI (§14.13.1, §9.10)
+def after_gate1(ctx: AppContext, state: State, issue_number: int | str = "auto", **cols: object) -> str:
+    """An item whose current proposal version's Start work was consumed (it passed gate 1)."""
+    cols.setdefault("proposal_version", 1)
+    cid = insert_contribution(ctx, state, upstream="runatlantis/atlantis", issue_number=issue_number, **cols)
+    consumed_proposal(ctx, cid)
+    return cid
+
+
+def terminal_rows(ctx: AppContext) -> list[sqlite3.Row]:
+    return ctx.conn.execute(
+        "SELECT dedupe_key, priority, thread_key, payload_json FROM tg_outbox WHERE dedupe_key LIKE 'terminal:%'"
+    ).fetchall()
+
+
+def test_planning_abandoned_after_gate_1_queues_one_fyi(ctx: AppContext) -> None:
+    cid = after_gate1(ctx, S.PLANNING, issue_number=2607)
+    evidence = {"reason": "plan_infeasible", "summary": "already fixed on main"}
+    ctx.state_machine.transition(cid, S.PLANNING, S.ABANDONED, Actor.WORKER, evidence)
+    rows = terminal_rows(ctx)
+    assert len(rows) == 1
+    row = rows[0]
+    assert (row["dedupe_key"], row["priority"], row["thread_key"]) == (f"terminal:{cid}", 2, "feed")
+    payload = row["payload_json"]
+    assert f"<code>{cid}</code>" in payload and "already fixed on main" in payload
+    assert "atlantis#2607" in payload and "plan_infeasible" in payload and "Stage: planning" in payload
+
+
+@pytest.mark.parametrize(
+    ("from_", "actor"),
+    [(S.FETCHING, Actor.WORKER), (S.PLANNING, Actor.WORKER), (S.IMPLEMENTING, Actor.WORKER),
+     (S.VALIDATING, Actor.WORKER), (S.PROPOSAL_APPROVED, Actor.WORKER), (S.SUBMIT_FAILED, Actor.GATEKEEPER)],
+)  # fmt: skip
+def test_failed_after_gate_1_queues_one_fyi(ctx: AppContext, from_: State, actor: Actor) -> None:
+    cid = after_gate1(ctx, from_)
+    ctx.state_machine.transition(cid, from_, S.FAILED, actor, {"error_class": "output_invalid"})
+    rows = terminal_rows(ctx)
+    assert [r["dedupe_key"] for r in rows] == [f"terminal:{cid}"]
+    assert "Failed" in rows[0]["payload_json"] and "output_invalid" in rows[0]["payload_json"]
+
+
+def test_no_fyi_before_gate_1_on_redirect_or_by_the_owner(ctx: AppContext) -> None:
+    for from_ in (S.VETTING, S.SCOUTING):  # before gate 1: no proposal at all
+        cid = insert_contribution(ctx, from_)
+        ctx.state_machine.transition(cid, from_, S.FAILED, Actor.WORKER, {"error_class": "x"})
+    rescout = insert_contribution(ctx, S.SCOUTING, proposal_version=1)  # a version, but no Start work
+    ctx.state_machine.transition(rescout, S.SCOUTING, S.FAILED, Actor.WORKER, {"error_class": "x"})
+    live = after_gate1(ctx, S.PACKAGING, pr_number=7)  # live-PR redirect: WATCHING keeps its own note
+    assert ctx.state_machine.transition(live, S.PACKAGING, S.FAILED, Actor.GATEKEEPER).state is S.WATCHING
+    dropped = after_gate1(ctx, S.RESCOPE_REQUIRED)  # the owner's own Drop
+    ctx.state_machine.transition(dropped, S.RESCOPE_REQUIRED, S.ABANDONED, Actor.HUMAN)
+    stopped = after_gate1(ctx, S.WATCHING, pr_number=8)  # the owner's own 🛑 Stop watching
+    ctx.state_machine.transition(stopped, S.WATCHING, S.ABANDONED, Actor.HUMAN)
+    assert terminal_rows(ctx) == []
+
+
+def test_terminal_fyi_is_deduplicated_per_cid(ctx: AppContext) -> None:
+    cid = after_gate1(ctx, S.PLANNING)
+    ctx.state_machine.transition(cid, S.PLANNING, S.ABANDONED, Actor.WORKER, {"reason": "plan_infeasible"})
+    row = db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (cid,))
+    assert row is not None
+    assert terminal_fyi.queue_terminal_fyi(ctx, row, S.PLANNING, S.ABANDONED, "plan_infeasible", {}) is None
+    assert len(terminal_rows(ctx)) == 1
+
+
+def test_a_failing_fyi_never_blocks_the_transition(ctx: AppContext, caplog: pytest.LogCaptureFixture) -> None:
+    cid = after_gate1(ctx, S.IMPLEMENTING)
+
+    def broken(*args: object) -> None:
+        ctx.conn.execute("UPDATE contributions SET notes = 'half' WHERE id = ?", (cid,))  # rolled back alone
+        raise RuntimeError("render bug")
+
+    ctx.state_machine.on_terminal = broken
+    with caplog.at_level(logging.ERROR):
+        assert ctx.state_machine.transition(cid, S.IMPLEMENTING, S.FAILED, Actor.WORKER).state is S.FAILED
+    row = db.one(ctx.conn, "SELECT state, notes FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", None)
+    assert [getattr(r, "cid", None) for r in caplog.records if getattr(r, "event", None) == "terminal_fyi_failed"] \
+        == [cid]  # fmt: skip
+
+
+def test_terminal_fyi_without_telegram_is_dropped(ctx: AppContext) -> None:
+    profile = ctx.paths.config_dir / "profile.yaml"
+    profile.write_text(profile.read_text().replace("user_id: 4242", "user_id: 0"))
+    ctx.snapshots.apply_reload(ctx.snapshots.prepare_reload().hash, "uid:1000/operator")
+    cid = after_gate1(ctx, S.PLANNING)
+    ctx.state_machine.transition(cid, S.PLANNING, S.ABANDONED, Actor.WORKER, {"reason": "plan_infeasible"})
+    assert state_of(ctx, cid) == "ABANDONED" and terminal_rows(ctx) == []
 
 
 # ------------------------------------------------------------------------- expiry

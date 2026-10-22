@@ -4,7 +4,8 @@ Entered from PLANNED, VALIDATION_FAILED, REVISE, CHANGES_REQUESTED (the gatekeep
 loops and refuses past the maxima) and from a WATCHING fix round, which first unbundles the last
 approved bundle (``mode=fix_round``, args fixed from gatekeeper state). The coder adds tests that
 cover the change (tests-required rule, §9.14). ``needs_network`` (a new dependency) fails the stage
-with ``needs_network`` (v1 has no second fetch into a populated task volume; the owner is told).
+with ``needs_network`` (v1 has no second fetch into a populated task volume; the owner is told by the
+gatekeeper's terminal FYI, which shows the summary carried in the FAILED evidence).
 """
 
 from __future__ import annotations
@@ -76,10 +77,10 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         )
         run_.model_actual = result.model_actual
         report = result.value
-        if report.needs_network:
-            sc.say(f"📦 {c['upstream']}: the change needs new dependencies ({', '.join(report.needs_network[:5])});"
-                   " v1 does not re-fetch, so it stops here.")  # fmt: skip
-            raise StageFailed("needs_network")
+        if report.needs_network:  # the gatekeeper's terminal FYI carries the summary (§14.13.1)
+            deps = ", ".join(report.needs_network[:5])
+            summary = f"The change needs new dependencies ({deps}); v1 does not re-fetch, so it stops here."
+            raise StageFailed("needs_network", summary=summary)
     models = {**sc.load(cid).get("models", {}), "coder": result.model.model}
     sc.save(cid, implement=report.model_dump(), models=models, watch_fix=None)
     sc.transition(cid, "IMPLEMENTING", "IMPLEMENTED",

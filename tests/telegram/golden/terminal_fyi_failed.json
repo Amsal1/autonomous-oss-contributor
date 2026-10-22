@@ -1,0 +1,40 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "❌ ",
+    {
+     "text": "Failed",
+     "type": "bold"
+    },
+    " · ",
+    "SigNoz/signoz",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Stage: planning",
+    " · reason: ",
+    "output_invalid"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "No further work on this item. Logs: /logs ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

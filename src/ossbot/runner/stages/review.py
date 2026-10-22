@@ -16,6 +16,7 @@ from typing import Any
 
 from ossbot.common.size import path_matches
 from ossbot.runner import prompts
+from ossbot.runner.errors import SUMMARY_MAX
 from ossbot.runner.outputs import SCHEMA_HINTS, Finding, ReviewVerdict
 from ossbot.runner.pipeline import StageContext, StageRun
 from ossbot.runner.stages.common import has_test_suite, issue_text, owner_notes
@@ -80,6 +81,9 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
     to = {"pass": "REVIEW_PASSED", "revise": "REVISE", "reject": "REVIEW_REJECTED"}[verdict.verdict]
     sc.transition(cid, "REVIEWING", to, {"verdict": verdict.verdict, "tests_present": verdict.tests_present,
                                          "tests_exception": verdict.tests_exception})  # fmt: skip
-    if to == "REVIEW_REJECTED":
-        sc.transition(cid, "REVIEW_REJECTED", "ABANDONED", {"reason": "review_rejected"})
-        sc.say(f"🔍 {c['upstream']}: self-review rejected the change ({len(verdict.blocking)} blocking).")
+    if to == "REVIEW_REJECTED":  # the gatekeeper's terminal FYI shows the summary (§9.10, §14.13.1)
+        found = "; ".join(f.issue for f in verdict.blocking[:3])
+        summary = f"Self-review rejected the change ({len(verdict.blocking)} blocking)"
+        summary += f": {found}" if found else "."
+        sc.transition(cid, "REVIEW_REJECTED", "ABANDONED",
+                      {"reason": "review_rejected", "summary": summary[:SUMMARY_MAX]})  # fmt: skip

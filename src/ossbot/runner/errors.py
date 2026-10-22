@@ -22,14 +22,18 @@ PROBE_GATE = "safety_probe_missing"  # sandboxd's 423 for a Kiro job before the 
 EGRESS_ANOMALY = "egress_anomaly"
 EGRESS_ANOMALY_PENDING = "egress_anomaly_pending"
 CONTRIBUTION_HELD = "contribution_held"
+SUMMARY_MAX = 1000  # an owner-facing summary in terminal evidence (far below EVIDENCE_MAX_BYTES, 64 KiB)
 
 
 class StageFailed(RuntimeError):
-    """A stage cannot finish; ``error_class`` goes to the transition evidence and the stage run."""
+    """A stage cannot finish; ``error_class`` goes to the transition evidence and the stage run. ``summary``
+    (optional, ≤ ``SUMMARY_MAX``) is the owner-facing why: the FAILED evidence carries it to the gatekeeper's
+    terminal FYI (DESIGN §14.13.1)."""
 
-    def __init__(self, error_class: str, message: str = "") -> None:
+    def __init__(self, error_class: str, message: str = "", *, summary: str = "") -> None:
         super().__init__(f"{error_class}: {message}" if message else error_class)
         self.error_class = error_class[:64]
+        self.summary = summary[:SUMMARY_MAX]
 
 
 class Interrupted(RuntimeError):

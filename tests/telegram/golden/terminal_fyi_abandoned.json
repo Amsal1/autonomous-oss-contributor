@@ -1,0 +1,57 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "⚪ ",
+    {
+     "text": "Abandoned",
+     "type": "bold"
+    },
+    " · ",
+    "runatlantis/atlantis#2607",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Stage: planning",
+    " · reason: ",
+    "plan_infeasible"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "blocks": [
+    {
+     "text": [
+      "🤖 ",
+      {
+       "text": "Why:",
+       "type": "bold"
+      },
+      " ",
+      "The stale-apply guards already landed on main (server/events/db_updater.go); the bug no longer reproduces. Suggested next step: comment on #2607."
+     ],
+     "type": "paragraph"
+    }
+   ],
+   "type": "blockquote"
+  },
+  {
+   "text": [
+    "No further work on this item. Logs: /logs ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

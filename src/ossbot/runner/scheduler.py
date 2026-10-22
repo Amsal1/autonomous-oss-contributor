@@ -38,7 +38,15 @@ from typing import Any
 from ossbot.common.clock import from_iso
 from ossbot.common.models import LIVE_TEST_ROLE, Catalog, ModelUnavailable
 from ossbot.runner import stages
-from ossbot.runner.errors import CapReached, ContributionHeld, Deferred, Interrupted, ProbesNotReady, StageFailed
+from ossbot.runner.errors import (
+    SUMMARY_MAX,
+    CapReached,
+    ContributionHeld,
+    Deferred,
+    Interrupted,
+    ProbesNotReady,
+    StageFailed,
+)
 from ossbot.runner.github_read import GitHubRateLimited
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.pipeline import StageContext
@@ -380,7 +388,7 @@ class Scheduler:
         except (Interrupted, Deferred) as exc:
             log.info("stage stopped for %s: %s", cid, exc, extra={"event": "stage_stopped", "cid": cid})
         except StageFailed as exc:
-            self.fail(sc, cid, exc.error_class)
+            self.fail(sc, cid, exc.error_class, summary=exc.summary)
         except GkError as exc:
             if exc.status == 409 and exc.code in {"stale_from", "stage_running"}:
                 return  # someone else moved it; the next tick re-reads
@@ -396,7 +404,9 @@ class Scheduler:
             log.exception("stage crashed for %s", cid, extra={"event": "stage_crashed", "cid": cid})
             self.fail(sc, cid, f"internal:{type(exc).__name__}".lower())
 
-    def fail(self, sc: StageContext, cid: str, error_class: str) -> None:
+    def fail(self, sc: StageContext, cid: str, error_class: str, *, summary: str = "") -> None:
+        """FAILED with the error class (and the stage's owner-facing ``summary`` when it gave one); the
+        gatekeeper sends the terminal FYI after gate 1 (§14.13.1), so the runner says nothing itself."""
         try:
             c = sc.gk.contribution(cid)
             state = str(c["state"])
@@ -405,7 +415,12 @@ class Scheduler:
             if state in NO_FAIL:
                 self._hold(sc, c, error_class)
                 return
-            sc.gk.transition(cid, state, "FAILED", {"error_class": error_class[:64]})
+            evidence: dict[str, Any] = {"error_class": error_class[:64]}
+            if summary:
+                evidence["summary"] = summary[:SUMMARY_MAX]
+            sc.gk.transition(cid, state, "FAILED", evidence)
+            log.warning("stage failed for %s: %s", cid, error_class,
+                        extra={"event": "stage_failed", "cid": cid, "error_class": error_class[:64]})  # fmt: skip
             if error_class == "model_unavailable":
                 sc.say(f"⚠️ {cid}: no model of its role is in the Kiro catalog (model_unavailable).")
         except GkError as exc:
