@@ -7,6 +7,7 @@ import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Any
 
 from ossbot.common import probe_result
@@ -15,10 +16,10 @@ from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
 from ossbot.common.schemas import HoldView
-from ossbot.gatekeeper import db, policy, proposals, secret_scan, signing
+from ossbot.gatekeeper import auto_reissue, db, policy, proposals, secret_scan, signing
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
-from ossbot.gatekeeper.approvals import ApprovalService, ArtifactSource, Invalidated
+from ossbot.gatekeeper.approvals import ApprovalError, ApprovalService, ArtifactSource, Invalidated
 from ossbot.gatekeeper.audit import AuditLog
 from ossbot.gatekeeper.authz import Role, interactive_ancestry
 from ossbot.gatekeeper.chat import hermes_api
@@ -86,6 +87,8 @@ class AppContext:
     skill_reviews: SkillReviews = field(default=None)  # type: ignore[assignment]  # set by build_context
     # CardPublisher.recover (delta 8); TelegramFrontend.start sets it, housekeeping calls it each tick
     card_recover: Callable[[], None] = field(default=lambda: None)
+    # reissue_due: the invalidated approval ids whose auto re-send was refused (per process, D6)
+    auto_reissue_failed: set[str] = field(default_factory=set)
     chat: ChatRuntime | None = None  # the assistant backend (§15.6), set by build_context
     review_mirror: Any = None  # the opt-in review mirror service (ADR-0019 C), set by main
     # the gatekeeper's read-only GitHub client (GETs only), set by main: /v1/work repo checks
@@ -159,10 +162,51 @@ class AppContext:
             self.on_approval_created(sid)
         return ids
 
+    def reissue_due(self, actor: str = "system") -> list[str]:
+        """Re-send every owed card (``auto_reissue``, §12.4, ADR-0008 addendum): after a start-time
+        snapshot change, a kill, a deferred reload or dry-run toggle. Runs first in
+        ``CardPublisher.recover`` (start and every housekeeping tick); nothing while paused or killed (the
+        cards follow on the first tick after resume). Each re-send goes through the wrappers above with
+        the expiry kept, so the binding is recomputed by ``create`` (I1, I3). A failing re-send is
+        audited once and not retried by this process (a restart retries once)."""
+        if not self.approvals.system_running():
+            return []
+        now = self.clock.now()
+        floor = now + timedelta(seconds=self.config.policy.limits.confirm_ttl_seconds)
+        wrappers: dict[str, Callable[..., list[str]]] = {"a": self.reissue, "p": self.reissue_proposal,
+                                                         "s": self.reissue_skill}  # fmt: skip
+        created: list[str] = []
+        for item in auto_reissue.owed(self.conn, now, floor):
+            if item.newest_id in self.auto_reissue_failed:
+                continue
+            cid = None if item.family == "s" else item.subject
+            try:
+                ids = wrappers[item.family](item.subject, actor, keep_expiry=True)
+            except (ApprovalError, KeyError, ValueError, OSError) as exc:
+                code = exc.code if isinstance(exc, ApprovalError) else type(exc).__name__
+                self.auto_reissue_failed.add(item.newest_id)
+                with db.transaction(self.conn):
+                    self.audit.append(actor, "auto_reissue_failed", {"family": item.family, "subject": item.subject,
+                                                                     "previous": item.newest_id, "code": code},
+                                      cid)  # fmt: skip
+                log.warning("auto re-send of %s refused: %s", item.subject, code,
+                            extra={"event": "auto_reissue_failed"})  # fmt: skip
+                continue
+            with db.transaction(self.conn):
+                data = {"family": item.family, "subject": item.subject, "previous": item.newest_id, "approval_ids": ids}
+                self.audit.append(actor, "auto_reissue", data, cid)
+            log.info("re-sent %d card(s) for %s", len(ids), item.subject, extra={"event": "auto_reissue"})
+            created += ids
+        return created
+
     def reissue_cards(self, invalidated: list[Invalidated], actor: str) -> list[str]:
         """Fresh cards for approvals a dry-run toggle or a reload invalidated (§12.4). Outbound-action
         cards get a fresh TTL (the bound mode or policy changed); proposal and skill cards keep their
-        expiry and are re-created only while still open (``reissue_invalidated``, BA-5, BA-17)."""
+        expiry and are re-created only while still open (``reissue_invalidated``, BA-5, BA-17).
+        While paused or killed nothing is created: the reasons are auto re-send reasons, so
+        ``reissue_due`` sends the cards on the first tick after resume (ADR-0008 addendum)."""
+        if not self.approvals.system_running():
+            return []
         created: list[str] = []
         proposals = [i.cid for i in invalidated if i.approval_id.startswith("p_") and i.cid is not None]
         skill_ids = [i.approval_id for i in invalidated if i.approval_id.startswith("s_")]

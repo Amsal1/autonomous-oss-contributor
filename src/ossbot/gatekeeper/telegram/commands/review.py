@@ -23,6 +23,7 @@ from ossbot.gatekeeper.telegram.commands.common import cancel_button, confirm_bu
 from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Reply, command, confirm_handler
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.review import queue, resolve
+from ossbot.gatekeeper.telegram.review import retry as review_retry
 from ossbot.gatekeeper.telegram.review.resolve import SKILL_PATTERN
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -43,7 +44,7 @@ def resend(app: AppContext, cid: str, actor: str) -> str:
             return f"Unknown contribution {cid}"
         proposal = db.one(app.conn, "SELECT 1 FROM proposal_approvals WHERE cid = ? AND status IN ('pending','armed')",
                           (cid,))  # fmt: skip
-        if proposal is not None:
+        if proposal is not None or resolve.state_of(app.conn, cid) == "PROPOSED":  # gate 1, card or not
             try:
                 app.reissue_proposal(cid, actor, keep_expiry=True)
             except ApprovalError:
@@ -65,7 +66,7 @@ async def approve_cmd(ctx: CommandContext, args: list[str]) -> Reply:
 
 class OpenArg(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    family: Literal["a", "p", "s", "r"]
+    family: Literal["a", "p", "s", "r", "h", "f"]
     subject: str = Field(min_length=1, max_length=64)
 
 
@@ -90,6 +91,10 @@ async def queue_open(tap: Tap) -> str:
         return resolve.SUPERSEDED
     if a.family == "r":
         return resend_rescope(tap.app, a.subject)
+    if a.family == "h":
+        return resend_hold(tap.app, a.subject)
+    if a.family == "f":
+        return retry_failed(tap.app, a.subject, tap.actor)
     if a.family == "p":
         try:
             tap.app.reissue_proposal(a.subject, tap.actor, keep_expiry=True)
@@ -111,6 +116,30 @@ def resend_rescope(app: AppContext, cid: str) -> str:
     reason: rescope_cards.Reason = "ceiling" if report.get("rescope_reason") == "ceiling" else "overrun"
     rescope_cards.send(app, cid, int(report.get("rev") or 1), reason, report)
     return "Re-sent the size card"
+
+
+def resend_hold(app: AppContext, cid: str) -> str:
+    """The open egress hold's card again (its Resume is the two-tap on that card, I9)."""
+    from ossbot.gatekeeper.telegram import hold_cards  # noqa: PLC0415 - hold_cards imports review modules
+
+    hold = app.holds.get_open(cid)
+    if hold is None:
+        return hold_cards.GONE
+    hold_cards.queue_hold_card(app, hold)
+    return "Re-sent the hold card"
+
+
+def retry_failed(app: AppContext, action_id: str, actor: str) -> str:
+    """``SUBMIT_FAILED`` -> Open: the retry note's 🔁 Retry (a fresh card; approve and confirm again)."""
+    if not action_id.startswith("x_"):
+        return resolve.SUPERSEDED
+    try:
+        approval_id = review_retry.retry_failed(app, action_id, actor)
+    except ApprovalError:
+        row = db.one(app.conn, "SELECT cid FROM outbound_actions WHERE id = ?", (action_id,))
+        return resolve.nothing_text(resolve.state_of(app.conn, str(row["cid"]) if row else ""))
+    app.on_approval_created(approval_id)
+    return "🔁 A fresh card follows (approve and confirm again)."
 
 
 class ReviewOpenArg(BaseModel):

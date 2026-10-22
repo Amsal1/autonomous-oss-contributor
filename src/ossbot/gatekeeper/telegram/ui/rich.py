@@ -17,6 +17,7 @@ from ossbot.gatekeeper.chat import md2blocks
 from ossbot.gatekeeper.telegram.escape import make_visible
 from ossbot.gatekeeper.telegram.prefs import UxPrefs
 from ossbot.gatekeeper.telegram.ui import blocks as rb
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui.kit import (
     Block,
@@ -26,6 +27,7 @@ from ossbot.gatekeeper.telegram.ui.kit import (
     DetailsEl,
     Element,
     FooterEl,
+    Id,
     Italic,
     Line,
     Lines,
@@ -71,6 +73,8 @@ def _span(span: Span, surface: str) -> rb.RichText:
         return rb.RichTextUrl(text=inner, url=span.url) if domain_of(span.url) else inner
     if isinstance(span, Time):
         return rb.RichTextDateTime(text=span.fallback, unix_time=span.unix, date_time_format=span.fmt)
+    if isinstance(span, Id):
+        return rb.RichTextCode(text=ids.rich_text(span.value, span.kind))
     raise TypeError(f"{type(span).__name__} can't be rendered rich")  # Html spans are classic only
 
 

@@ -17,7 +17,7 @@ from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.review import stale
 from tests.conftest import REPO_ROOT
 from tests.fakes.holds import hold_request
-from tests.telegram.reviewkit import Card, labels, latest, open_card, status, text, toast, token
+from tests.telegram.reviewkit import Card, labels, latest, newest_approval, open_card, status, text, toast, token
 from tests.telegram.tgharness import TgRig, make_rig
 
 SRC = REPO_ROOT / "src" / "ossbot"
@@ -106,7 +106,7 @@ async def test_expired_card_offers_retry_and_stubs_its_parts(rig: TgRig) -> None
     card = await open_card(rig)
     await _expire(rig, card)
     shown = text(rig, card.message_id)
-    assert shown.split("\n")[0].endswith("⌛ <b>Expired</b> · approval was valid 72 h")
+    assert shown.split("\n")[0].endswith(f"⌛ <b>Expired</b> · approval was valid 72 h · <code>{card.cid}</code>")
     assert "<s>" in shown
     assert labels(rig, card.message_id) == ["⛔ Not approvable", "🔁 Retry"]
     assert rig.buttons(latest(rig, card.message_id))[0][0]["disabled"] == {}
@@ -136,14 +136,32 @@ async def test_reissued_card_offers_show_current(rig: TgRig) -> None:
     assert toast(rig) == "Re-sent the card"
 
 
-async def test_no_show_current_without_an_open_card(rig: TgRig) -> None:
+async def test_reason_line_when_nothing_is_eligible(rig: TgRig) -> None:
+    """§14.11.12: no open card, nothing owed and nothing to retry -> no second button, one reason line."""
+    ctx = rig.ctx
+    card = await open_card(rig)
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE contributions SET state = 'WATCHING' WHERE id = ?", (card.cid,))
+        ctx.approvals.invalidate_contribution(card.cid, "killed", "system")
+    await _tick(rig)
+    shown = text(rig, card.message_id)
+    assert shown.split("\n")[0].endswith(f"⚪ <b>Invalidated</b> · kill · <code>{card.cid}</code>")
+    assert shown.split("\n")[1] == "Nothing to approve: state WATCHING"
+    assert len(shown) <= 3900
+    assert labels(rig, card.message_id) == ["⛔ Not approvable"]
+
+
+async def test_kill_while_running_is_followed_by_a_fresh_card(rig: TgRig) -> None:
+    """A ``killed`` invalidation of a still-eligible card is owed: the next tick re-sends it and the
+    stale card offers Show current (the auto re-send, ADR-0008 addendum)."""
     ctx = rig.ctx
     card = await open_card(rig)
     with db.transaction(ctx.conn):
         ctx.approvals.invalidate_contribution(card.cid, "killed", "system")
     await _tick(rig)
-    assert "⚪ <b>Invalidated</b> · kill" in text(rig, card.message_id)
-    assert labels(rig, card.message_id) == ["⛔ Not approvable"]
+    assert labels(rig, card.message_id) == ["⛔ Not approvable", "⬇️ Show current"]
+    fresh = newest_approval(ctx, card.action)
+    assert fresh != card.approval and status(ctx, fresh) == "pending"
 
 
 async def test_held_card_offers_no_second_button(rig: TgRig) -> None:

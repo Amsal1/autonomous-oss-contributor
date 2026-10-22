@@ -886,6 +886,19 @@ Top of the open search (★, language, CI on merged PRs, last default-branch com
 
 The redeploy changed the config hash, so the open gate-2 approval of the grafana/loki contribution (c_D1BVZ6N1HZ, still `AWAITING_APPROVAL`) was invalidated as expected; it was not touched otherwise. The bot stays killed until the owner resumes it (`/resume` two-tap in Telegram or `ROOT ossctl resume` with its TTY confirm).
 
+## Post-v1: stale cards and /queue
+
+PART A of `.ossbot-local/postv1/plan-stale-queue-copy.md` (rows OD-C1, OD-C2; DESIGN §12.4, §13.2, §14.11.12, §14.11.13, §14.18.4.2-4; ADR-0008 addendum "deferred re-send"). Baseline `ea7135d`. Hermetic only: no redeploy, no live call, no Telegram message, no config file changed (`git diff --stat ea7135d -- config/` empty).
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports` | clean; 270 source files; 16 contracts kept |
+| New and touched suites | `DEV pytest tests/unit/gatekeeper/test_auto_reissue.py tests/telegram/test_stale_forward.py tests/telegram/test_kit_ids.py tests/telegram/test_stale.py tests/telegram/test_queue.py tests/unit/gatekeeper/test_card_recover.py tests/e2e/test_e2e_resume.py … -n auto --timeout=120` | 640 passed |
+| Neighbours | `DEV pytest tests/telegram tests/unit/gatekeeper tests/e2e/test_e2e_resume.py tests/e2e/test_demo_capture.py -n auto --timeout=120` | 2597 passed (2 expectations updated for the `<code>` cid in the stale/S5 header) |
+| Hygiene | `DEV ossctl lint personal ; DEV ossctl docs commands --check` | 0 hits; README command table current |
+
+What the tests show: a reload, a start-time snapshot change, kill -> resume and pause (+ dry-run toggle) -> resume each end with one fresh card and `⬇️ Show current` on the stale one; while killed or paused no approval row and no decision token is created, and Show current answers `Paused or killed: the fresh card follows after /resume`; four restarts on a changed config send exactly one fresh card (one `auto_reissue` audit event); the fresh approval's `binding_hash` equals the binding recomputed with the current dry-run flag; held, `changes_requested`, rejected, `render_failed`, expired, window-too-short and `IMPLEMENTING` cards are not re-sent; a refused re-send is audited once. `/queue` lists the owner's case (`AWAITING_APPROVAL`, card invalidated: `1 waiting`, Open re-sends one card), expired-but-eligible (fresh window), `PROPOSED` and staged skills without a card, holds (Open re-sends the hold card), `RESCOPE_REQUIRED`, `SUBMIT_FAILED` (Open = the retry note's Retry, one `retry_requested`), and an item no longer eligible answers why and sends nothing. The full marker run is the close-out's (C2). The dashboard's "📥 n pending" still counts open approvals only.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

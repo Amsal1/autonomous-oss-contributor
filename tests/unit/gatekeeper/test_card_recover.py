@@ -143,6 +143,22 @@ async def test_a_failing_card_recover_does_not_stop_the_expiry_sweep(
     assert [r for r in caplog.records if getattr(r, "event", None) == "card_recover_failed"]
 
 
+def test_recover_resends_owed_cards_first(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Post-v1 OD-C1: the owed re-send runs before steps 0-2 and the stale sweep, so the sweep already
+    sees the fresh card; a failing re-send does not stop the other steps."""
+    publisher = CardPublisher(ctx)
+    order: list[str] = []
+
+    def due(actor: str = "system") -> list[str]:
+        order.append("reissue_due")
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ctx, "reissue_due", due)
+    monkeypatch.setattr(publisher, "stale_sweep", lambda: order.append("stale_sweep") or 0)
+    publisher.recover()
+    assert order == ["reissue_due", "stale_sweep"]
+
+
 async def test_pre_migration_card_rows_are_skipped(ctx: AppContext, caplog: pytest.LogCaptureFixture) -> None:
     publisher = CardPublisher(ctx)
     aid = _new_card(ctx, "a")

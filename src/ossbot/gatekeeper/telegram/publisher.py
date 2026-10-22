@@ -25,13 +25,14 @@ from telegram.constants import ParseMode
 
 from ossbot.common.clock import to_iso
 from ossbot.common.schemas import State
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import auto_reissue, db
 from ossbot.gatekeeper.approvals import ApprovalError, reissue_eligible
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow
 from ossbot.gatekeeper.telegram import keyboards
 from ossbot.gatekeeper.telegram.escape import esc
-from ossbot.gatekeeper.telegram.review import stale
+from ossbot.gatekeeper.telegram.review import resolve, stale
+from ossbot.gatekeeper.telegram.review.resolve import StaleShowCurrentArg
 from ossbot.gatekeeper.telegram.runtime import ui_of
 
 log = logging.getLogger(__name__)
@@ -228,6 +229,11 @@ class CardPublisher:
             return
         if svc.part_count(approval_id) and row["body_parts_delivered"] < row["body_parts_total"]:
             return
+        if not self.ctx.approvals.system_running():
+            # No decision token is minted while paused or killed (ADR-0008 addendum): recover() step 2
+            # arms the card on the first tick after resume.
+            log.info("card %s not armed while paused or killed", approval_id, extra={"event": "card_tokens_deferred"})
+            return
         try:
             with db.transaction(self.ctx.conn):
                 tokens = svc.issue_card_tokens(approval_id)
@@ -279,18 +285,49 @@ class CardPublisher:
             self.render_stale(approval_id, key=f"stale:{approval_id}:{occurrence}")
 
     # ---------------------------------------------------------------- S12
-    def _eligible(self, meta: dict[str, Any]) -> bool:
+    def _retry_eligible(self, meta: dict[str, Any]) -> bool:
+        """The action of a Retry row is still waiting (the tap itself refuses while paused or killed)."""
         action_id = meta.get("action_id")
         if action_id is None:
             return False
         row = db.one(self.ctx.conn, "SELECT o.kind, o.status, c.state FROM outbound_actions o JOIN contributions c"
                      " ON c.id = o.cid WHERE o.id = ?", (action_id,))  # fmt: skip
-        if row is None or not self.ctx.approvals.system_running():
+        if row is None:
             return False
         try:
             return reissue_eligible(row["kind"], row["status"], State(row["state"]))
         except ValueError:
             return False
+
+    def _forward(self, approval_id: str, row: Any, meta: dict[str, Any]) -> tuple[stale.Forward, str | None]:
+        """§14.11.12 forward rule: ``⬇️ Show current`` when an open card exists or a re-send is owed
+        (``auto_reissue``, deferred while paused or killed); ``🔁 Retry`` for the explicit-retry rows
+        while the action is eligible; otherwise no button and one reason line."""
+        conn = self.ctx.conn
+        cid, skill = meta.get("cid"), meta.get("skill")
+        gate = 1 if approval_id.startswith("p_") else None
+        status, reason = str(row["status"]), row["invalidated_reason"]
+        if (cid or skill) and resolve.open_card_exists(conn, StaleShowCurrentArg.model_validate(
+                stale.show_arg(cid, skill, gate))):  # fmt: skip
+            return "show_current", None
+        now = self.ctx.clock.now()
+        floor = now + timedelta(seconds=self.ctx.config.policy.limits.confirm_ttl_seconds)
+        if skill is not None:
+            staged = self.ctx.decisions.skills.source.reissuable(conn, str(skill)) is not None
+            if staged and auto_reissue.owed_for(conn, now, floor, skill=str(skill)):
+                return "show_current", None
+            return "none", stale.SKILL_REOPEN if staged else stale.nothing_line(skill=str(skill))
+        if cid is None:
+            return "none", None
+        if auto_reissue.owed_for(conn, now, floor, cid=str(cid)):
+            return "show_current", None
+        held = auto_reissue.held(conn, str(cid))
+        if gate is None and not held and self._retry_eligible(meta):
+            return ("retry", None) if stale.is_retry_row(status, reason) else ("none", stale.REOPEN)
+        state = resolve.state_of(conn, str(cid))
+        if gate == 1 and not held and state == "PROPOSED":
+            return "none", stale.REOPEN
+        return "none", stale.nothing_line(state=state, gate=gate, held=held)
 
     def render_stale(self, approval_id: str, *, key: str | None = None) -> bool:
         """S12/S5 for an ended approval: the card edit (dedupe ``stale:<aid>``) plus part stubs."""
@@ -304,10 +341,11 @@ class CardPublisher:
         except (ApprovalError, KeyError):
             card_html = esc(f"{meta.get('cid') or meta.get('skill') or approval_id}")
         reason = row["invalidated_reason"]
+        forward, reason_line = self._forward(approval_id, row, meta)
         rendered = stale.render(
-            self.ctx.conn, card_html=card_html, status=str(row["status"]), reason=reason, cid=meta.get("cid"),
+            card_html=card_html, status=str(row["status"]), reason=reason, cid=meta.get("cid"),
             rev=meta.get("rev"), action_id=meta.get("action_id"), skill=meta.get("skill"),
-            gate=1 if approval_id.startswith("p_") else None, eligible=self._eligible(meta),
+            gate=1 if approval_id.startswith("p_") else None, forward=forward, reason_line=reason_line,
         )  # fmt: skip
         chat, mid = int(row["tg_chat_id"]), int(row["tg_message_id"])
         disabled = {"text": stale.disabled_label(approval_id), "disabled": {}}
@@ -357,8 +395,14 @@ class CardPublisher:
     def recover(self) -> None:
         """Delta 8 (§14.18.4.4): heal every crash window of card delivery. Run once before polling
         starts and on every housekeeping tick (``ctx.card_recover``). Never counts parts. Step 3
-        renders S12 for ended approvals (AC 10)."""
+        renders S12 for ended approvals (AC 10). First, owed cards are re-sent (``AppContext.reissue_due``:
+        a start-time snapshot change, kill -> resume, a deferred reload or toggle), so the stale sweep
+        below already sees the fresh card and offers ``⬇️ Show current``."""
         conn = self.ctx.conn
+        try:
+            self.ctx.reissue_due()
+        except Exception:
+            log.exception("auto re-send failed", extra={"event": "auto_reissue_error"})
         for table in DECISION_TABLES.values():
             # 0. approval created, card never enqueued (a failed on_approval_created after a commit)
             for r in conn.execute(

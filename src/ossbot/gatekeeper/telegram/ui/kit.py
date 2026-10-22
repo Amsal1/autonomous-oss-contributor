@@ -85,7 +85,22 @@ class Html:
     value: str
 
 
-Span = Text | Const | Verbatim | Bold | Italic | Code | Link | Time | Html
+# ``ui/ids.py`` holds the grammar of each kind; ``branch`` is the one untrusted kind (redacted first).
+IdKind = Literal["id", "cid", "approval", "proposal", "skill_approval", "action", "hold", "run", "skill", "sha",
+                 "pr", "branch"]  # fmt: skip
+
+
+@dataclass(frozen=True)
+class Id:
+    """An identifier shown one tap to copy: classic ``<code>``, rich ``RichTextCode`` (``ui/ids.py``).
+    Gatekeeper-generated kinds are checked against their grammar (a mismatch raises ``LimitError``: a
+    bug); ``branch`` is untrusted and redacted like ``Text``. Never used for publish bytes (U8)."""
+
+    value: str
+    kind: IdKind = "cid"
+
+
+Span = Text | Const | Verbatim | Bold | Italic | Code | Link | Time | Html | Id
 Line = tuple[Span, ...]
 
 
@@ -329,8 +344,9 @@ def with_rows(view: View, rows: Rows) -> View:
     return replace(view, rows=rows)
 
 
-__all__ = ["CLASSIC_MAX", "Block", "Bold", "ButtonSpec", "Code", "Const", "DetailsEl", "Element", "FooterEl", "Italic",
-           "Line", "Lines", "Link", "Markdown", "PreBlock", "Quote", "Rows", "Span", "TableEl", "Text", "Time",
+__all__ = ["CLASSIC_MAX", "Block", "Bold", "ButtonSpec", "Code", "Const", "DetailsEl", "Element", "FooterEl", "Id",
+           "IdKind", "Italic", "Line",
+           "Lines", "Link", "Markdown", "PreBlock", "Quote", "Rows", "Span", "TableEl", "Text", "Time",
            "Verbatim", "View",
            "ViewTooLarge", "bound", "button", "card", "claim", "confirm_view", "copy_button", "disabled_button", "fact",
            "header", "line", "list_view", "mode_badge", "pager", "picker", "plain", "stub", "toast", "url_button",

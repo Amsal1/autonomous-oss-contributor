@@ -10,9 +10,32 @@ from typing import Any
 
 import pytest
 
+from ossbot.common.clock import to_iso
+from ossbot.gatekeeper import db
 from ossbot.runner import pipeline
 from ossbot.runner.scheduler import Scheduler
 from tests.e2e.conftest import E2E
+
+
+def test_kill_then_resume_resends_a_fresh_card(e2e: E2E) -> None:
+    """Post-v1 OD-C1: a kill invalidates the armed preview; nothing is re-sent while killed; after resume
+    the gatekeeper's sweep (``reissue_due``, the first step of ``CardPublisher.recover``) sends one fresh
+    card, which needs the full two-tap again and submits exactly once."""
+    ctx = e2e.ctx
+    cid, approval = e2e.to_preview()
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE approvals SET status = 'armed', armed_at = ? WHERE id = ?",
+                         (to_iso(ctx.clock.now()), approval))  # fmt: skip
+    ctx.control.kill("test", "tg:4242")
+    assert ctx.reissue_due() == []
+    ctx.control.request_resume("tg:4242")
+    for flag in (ctx.paths.killed_flag, ctx.paths.paused_flag, ctx.paths.resume_request):
+        flag.unlink(missing_ok=True)  # what the root enforcer does
+    assert ctx.control.reconcile().state == "running"
+    [fresh] = ctx.reissue_due()
+    assert fresh != approval and e2e.pending_approval(cid) == fresh
+    assert ctx.reissue_due() == []  # idempotent: nothing owed any more
+    assert e2e.approve(fresh) == "dry_run_done"
 
 
 class RunnerKilled(BaseException):

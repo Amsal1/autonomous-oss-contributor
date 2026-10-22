@@ -33,7 +33,6 @@ from telegram.ext import Application, CallbackQueryHandler, ContextTypes, Messag
 
 from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.control_flags import Blocked
-from ossbot.common.ids import new_action_id
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db, signing
 from ossbot.gatekeeper.approvals import ApprovalError
@@ -69,6 +68,7 @@ from ossbot.gatekeeper.telegram.commands.registry import (
 )
 from ossbot.gatekeeper.telegram.escape import b, esc
 from ossbot.gatekeeper.telegram.review import confirm as review_confirm
+from ossbot.gatekeeper.telegram.review import retry as review_retry
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.topics import CommandTarget
 from ossbot.gatekeeper.telegram.ui import kit as k
@@ -85,7 +85,6 @@ Submit = Callable[[str], Awaitable[str]]
 Preflight = Callable[[str], Awaitable[list[str]]]
 COMMAND_CONFIRM_TTL = timedelta(minutes=5)
 RETRY_TTL = timedelta(hours=24)
-MARKER_PREFIX = "<!-- ossbot:action="
 # Update handler budget (DESIGN §14.18.5, BA-2). PTB runs one update at a time, so anything slower
 # than SQLite, an outbox enqueue and one direct Bot API edit is spawned as a tracked task.
 TaskKind = Literal["chat_turn", "media", "telegraph", "github_read", "render", "submit", "command"]
@@ -765,35 +764,9 @@ class Handlers:
     async def _retry(self, query: Any, token: str, row: Any, user_id: int, chat_id: int, message_id: int) -> None:
         """Retry = a fresh card for the same content; it needs the full two-tap approval again."""
         ctx = self.ctx
-        actor = f"tg:{user_id}"
         with db.transaction(ctx.conn):
             ctx.approvals.use_token(token, ("retry",), chat_id=chat_id, message_id=message_id)
-            old = db.one(ctx.conn, "SELECT * FROM outbound_actions WHERE id = ?", (row["arg"],))
-            if old is None or old["status"] != "failed":
-                raise ApprovalError("retry_unavailable")
-            contrib = db.one(ctx.conn, "SELECT state FROM contributions WHERE id = ?", (old["cid"],))
-            assert contrib is not None
-            payload: dict[str, Any] = json.loads(old["payload_json"])
-            new_id = new_action_id()
-            if old["kind"] in {"comment", "issue_claim"}:
-                body = str(payload["body"])
-                payload["body"] = body.replace(f"{MARKER_PREFIX}{old['id']} -->", f"{MARKER_PREFIX}{new_id} -->")
-            elif contrib["state"] == State.SUBMIT_FAILED.value:
-                try:
-                    ctx.state_machine.transition(
-                        old["cid"], State.SUBMIT_FAILED, State.AWAITING_APPROVAL, Actor.HUMAN, {}, actor
-                    )
-                except TransitionError as exc:
-                    raise ApprovalError("retry_unavailable", exc.code) from exc
-            else:
-                raise ApprovalError("retry_unavailable", contrib["state"])
-            ctx.conn.execute(
-                "INSERT INTO outbound_actions (id, cid, kind, payload_json, status, created_at) VALUES (?,?,?,?,?,?)",
-                (new_id, old["cid"], old["kind"], json.dumps(payload, sort_keys=True), "pending_approval",
-                 to_iso(ctx.clock.now())),
-            )  # fmt: skip
-            approval_id = ctx.create_approval(new_id, actor)
-            ctx.audit.append(actor, "retry_requested", {"old_action": old["id"], "action_id": new_id}, old["cid"])
+            approval_id = review_retry.retry_failed(ctx, str(row["arg"]), f"tg:{user_id}")
         ctx.on_approval_created(approval_id)
         await self._edit(query, "🔁 Retry requested: a fresh card follows (approve and confirm again).")
         await query.answer()

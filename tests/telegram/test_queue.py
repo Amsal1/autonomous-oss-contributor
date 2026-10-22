@@ -15,8 +15,10 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.review import queue
 from tests.conftest import insert_action, insert_contribution, packaged_contribution
-from tests.telegram.reviewkit import labels, newest_approval, publish, sent_with, text, toast, token
+from tests.fakes.holds import hold_request
+from tests.telegram.reviewkit import labels, newest_approval, publish, sent_with, status, text, toast, token
 from tests.telegram.tgharness import TgRig, make_rig
+from tests.unit.gatekeeper.decision_helpers import install_sources, proposal_card, proposed_contribution, skill_card
 
 
 def _approve(ctx: AppContext, action: str, *, hours: int = 72) -> str:
@@ -62,19 +64,22 @@ def test_class_order_and_gates(ctx: AppContext) -> None:
 
 
 def test_maintainer_fix_expired_items_and_size_cards(ctx: AppContext) -> None:
-    """F009-R1-8: a maintainer-triggered push_update is class 0; expired approvals aren't listed even
-    before the sweep; ceiling-hit (class 2) and RESCOPE_REQUIRED (class 3) items are listed."""
+    """F009-R1-8: a maintainer-triggered push_update is class 0; an approval past its expiry is no open
+    card even before the sweep, but its still-eligible item is listed as ``⌛ expired`` (post-v1 OD-C2);
+    ceiling-hit (class 2) and RESCOPE_REQUIRED (class 3) items are listed."""
     fixed_cid, fixed = packaged_contribution(ctx, pr_number=8)
     with db.transaction(ctx.conn):
         ctx.audit.append("uid:2001/worker", "transition", {"from": "WATCHING", "to": "IMPLEMENTING",
                                                            "evidence": {"reason": "fix_round"}}, fixed_cid)  # fmt: skip
     _approve(ctx, fixed, hours=60)
-    _, gone = packaged_contribution(ctx)
+    gone_cid, gone = packaged_contribution(ctx)
     _approve(ctx, gone, hours=-1)  # past expires_at, still 'pending' until the sweep
     ceiling = insert_contribution(ctx, State.RESCOPE_REQUIRED, size_report_json='{"rescope_reason": "ceiling"}')
     overrun = insert_contribution(ctx, State.RESCOPE_REQUIRED, size_report_json='{"rescope_reason": "overrun"}')
-    order = [(i.class_rank, i.subject, i.family) for i in queue.ordered(ctx)]
-    assert order == [(0, fixed_cid, "a"), (2, ceiling, "r"), (3, overrun, "r")]
+    items = queue.ordered(ctx)
+    order = [(i.class_rank, i.subject, i.family) for i in items]
+    assert order == [(0, fixed_cid, "a"), (2, ceiling, "r"), (3, gone_cid, "a"), (3, overrun, "r")]
+    assert items[2].label.endswith("· ⌛ expired")
 
 
 def test_autonomous_proposals_rank_by_score_not_target_priority() -> None:
@@ -97,6 +102,37 @@ def test_empty_queue_and_paging(ctx: AppContext) -> None:
     assert [b.label for b in view.rows[0]] == ["📥 Open 6", "📥 Open 7"]
 
 
+def test_waiting_items_without_a_live_card(ctx: AppContext) -> None:
+    """Post-v1 OD-C2: what waits on the owner is listed whether or not a live card exists."""
+    _, skills = install_sources(ctx)
+    skills.staged["git-helper"] = "sr_1"
+    gone_cid, gone = packaged_contribution(ctx)  # the owner's case: AWAITING_APPROVAL, card invalidated
+    with db.transaction(ctx.conn):
+        ctx.approvals.invalidate_one(_approve(ctx, gone), "config_snapshot_changed", "system")
+    prop_cid = proposed_contribution(ctx)
+    pid, _ = proposal_card(ctx, prop_cid)
+    sid, _ = skill_card(ctx)
+    with db.transaction(ctx.conn):
+        ctx.decisions.proposals.invalidate_all_open("config_snapshot_changed")
+        ctx.decisions.skills.invalidate_all_open("tier_changed")
+    held_cid, _ = packaged_contribution(ctx)
+    ctx.holds.hold(held_cid, hold_request(), "uid:2002/sandbox")
+    failed_cid = insert_contribution(ctx, State.SUBMIT_FAILED)
+    failed = insert_action(ctx, failed_cid, "open_pr", {"rev": 1}, status="failed", error_class="github_5xx")
+    implementing, stuck = packaged_contribution(ctx)
+    with db.transaction(ctx.conn):  # not waiting on the owner: a revision is being built
+        ctx.conn.execute("UPDATE contributions SET state = 'IMPLEMENTING' WHERE id = ?", (implementing,))
+    got = {(i.family, i.subject): i.label for i in queue.items(ctx)}
+    assert set(got) == {("a", gone_cid), ("p", prop_cid), ("s", "git-helper"), ("h", held_cid), ("f", failed)}
+    assert got[("a", gone_cid)].endswith("· no live card")
+    assert got[("p", prop_cid)].endswith("· no live card") and got[("s", "git-helper")].endswith("· no live card")
+    assert got[("h", held_cid)] == "⏸ Held · langfuse/langfuse · egress anomaly"
+    assert got[("f", failed)] == "⚠️ Submit failed · langfuse/langfuse · github_5xx"
+    assert stuck and pid and sid
+    ranks = {i.family: i.class_rank for i in queue.items(ctx)}
+    assert ranks["h"] == 0 and ranks["f"] == 1
+
+
 @pytest.fixture
 async def rig(ctx: AppContext) -> AsyncIterator[TgRig]:
     async for r in make_rig(ctx):
@@ -111,7 +147,7 @@ async def test_queue_command_and_open_keep_the_expiry(rig: TgRig) -> None:
     ctx.clock.advance(hours=2)  # type: ignore[attr-defined]
     await rig.say("/queue")
     mid = sent_with(rig, "Queue")
-    assert "📥 <b>Queue</b> · 1 open" in text(rig, mid)
+    assert "📥 <b>Queue</b> · 1 waiting" in text(rig, mid)
     assert labels(rig, mid) == ["📥 Open 1", "⬆️ Oldest first", "✅ 🎯 By priority"]
     await rig.tap(token(rig, mid, "📥 Open 1"), message=mid)
     assert toast(rig) == "Re-sent the card"
@@ -122,3 +158,105 @@ async def test_queue_command_and_open_keep_the_expiry(rig: TgRig) -> None:
     assert labels(rig, mid)[-2:] == ["✅ ⬆️ Oldest first", "🎯 By priority"]
     assert cid in str(ctx.conn.execute("SELECT cid FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
                                        " WHERE a.id = ?", (new,)).fetchone()[0])  # fmt: skip
+
+
+async def _open_first(rig: TgRig) -> str:
+    await rig.say("/queue")
+    mid = sent_with(rig, "Queue")
+    await rig.tap(token(rig, mid, "📥 Open 1"), message=mid)
+    return toast(rig)
+
+
+def _open_cards(ctx: AppContext, action: str) -> list[str]:
+    return [str(r[0]) for r in ctx.conn.execute("SELECT id FROM approvals WHERE action_id = ? AND status IN"
+                                                " ('pending','armed')", (action,))]  # fmt: skip
+
+
+async def test_open_awaiting_approval_without_a_card(rig: TgRig) -> None:
+    """The owner's case: /queue showed 0 items while /approve <cid> worked."""
+    ctx = rig.ctx
+    cid, action = packaged_contribution(ctx)
+    card = await publish(rig, action)
+    with db.transaction(ctx.conn):
+        ctx.approvals.invalidate_one(card.approval, "config_snapshot_changed", "system")
+    await rig.say("/queue")
+    mid = sent_with(rig, "Queue")
+    assert "📥 <b>Queue</b> · 1 waiting" in text(rig, mid) and "no live card" in text(rig, mid)
+    await rig.tap(token(rig, mid, "📥 Open 1"), message=mid)
+    assert toast(rig) == "Re-sent the card"
+    assert len(_open_cards(ctx, action)) == 1 and status(ctx, card.approval) == "invalidated"
+    assert cid
+
+
+async def test_open_expired_restarts_the_window(rig: TgRig) -> None:
+    ctx = rig.ctx
+    _, action = packaged_contribution(ctx)
+    card = await publish(rig, action)
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE approvals SET status = 'expired' WHERE id = ?", (card.approval,))
+    ctx.clock.advance(hours=73)  # type: ignore[attr-defined]
+    assert await _open_first(rig) == "Re-sent the card"
+    [fresh] = _open_cards(ctx, action)
+    expires = db.one(ctx.conn, "SELECT expires_at FROM approvals WHERE id = ?", (fresh,))[0]
+    assert expires > to_iso(ctx.clock.now() + timedelta(hours=71))
+
+
+async def test_open_proposal_and_skill_without_a_card(rig: TgRig) -> None:
+    ctx = rig.ctx
+    _, skills = install_sources(ctx)
+    skills.staged["git-helper"] = "sr_1"
+    cid = proposed_contribution(ctx)
+    proposal_card(ctx, cid)
+    with db.transaction(ctx.conn):
+        ctx.decisions.proposals.invalidate_all_open("config_snapshot_changed")
+    assert await _open_first(rig) == "Re-sent the proposal card"
+    assert db.one(ctx.conn, "SELECT 1 FROM proposal_approvals WHERE cid = ? AND status = 'pending'", (cid,))
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE contributions SET state = 'PLANNED' WHERE id = ?", (cid,))
+        ctx.decisions.proposals.invalidate_all_open("config_snapshot_changed")
+    skill_card(ctx)
+    with db.transaction(ctx.conn):
+        ctx.decisions.skills.invalidate_all_open("tier_changed")
+    assert await _open_first(rig) == "Re-sent the skill card"
+    assert db.one(ctx.conn, "SELECT 1 FROM skill_approvals WHERE skill = 'git-helper' AND status = 'pending'")
+
+
+async def test_open_held_resends_the_hold_card(rig: TgRig) -> None:
+    ctx = rig.ctx
+    cid, _ = packaged_contribution(ctx)
+    ctx.holds.hold(cid, hold_request(), "uid:2002/sandbox")
+    await rig.flush()
+    cards = len([p for p in rig.sent() if "Egress anomaly" in str(p.get("text", ""))])
+    assert await _open_first(rig) == "Re-sent the hold card"
+    assert len([p for p in rig.sent() if "Egress anomaly" in str(p.get("text", ""))]) == cards + 1
+
+
+async def test_open_submit_failed_is_the_retry(rig: TgRig) -> None:
+    ctx = rig.ctx
+    cid, action = packaged_contribution(ctx)
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE contributions SET state = 'SUBMIT_FAILED' WHERE id = ?", (cid,))
+        ctx.conn.execute("UPDATE outbound_actions SET status = 'failed', error_class = 'github_5xx' WHERE id = ?",
+                         (action,))  # fmt: skip
+    assert await _open_first(rig) == "🔁 A fresh card follows (approve and confirm again)."
+    row = db.one(ctx.conn, "SELECT o.id, c.state FROM outbound_actions o JOIN contributions c ON c.id = o.cid"
+                 " WHERE o.cid = ? AND o.status = 'pending_approval'", (cid,))  # fmt: skip
+    assert row is not None and row["state"] == "AWAITING_APPROVAL" and len(_open_cards(ctx, str(row["id"]))) == 1
+    retried = ctx.conn.execute("SELECT data_json FROM audit_events WHERE event = 'retry_requested'").fetchall()
+    assert len(retried) == 1
+
+
+async def test_an_item_no_longer_eligible_answers_why(rig: TgRig) -> None:
+    ctx = rig.ctx
+    cid, action = packaged_contribution(ctx)
+    card = await publish(rig, action)
+    with db.transaction(ctx.conn):
+        ctx.approvals.invalidate_one(card.approval, "config_snapshot_changed", "system")
+    await rig.say("/queue")
+    mid = sent_with(rig, "Queue")
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE contributions SET state = 'IMPLEMENTING' WHERE id = ?", (cid,))
+    before = int(ctx.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0])
+    await rig.tap(token(rig, mid, "📥 Open 1"), message=mid)
+    assert toast(rig) == "Nothing to re-send (state IMPLEMENTING)"
+    assert int(ctx.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0]) == before

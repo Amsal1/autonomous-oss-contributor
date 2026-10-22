@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from ossbot.gatekeeper.chat import md2blocks
 from ossbot.gatekeeper.telegram.escape import defuse_commands, esc, esc_attr, make_visible, tg_time
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui.kit import (
     Block,
@@ -22,6 +23,7 @@ from ossbot.gatekeeper.telegram.ui.kit import (
     Element,
     FooterEl,
     Html,
+    Id,
     Italic,
     Line,
     Lines,
@@ -88,6 +90,8 @@ def _span(span: Span, c: _Ctx) -> str:
         return tg_time(span.unix, span.fallback, span.fmt)
     if isinstance(span, Html):
         return span.value
+    if isinstance(span, Id):
+        return f"<code>{ids.inner_html(span.value, span.kind)}</code>"
     raise TypeError(type(span).__name__)
 
 

@@ -10,20 +10,29 @@ Ordering is deterministic: ``(class_rank, expires_at, -target_priority, created_
 * Class 4: autonomous proposals (CR-004 rank score, descending, instead of the target priority).
 * Class 5: other ``comment``.
 
-``[📥 Open n]`` re-sends with ``/approve`` semantics and the expiry kept (``AppContext.reissue`` /
-``reissue_proposal`` / ``reissue_skill``), so opening an item never moves it. Gate 2 (approval cards)
-is listed before gate 1 (proposals). Expired items aren't listed.
+* Class 0 also: an open egress hold (a stage is stopped); class 1 also: a failed submission.
+
+The queue lists what waits on the owner whether or not a live card exists (an invalidated or expired
+card of a still-eligible item is listed with ``· no live card`` / ``· ⌛ expired``). ``[📥 Open n]``
+re-sends with ``/approve`` semantics and the expiry kept (``AppContext.reissue`` / ``reissue_proposal`` /
+``reissue_skill``; an expired window restarts, like 🔁 Retry), so opening an item never moves it; a hold
+re-sends its hold card, a failed submission does what the retry note's 🔁 Retry does. Gate 2 (approval
+cards) is listed before gate 1 (proposals).
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
 from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.config import resolve_target
+from ossbot.common.schemas import State
+from ossbot.gatekeeper import db
+from ossbot.gatekeeper.approvals import reissue_eligible
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui.limits import middle_cut
@@ -31,7 +40,12 @@ from ossbot.gatekeeper.telegram.ui.limits import middle_cut
 PER_PAGE = 5
 PROMOTE_WITHIN = timedelta(hours=6)
 RESCOPE_TTL = timedelta(hours=72)  # the rescope/ceiling card's buttons (rescope_cards.TTL)
+RETRY_TTL = timedelta(hours=24)  # the retry note's 🔁 Retry token (publisher.RETRY_TOKEN_TTL)
+NO_CARD_MARK = " · no live card"
+EXPIRED_MARK = " · ⌛ expired"
+_SAFE = re.compile(r"[^A-Za-z0-9_:-]")
 Sort = Literal["priority", "oldest"]
+Family = Literal["a", "p", "s", "r", "h", "f"]
 
 
 @dataclass(frozen=True)
@@ -41,8 +55,9 @@ class Item:
     expires_at: datetime
     target_priority: int
     created_at: str
-    family: Literal["a", "p", "s", "r"]  # r: a rescope or ceiling-hit card (no approval yet)
-    subject: str  # cid, or the skill name
+    # r: a rescope or ceiling-hit card (no approval yet); h: an open egress hold; f: a failed submission
+    family: Family
+    subject: str  # cid, the skill name, or (f) the failed action id
     label: str
     score: float = 0.0
 
@@ -69,35 +84,82 @@ def maintainer_triggered(ctx: AppContext, cid: str) -> bool:
     return False
 
 
+def _action_rank(ctx: AppContext, r: Any) -> int:
+    kind = str(r["kind"])
+    if kind == "comment":
+        target = json.loads(r["payload_json"]).get("target_number")
+        return 0 if r["pr_number"] and target == r["pr_number"] else 5
+    if kind == "push_update" and maintainer_triggered(ctx, str(r["cid"])):
+        return 0
+    if kind == "issue_claim" or r["source"] == "user":
+        return 1
+    return 2 if kind == "push_update" else 3
+
+
+def _action_label(r: Any) -> str:
+    kind = str(r["kind"])
+    icon = {"open_pr": "🧩", "push_update": "🔁", "comment": "💬", "issue_claim": "🙋"}[kind]
+    what = {"open_pr": "PR preview", "push_update": f"PR #{r['pr_number']} fix", "comment": "comment",
+            "issue_claim": "claim"}[kind]  # fmt: skip
+    return f"{icon} {what} · {middle_cut(str(r['upstream']), 30)}" + (" · 👤" if r["source"] == "user" else "")
+
+
+def _proposal_rank(r: Any, expires: datetime, now: datetime) -> int:
+    return 1 if r["source"] == "user" else (2 if expires - now <= PROMOTE_WITHIN else 4)
+
+
+def _proposal_label(r: Any, version: int) -> str:
+    issue = f" #{r['issue_number']}" if r["issue_number"] else ""
+    return (f"💡 Proposal v{version} · {middle_cut(str(r['upstream']), 28)}{issue} · {r['est_class'] or '?'}"
+            + (" · 👤" if r["source"] == "user" else ""))  # fmt: skip
+
+
+def _marker(expires: datetime, now: datetime) -> str:
+    return EXPIRED_MARK if expires <= now else NO_CARD_MARK
+
+
 def items(ctx: AppContext) -> list[Item]:
+    """Everything waiting on the owner, live card or not (§14.11.13): open cards first, then the same
+    subjects without a live card (``AWAITING_APPROVAL`` and the other re-send states, ``PROPOSED``, staged
+    skills), open holds, ``RESCOPE_REQUIRED`` and ``SUBMIT_FAILED``. Deduped by ``(family, subject)``."""
     now = ctx.clock.now()
-    live = to_iso(now)  # expired items aren't listed, even before the sweep marks them
+    live = to_iso(now)  # expired approvals aren't listed as open cards, even before the sweep marks them
     out: list[Item] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(item: Item, *, live_card: bool = False) -> None:
+        """Every open card is its own row (siblings of one cid included); the no-card sources add a
+        subject only once and never next to its live card."""
+        if live_card or (item.family, item.subject) not in seen:
+            seen.add((item.family, item.subject))
+            out.append(item)
+
+    held = {str(r[0]) for r in ctx.conn.execute("SELECT cid FROM contribution_holds WHERE released_at IS NULL")}
     for r in ctx.conn.execute(
-        "SELECT a.id, a.expires_at, a.created_at, o.kind, o.payload_json, c.id AS cid, c.upstream, c.source,"
-        " c.pr_number FROM approvals a JOIN outbound_actions o ON o.id = a.action_id JOIN contributions c"
-        " ON c.id = o.cid WHERE a.status IN ('pending','armed') AND a.expires_at > ?",
+        "SELECT a.id, a.expires_at, a.created_at, o.id AS action_id, o.kind, o.payload_json, c.id AS cid,"
+        " c.upstream, c.source, c.pr_number FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
+        " JOIN contributions c ON c.id = o.cid WHERE a.status IN ('pending','armed') AND a.expires_at > ?",
         (live,),
     ).fetchall():
-        kind = str(r["kind"])
-        user = r["source"] == "user"
-        if kind == "comment":
-            target = json.loads(r["payload_json"]).get("target_number")
-            rank = 0 if r["pr_number"] and target == r["pr_number"] else 5
-        elif kind == "push_update" and maintainer_triggered(ctx, str(r["cid"])):
-            rank = 0
-        elif kind == "issue_claim" or user:
-            rank = 1
-        elif kind == "push_update":
-            rank = 2
-        else:
-            rank = 3
-        icon = {"open_pr": "🧩", "push_update": "🔁", "comment": "💬", "issue_claim": "🙋"}[kind]
-        what = {"open_pr": "PR preview", "push_update": f"PR #{r['pr_number']} fix", "comment": "comment",
-                "issue_claim": "claim"}[kind]  # fmt: skip
-        out.append(Item(2, rank, from_iso(r["expires_at"]), _priority(ctx, str(r["upstream"])), str(r["created_at"]),
-                        "a", str(r["cid"]), f"{icon} {what} · {middle_cut(str(r['upstream']), 30)}"
-                        + (" · 👤" if user else "")))  # fmt: skip
+        add(Item(2, _action_rank(ctx, r), from_iso(r["expires_at"]), _priority(ctx, str(r["upstream"])),
+                 str(r["created_at"]), "a", str(r["cid"]), _action_label(r)), live_card=True)  # fmt: skip
+    # gate 2 without a live card: an eligible action, nothing open or being submitted, not held
+    for r in ctx.conn.execute(
+        "SELECT o.id AS action_id, o.kind, o.payload_json, o.created_at AS action_created, c.id AS cid, c.state,"
+        " c.upstream, c.source, c.pr_number, c.updated_at FROM outbound_actions o JOIN contributions c ON"
+        " c.id = o.cid WHERE o.status = 'pending_approval' AND NOT EXISTS (SELECT 1 FROM approvals a"
+        " JOIN outbound_actions o2 ON o2.id = a.action_id WHERE o2.cid = o.cid AND (a.status = 'confirmed'"
+        " OR (a.status IN ('pending','armed') AND a.expires_at > ?))) ORDER BY o.created_at",
+        (live,),
+    ).fetchall():
+        state = _state(str(r["state"]))
+        if str(r["cid"]) in held or state is None or not reissue_eligible(r["kind"], "pending_approval", state):
+            continue
+        newest = db.one(ctx.conn, "SELECT expires_at, created_at FROM approvals WHERE action_id = ? ORDER BY"
+                        " created_at DESC, rowid DESC LIMIT 1", (r["action_id"],))  # fmt: skip
+        expires = from_iso(newest["expires_at"]) if newest else from_iso(r["updated_at"]) + RESCOPE_TTL
+        add(Item(2, _action_rank(ctx, r), expires, _priority(ctx, str(r["upstream"])), str(r["action_created"]), "a",
+                 str(r["cid"]), _action_label(r) + _marker(expires, now)))  # fmt: skip
     for r in ctx.conn.execute(
         "SELECT p.id, p.expires_at, p.created_at, p.version, c.id AS cid, c.upstream, c.source, c.issue_number,"
         " c.est_class, c.score FROM proposal_approvals p JOIN contributions c ON c.id = p.cid"
@@ -105,29 +167,78 @@ def items(ctx: AppContext) -> list[Item]:
         (live,),
     ).fetchall():
         expires = from_iso(r["expires_at"])
-        user = r["source"] == "user"
-        rank = 1 if user else (2 if expires - now <= PROMOTE_WITHIN else 4)
-        issue = f" #{r['issue_number']}" if r["issue_number"] else ""
-        out.append(Item(1, rank, expires, _priority(ctx, str(r["upstream"])), str(r["created_at"]), "p",
-                        str(r["cid"]), f"💡 Proposal v{r['version']} · {middle_cut(str(r['upstream']), 28)}{issue}"
-                        f" · {r['est_class'] or '?'}" + (" · 👤" if user else ""),
-                        float(r["score"] or 0.0)))  # fmt: skip
+        add(Item(1, _proposal_rank(r, expires, now), expires, _priority(ctx, str(r["upstream"])), str(r["created_at"]),
+                 "p", str(r["cid"]), _proposal_label(r, int(r["version"])), float(r["score"] or 0.0)),
+            live_card=True)  # fmt: skip
+    # gate 1 without a live card: PROPOSED with an earlier card, nothing open or confirmed, not held
+    for r in ctx.conn.execute(
+        "SELECT c.id AS cid, c.upstream, c.source, c.issue_number, c.est_class, c.score, c.created_at AS"
+        " contrib_created FROM contributions c WHERE c.state = 'PROPOSED' AND NOT EXISTS (SELECT 1 FROM"
+        " proposal_approvals p WHERE p.cid = c.id AND (p.status = 'confirmed' OR (p.status IN ('pending','armed')"
+        " AND p.expires_at > ?)))",
+        (live,),
+    ).fetchall():
+        newest = db.one(ctx.conn, "SELECT version, expires_at FROM proposal_approvals WHERE cid = ? ORDER BY version"
+                        " DESC, created_at DESC, rowid DESC LIMIT 1", (r["cid"],))  # fmt: skip
+        if newest is None or str(r["cid"]) in held:
+            continue
+        expires = from_iso(newest["expires_at"])
+        add(Item(1, _proposal_rank(r, expires, now), expires, _priority(ctx, str(r["upstream"])),
+                 str(r["contrib_created"]), "p", str(r["cid"]),
+                 _proposal_label(r, int(newest["version"])) + _marker(expires, now),
+                 float(r["score"] or 0.0)))  # fmt: skip
     for r in ctx.conn.execute(
         "SELECT id, expires_at, created_at, skill, version FROM skill_approvals WHERE status IN ('pending','armed')"
         " AND expires_at > ?",
         (live,),
     ).fetchall():
-        out.append(Item(2, 3, from_iso(r["expires_at"]), 0, str(r["created_at"]), "s", str(r["skill"]),
-                        f"🧠 Skill {middle_cut(str(r['skill']), 30)} v{r['version']}"))  # fmt: skip
+        add(Item(2, 3, from_iso(r["expires_at"]), 0, str(r["created_at"]), "s", str(r["skill"]),
+                 f"🧠 Skill {middle_cut(str(r['skill']), 30)} v{r['version']}"), live_card=True)  # fmt: skip
+    # staged skills without a live card (the source says still staged and within the tier)
+    for (skill,) in ctx.conn.execute("SELECT DISTINCT skill FROM skill_approvals ORDER BY skill").fetchall():
+        if ("s", str(skill)) in seen or ctx.decisions.skills.source.reissuable(ctx.conn, str(skill)) is None:
+            continue
+        if db.one(ctx.conn, "SELECT 1 FROM skill_approvals WHERE skill = ? AND status = 'confirmed'", (skill,)):
+            continue
+        newest = db.one(ctx.conn, "SELECT expires_at, created_at, version FROM skill_approvals WHERE skill = ? ORDER"
+                        " BY created_at DESC, rowid DESC LIMIT 1", (skill,))  # fmt: skip
+        assert newest is not None
+        expires = from_iso(newest["expires_at"])
+        add(Item(2, 3, expires, 0, str(newest["created_at"]), "s", str(skill),
+                 f"🧠 Skill {middle_cut(str(skill), 30)} v{newest['version']}" + _marker(expires, now)))  # fmt: skip
+    # open holds: a stage is stopped until the owner resumes it (class 0)
+    for r in ctx.conn.execute(
+        "SELECT h.cid, h.held_at, c.upstream FROM contribution_holds h JOIN contributions c ON c.id = h.cid"
+        " WHERE h.released_at IS NULL ORDER BY h.held_at"
+    ).fetchall():
+        add(Item(2, 0, from_iso(r["held_at"]), _priority(ctx, str(r["upstream"])), str(r["held_at"]), "h",
+                 str(r["cid"]), f"⏸ Held · {middle_cut(str(r['upstream']), 30)} · egress anomaly"))  # fmt: skip
     # items paused for a size decision: ceiling-hit (class 2) and RESCOPE_REQUIRED (class 3) cards
     for r in ctx.conn.execute("SELECT id, upstream, updated_at, size_report_json FROM contributions WHERE state ="
                               " 'RESCOPE_REQUIRED'"):  # fmt: skip
         report = json.loads(r["size_report_json"] or "{}")
         ceiling = report.get("rescope_reason") == "ceiling"
         label = f"{'🧱 Ceiling' if ceiling else '📏 Re-approval'} · {middle_cut(str(r['upstream']), 30)}"
-        out.append(Item(2, 2 if ceiling else 3, from_iso(r["updated_at"]) + RESCOPE_TTL, _priority(ctx, r["upstream"]),
-                        str(r["updated_at"]), "r", str(r["id"]), label))  # fmt: skip
+        add(Item(2, 2 if ceiling else 3, from_iso(r["updated_at"]) + RESCOPE_TTL, _priority(ctx, r["upstream"]),
+                 str(r["updated_at"]), "r", str(r["id"]), label))  # fmt: skip
+    # a failed submission: Open = the retry note's 🔁 Retry (class 1)
+    for r in ctx.conn.execute("SELECT id, upstream, updated_at FROM contributions WHERE state = 'SUBMIT_FAILED'"):
+        failed = db.one(ctx.conn, "SELECT id, error_class FROM outbound_actions WHERE cid = ? AND status = 'failed'"
+                        " ORDER BY created_at DESC, rowid DESC LIMIT 1", (r["id"],))  # fmt: skip
+        if failed is None:
+            continue
+        error = middle_cut(_SAFE.sub("", str(failed["error_class"] or "error")), 30)
+        add(Item(2, 1, from_iso(r["updated_at"]) + RETRY_TTL, _priority(ctx, str(r["upstream"])),
+                 str(r["updated_at"]), "f", str(failed["id"]),
+                 f"⚠️ Submit failed · {middle_cut(str(r['upstream']), 30)} · {error}"))  # fmt: skip
     return out
+
+
+def _state(value: str) -> State | None:
+    try:
+        return State(value)
+    except ValueError:
+        return None
 
 
 def ordered(ctx: AppContext, sort: Sort = "priority") -> list[Item]:
@@ -140,7 +251,7 @@ def view(ctx: AppContext, page: int = 1, sort: Sort = "priority") -> k.View:
     page = min(max(1, page), pages)
     start = (page - 1) * PER_PAGE
     shown = queue[start : start + PER_PAGE]
-    lines: list[k.Line] = [(k.Const("📥 "), k.Bold(k.Const("Queue")), k.Const(f" · {len(queue)} open"))]
+    lines: list[k.Line] = [(k.Const("📥 "), k.Bold(k.Const("Queue")), k.Const(f" · {len(queue)} waiting"))]
     gate2 = sum(1 for i in queue if i.gate == 2)
     current_gate = 0
     for n, item in enumerate(shown, start + 1):
@@ -149,7 +260,11 @@ def view(ctx: AppContext, page: int = 1, sort: Sort = "priority") -> k.View:
             gate1 = len(queue) - gate2
             title = f"Gate 2 · approval cards ({gate2})" if item.gate == 2 else f"Gate 1 · proposals ({gate1})"
             lines.append((k.Bold(k.Const(title)),))
-        lines.append((k.Const(f"{n}. "), k.Text(item.label, 90), k.Const(" · expires "),
+        when = " · held since " if item.family == "h" else " · expires "
+        if item.label.endswith(EXPIRED_MARK):
+            lines.append((k.Const(f"{n}. "), k.Text(item.label, 90)))
+            continue
+        lines.append((k.Const(f"{n}. "), k.Text(item.label, 90), k.Const(when),
                       k.Time(int(item.expires_at.timestamp()), item.expires_at.strftime("%d %b %H:%M"))))  # fmt: skip
     if not queue:
         lines.append(k.line("Nothing is waiting for you."))

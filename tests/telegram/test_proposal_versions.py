@@ -50,7 +50,7 @@ async def test_expired_proposal_card_copy(rig: TgRig) -> None:
         rig.ctx.conn.execute("UPDATE proposal_approvals SET status = 'expired' WHERE id = ?", (v1.approval,))
     await tick(rig)
     old = text(rig, v1.message_id)
-    assert old.split("\n")[0].endswith("⌛ <b>Expired</b> · re-scouting if still relevant")
+    assert old.split("\n")[0].endswith(f"⌛ <b>Expired</b> · re-scouting if still relevant · <code>{v1.cid}</code>")
     assert labels(rig, v1.message_id) == ["⛔ Not decidable"]
     await rig.tap(skip, message=v1.message_id)
     assert toast(rig) == proposal_cards.EXPIRED

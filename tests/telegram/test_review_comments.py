@@ -96,7 +96,7 @@ async def test_send_creates_one_change_request_and_the_card_turns_s5(rig: TgRig)
     rig.frontend.publisher.recover()
     await rig.flush()
     s5 = text(rig, card.message_id)
-    assert f"✏️ <b>Changes requested</b> · {card.cid} · r1 → r2 in progress\n<s>" in s5
+    assert f"✏️ <b>Changes requested</b> · <code>{card.cid}</code> · r1 → r2 in progress\n<s>" in s5
     assert "Approve" not in str(latest(rig, card.message_id).get("reply_markup"))
 
 

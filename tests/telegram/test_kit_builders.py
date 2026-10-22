@@ -102,8 +102,8 @@ def stale_cards(ctx: AppContext, text: str) -> Out:
     for card in [c for c in s1_cards(text) if isinstance(c, str) and "PR body (" not in c][:5]:
         for status, reason in (("invalidated", "binding_changed"), ("expired", None),
                                ("invalidated", "new_proposal_version")):  # fmt: skip
-            out.append(stale.render(ctx.conn, card_html=card, status=status, reason=reason, cid="c_0123456789",
-                                    rev=2, action_id=None).text)  # fmt: skip
+            out.append(stale.render(card_html=card, status=status, reason=reason, cid="c_0123456789", rev=2,
+                                    action_id=None, reason_line="Nothing to approve: state X").text)  # fmt: skip
     return out
 
 

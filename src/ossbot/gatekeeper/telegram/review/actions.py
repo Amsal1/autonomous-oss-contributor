@@ -9,14 +9,24 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import auto_reissue, db
 from ossbot.gatekeeper.approvals import ApprovalError
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.actions import NoArg, Tap, action
 from ossbot.gatekeeper.telegram.inputs import Typed, input_handler, view_reply
-from ossbot.gatekeeper.telegram.review import comments, docs, edit_text, explorer, interdiff_view, patchview, resolve
+from ossbot.gatekeeper.telegram.review import (
+    comments,
+    docs,
+    edit_text,
+    explorer,
+    interdiff_view,
+    patchview,
+    resolve,
+    stale,
+)
 from ossbot.gatekeeper.telegram.review.resolve import ReviewArg, StaleShowCurrentArg
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.ui import kit as k
@@ -345,18 +355,49 @@ async def stale_retry(tap: Tap) -> str:
     return "🔁 A fresh card follows." if len(ids) == 1 else f"🔁 {len(ids)} fresh cards follow."
 
 
+def _resend_owed(tap: Tap, cid: str, now: datetime, floor: datetime) -> str:
+    """Show current without an open card (D8): re-send what is owed (deferred while paused or killed),
+    else the stale card's reason line."""
+    ctx = tap.app
+    actions = auto_reissue.owed_actions(ctx.conn, now, floor, cid=cid)
+    proposals = auto_reissue.owed_proposals(ctx.conn, now, floor, cid=cid)
+    if actions or proposals:
+        if not ctx.approvals.system_running():
+            return stale.DEFERRED
+        if actions:
+            ids = ctx.reissue(cid, tap.actor, keep_expiry=True)
+            return "Re-sent the card" if len(ids) == 1 else f"Re-sent {len(ids)} cards"
+        ctx.reissue_proposal(cid, tap.actor, keep_expiry=True)
+        return "Re-sent the proposal card"
+    state = resolve.state_of(ctx.conn, cid)
+    held = auto_reissue.held(ctx.conn, cid)
+    gate = 1 if state == "PROPOSED" else None
+    return stale.nothing_line(state=state, gate=gate, held=held)
+
+
 @action("stale_show_current", arg=StaleShowCurrentArg)
 async def stale_show_current(tap: Tap) -> str:
     """Resolved by contribution (or skill), never by the stale card's action (§14.11.12, BA-11)."""
     a: StaleShowCurrentArg = tap.arg
     ctx = tap.app
+    now = ctx.clock.now()
+    floor = now + timedelta(seconds=ctx.config.policy.limits.confirm_ttl_seconds)
     try:
         if a.skill is not None:
-            ids = ctx.reissue_skill(a.skill, tap.actor, keep_expiry=True) if db.one(
-                ctx.conn, "SELECT 1 FROM skill_approvals WHERE skill = ? AND status IN ('pending','armed')",
-                (a.skill,)) else []  # fmt: skip
-            return "Re-sent the skill card" if ids else f"No open card for skill {a.skill}"
+            open_skill = db.one(ctx.conn, "SELECT 1 FROM skill_approvals WHERE skill = ? AND status IN"
+                                " ('pending','armed')", (a.skill,)) is not None  # fmt: skip
+            if not open_skill and auto_reissue.owed_for(ctx.conn, now, floor, skill=a.skill):
+                if not ctx.approvals.system_running():
+                    return stale.DEFERRED  # nothing is created while paused or killed
+                open_skill = True
+            ids = ctx.reissue_skill(a.skill, tap.actor, keep_expiry=True) if open_skill else []
+            if ids:
+                return "Re-sent the skill card"
+            staged = ctx.decisions.skills.source.reissuable(ctx.conn, a.skill) is not None
+            return stale.SKILL_REOPEN if staged else stale.nothing_line(skill=a.skill)
         assert a.cid is not None
+        if not resolve.open_card_exists(ctx.conn, a):
+            return _resend_owed(tap, a.cid, now, floor)
         pr_open = db.one(ctx.conn, "SELECT 1 FROM approvals a JOIN outbound_actions o ON o.id = a.action_id"
                          " WHERE o.cid = ? AND a.status IN ('pending','armed') LIMIT 1", (a.cid,))  # fmt: skip
         prop_open = db.one(ctx.conn, "SELECT 1 FROM proposal_approvals WHERE cid = ? AND status IN"
