@@ -901,7 +901,7 @@ What the tests show: a reload, a start-time snapshot change, kill -> resume and 
 
 ## Post-v1: copyable ids
 
-PART B of `.ossbot-local/postv1/plan-stale-queue-copy.md` (row OD-C3; DESIGN §14.13.1, §14.17.3, §14.18.1; ADR-0004 addendum "copyable ids"). Start `e549f50`. Hermetic only: no redeploy, no live call, no Telegram message, `config/` unchanged.
+PART B of `.ossbot-local/postv1/plan-stale-queue-copy.md` (row OD-C3; DESIGN §14.13.1, §14.17.3, §14.18.1; ADR-0004 addendum "copyable ids"). Start `e549f50`, PART B commit `7a38364`. Hermetic only: no redeploy, no live call, no Telegram message, `config/` unchanged.
 
 | Check | Command | Result |
 |---|---|---|
