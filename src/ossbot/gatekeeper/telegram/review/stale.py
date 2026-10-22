@@ -20,6 +20,7 @@ from typing import Any, Literal
 
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.ui import ids
+from ossbot.gatekeeper.telegram.ui.kit import IdKind
 
 Second = Literal["show_current", "retry", "show_or_retry", "none"]
 Forward = Literal["show_current", "retry", "none"]
@@ -170,7 +171,12 @@ def render(*, card_html: str, status: str, reason: str | None, cid: str | None, 
 
 
 def part_stub(cid: str | None, rev: int | None) -> str:
-    return esc(PART_STUB.format(cid=cid or "", rev=f" r{rev}" if rev else ""))
+    """``⚪ part of superseded <code>c_…</code> r2`` (a cid or a skill name, one tap to copy)."""
+    value = cid or ""
+    kind: IdKind | None = "cid" if ids.valid(value, "cid") else ("skill" if ids.valid(value, "skill") else None)
+    subject = ids.html(value, kind) if kind else esc(value)
+    head, tail = PART_STUB.split("{cid}")
+    return esc(head) + subject + esc(tail.format(rev=f" r{rev}" if rev else ""))
 
 
 def stale_views(conn: sqlite3.Connection, approval_id: str) -> list[sqlite3.Row]:

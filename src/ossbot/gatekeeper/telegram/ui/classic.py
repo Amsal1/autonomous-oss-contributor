@@ -1,7 +1,8 @@
 """Classic (parse mode HTML) renderer of a ``View`` (DESIGN §14.17.3, U1, U8, U14).
 
 Every untrusted leaf (``Text``) is redacted first, then made visible, defused and escaped; ``Const``
-template text is only escaped; ``Verbatim`` publish bytes are scanned (a hit is a bug, counted in
+template text is escaped and its ids (``ui/ids.py`` strong patterns) put in ``<code>``, one tap to copy,
+except inside a code span or a link; ``Verbatim`` publish bytes are scanned (a hit is a bug, counted in
 ``Rendered.verbatim_hits``) and made visible, never redacted or defused. Tags come only from this
 module: ``b i code pre a blockquote(expandable) tg-time``; links only for http(s).
 """
@@ -70,21 +71,22 @@ class _Ctx:
         return esc(make_visible(value)[0])
 
 
-def _span(span: Span, c: _Ctx) -> str:
+def _span(span: Span, c: _Ctx, *, plain: bool = False) -> str:
+    """``plain``: inside ``<code>`` or a link, where template ids are not wrapped again."""
     if isinstance(span, Text):
         return c.untrusted(span.value, span.max)
     if isinstance(span, Const):
-        return esc(span.value)
+        return esc(span.value) if plain else ids.autocode(span.value)  # template ids one tap to copy (§14.17.3)
     if isinstance(span, Verbatim):
         return c.verbatim(span.value, span.surface)
     if isinstance(span, Bold):
-        return f"<b>{_span(span.inner, c)}</b>"
+        return f"<b>{_span(span.inner, c, plain=plain)}</b>"
     if isinstance(span, Italic):
-        return f"<i>{_span(span.inner, c)}</i>"
+        return f"<i>{_span(span.inner, c, plain=plain)}</i>"
     if isinstance(span, Code):
-        return f"<code>{_span(span.inner, c)}</code>"
+        return f"<code>{_span(span.inner, c, plain=True)}</code>"
     if isinstance(span, Link):
-        inner = _span(span.inner, c)
+        inner = _span(span.inner, c, plain=True)
         return f'<a href="{esc_attr(span.url)}">{inner}</a>' if domain_of(span.url) else inner
     if isinstance(span, Time):
         return tg_time(span.unix, span.fallback, span.fmt)

@@ -236,6 +236,7 @@ class AppContext:
                coalesce_key: str | None = None, thread: str | None = None) -> None:  # fmt: skip
         """FYI/alert to the owner's private chat via the outbox (dropped while Telegram is unset).
 
+        ``text`` is plain text: it is sent as escaped HTML with its ids in ``<code>`` (one tap to copy).
         The priority comes from the text's fixed leading icon unless given (``telegram.notify.classify``:
         🛑/🚨 are P0 in 🚦 Control and always ring; FYIs are silent P2 in 📈 OSS feed and may be held
         in quiet hours or a batch window, §14.13)."""
@@ -255,7 +256,11 @@ class AppContext:
         prio, holdable = tg_notify.classify(text)
         if priority is not None:
             prio, holdable = priority, holdable and priority >= 2
-        self.outbox.enqueue("sendMessage", {"chat_id": chat_id, "text": text}, priority=prio,
+        from ossbot.gatekeeper.telegram.ui import ids  # noqa: PLC0415 - telegram imports the context
+
+        # The text stays data (§14.13): escaped, ids as one-tap code (``ui/ids.py``), never markup.
+        payload = {"chat_id": chat_id, "text": ids.autocode(text), "parse_mode": "HTML"}
+        self.outbox.enqueue("sendMessage", payload, priority=prio,
                             thread_key=thread or tg_notify.THREAD_OF[prio], category=category, holdable=holdable,
                             coalesce_key=coalesce_key)  # fmt: skip
 

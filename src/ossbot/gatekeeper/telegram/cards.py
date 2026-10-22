@@ -36,7 +36,7 @@ from ossbot.gatekeeper.signing import card_text as card_signature
 from ossbot.gatekeeper.signing import from_payload as signature_of
 from ossbot.gatekeeper.telegram.escape import b, esc, make_visible
 from ossbot.gatekeeper.telegram.review.size_line import size_lines
-from ossbot.gatekeeper.telegram.ui import classic, icons
+from ossbot.gatekeeper.telegram.ui import classic, icons, ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui.limits import CLASSIC_MAX, PART_MAX, chunk_verbatim
@@ -132,12 +132,22 @@ def _unix(when: datetime) -> int:
     return int(when.timestamp())
 
 
+def _sha(value: str) -> k.Span:
+    """A commit SHA one tap to copy; a value that isn't hex (old rows) is still code, as untrusted text."""
+    return k.Id(value, "sha") if ids.valid(value, "sha") else k.Code(k.Text(value or "?", 40))
+
+
+def _branch(value: str | None, limit: int) -> k.Span:
+    """A branch name one tap to copy (untrusted: ``ids`` redacts it); nothing for an empty value."""
+    return k.Id(value[:limit], "branch") if value else k.Const("")
+
+
 # ------------------------------------------------------------------------------------ blocks
 def _header(view: CardView) -> k.Line:
     icon, title = HEADERS[view.kind]
     if view.kind == "open_pr" and view.interdiff is not None:
         icon, title = icons.REVISION, "Revised for review"
-    title = title.format(pr=view.pr_number)
+    title = title.format(pr=view.pr_number)  # "PR #12": template text, so the kit codes the reference
     ident = view.cid + (f" · r{view.rev}" if view.rev and view.kind in {"open_pr", "push_update"} else "")
     return k.header(icon, title, ident, _mode(view.dry_run))
 
@@ -154,7 +164,7 @@ def _subject(view: CardView) -> list[k.Line]:
         return lines
     repo: list[k.Span] = [k.Bold(k.Text(view.upstream, 150))]
     if view.kind == "push_update":
-        repo += [k.Const(" · incremental commit on "), k.Code(k.Text(f"{view.fork_owner}:{view.branch}", 120))]
+        repo += [k.Const(" · incremental commit on "), _branch(f"{view.fork_owner}:{view.branch}", 120)]
     lines.append(tuple(repo))
     if view.issue_number:
         issue: list[k.Span] = [k.Const("Issue ")]
@@ -244,11 +254,12 @@ def card_view_kit(view: CardView, *, body_part_count: int = 0) -> k.View:
         if review is not None:
             blocks.append(review)
         short, base = (view.head_sha or "")[:7], (view.round_base or "")[:7]
-        on = f"{view.base_ref}@{base}" if view.kind == "open_pr" else f"{base} (current PR head)"
-        commit = (k.Const("Commit "), k.Code(k.Const(short)), k.Const(" on "), k.Text(on, 120), k.Const(" · "),
+        on: k.Line = ((_branch(view.base_ref, 100), k.Const("@"), _sha(base))
+                      if view.kind == "open_pr" else (_sha(base), k.Const(" (current PR head)")))  # fmt: skip
+        commit = (k.Const("Commit "), _sha(short), k.Const(" on "), *on, k.Const(" · "),
                   k.Text(view.identity or "", 160))  # fmt: skip
         target = f"{view.fork_owner}/" + view.upstream.split("/", 1)[-1]
-        branch = (k.Const("Branch "), k.Code(k.Text(view.branch or "", 120)), k.Const(" → "), k.Text(target, 150))
+        branch = (k.Const("Branch "), _branch(view.branch, 120), k.Const(" → "), k.Text(target, 150))
         signed = k.line(card_signature(view.signature))  # gatekeeper fact: fixed text + the public fingerprint
         blocks.append(k.Block((k.Lines((commit, branch, signed)),), required=False, priority=6, name="commit"))
     repo_policy = _repo_policy_block(view)
@@ -304,12 +315,12 @@ def render(view: CardView) -> CardMessages:
         kinds += ["commit_msg"] * len(commit)
     rev = view.rev if view.rev is not None else "?"
     if _verbatim_hit(view):
-        return CardMessages(card=esc(WITHHELD.format(cid=view.cid, rev=rev)), withheld=True)
+        return CardMessages(card=ids.autocode(WITHHELD.format(cid=view.cid, rev=rev)), withheld=True)
     count = kinds.count("body_part")
     try:
         out = classic.render(card_view_kit(view, body_part_count=count), surface="card")
     except k.ViewTooLarge:
-        return CardMessages(card=esc(TOO_LARGE.format(cid=view.cid, rev=rev)), too_large=True)
+        return CardMessages(card=ids.autocode(TOO_LARGE.format(cid=view.cid, rev=rev)), too_large=True)
     return CardMessages(card=out.text, parts=parts, part_kinds=kinds)
 
 

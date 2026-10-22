@@ -22,6 +22,7 @@ from ossbot.gatekeeper.telegram.bot import CardPublisher, TelegramFrontend
 from ossbot.gatekeeper.telegram.handlers import Handlers
 from telegram import Update
 from tests.fakes.fake_telegram import FakeBotRequest, callback_update, message_update
+from tests.telegram import idcheck
 
 OWNER = 4242
 
@@ -34,15 +35,20 @@ class TgRig:
     handlers: Handlers
     frontend: TelegramFrontend
     submitted: list[str] = field(default_factory=list)
+    bare_ids: list[str] = field(default_factory=list)  # copyable-id lint hits (idcheck), raised by flush
 
     async def flush(self, rounds: int = 6) -> int:
-        """Deliver every due outbox row (several rounds: deliveries enqueue follow-ups)."""
+        """Deliver every due outbox row (several rounds: deliveries enqueue follow-ups). Every Bot API call
+        made on the way is checked by the copyable-id lint (``idcheck``); a hit fails the test here."""
         total = 0
         for _ in range(rounds * 4):
             n = await self.frontend.worker.run_once()
             total += n
             if n == 0 and not self.ctx.outbox.due(1):
                 break
+        if self.bare_ids:
+            hits, self.bare_ids[:] = list(self.bare_ids), []
+            raise AssertionError("ids rendered outside ui/ids.py:\n" + "\n".join(hits))
         return total
 
     async def settle(self) -> None:
@@ -107,6 +113,8 @@ async def make_rig(ctx: AppContext, *, topics: bool = False, user_topics: bool =
     async def default_preflight(approval_id: str) -> list[str]:
         return []
 
+    bare: list[str] = []
+    lint_calls(req, bare)
     handlers = Handlers(ctx, submit or default_submit, preflight or default_preflight)
     app = Application.builder().token("123456:TEST-TOKEN-NOT-REAL").request(req).updater(None).build()
     handlers.register(app)
@@ -117,7 +125,7 @@ async def make_rig(ctx: AppContext, *, topics: bool = False, user_topics: bool =
     for svc in ctx.decisions.all():
         svc.on_disarmed = frontend.publisher.render_s1
     await frontend.workspace()
-    rig = TgRig(ctx, app, req, handlers, frontend)
+    rig = TgRig(ctx, app, req, handlers, frontend, bare_ids=bare)
     holder["rig"] = rig
     await rig.flush()
     req.calls.clear()
@@ -126,6 +134,22 @@ async def make_rig(ctx: AppContext, *, topics: bool = False, user_topics: bool =
     finally:
         await handlers.drain()
         await app.shutdown()
+
+
+def lint_calls(req: FakeBotRequest, hits: list[str]) -> None:
+    """Run the copyable-id lint on every call ``req`` records from now on; hits are appended to ``hits``."""
+    original = req.do_request
+
+    async def checked(url: str, method: str, request_data: Any = None, *args: Any, **kw: Any) -> tuple[int, bytes]:
+        before = len(req.calls)
+        result = await original(url, method, request_data, *args, **kw)
+        for name, payload in req.calls[before:]:
+            bare = idcheck.bare_ids(name, payload)
+            if bare:
+                hits.append(f"{name}: {bare} in {payload!r:.400}")
+        return result
+
+    req.do_request = checked  # type: ignore[method-assign]
 
 
 def worker(ctx: AppContext, sender: Any) -> OutboxWorker:

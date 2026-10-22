@@ -17,7 +17,8 @@ card of a still-eligible item is listed with ``· no live card`` / ``· ⌛ expi
 re-sends with ``/approve`` semantics and the expiry kept (``AppContext.reissue`` / ``reissue_proposal`` /
 ``reissue_skill``; an expired window restarts, like 🔁 Retry), so opening an item never moves it; a hold
 re-sends its hold card, a failed submission does what the retry note's 🔁 Retry does. Gate 2 (approval
-cards) is listed before gate 1 (proposals).
+cards) is listed before gate 1 (proposals). Every item but a skill shows its cid one tap to copy
+(``k.Id``, §14.17.3).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui.limits import middle_cut
 
 PER_PAGE = 5
+LABEL_MAX = 90
 PROMOTE_WITHIN = timedelta(hours=6)
 RESCOPE_TTL = timedelta(hours=72)  # the rescope/ceiling card's buttons (rescope_cards.TTL)
 RETRY_TTL = timedelta(hours=24)  # the retry note's 🔁 Retry token (publisher.RETRY_TOKEN_TTL)
@@ -60,6 +62,11 @@ class Item:
     subject: str  # cid, the skill name, or (f) the failed action id
     label: str
     score: float = 0.0
+    cid: str = ""  # shown one tap to copy after the label (§14.17.3); empty for skills
+
+    @property
+    def shown_cid(self) -> str:
+        return self.cid or (self.subject if self.family in {"a", "p", "r", "h"} else "")
 
     def key(self, sort: Sort) -> tuple[Any, ...]:
         if sort == "oldest":
@@ -230,7 +237,7 @@ def items(ctx: AppContext) -> list[Item]:
         error = middle_cut(_SAFE.sub("", str(failed["error_class"] or "error")), 30)
         add(Item(2, 1, from_iso(r["updated_at"]) + RETRY_TTL, _priority(ctx, str(r["upstream"])),
                  str(r["updated_at"]), "f", str(failed["id"]),
-                 f"⚠️ Submit failed · {middle_cut(str(r['upstream']), 30)} · {error}"))  # fmt: skip
+                 f"⚠️ Submit failed · {middle_cut(str(r['upstream']), 30)} · {error}", cid=str(r["id"])))  # fmt: skip
     return out
 
 
@@ -261,10 +268,15 @@ def view(ctx: AppContext, page: int = 1, sort: Sort = "priority") -> k.View:
             title = f"Gate 2 · approval cards ({gate2})" if item.gate == 2 else f"Gate 1 · proposals ({gate1})"
             lines.append((k.Bold(k.Const(title)),))
         when = " · held since " if item.family == "h" else " · expires "
+        # the cid one tap to copy (/approve, /logs …); the label gives up its 15 characters so an item line
+        # still shows ≤ 120 characters (§14.11.13)
+        head: k.Line = (k.Const(f"{n}. "), k.Text(item.label, LABEL_MAX - (15 if item.shown_cid else 0)))
+        if item.shown_cid:
+            head += (k.Const(" · "), k.Id(item.shown_cid))
         if item.label.endswith(EXPIRED_MARK):
-            lines.append((k.Const(f"{n}. "), k.Text(item.label, 90)))
+            lines.append(head)
             continue
-        lines.append((k.Const(f"{n}. "), k.Text(item.label, 90), k.Const(when),
+        lines.append((*head, k.Const(when),
                       k.Time(int(item.expires_at.timestamp()), item.expires_at.strftime("%d %b %H:%M"))))  # fmt: skip
     if not queue:
         lines.append(k.line("Nothing is waiting for you."))

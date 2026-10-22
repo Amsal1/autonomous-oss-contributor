@@ -39,7 +39,7 @@ async def test_explorer_is_a_reply_to_the_card_with_no_decision_token(rig: TgRig
     payload = latest(rig, mid)
     assert payload["reply_parameters"]["message_id"] == card.message_id
     shown = text(rig, mid)
-    assert f"{card.cid} r1" in shown and "1/9 Summary" in shown
+    assert f"<code>{card.cid}</code> r1" in shown and "1/9 Summary" in shown
     assert "2 files +4 −1" in shown
     assert not any("Approve" in label or "Confirm" in label for label in labels(rig, mid))
     for row in rig.buttons(payload):

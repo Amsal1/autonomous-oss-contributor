@@ -28,7 +28,7 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.telegram import keyboards
 from ossbot.gatekeeper.telegram.cards import CardMessages
 from ossbot.gatekeeper.telegram.escape import esc
-from ossbot.gatekeeper.telegram.ui import classic, icons
+from ossbot.gatekeeper.telegram.ui import classic, icons, ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui.limits import middle_cut
 
@@ -336,12 +336,13 @@ def render(ctx: AppContext, row: sqlite3.Row) -> CardMessages:
     """``ProposalApprovals.renderer``: the classic card text (no parts)."""
     view = card_view(ctx, row)
     if view is None:
-        return CardMessages(card=f"<b>💡 Proposal</b> · {esc(str(row['cid']))} · v{int(row['version'])} ·"
+        return CardMessages(card=f"<b>💡 Proposal</b> · {ids.html(str(row['cid']))} · v{int(row['version'])} ·"
                                  " (content unavailable)")  # fmt: skip
     try:
         return CardMessages(card=classic.render(view, surface="card").text)
     except k.ViewTooLarge:
-        return CardMessages(card=esc(f"⚠️ Proposal card too large to render (bug) · {row['cid']}"), too_large=True)
+        return CardMessages(card=ids.autocode(f"⚠️ Proposal card too large to render (bug) · {row['cid']}"),
+                            too_large=True)  # fmt: skip
 
 
 # --------------------------------------------------------------------------- keyboard

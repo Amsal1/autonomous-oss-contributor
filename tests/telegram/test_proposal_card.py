@@ -36,7 +36,7 @@ async def test_card_fields_badge_and_keyboard(rig: TgRig) -> None:
     card = await proposal_card(rig, vetting={"claim_status": "unclaimed"}, rationale="maintainer asked for a PR")
     body = text(rig, card.message_id)
     first = body.split("\n", 1)[0]
-    assert first.startswith("💡 <b>Proposal</b> · " + card.cid + " · v1")
+    assert first.startswith("💡 <b>Proposal</b> · <code>" + card.cid + "</code> · v1")
     assert "🧪 DRY RUN (n/a: local change)" in first
     assert "<b>langfuse/langfuse</b>" in body
     assert "<b>Fix trace export when spans are empty</b> · Bug" in body
@@ -189,7 +189,7 @@ async def test_details_has_sections_and_no_decision_buttons(rig: TgRig) -> None:
     card = await proposal_card(rig, risks=["could break exporters"], alternatives=[{"summary": "do less"}])
     await rig.tap(token(rig, card.message_id, "🧭 Details"), message=card.message_id)
     mid = view_message(rig.ctx, "proposal_details")
-    assert f"{card.cid} v1" in text(rig, mid) and "1/6 Problem &amp; approach" in text(rig, mid)
+    assert f"<code>{card.cid}</code> v1" in text(rig, mid) and "1/6 Problem &amp; approach" in text(rig, mid)
     purposes = {r[0] for r in rig.ctx.conn.execute("SELECT purpose FROM ui_tokens WHERE tg_message_id = ?", (mid,))}
     assert purposes == {"proposal_details_nav"}
     await rig.tap(token(rig, mid, "▶"), message=mid)

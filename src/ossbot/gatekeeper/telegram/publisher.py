@@ -30,10 +30,10 @@ from ossbot.gatekeeper.approvals import ApprovalError, reissue_eligible
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow
 from ossbot.gatekeeper.telegram import keyboards
-from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.review import resolve, stale
 from ossbot.gatekeeper.telegram.review.resolve import StaleShowCurrentArg
 from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.ui import ids
 
 log = logging.getLogger(__name__)
 RETRY_TOKEN_TTL = timedelta(hours=24)
@@ -179,7 +179,7 @@ class CardPublisher:
             return
         self.ctx.outbox.enqueue(
             "sendMessage",
-            {"chat_id": chat, "text": esc(text), "parse_mode": ParseMode.HTML},
+            {"chat_id": chat, "text": ids.autocode(text), "parse_mode": ParseMode.HTML},
             dedupe_key=f"{RETRY_PREFIX}{action_id}",
             thread_key="reviews",
         )
@@ -339,7 +339,7 @@ class CardPublisher:
         try:
             card_html = svc.card_view(approval_id).card
         except (ApprovalError, KeyError):
-            card_html = esc(f"{meta.get('cid') or meta.get('skill') or approval_id}")
+            card_html = ids.autocode(f"{meta.get('cid') or meta.get('skill') or approval_id}")
         reason = row["invalidated_reason"]
         forward, reason_line = self._forward(approval_id, row, meta)
         rendered = stale.render(

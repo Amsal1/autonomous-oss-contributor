@@ -13,6 +13,7 @@ import logging
 from ossbot.gatekeeper import db, review_html
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.review import patchview
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -60,4 +61,4 @@ async def send(ctx: AppContext, which: str, cid: str, rev: int, thread_id: int |
     if ui_redact.scan(data, surface=which):
         _note(ctx, WITHHELD, thread_id)
         return
-    ui_send.document(ctx, name, data, caption=caption, thread_id=thread_id)
+    ui_send.document(ctx, name, data, caption=ids.autocode(caption), thread_id=thread_id)  # the cid one tap to copy

@@ -111,7 +111,7 @@ async def test_expired_card_offers_retry_and_stubs_its_parts(rig: TgRig) -> None
     assert labels(rig, card.message_id) == ["⛔ Not approvable", "🔁 Retry"]
     assert rig.buttons(latest(rig, card.message_id))[0][0]["disabled"] == {}
     for part in _parts(ctx, card.approval):
-        assert text(rig, part) == f"⚪ part of superseded {card.cid} r1"
+        assert text(rig, part) == f"⚪ part of superseded <code>{card.cid}</code> r1"
     await rig.tap(token(rig, card.message_id, "🔁 Retry"), message=card.message_id)
     assert toast(rig) == "🔁 A fresh card follows."
 

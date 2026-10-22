@@ -51,7 +51,7 @@ async def test_card_shows_gatekeeper_facts(rig: TgRig) -> None:
     cid = rescoped(rig.ctx)
     mid = await send(rig, cid)
     body = text(rig, mid)
-    assert body.startswith(f"📏 <b>Re-approval needed</b> · {cid} · v1 → v2 · ")
+    assert body.startswith(f"📏 <b>Re-approval needed</b> · <code>{cid}</code> · v1 → v2 · ")
     assert "n/a: local change" in body.split("\n", 1)[0]
     assert "Approved <b>s</b> (~35 code) · measured ✅ <b>m</b>: 6 files · +142 / −30 code · +210 test" in body
     assert "⚠️ 2 files outside the plan: web/src/config.ts, docs/export.md" in body
@@ -65,7 +65,7 @@ async def test_continue_is_two_taps_and_binds_the_measured_class(rig: TgRig) -> 
     cid = rescoped(rig.ctx)
     mid = await send(rig, cid)
     await rig.tap(token(rig, mid, "✅ Continue at m"), message=mid)
-    sentence = f"Confirm: continue {cid} at size m (was s). Local work only — dry-run does not apply."
+    sentence = f"Confirm: continue <code>{cid}</code> at size m (was s). Local work only — dry-run does not apply."
     assert sentence in text(rig, mid)
     assert state(rig.ctx, cid) == "RESCOPE_REQUIRED"
     await rig.tap(token(rig, mid, "🛠 Confirm continue"), message=mid)
@@ -155,7 +155,7 @@ async def test_drop_needs_a_confirm(rig: TgRig) -> None:
     assert state(rig.ctx, cid) == "RESCOPE_REQUIRED"
     await rig.tap(token(rig, mid, "🗑 Drop it"), message=mid)
     assert state(rig.ctx, cid) == "ABANDONED"
-    assert f"🗑 Dropped {cid}" in text(rig, mid)
+    assert f"🗑 Dropped <code>{cid}</code>" in text(rig, mid)
 
 
 async def test_explore_is_read_only(rig: TgRig) -> None:

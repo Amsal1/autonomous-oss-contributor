@@ -41,7 +41,7 @@ from tests.e2e.demo_capture import (
 )
 from tests.fakes import fake_telegram
 from tests.githarness import GitWorld, LocalRemote
-from tests.telegram import proposalkit, reviewkit
+from tests.telegram import idcheck, proposalkit, reviewkit
 from tests.telegram.chatkit import deltas, wire
 from tests.telegram.tgharness import TgRig, make_rig
 from tests.unit.gatekeeper.test_submit import submitter
@@ -260,6 +260,9 @@ async def test_demo_capture(gctx: AppContext, world: GitWorld, tmp_path: Path, f
     text = json.dumps(doc, ensure_ascii=False)
     for needle in ("/tmp/", "pytest-of-", "/home/", "/mnt/"):
         assert needle not in text, needle
+    # the copyable-id lint over the whole transcript: every id the demo shows is one tap to copy
+    bare = [(e["method"], idcheck.bare_ids(e["method"], e["params"])) for e in doc["events"] if e["type"] == "bot"]
+    assert [b for b in bare if b[1]] == []
     # replay it through the demo renderer: every scene page, both themes, checked against the payloads
     if str(DEMO_ROOT) not in sys.path:
         sys.path.insert(0, str(DEMO_ROOT))
@@ -271,4 +274,4 @@ async def test_demo_capture(gctx: AppContext, world: GitWorld, tmp_path: Path, f
     assert len({p.entry["scene"] for p in built}) == 9
     by_mark = {p.entry["mark"]: p for p in built}
     assert "🧪 DRY RUN" in by_mark["05-dry-run-panel"].html and "Killed" in by_mark["09-kill"].html
-    assert "Submitted · PR #" in by_mark["06-submitted"].html
+    assert 'Submitted · PR <code class="tg-code">#' in by_mark["06-submitted"].html  # the PR number as code

@@ -157,7 +157,8 @@ async def changes(tap: Tap) -> str:
     """✏️ Request changes: a ForceReply; the draft review's comments are included automatically."""
     meta = _card_meta(tap)
     comments.prompt(tap.app, "changes", meta["cid"], _rev(meta), meta.get("action_id"),
-                    "✏️ Describe the change for " + meta["cid"] + " (≤ 4,000 chars). Draft comments are included.",
+                    k.line("✏️ Describe the change for ", k.Id(str(meta["cid"])),
+                           " (≤ 4,000 chars). Draft comments are included."),
                     comments.CHANGES_PLACEHOLDER, reply_to=tap.message_id)  # fmt: skip
     return "Reply with what should change."
 
@@ -230,7 +231,8 @@ async def comment_general(tap: Tap) -> str:
     refused = resolve.refusal(tap.app.conn, a.action_id, "comment")
     if refused or a.rev is None:
         return refused or resolve.SUPERSEDED
-    comments.prompt(tap.app, "comment", a.cid, a.rev, a.action_id, f"💬 General comment on {a.cid} r{a.rev}",
+    comments.prompt(tap.app, "comment", a.cid, a.rev, a.action_id,
+                    k.line("💬 General comment on ", k.Id(a.cid), f" r{a.rev}"),
                     comments.COMMENT_PLACEHOLDER, reply_to=tap.message_id)  # fmt: skip
     return ""
 

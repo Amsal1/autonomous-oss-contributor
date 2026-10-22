@@ -35,6 +35,7 @@ from ossbot.common.schemas import CatalogEntry
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.app import create_app as create_gatekeeper
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.telegram.notify import plain_text
 from ossbot.runner.github_read import GitHubRead
 from ossbot.runner.gk_client import Gatekeeper
 from ossbot.runner.pipeline import Gate, StageContext
@@ -266,7 +267,8 @@ class E2E:
         self.sc.clocks.wall = lambda: due  # type: ignore[method-assign]
 
     def notes(self) -> list[str]:
-        return [json.loads(r[0])["text"] for r in self.ctx.conn.execute("SELECT payload_json FROM tg_outbox")
+        """Message texts as shown (HTML tags such as the ids' ``<code>`` stripped, entities decoded)."""
+        return [plain_text(json.loads(r[0])) for r in self.ctx.conn.execute("SELECT payload_json FROM tg_outbox")
                 if "text" in json.loads(r[0])]  # fmt: skip
 
     def pipeline_log(self) -> list[str]:

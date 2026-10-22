@@ -32,6 +32,7 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.outbox import HoldDecision, HoldRequest, OutboxRow
 from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.prefs import UxPrefs
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 
 if TYPE_CHECKING:
@@ -234,12 +235,12 @@ class Notifier:
         when an approval is waiting (§14.13.3)."""
         texts = [plain_text(json.loads(r["payload_json"])) for r in rows]
         lines: list[k.Line] = [(k.Const("📈 "), k.Bold(k.Const(f"{len(rows)} updates")))]
-        lines += [k.line(f"• {first_line(t)}") for t in texts[:MERGED_LINES]]
+        lines += [ids.spans(f"• {first_line(t)}") for t in texts[:MERGED_LINES]]  # ids one tap to copy
         if len(texts) > MERGED_LINES:
             lines.append(k.line(f"+{len(texts) - MERGED_LINES} more below"))
         body = "\n\n".join(texts)[:MERGED_BODY_MAX]
         blocks = [k.Block((k.Lines(tuple(lines)),), name="lines"),
-                  k.Block((k.Quote(tuple(k.line(x) for x in body.split("\n")), expandable=True),), required=False,
+                  k.Block((k.Quote(tuple(ids.spans(x) for x in body.split("\n")), expandable=True),), required=False,
                           priority=1, name="full")]  # fmt: skip
         rows_: k.Rows = []
         pending = db.one(self.ctx.conn, "SELECT COUNT(*) FROM approvals WHERE status IN ('pending','armed')")

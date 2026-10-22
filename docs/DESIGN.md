@@ -3185,6 +3185,8 @@ Every outbox row carries `priority` (new column). `telegram/notify.py` maps it t
 
 The local-operator-action FYI (§12.2) stays P2 but is **never** held, because it is a security FYI. It is sent silently right away.
 
+FYIs (`AppContext.notify`, the worker `/v1/notify` relay, state-machine notices) are plain text from the caller and are sent as classic HTML built by `ui/ids.autocode`: the text escaped, its ids in `<code>` (one tap to copy, §14.17.3), no markup from the caller, never control. `classify()` reads the raw text; the merge (§14.13.3) and the away summary read the shown text (`notify.plain_text`).
+
 #### 14.13.2 Quiet hours, /quiet and /notify
 - **Quiet hours:** `profile.yaml telegram.quiet_hours` (e.g. `"23:00-07:30"`) in `telegram.timezone` (IANA, e.g. `Asia/Jakarta`). During quiet hours P1 goes silent and P2 is held. The first loud message after quiet hours ends is a single P1 summary: "🌅 While you were away: 2 cards, 1 maintainer reply".
 - **`/quiet`** picker: `[1 h] [3 h] [Until 08:00] [Until tomorrow] [Off]`. It stores `ux_prefs.quiet_until` (personal, immediate) and echoes `🌙 Quiet until <tg-time>`.
@@ -3477,6 +3479,7 @@ Button colour (`style`) always repeats a word ("Confirm LIVE"), never replaces i
   - links only for `http(s)://`;
   - untrusted text goes through `make_visible` then `defuse_commands` (U8);
   - bytes that will be published always in `<pre>` (unchanged).
+- **Copyable ids (post-v1 OD-C3, owner message 12).** Every contribution id (`c_…`), approval, proposal, skill-approval, action and hold id, commit SHA, branch name and PR number reference (the `#12` of `PR #12`) the bot shows renders as `<code>` (classic) or a `code` node (rich), so one tap copies it. They render only through `telegram/ui/ids.py`: the kit span `k.Id(value, kind)`, `ids.html()` for gatekeeper-built classic HTML, `ids.autocode()` for plain text, and the renderers, which put the ids found in `Const` template text in code (never inside a code span or a link). Gatekeeper-generated kinds are checked against their grammar (a mismatch raises `LimitError`: a bug); `branch` is untrusted and is redacted (`ui/redact.py`), made visible and escaped before it is wrapped. `Text` (untrusted, model) and `Verbatim` (publish bytes, U8/I12) are never rewritten; issue numbers stay plain. Callback toasts and button labels stay plain text (Telegram can't format them). The lint `tests/telegram/idcheck.py` runs on every Bot API call of every `TgRig` test and over the demo transcript, and fails when a prefixed id is shown outside code. The extra markup stays inside the budgets of §14.17.4 (a `/queue` item gives the cid's 15 characters back from its label cut, so an item line still shows ≤ 120 characters).
 - **MarkdownV2 is never used.**
 - **Rich:** `blocks` only. Every string a plain `RichText` string, `skip_entity_detection: true` on every message, links as explicit `RichTextUrl` (http(s) only), no `tg-button` blocks for decisions (U3). The rich `html` and `markdown` modes are allowed only for constant templates with no interpolation. In practice the kit never uses them.
 - **Rich views setting:** `ux_prefs.rich_views ∈ {auto, on, off}`, default `auto`.
@@ -3507,6 +3510,7 @@ Button colour (`style`) always repeats a word ("Confirm LIVE"), never replaces i
 ### 14.18 UI component kit (`src/ossbot/gatekeeper/telegram/ui/`)
 
 #### 14.18.1 Modules and API
+- `ids.py` (post-v1 OD-C3): the id grammars, `check`/`valid`, `html(value, kind)`, `autocode(text)` (escape plus `<code>` around strong id patterns) and `spans(text)` (`Const`/`Id` spans); `kit.Id(value, kind)` is the span, `kit.header` passes its ident through `ids.spans` (§14.17.3).
 - `kit.py`: the components. Each returns a `View`: `{method, payload (classic), rich_payload | None, buttons: list[ButtonSpec], view_kind, state}`.
   - **Budget rule.** A card is built from blocks marked `required` or `optional` with a drop priority. When the rendered text would exceed the budget (§14.17.4), the kit removes optional blocks in priority order (lowest value first) and re-renders; it never cuts inside a required block and never cuts trailing lines. Required on every card: the header, the mode line, the subject/title (or issue) line, the size line and its ⚠️ highlight, and the expiry line.
   - **Each required block is bounded**, so the required set can't exceed the budget. Bounds in escaped characters:

@@ -46,9 +46,13 @@ def test_card_classic_and_rich(ctx: AppContext) -> None:
     found, _ = ctx.holds.hold(cid, hold_request(), SANDBOX)
     view = hold_cards.hold_view(ctx, found)
     keyboard = "\n".join(" | ".join(row) for row in view.keyboard_labels())
-    golden.check("hold_card.html", classic.render(view).text + "\n--\n" + keyboard + "\n")
+    # the cid (one tap to copy, §14.17.3) differs per run: the goldens pin it as c_CID
+    golden.check("hold_card.html", classic.render(view).text.replace(cid, "c_CID") + "\n--\n" + keyboard + "\n")
+    assert f"<code>{cid}</code>" in classic.render(view).text
     doc = blocks.dump(rich.render(replace(view, rich=True)))
-    golden.check("hold_card.json", json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
+    golden.check(
+        "hold_card.json", json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True).replace(cid, "c_CID") + "\n"
+    )
     confirm = hold_cards.confirm_view(ctx, found)
     golden.check("hold_card_confirm.html", classic.render(confirm).text + "\n--\n"
                  + "\n".join(" | ".join(r) for r in confirm.keyboard_labels()) + "\n")  # fmt: skip

@@ -18,6 +18,7 @@ from ossbot.gatekeeper.github_read import GitHubError, GitHubReader
 from ossbot.gatekeeper.reconcile import Reconciler
 from ossbot.gatekeeper.state_machine import Actor
 from ossbot.gatekeeper.submit import HELD_TEXT, Submitter
+from ossbot.gatekeeper.telegram.notify import plain_text
 from tests.conftest import insert_action, insert_contribution
 from tests.fakes.fake_github import FakeGitHub, FakePusher
 from tests.fakes.holds import hold_request
@@ -44,7 +45,8 @@ def gh() -> FakeGitHub:
 
 
 def notes(ctx: AppContext) -> list[str]:
-    return [json.loads(r["payload_json"])["text"] for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox")]
+    """The FYI texts as shown (notify sends escaped HTML with ids in ``<code>``)."""
+    return [plain_text(json.loads(r["payload_json"])) for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox")]
 
 
 def confirm(ctx: AppContext, approval_id: str, message_id: int = 10) -> dict[str, Any]:

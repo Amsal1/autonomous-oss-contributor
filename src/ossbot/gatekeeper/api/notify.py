@@ -6,8 +6,9 @@
   unless ``priority: "P1"`` (at most 5 P1 per local day, then P2).
 * **Worker notices** (role ``worker``, the information-sign prefix): no session; 📈 OSS feed as P2, or P1 on request.
 
-``priority`` is ``"P1"`` or ``"P2"``; anything else, ``"P0"`` included, is a 422. The text is relayed as
-plain text (no parse mode, no buttons); it never carries control.
+``priority`` is ``"P1"`` or ``"P2"``; anything else, ``"P0"`` included, is a 422. The text is relayed
+escaped (classic HTML built by ``ui/ids.autocode``: no markup from the caller, ids as one-tap code, no
+buttons); it never carries control.
 """
 
 from __future__ import annotations

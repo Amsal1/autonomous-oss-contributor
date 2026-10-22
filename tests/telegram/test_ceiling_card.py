@@ -35,7 +35,7 @@ async def test_card_is_read_only_facts(rig: TgRig) -> None:
     mid = await send(rig, cid, "ceiling", OVER)
     body = text(rig, mid)
     c = rig.ctx.config.policy.diff
-    assert body.startswith(f"🧱 <b>Size ceiling reached</b> · {cid} · paused")
+    assert body.startswith(f"🧱 <b>Size ceiling reached</b> · <code>{cid}</code> · paused")
     assert "Measured ✅ 91 files · +3,180 / −240 code · +1,020 test" in body
     ceiling = f"{c.max_files} files · {c.max_changed_lines:,} code · {c.max_test_lines:,} test"
     assert f"Ceiling (config only): {ceiling}" in body

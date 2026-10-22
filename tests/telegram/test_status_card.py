@@ -64,7 +64,8 @@ async def test_card_is_sent_then_edited_only_on_change_and_at_most_once_a_minute
     view = _status(rig)
     assert view is not None
     doc = json.dumps(rig.req.calls[-1][1], ensure_ascii=False)
-    assert "PR #5678 open" in doc and "CI: ✅ 1 · ⏳ 1 · ❌ 0" in doc and "🔄 Refresh" in doc
+    assert '"PR ", {"type": "code", "text": "#5678"}, " open' in doc  # the PR number one tap to copy
+    assert "CI: ✅ 1 · ⏳ 1 · ❌ 0" in doc and "🔄 Refresh" in doc
     await status_card.refresh(rig.ctx, reader, cid)  # first poll after the send records the hash
     await rig.flush()
     edits = len([m for m, _ in rig.req.calls if m == "editMessageText"])

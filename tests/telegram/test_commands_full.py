@@ -187,7 +187,7 @@ async def test_review_opens_the_explorer_of_an_open_card(rig: TgRig) -> None:
     await rig.say("/review")
     mid = sent_with(rig, "Review which card?")
     await rig.tap(token(rig, mid, f"🧭 {cid}"), message=mid)
-    assert sent_with(rig, f"🧭 <b>{cid} r")
+    assert sent_with(rig, f"🧭 <b><code>{cid}</code> r")
 
 
 async def _open_card(rig: TgRig) -> str:

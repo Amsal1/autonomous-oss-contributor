@@ -43,7 +43,7 @@ async def test_patch_document_is_the_derived_patch(rig: TgRig) -> None:
     assert "Preparing the document" in str(rig.req.last("answerCallbackQuery").get("text"))
     assert _uploads(rig) == [(f"{card.cid}-r1.patch", PATCH.encode())]
     caption = rig.req.last("sendDocument")["caption"]
-    assert caption == f"📄 {card.cid} r1 · gatekeeper-derived patch"
+    assert caption == f"📄 <code>{card.cid}</code> r1 · gatekeeper-derived patch"
 
 
 async def test_html_document_is_escaped_and_script_free(rig: TgRig) -> None:

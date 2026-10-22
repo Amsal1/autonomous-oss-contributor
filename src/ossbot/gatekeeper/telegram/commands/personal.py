@@ -27,6 +27,7 @@ from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Reply, 
 from ossbot.gatekeeper.telegram.escape import b, esc
 from ossbot.gatekeeper.telegram.notify import CATEGORIES
 from ossbot.gatekeeper.telegram.runtime import ui_of
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -239,7 +240,7 @@ def logs_stages(app: AppContext, cid: str) -> k.View:
             for r in runs]  # fmt: skip
     rows = picker_rows(btns, 2)
     rows.append([k.button("↩️ Back", "logs_pick", {})])
-    return k.plain("picker", (k.Const("📜 "), k.Text(cid), k.Const(": which stage?" if btns else ": no stage runs.")),
+    return k.plain("picker", (k.Const("📜 "), k.Id(cid), k.Const(": which stage?" if btns else ": no stage runs.")),
                    rows=rows)  # fmt: skip
 
 
@@ -263,7 +264,7 @@ def log_reply(app: AppContext, run_id: str) -> Reply:
     run = db.one(app.conn, "SELECT * FROM stage_runs WHERE id = ?", (run_id,))
     if run is None:
         return Reply("Unknown stage run.")
-    head = (f"📜 {b(str(run['stage']))} #{run['attempt']} of {esc(str(run['cid']))} · {esc(str(run['status']))}"
+    head = (f"📜 {b(str(run['stage']))} #{run['attempt']} of {ids.html(str(run['cid']))} · {esc(str(run['status']))}"
             + (f" · {esc(str(run['error_class']))}" if run["error_class"] else ""))  # fmt: skip
     data = _read_log(app, run["log_path"])
     if data is None:
@@ -282,7 +283,7 @@ async def logs(ctx: CommandContext, args: list[str]) -> Reply:
         return Reply("", view=logs_contributions(app))
     cid = args[0]
     if not ID_RE.match(cid) or not cid.startswith("c_"):
-        return Reply("Usage: /logs [c_0123456789] [stage]")
+        return Reply(ids.autocode("Usage: /logs [c_0123456789] [stage]"))
     if len(args) > 1:
         run = db.one(app.conn, "SELECT id FROM stage_runs WHERE cid = ? AND stage = ? ORDER BY"
                      " COALESCE(started_at, '') DESC LIMIT 1", (cid, args[1]))  # fmt: skip

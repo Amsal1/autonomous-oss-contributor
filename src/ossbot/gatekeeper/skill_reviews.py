@@ -36,6 +36,7 @@ from ossbot.gatekeeper.chat.hermes_surface import PLUGIN_PREFIX, allowed_tools
 from ossbot.gatekeeper.skill_approvals import SkillApprovals
 from ossbot.gatekeeper.telegram.cards import CardMessages
 from ossbot.gatekeeper.telegram.escape import b, esc, make_visible, tg_time, untrusted
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui.redact import redact
 
 log = logging.getLogger(__name__)
@@ -182,7 +183,7 @@ def render_skill_card(conn: sqlite3.Connection, row: sqlite3.Row) -> CardMessage
     sha = str(review["content_sha256"])
     lines = [
         f"🧠 {b('Skill ready for approval')} · {esc(review['skill'])} v{review['version']}"
-        f" ({ACTION_WORD.get(review['action'], esc(review['action']))}) · {esc(row['id'])}"
+        f" ({ACTION_WORD.get(review['action'], esc(review['action']))}) · {ids.html(str(row['id']), 'skill_approval')}"
         f" · {b(badge + ' (n/a: local change)')}",
         f"Requested by Hermes (tier {esc(review['tier'])}) · 🤖 “{reason or '—'}”",
         f"Tools requested: {esc(', '.join(tools) or 'none')} · "

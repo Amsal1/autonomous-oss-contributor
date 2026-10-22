@@ -37,7 +37,7 @@ async def test_card_layout_and_two_taps(rig: TgRig, tmp_path: Path) -> None:
     sid, mid = await _card(rig, tmp_path)
     body = text(rig, mid)
     head = body.split("\n")[0]
-    assert head.startswith("🧠 <b>Skill ready for approval</b> · protein-log v1 (new) · " + sid)
+    assert head.startswith("🧠 <b>Skill ready for approval</b> · protein-log v1 (new) · <code>" + sid + "</code>")
     assert "<b>🧪 DRY RUN (n/a: local change)</b>" in head
     assert "Requested by Hermes (tier self_improve) · 🤖 “log protein”" in body
     assert "Tools requested: memory · ✅ all within tier" in body

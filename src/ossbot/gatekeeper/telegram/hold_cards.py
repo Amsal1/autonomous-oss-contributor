@@ -60,17 +60,18 @@ def _repo(ctx: AppContext, cid: str) -> str:
 
 
 def hold_view(ctx: AppContext, hold: HoldView) -> k.View:
-    """🚨 Egress anomaly · owner/repo#N · <stage> job stopped, the numbers against the limits, ≤ 5 hosts."""
+    """🚨 Egress anomaly · owner/repo#N · c_… · <stage> job stopped, the numbers against the limits, ≤ 5 hosts."""
     d = hold.detail
     lim = d.limits
     numbers = (f"↑ {_size(d.up_bytes)} (limit {lim.max_upload_mb} MB) · ↓ {_size(d.down_bytes)} (limit"
                f" {lim.max_download_mb} MB) · {d.hosts} hosts (limit {lim.max_hosts}) · mode {d.egress_mode}"
                + (" · strict egress" if d.egress == "strict" else ""))  # fmt: skip
-    lines: list[k.Line] = [
-        (k.Const("🚨 "), k.Bold(k.Const("Egress anomaly")), k.Const(" · "), k.Text(_subject(ctx, hold.cid), 160),
-         k.Const(f" · {d.stage} job stopped")),
-        k.line(numbers),
-    ]  # fmt: skip
+    subject = _subject(ctx, hold.cid)
+    head: list[k.Span] = [k.Const("🚨 "), k.Bold(k.Const("Egress anomaly")), k.Const(" · ")]
+    if subject != hold.cid:
+        head += [k.Text(subject, 160), k.Const(" · ")]
+    head += [k.Id(hold.cid), k.Const(f" · {d.stage} job stopped")]  # the cid one tap to copy (§14.17.3)
+    lines: list[k.Line] = [tuple(head), k.line(numbers)]
     hosts = d.top_hosts[:TOP_HOSTS_SHOWN]
     if hosts:
         spans: list[k.Span] = [k.Const("Top hosts: ")]

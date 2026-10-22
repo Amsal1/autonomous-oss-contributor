@@ -9,6 +9,11 @@
     },
     " · ",
     "acme/widgets#123",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    },
     " · validate job stopped"
    ],
    "type": "paragraph"

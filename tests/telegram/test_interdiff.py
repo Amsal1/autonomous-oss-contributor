@@ -172,13 +172,13 @@ async def test_revised_card_and_the_interdiff_view(rig: TgRig) -> None:
     cid, action = _revised(ctx, info, INTERDIFF_PATCH)
     card = await publish(rig, action)
     shown = text(rig, card.message_id)
-    assert shown.startswith(f"🔁 <b>Revised for review</b> · {cid} · r2")
+    assert shown.startswith(f"🔁 <b>Revised for review</b> · <code>{cid}</code> · r2")
     assert "1. src/app.py L3 — y should be 4 · ✅ touched" in shown
     assert "<b>What changed since r1</b> ✅ (base unchanged): src/app.py +1 −1" in shown
     assert labels(rig, card.message_id)[2:4] == ["🧭 Explore", "🔀 Interdiff"]
     await rig.tap(token(rig, card.message_id, "🔀 Interdiff"), message=card.message_id)
     view = view_message(ctx, "interdiff")
-    assert f"🔀 <b>{cid} r1 → r2</b>" in text(rig, view) and "+y = 4" in text(rig, view)
+    assert f"🔀 <b><code>{cid}</code> r1 → r2</b>" in text(rig, view) and "+y = 4" in text(rig, view)
 
 
 LONG = "".join(f"+interdiff line {i:04d} padding padding\n" for i in range(160))

@@ -25,6 +25,7 @@ from ossbot.gatekeeper.telegram.escape import esc
 from ossbot.gatekeeper.telegram.review import queue, resolve
 from ossbot.gatekeeper.telegram.review import retry as review_retry
 from ossbot.gatekeeper.telegram.review.resolve import SKILL_PATTERN
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
 
@@ -36,7 +37,7 @@ async def queue_cmd(ctx: CommandContext, args: list[str]) -> Reply:
 
 def resend(app: AppContext, cid: str, actor: str) -> str:
     try:
-        ids = app.reissue(cid, actor, keep_expiry=True)
+        created = app.reissue(cid, actor, keep_expiry=True)
     except ApprovalError as exc:
         if exc.code == "submitting":
             return "Submitting… try again in a moment"
@@ -51,7 +52,7 @@ def resend(app: AppContext, cid: str, actor: str) -> str:
                 return resolve.nothing_text(resolve.state_of(app.conn, cid))
             return "Re-sent the proposal card"
         return resolve.nothing_text(resolve.state_of(app.conn, cid))
-    return "Re-sent the card" if len(ids) == 1 else f"Re-sent {len(ids)} cards"
+    return "Re-sent the card" if len(created) == 1 else f"Re-sent {len(created)} cards"
 
 
 @command("approve", help="Re-send a contribution's card (never approves by itself)", safety="read")
@@ -60,8 +61,8 @@ async def approve_cmd(ctx: CommandContext, args: list[str]) -> Reply:
         return Reply("", view=queue.view(ctx.app))
     cid = args[0].strip()
     if not ID_RE.match(cid) or not cid.startswith("c_"):
-        return Reply("Usage: /approve c_0123456789 (re-sends its card; you approve on the card)")
-    return Reply(esc(resend(ctx.app, cid, ctx.actor)))
+        return Reply(ids.autocode("Usage: /approve c_0123456789 (re-sends its card; you approve on the card)"))
+    return Reply(ids.autocode(resend(ctx.app, cid, ctx.actor)))
 
 
 class OpenArg(BaseModel):
@@ -168,11 +169,11 @@ async def review_cmd(ctx: CommandContext, args: list[str]) -> Reply:
            " a.status IN ('pending','armed') AND o.kind IN ('open_pr','push_update')")  # fmt: skip
     if args:
         if not ID_RE.match(args[0]) or not args[0].startswith("c_"):
-            return Reply("Usage: /review [c_0123456789]")
+            return Reply(ids.autocode("Usage: /review [c_0123456789]"))
         row = db.one(app.conn, sql + " AND o.cid = ? ORDER BY a.created_at DESC LIMIT 1", (args[0],))
         if row is None:
-            return Reply(esc(resolve.nothing_text(resolve.state_of(app.conn, args[0]))))
-        return Reply(esc(_open_review(app, str(row["id"])) or "🧭 Explorer below."))
+            return Reply(ids.autocode(resolve.nothing_text(resolve.state_of(app.conn, args[0]))))
+        return Reply(ids.autocode(_open_review(app, str(row["id"])) or "🧭 Explorer below."))
     rows = app.conn.execute(sql + " ORDER BY a.created_at LIMIT 8").fetchall()
     if not rows:
         return Reply("No open PR cards to review. /queue shows everything waiting.")
@@ -211,7 +212,7 @@ def _reject_reasons_view(app: AppContext, approval_id: str) -> k.View:
         return k.plain("fyi", k.line("That card is no longer open."))
     btns = [k.button(label, "reject_cmd", {"approval_id": approval_id, "reason": key})
             for key, label in REJECT_LABELS.items()]  # fmt: skip
-    return k.plain("picker", (k.Const("❌ "), k.Bold(k.Const("Reject ")), k.Code(k.Text(str(row["cid"]), 40)),
+    return k.plain("picker", (k.Const("❌ "), k.Bold(k.Const("Reject ")), k.Id(str(row["cid"])),
                               k.Const(f" ({row['kind']}): why?")),
                    rows=[btns[:2], btns[2:], [cancel_button()]])  # fmt: skip
 
@@ -220,7 +221,7 @@ def _reject_confirm_view(app: AppContext, approval_id: str, reason: RejectReason
     row = db.one(app.conn, OPEN_CARDS_SQL + " AND a.id = ?", (approval_id,))
     if row is None:
         return k.plain("fyi", k.line("That card is no longer open."))
-    lines: list[k.Line] = [(k.Const("❌ Reject "), k.Code(k.Text(str(row["cid"]), 40)),
+    lines: list[k.Line] = [(k.Const("❌ Reject "), k.Id(str(row["cid"])),
                             k.Const(f" ({row['kind']}): {REJECT_LABELS[reason]}. Nothing is published;"
                                     " the card's buttons stop working."))]  # fmt: skip
     if reason == "repo_unsuitable":
@@ -244,10 +245,10 @@ async def reject_cmd(ctx: CommandContext, args: list[str]) -> Reply:
                                       rows=[btns[i : i + 2] for i in range(0, len(btns), 2)]))  # fmt: skip
     cid = args[0].strip()
     if not ID_RE.match(cid) or not cid.startswith("c_"):
-        return Reply("Usage: /reject [c_0123456789] [reason]")
+        return Reply(ids.autocode("Usage: /reject [c_0123456789] [reason]"))
     row = db.one(app.conn, OPEN_CARDS_SQL + " AND o.cid = ? ORDER BY a.created_at DESC LIMIT 1", (cid,))
     if row is None:
-        return Reply(esc(resolve.nothing_text(resolve.state_of(app.conn, cid))))
+        return Reply(ids.autocode(resolve.nothing_text(resolve.state_of(app.conn, cid))))
     if len(args) == 1:
         return Reply("", view=_reject_reasons_view(app, str(row["id"])))
     reason, text = _reason_of(args[1:])
@@ -287,7 +288,7 @@ async def reject_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
         ctx.handlers.repo_cooldown(cid, ctx.actor)
     elif reason == "other" and not text:
         ctx.handlers.ask_reject_reason(cid, approval_id, ctx.message_id)
-    return Reply(f"❌ Rejected {esc(cid)} ({esc(REJECT_LABELS[reason])}); nothing was published.")
+    return Reply(f"❌ Rejected {ids.html(cid)} ({esc(REJECT_LABELS[reason])}); nothing was published.")
 
 
 @action("review_open", arg=ReviewOpenArg)

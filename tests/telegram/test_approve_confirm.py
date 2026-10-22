@@ -88,7 +88,7 @@ async def test_live_panel_is_red_and_s9_links_the_pr(rig: TgRig) -> None:
     assert _button(rig, card.message_id, "🚀 Confirm LIVE")["style"] == "danger"
     await rig.tap(token(rig, card.message_id, "🚀 Confirm LIVE"), message=card.message_id)
     final = latest(rig, card.message_id)
-    assert final["text"].endswith("🚀 <b>Submitted · PR #77</b>")
+    assert final["text"].endswith("🚀 <b>Submitted · PR <code>#77</code></b>")
     assert rig.buttons(final) == [[{"text": "🔗 Open PR ↗", "url": PR_URL},
                                    {"text": "📋 Copy link", "copy_text": {"text": PR_URL}}]]  # fmt: skip
     assert cid in final["text"]

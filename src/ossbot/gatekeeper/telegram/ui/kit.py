@@ -3,7 +3,9 @@
 * Spans carry their trust: ``Text`` (untrusted or model text: redacted, made visible, defused,
   escaped), ``Const`` (gatekeeper template text: escaped only, so our own ``/resume`` hints stay
   tappable), ``Verbatim`` (publish bytes such as the PR title: scanned, made visible, escaped, never
-  redacted, defused or cut).
+  redacted, defused or cut), ``Id`` (a gatekeeper id, SHA, PR ref or branch shown one tap to copy). The
+  renderers also put the ids found in ``Const`` text in code (``ui/ids.py``), never those in ``Text`` or
+  ``Verbatim``.
 * A view is a list of ``Block``s marked required or optional. The budget rule drops optional blocks
   lowest priority first and never cuts inside a block; required blocks are bounded by their spans'
   ``max``. ``ViewTooLarge`` means a bug: the caller logs ERROR and sends ``stub`` instead.
@@ -230,9 +232,13 @@ def mode_badge(dry_run: bool | None, *, na: str | None = None) -> Span:
 
 
 def header(icon: str, title: str, ident: str | None = None, mode: Span | None = None) -> Line:
+    """``icon <b>title</b> · ident · mode``; the ident's ids (``c_…``, 40-hex SHAs, ``PR #12``) become ``Id``
+    spans, one tap to copy (``ui/ids.py``)."""
+    from ossbot.gatekeeper.telegram.ui import ids  # noqa: PLC0415 - ids builds on this module's spans
+
     parts: list[Span] = [Const(f"{icon} "), Bold(Const(title))]
     if ident:
-        parts += [Const(" · "), Const(ident)]
+        parts += [Const(" · "), *ids.spans(ident)]
     if mode is not None and mode != Const(""):
         parts += [Const(" · "), mode]
     return tuple(parts)

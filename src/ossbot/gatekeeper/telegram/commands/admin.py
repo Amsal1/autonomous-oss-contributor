@@ -29,6 +29,7 @@ from ossbot.gatekeeper.telegram.actions import Tap, action
 from ossbot.gatekeeper.telegram.commands.common import confirm_button, confirm_panel, picker_rows
 from ossbot.gatekeeper.telegram.commands.registry import CommandContext, Confirm, Reply, command, confirm_handler
 from ossbot.gatekeeper.telegram.escape import b, esc
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -283,7 +284,7 @@ async def model_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
     try:
         diff = ctx.app.models.set_model(role, model_id, effort, False, ctx.actor)
     except ModelSetError as exc:
-        return Reply(f"Refused: {esc(str(exc)[:200])}")
+        return Reply(f"Refused: {ids.autocode(str(exc)[:200])}")
     return Reply(f"🧠 {b('Model')} {esc(role)} → {esc(model_id)}" + ("" if diff else " (already set)"))
 
 
@@ -331,7 +332,7 @@ async def reload(ctx: CommandContext, args: list[str]) -> Reply:
     diff = ui_redact.redact(preview.diff, surface="reload_diff")[0]
     cut = diff if len(diff) <= DIFF_MAX else diff[:DIFF_MAX] + "\n…"
     return Reply(
-        f"⚙️ {b('Reload')} {esc(', '.join(preview.changed_files))} (snapshot {esc(preview.hash[:12])})\n"
+        f"⚙️ {b('Reload')} {esc(', '.join(preview.changed_files))} (snapshot {ids.html(preview.hash[:12], 'sha')})\n"
         f"<pre>{esc(cut)}</pre>\nEvery open approval, proposal and skill card is invalidated and re-issued.",
         Confirm("reload_confirm", "✅ Reload", preview.hash, style="danger"),
     )
@@ -344,7 +345,8 @@ async def reload_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
     except (ConfigError, ReloadConflict) as exc:
         return Reply(f"Not reloaded: {esc(str(exc)[:300])}")
     ctx.app.reissue_cards(invalidated, ctx.actor)
-    return Reply(f"⚙️ {b('Reloaded')} · snapshot {esc(snap.hash[:12])} · {len(invalidated)} card(s) re-issued")
+    return Reply(f"⚙️ {b('Reloaded')} · snapshot {ids.html(snap.hash[:12], 'sha')} · {len(invalidated)} card(s)"
+                 " re-issued")  # fmt: skip
 
 
 # ------------------------------------------------------------------------------------ /repos

@@ -899,6 +899,20 @@ PART A of `.ossbot-local/postv1/plan-stale-queue-copy.md` (rows OD-C1, OD-C2; DE
 
 What the tests show: a reload, a start-time snapshot change, kill -> resume and pause (+ dry-run toggle) -> resume each end with one fresh card and `⬇️ Show current` on the stale one; while killed or paused no approval row and no decision token is created, and Show current answers `Paused or killed: the fresh card follows after /resume`; four restarts on a changed config send exactly one fresh card (one `auto_reissue` audit event); the fresh approval's `binding_hash` equals the binding recomputed with the current dry-run flag; held, `changes_requested`, rejected, `render_failed`, expired, window-too-short and `IMPLEMENTING` cards are not re-sent; a refused re-send is audited once. `/queue` lists the owner's case (`AWAITING_APPROVAL`, card invalidated: `1 waiting`, Open re-sends one card), expired-but-eligible (fresh window), `PROPOSED` and staged skills without a card, holds (Open re-sends the hold card), `RESCOPE_REQUIRED`, `SUBMIT_FAILED` (Open = the retry note's Retry, one `retry_requested`), and an item no longer eligible answers why and sends nothing. The full marker run is the close-out's (C2). The dashboard's "📥 n pending" still counts open approvals only.
 
+## Post-v1: copyable ids
+
+PART B of `.ossbot-local/postv1/plan-stale-queue-copy.md` (row OD-C3; DESIGN §14.13.1, §14.17.3, §14.18.1; ADR-0004 addendum "copyable ids"). Start `e549f50`. Hermetic only: no redeploy, no live call, no Telegram message, `config/` unchanged.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint before the fix | `tests/telegram/idcheck.py` wired into `tgharness`, PART A code | 175 of 717 telegram tests failed on bare ids (the lint bites) |
+| Lint gate | `DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports` | clean; 270 source files; 16 contracts kept |
+| Targeted suites | `DEV pytest tests/telegram tests/unit/gatekeeper tests/e2e tests/unit/test_no_hardcoded_models.py tests/unit/ctl -n auto --timeout=120 -m "not sandbox and not e2e_docker"` | 2941 passed |
+| Demo media | `scripts\dev\make-demo.ps1`, then `-Check` | 14 stills, GIF and MP4 changed (ids now code); `-Check` PASS (render digest f3aed5305b30) |
+| Hygiene | `DEV ossctl lint personal ; DEV ossctl docs commands --check` | 0 hits; README command table current |
+
+What the tests show: every golden and every Bot API call of every `TgRig` test and of the demo transcript shows its prefixed ids inside `<code>`/a `code` node; ids in `Text` and `Verbatim` are never rewritten (and the lint flags them); FYIs are escaped HTML whose `classify` and merge read the raw/shown text; a stale card, a 5-item `/queue` page (≤ 1,500 characters, item lines ≤ 120 shown characters) and a 15-FYI merge still fit their budgets with the extra markup. The goldens changed only by `<code>` wrappers (S1 headers, commit/base SHAs, base branch, `PR #12`, proposal header, hold card cid). The full marker run is the close-out's (C2).
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

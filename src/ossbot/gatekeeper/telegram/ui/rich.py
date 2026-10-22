@@ -3,6 +3,8 @@
 * Every leaf is a plain ``RichText`` string: untrusted text is redacted and made visible first (U14,
   U1), ``skip_entity_detection`` is always set, links are explicit ``RichTextUrl`` (http(s) only).
   No ``html``/``markdown`` field exists in ``blocks.InputRichMessage``.
+* Ids (``k.Id`` and the ids found in ``Const`` text outside a code span or link) are ``RichTextCode``
+  nodes, one tap to copy (``ui/ids.py``, §14.17.3).
 * ``use_rich``: ``ux_prefs.rich_views`` (auto|on|off, default from ``telegram.yaml``) and
   ``rich_unavailable_until``; approval cards and confirms never set ``View.rich`` (U3).
 * ``mark_unavailable`` is called on a rich 400: classic for 24 h (§14.20.5).
@@ -53,23 +55,32 @@ def _visible(text: str) -> str:
     return make_visible(text)[0]
 
 
-def _span(span: Span, surface: str) -> rb.RichText:
+def _const(value: str) -> rb.RichText:
+    """Template text with its ids as ``RichTextCode`` nodes (one tap to copy, §14.17.3)."""
+    parts = ids.spans(value)
+    if len(parts) == 1 and isinstance(parts[0], Const):
+        return value
+    return [p.value if isinstance(p, Const) else _span(p, "") for p in parts]
+
+
+def _span(span: Span, surface: str, *, plain: bool = False) -> rb.RichText:
+    """``plain``: inside a code node or a link, where template ids are not wrapped again."""
     if isinstance(span, Text):
         text, _ = ui_redact.redact(span.value, surface=surface)
         return _visible(cut(text, span.max) if span.max is not None else text)
     if isinstance(span, Const):
-        return span.value
+        return span.value if plain else _const(span.value)
     if isinstance(span, Verbatim):
         ui_redact.scan(span.value, surface=span.surface)
         return _visible(span.value)
     if isinstance(span, Bold):
-        return rb.RichTextBold(text=_span(span.inner, surface))
+        return rb.RichTextBold(text=_span(span.inner, surface, plain=plain))
     if isinstance(span, Italic):
-        return rb.RichTextItalic(text=_span(span.inner, surface))
+        return rb.RichTextItalic(text=_span(span.inner, surface, plain=plain))
     if isinstance(span, Code):
-        return rb.RichTextCode(text=_span(span.inner, surface))
+        return rb.RichTextCode(text=_span(span.inner, surface, plain=True))
     if isinstance(span, Link):
-        inner = _span(span.inner, surface)
+        inner = _span(span.inner, surface, plain=True)
         return rb.RichTextUrl(text=inner, url=span.url) if domain_of(span.url) else inner
     if isinstance(span, Time):
         return rb.RichTextDateTime(text=span.fallback, unix_time=span.unix, date_time_format=span.fmt)

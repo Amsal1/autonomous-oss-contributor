@@ -59,12 +59,15 @@ def where(row: Any) -> str:
     return f"{name} L{row['line_start']}" + (f"–{end}" if end != row["line_start"] else "")
 
 
-def prompt(ctx: AppContext, kind: str, cid: str, rev: int, action_id: str | None, text: str, placeholder: str, *,
+def prompt(ctx: AppContext, kind: str, cid: str, rev: int, action_id: str | None, text: str | k.Line,
+           placeholder: str, *,
            reply_to: int | None = None, path: str | None = None, hunk: int | None = None,
            lines: list[list[Any]] | None = None) -> None:  # fmt: skip
     """A ForceReply prompt; ``pending_input`` is opened when it is sent (``Outbox.mark_sent``). ``lines``:
-    one ``[side, start, end]`` already resolved (an interdiff hunk), stored as the prompt's candidate."""
-    view = k.plain("confirm_prompt", (k.Text(text, 300),))
+    one ``[side, start, end]`` already resolved (an interdiff hunk), stored as the prompt's candidate. A ``str``
+    ``text`` may carry untrusted parts (a path) and is shown as ``Text``; a ``Line`` is template text (its
+    cid one tap to copy)."""
+    view = k.plain("confirm_prompt", (k.Text(text, 300),) if isinstance(text, str) else text)
     view.placeholder = placeholder[:60]
     view.cid, view.rev, view.action_id = cid, rev, action_id
     prompt_state: dict[str, Any] = {"kind": kind, "cid": cid, "rev": rev, "action_id": action_id, "path": path,

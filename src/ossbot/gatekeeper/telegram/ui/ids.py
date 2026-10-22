@@ -6,9 +6,12 @@ branch names render as classic ``<code>`` or a rich ``RichTextCode`` node, so on
   mismatch raises ``LimitError`` (a bug in code, never shown).
 * ``branch`` is the one untrusted kind: redacted (``ui/redact.py``), made visible and escaped like
   ``k.Text`` before it is wrapped.
-* ``autocode(text)`` escapes plain text and wraps only strong id patterns (prefixed ids, 40-hex SHAs);
-  ``spans(text)`` splits text into ``Const``/``Id`` spans the same way. Neither is ever applied to
-  ``Verbatim`` publish bytes (U8, I12). Toasts and button labels stay plain (Telegram can't format them).
+* ``autocode(text)`` escapes plain text and wraps only strong id patterns (prefixed ids, 40-hex SHAs, the
+  ``#12`` of ``PR #12``); ``spans(text)`` splits text into ``Const``/``Id`` spans the same way. The
+  renderers apply the same split to every ``Const`` (template text) outside a code span or link, and
+  ``AppContext.notify`` sends FYIs through ``autocode``. Neither is ever applied to ``Text`` (untrusted)
+  or ``Verbatim`` publish bytes (U8, I12). Toasts and button labels stay plain (Telegram can't format
+  them). ``tests/telegram/idcheck.py`` fails any Bot API call that shows a prefixed id outside code.
 """
 
 from __future__ import annotations
@@ -37,8 +40,9 @@ PATTERNS: dict[str, re.Pattern[str]] = {
 }
 KIND_OF_PREFIX: dict[str, IdKind] = {"c": "cid", "a": "approval", "p": "proposal", "s": "skill_approval",
                                      "x": "action", "h": "hold", "r": "run"}  # fmt: skip
-# Strong patterns only: a prefixed id or a full 40-hex SHA standing alone (``xc_…`` lookalikes don't match).
-STRONG = re.compile(rf"\b(?:[a-z]_{_PREFIXED}|[0-9a-f]{{40}})\b")
+# Strong patterns only: a prefixed id, a full 40-hex SHA standing alone (``xc_…`` lookalikes don't match), or
+# the number of a ``PR #12`` reference (the ``#12`` part; issue numbers stay plain).
+STRONG = re.compile(rf"\b(?:[a-z]_{_PREFIXED}|[0-9a-f]{{40}})\b|(?<=\bPR )#[0-9]{{1,9}}\b")
 
 
 def valid(value: str, kind: IdKind) -> bool:
@@ -77,6 +81,8 @@ def html(value: str, kind: IdKind = "cid") -> str:
 
 
 def _kind(match: str) -> IdKind:
+    if match.startswith("#"):
+        return "pr"
     if len(match) == 40 and "_" not in match:
         return "sha"
     return KIND_OF_PREFIX.get(match[0], "id")

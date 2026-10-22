@@ -83,7 +83,7 @@ def test_open_pr_card_layout() -> None:
     out = cards.render(view())
     assert not out.withheld and not out.too_large
     lines = out.card.split("\n")
-    assert lines[0].startswith("🧩 <b>Ready for review</b> · c_0123456789 · r1")
+    assert lines[0].startswith("🧩 <b>Ready for review</b> · <code>c_0123456789</code> · r1")
     assert "🧪 DRY RUN" in lines[0]
     assert "<b>acme/\u2060widgets</b>" in out.card  # a word joiner keeps owner/repo from auto-linking
     assert "Issue #7 <b>Parser bug</b>" in out.card
@@ -138,7 +138,7 @@ def test_model_claims_are_labelled() -> None:
 
 def test_push_update_and_comment_headers() -> None:
     push = cards.render(view(kind="push_update", pr_number=12, rev=2))
-    assert push.card.startswith("🔁 <b>Fix ready for PR #12</b> · c_0123456789 · r2")
+    assert push.card.startswith("🔁 <b>Fix ready for PR <code>#12</code></b> · <code>c_0123456789</code> · r2")
     assert "incremental commit on" in push.card and push.part_kinds == ["commit_msg"]
     comment = cards.render(view(kind="comment", target_number=12, body="Thanks!"))
     assert "Target: <b>acme/widgets#12</b>" in comment.card.replace("\u2060", "")

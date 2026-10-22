@@ -9,13 +9,15 @@ import pytest
 
 from ossbot.common.schemas import State
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.telegram.notify import plain_text
 from tests.conftest import UID_OPERATOR, UID_REQUESTER, UID_SANDBOX, UID_WORKER, insert_contribution
 from tests.fakes.holds import hold_body, hold_request
 from tests.unit.gatekeeper.api_helpers import client
 
 
 def _fyis(ctx: AppContext) -> list[str]:
-    return [json.loads(r[0])["text"] for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox")]
+    """The FYI texts as shown (notify sends escaped HTML with ids in ``<code>``)."""
+    return [plain_text(json.loads(r[0])) for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox")]
 
 
 @pytest.mark.parametrize("uid", [UID_SANDBOX, UID_WORKER])

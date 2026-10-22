@@ -28,7 +28,7 @@ from ossbot.gatekeeper import db, ratelimit
 from ossbot.gatekeeper.anchors import last_anchor_time
 from ossbot.gatekeeper.outbox import OutboxRow, SendError
 from ossbot.gatekeeper.telegram.prefs import UxPrefs
-from ossbot.gatekeeper.telegram.ui import classic, icons
+from ossbot.gatekeeper.telegram.ui import classic, icons, ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
 
@@ -48,6 +48,12 @@ RUNNING_LINES = 3
 
 def _unix(ts: datetime) -> int:
     return int(ts.timestamp())
+
+
+def _hash(value: str) -> k.Span:
+    """A config or audit head (12 hex) one tap to copy; an unset or odd value stays plain code."""
+    short = (value or "")[:12]
+    return k.Id(short, "sha") if ids.valid(short, "sha") else k.Code(k.Const(short))
 
 
 def _parse_ts(value: str | None) -> datetime | None:
@@ -147,8 +153,8 @@ class Dashboard:
         out.append(tuple(tg))
         out.append(k.line(self._models()))
         # DESIGN §12.7: the config and audit heads with the last root anchor time
-        audit: list[k.Span] = [k.Const("Config "), k.Code(k.Const(control.config_hash[:12])), k.Const(" · audit "),
-                               k.Code(k.Const(control.audit_head[:12])), k.Const(" · anchor ")]  # fmt: skip
+        audit: list[k.Span] = [k.Const("Config "), _hash(control.config_hash), k.Const(" · audit "),
+                               _hash(control.audit_head), k.Const(" · anchor ")]  # fmt: skip
         anchored = last_anchor_time(ctx.paths.audit_anchors_log)
         audit.append(k.Time(_unix(anchored), anchored.strftime("%H:%M")) if anchored else k.Const("none yet"))
         out.append(tuple(audit))

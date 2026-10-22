@@ -71,6 +71,7 @@ from ossbot.gatekeeper.telegram.review import confirm as review_confirm
 from ossbot.gatekeeper.telegram.review import retry as review_retry
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.topics import CommandTarget
+from ossbot.gatekeeper.telegram.ui import ids
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import redact as ui_redact
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -412,7 +413,7 @@ class Handlers:
             try:
                 result = ProposalService(self.ctx).start(pid, f"tg:{user_id}")
             except (ProposalRefused, TransitionError) as exc:
-                await self._edit(query, f"{svc.card_view(pid).card}\n\n❌ Not started: {esc(str(exc)[:200])}")
+                await self._edit(query, f"{svc.card_view(pid).card}\n\n❌ Not started: {ids.autocode(str(exc)[:200])}")
                 await query.answer("Not started.")
                 return
             note = f"🛠 {b('Started')} · class {esc(result['approved_class'])}. The PR still needs its own approval."
@@ -484,7 +485,7 @@ class Handlers:
         try:
             reply = await effect
         except (Blocked, ApprovalError, TransitionError) as exc:
-            reply = Reply(f"Refused: {esc(str(exc)[:300])}")
+            reply = Reply(f"Refused: {ids.autocode(str(exc)[:300])}")
         self._edit_reply(message_id, reply)
 
     async def _action(
@@ -614,7 +615,7 @@ class Handlers:
             self._submitted(approval_id, str(result))
         except ApprovalError as exc:
             log.warning("submit refused: %s", exc.code, extra={"event": "submit_refused"})
-            self.ctx.notify(f"Submission refused ({esc(exc.code)}); nothing was published.")
+            self.ctx.notify(f"Submission refused ({exc.code}); nothing was published.")  # notify escapes
         except Exception:
             log.exception("submission crashed", extra={"event": "submit_crashed"})
             self.ctx.notify(
@@ -634,8 +635,9 @@ class Handlers:
         if row["status"] == "dry_run_done" or result == "dry_run_done":
             text = f"{card}\n\n🧪 {b('Dry run done — nothing was published')}"
         elif row["status"] == "done":
-            pr = f" · PR #{row['pr_number']}" if row["pr_number"] else ""
-            text = f"{card}\n\n🚀 {b('Submitted' + pr)}"
+            number = "#" + str(int(row["pr_number"])) if row["pr_number"] else ""
+            pr = f" · PR {ids.html(number, 'pr')}" if number else ""
+            text = f"{card}\n\n🚀 <b>Submitted{pr}</b>"  # the PR number one tap to copy
             url = str(row["pr_url"] or "")
             if url.startswith("https://github.com/"):
                 markup = {"inline_keyboard": [[{"text": "🔗 Open PR ↗", "url": url},
@@ -1049,7 +1051,7 @@ class Handlers:
             try:
                 reply = await spec.func(cctx, words[1:])
             except (Blocked, ApprovalError, TransitionError) as exc:
-                reply = Reply(f"Refused: {esc(str(exc)[:300])}")
+                reply = Reply(f"Refused: {ids.autocode(str(exc)[:300])}")
             if name in STOP_COMMANDS:
                 # §14.18.5 item 4: the local effect (kill/pause transaction) is committed first, then
                 # the cancellable work stops; submit and command tasks keep their Phase 1 rules.
@@ -1062,7 +1064,7 @@ class Handlers:
         try:
             reply = await effect
         except (Blocked, ApprovalError, TransitionError) as exc:
-            reply = Reply(f"Refused: {esc(str(exc)[:300])}")
+            reply = Reply(f"Refused: {ids.autocode(str(exc)[:300])}")
         self._send_reply(reply, thread_id=thread_id, stale_s=stale_s, compact=compact)
         if after is not None:
             after()
