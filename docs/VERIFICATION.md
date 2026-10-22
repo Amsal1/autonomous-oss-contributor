@@ -1018,7 +1018,7 @@ Not run in this step (close-out): the redeploy and the live `GET /rate_limit` re
 
 ## Post-v1 discovery fix, part B (fixes 5a-d, 6, 7, 10, 2026-10-22)
 
-Plan `.ossbot-local/postv1/plan-discovery-fix.md` Part B; ADR-0003 addendum "discovery pacing" (items 5-7, Part B verified facts, "Measured: pending close-out"); TRACEABILITY `DF-5`…`DF-7`. Hermetic code only: no redeploy, no live GitHub call, no `/reload`, dry-run and contributions untouched. Details: `.ossbot-local/postv1/discovery-fix/verify-b.md` (not tracked). DEV as in part A.
+Commit e1120fc. Plan `.ossbot-local/postv1/plan-discovery-fix.md` Part B; ADR-0003 addendum "discovery pacing" (items 5-7, Part B verified facts, "Measured: pending close-out"); TRACEABILITY `DF-5`…`DF-7`. Hermetic code only: no redeploy, no live GitHub call, no `/reload`, dry-run and contributions untouched. Details: `.ossbot-local/postv1/discovery-fix/verify-b.md` (not tracked). DEV as in part A.
 
 | Check | Command | Result |
 |---|---|---|
