@@ -960,6 +960,21 @@ Parts A and B of `.ossbot-local/postv1/plan-terminal-fyi.md` (rows OD-C5, OD-C6;
 
 Not run: a live end-to-end check (it needs a real contribution to fail after gate 1). Pending (later step): the redeploy. The runner inlines `prompts/planner.md` from the deployed app; `sandbox/images/llm/Dockerfile` also copies `prompts/`, so a rebuilt sandbox-llm image gets a new digest and the safety probes run again for it before the next Kiro job (not checked in this step).
 
+## Post-v1: close-out for Parts C, A and B (2026-10-22)
+
+HEAD `130ba68` (Parts C `3eb8320`, A `26e2318`, B `cbfef67`, docs `130ba68`); the redeploy's image pin is `0917f40`. Evidence: `.ossbot-local/postv1/verify-terminal-fyi.md`.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all checks passed; 589 files formatted; no issues in 271 files; 16 contracts kept |
+| Hermetic | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4726 passed in 166.55 s |
+| Hygiene | `ROOT gitleaks git --redact --config .gitleaks.toml .`; `DEV ossctl lint personal`; `DEV ossctl docs commands --check` | 325 commits, no leaks; 995 files, 0 hits; command table current |
+| Redeploy | `powershell -NoProfile -File scripts\bootstrap.ps1 -Only provision` | rc 0; app-deploy, images (sandbox-llm `sha256:2cb74d7b…`), enable-start changed; doctor PASS 41, WARN 2 (safety probes not run yet for the new tuple; hermes tool surface ConnectError during restart) |
+| Live state | `ROOT ossctl status`; GET-only `contribution_facts.py grafana/loki` | lifecycle up, state running, dry_run false before and after; c_D1BVZ6N1HZ `WATCHING` before and after |
+| Live poll rate (OD-C4) | `ROOT journalctl -u ossbot-gatekeeper --since -10min --no-pager -g "pulls/25527"` | before: 574 hits in 10 min (about 1 s apart); after: one 403 at 11:30:52Z ("next poll in 579 s", rate-limit reset honoured), then cycles at 11:40:33Z and 11:45:37Z (304 s); 4 hits in the 10 min to 11:47Z |
+
+Not run: a live terminal FYI (needs a real contribution to fail after gate 1), `ossctl doctor --probes` for the new sandbox-llm tuple (owner decision).
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
