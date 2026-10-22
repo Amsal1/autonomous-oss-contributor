@@ -972,8 +972,9 @@ HEAD `130ba68` (Parts C `3eb8320`, A `26e2318`, B `cbfef67`, docs `130ba68`); th
 | Redeploy | `powershell -NoProfile -File scripts\bootstrap.ps1 -Only provision` | rc 0; app-deploy, images (sandbox-llm `sha256:2cb74d7b…`), enable-start changed; doctor PASS 41, WARN 2 (safety probes not run yet for the new tuple; hermes tool surface ConnectError during restart) |
 | Live state | `ROOT ossctl status`; GET-only `contribution_facts.py grafana/loki` | lifecycle up, state running, dry_run false before and after; c_D1BVZ6N1HZ `WATCHING` before and after |
 | Live poll rate (OD-C4) | `ROOT journalctl -u ossbot-gatekeeper --since -10min --no-pager -g "pulls/25527"` | before: 574 hits in 10 min (about 1 s apart); after: one 403 at 11:30:52Z ("next poll in 579 s", rate-limit reset honoured), then cycles at 11:40:33Z and 11:45:37Z (304 s); 4 hits in the 10 min to 11:47Z |
+| Probes (owner-approved) | `ROOT ossctl doctor --probes`, then `ROOT ossctl doctor` | exit 0, PASS 49 (all five probes passed for tuple `da8e7914bcd2`, hermes-side probe clean); follow-up doctor PASS 48, no WARN |
 
-Not run: a live terminal FYI (needs a real contribution to fail after gate 1), `ossctl doctor --probes` for the new sandbox-llm tuple (owner decision).
+Not run: a live terminal FYI (needs a real contribution to fail after gate 1).
 
 ## Owner live checks (after the build)
 
