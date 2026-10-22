@@ -888,7 +888,7 @@ The redeploy changed the config hash, so the open gate-2 approval of the grafana
 
 ## Post-v1: stale cards and /queue
 
-PART A of `.ossbot-local/postv1/plan-stale-queue-copy.md` (rows OD-C1, OD-C2; DESIGN §12.4, §13.2, §14.11.12, §14.11.13, §14.18.4.2-4; ADR-0008 addendum "deferred re-send"). Baseline `ea7135d`. Hermetic only: no redeploy, no live call, no Telegram message, no config file changed (`git diff --stat ea7135d -- config/` empty).
+PART A of `.ossbot-local/postv1/plan-stale-queue-copy.md` (rows OD-C1, OD-C2; DESIGN §12.4, §13.2, §14.11.12, §14.11.13, §14.18.4.2-4; ADR-0008 addendum "deferred re-send"). Baseline `ea7135d`, PART A commit `50bc5ec`. Hermetic only: no redeploy, no live call, no Telegram message, no config file changed (`git diff --stat ea7135d -- config/` empty).
 
 | Check | Command | Result |
 |---|---|---|
