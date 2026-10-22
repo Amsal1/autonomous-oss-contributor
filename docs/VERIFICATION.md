@@ -1030,6 +1030,19 @@ Commit e1120fc. Plan `.ossbot-local/postv1/plan-discovery-fix.md` Part B; ADR-00
 
 Not run in this step (close-out): the redeploy and V-B, the live `ossctl doctor` rate-limit read as ossrunner (the ADR line "Measured: pending close-out").
 
+## Post-v1 discovery fix, close-out (2026-10-22)
+
+On 85ae34b (code) and dfdfb7c (ADR measured values). Details: `.ossbot-local/postv1/verify-discovery-fix.md` (not tracked).
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports`; `DEV ossctl docs commands --check` | all passed; 604 formatted; no issues in 274 files; 16 kept, 0 broken; README table current |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4876 passed in 168 s |
+| Hygiene | `ROOT gitleaks git --redact --config .gitleaks.toml .`; `DEV ossctl lint personal` | 337 commits, no leaks; 0 hits |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | exit 0; app-deploy and enable-start changed, images unchanged; safety probes passed for the unchanged tuple, so `doctor --probes` was not re-run |
+| V-B | `ROOT ossctl doctor` (full) | 15:39Z WARN core 593/5000 left (pre-fix loop), search 26/30; 15:41Z after the reset all PASS (49): core 4998/5000, search 30/30 |
+| Live cycle | `journalctl -u ossbot-runner` | 15:38:59Z `discover_done` (scheduler cycle, core floor hit at 623 left): 1 target read, 4 candidates, 3 created, 1 linked PR; 0 runner 403s in the next 29 min |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
