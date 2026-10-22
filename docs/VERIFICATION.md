@@ -1012,8 +1012,9 @@ Commit 22ef255. Owner message 12 ("no good proposal today"); diagnosis `.agents/
 | Part A targeted | `DEV pytest tests/unit/runner/test_github_read.py tests/unit/runner/test_discover.py tests/unit/runner/test_discover_open.py tests/unit/runner/test_open_discovery.py tests/unit/runner/test_scheduler.py tests/unit/runner/test_stage_flow.py tests/unit/gatekeeper/test_discovered_targets.py tests/unit/gatekeeper/test_discovered_targets_writer.py tests/unit/gatekeeper/test_api_discovered.py tests/unit/gatekeeper/test_authz.py tests/unit/gatekeeper/test_import_contracts.py tests/unit/ctl/test_cli_pipeline.py --timeout=120 -q` | 229 passed |
 | e2e scenarios 5, 5b | `DEV pytest tests/e2e/test_e2e_open_discovery.py -m e2e --timeout=120 -q` | 7 passed |
 | Affected packages | `DEV pytest tests/unit/runner tests/unit/ctl tests/unit/gatekeeper tests/e2e -m "unit or e2e" -n auto --timeout=120 -q` | 2632 passed |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120 -q` (log `.ossbot-local/logs/discovery-fix-A.log`, not tracked) | 4803 passed, 0 failed (on 3fac7ca) |
 
-Not run in this step (close-out): the full hermetic suite, the redeploy and the live `GET /rate_limit` read (Part B / close-out).
+Not run in this step (close-out): the redeploy and the live `GET /rate_limit` read (Part B / close-out).
 
 ## Owner live checks (after the build)
 
