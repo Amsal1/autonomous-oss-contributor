@@ -1,0 +1,15 @@
+💡 <b>Proposal</b> · <code>CID</code> · v1 · <b>🧪 DRY RUN (n/a: local change)</b>
+<b>langfuse/⁠langfuse</b>
+Issue <a href="https://github.com/langfuse/langfuse/issues/1234">#N</a> <b>Fix trace export when spans are empty</b> · Bug
+<blockquote>🤖 <b>Problem</b> Export throws when a trace has no spans.</blockquote>
+🤖 <b>Approach</b>
+  1. Guard empty span lists in toOtel()
+  2. Add a regression test next to trace.test.ts
+🤖 <b>Likely files</b> <code>web/⁠src/⁠export/</code>
+Size 🤖 est <b>s</b> · ~30 code · ~40 test · 2 files · ✅ fits your auto size ≤ s
+Validate ✅ tiers ≤ T1 · 🤖 1 test(s) to add/update · vitest on web/⁠src/⁠export
+✅ <b>AI policy</b>: not stated · <b>CI on PRs</b>: ❔ unknown
+✅ Signals: no competing claim · assignment not required
+⚠ code not inspected
+Confidence 🤖 0.78 · Risks 🤖 0 · Alternatives 🤖 0 → 🧭 Details
+⏳ Proposal expires <tg-time/>

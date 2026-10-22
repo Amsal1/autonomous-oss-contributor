@@ -135,7 +135,10 @@ class WatchDecision(Out):
 
 SCHEMA_HINTS: dict[str, str] = {
     "vetter": '{"ai_policy": "...", "ai_conditions": [...], "claim_status": "...", "suitability": 0.0, ...}',
-    "scout": '{"problem": "...", "approach": [...], "areas": [...], "kind": "bug", "estimate": {...}, ...}',
+    "scout": (
+        '{"problem": "...", "approach": [...], "areas": [...], "kind": "bug", "estimate": {...}, ...,'
+        ' "on_main": "needs_change|already_fixed|not_reproducible", "on_main_evidence": ["path:line or URL"]}'
+    ),
     "planner": (
         f'{{"feasible": true, "summary": "<= {PLAN_SUMMARY_MAX} chars",'
         f' "approach": ["<= {PLAN_APPROACH_MAX} items, each <= {LINE_MAX} chars"],'

@@ -119,6 +119,8 @@ class ProposalService:
         ctx = self.ctx
         policy = ctx.config.policy
         prop = req.proposal
+        if prop.on_main != "needs_change":  # the runner skips these; a card for work main doesn't need is refused
+            raise ProposalRefused(422, "not_a_proposal", prop.on_main)
         est = prop.estimate
         est_class = larger(classify(est.code_lines, est.files), est.size_class)
         ceiling = policy.diff
@@ -154,6 +156,8 @@ class ProposalService:
                         raise ProposalRefused(429, "proposal_daily_cap", str(pacing["next_slot_at"]))
             version = int(current or 0) + 1
             doc = prop.model_dump(by_alias=True)
+            if req.code_inspection is not None:  # runner-measured, inside the hash-bound doc (§14.11.15)
+                doc["code_inspection"] = req.code_inspection.model_dump()
             canonical = canonical_json(doc).decode("utf-8")
             digest = sha256_hex(canonical.encode("utf-8"))
             self.conn.execute(

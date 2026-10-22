@@ -137,6 +137,76 @@ def _read_acp(raw: str, stderr: str) -> KiroOutput:
     return out
 
 
+REPO_ROOT = "/work/repo"
+NOT_READ_KINDS = {"fetch", "execute", "edit", "delete", "move"}
+OFFLOAD_MARK = "-char limit; here is a preview"  # KAS 2.32.0 tool-result offload (ADR-0011 addendum)
+
+
+def _repo_path(value: Any) -> bool:
+    return isinstance(value, str) and (value == REPO_ROOT or value.startswith(REPO_ROOT + "/"))
+
+
+def _names_repo(raw: Any, depth: int = 0) -> bool:
+    """A string value in ``rawInput`` (up to depth 2) names ``/work/repo`` or below."""
+    if _repo_path(raw):
+        return True
+    if depth >= 2:
+        return False
+    if isinstance(raw, dict):
+        return any(_names_repo(v, depth + 1) for v in raw.values())
+    if isinstance(raw, list):
+        return any(_names_repo(v, depth + 1) for v in raw)
+    return False
+
+
+def repo_inspection(events: bytes) -> tuple[int, int]:
+    """``(repo_reads, offloaded)`` from a V3 ACP stream (§9.5a, ``code_inspection``): completed
+    built-in, non-fetch/execute/edit calls whose input or locations name ``/work/repo`` or below,
+    and calls whose result was offloaded (over 30,000 characters, cut to a preview the sandbox can't
+    expand). Merged by ``toolCallId``; unparseable lines are skipped; an empty stream is ``(0, 0)``.
+    Counting only: nothing here is executed or trusted beyond the integers."""
+    calls: dict[str, dict[str, Any]] = {}
+    order: list[dict[str, Any]] = []
+    for line in events.decode("utf-8", "replace").splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or event.get("type") != "sessionUpdate":
+            continue
+        data = event.get("data")
+        update = data.get("update") if isinstance(data, dict) else None
+        if not isinstance(update, dict) or update.get("sessionUpdate") not in {"tool_call", "tool_call_update"}:
+            continue
+        call_id = str(update.get("toolCallId") or "")
+        call = calls.get(call_id) if call_id else None
+        if call is None:
+            call = {"kind": None, "mcp": False, "repo": False, "status": "", "offloaded": False}
+            order.append(call)
+            if call_id:
+                calls[call_id] = call
+        if isinstance(update.get("kind"), str):
+            call["kind"] = update["kind"]
+        raw = update.get("rawInput")
+        if isinstance(raw, dict) and "tool_id" in raw:
+            call["mcp"] = True
+        if _names_repo(raw):
+            call["repo"] = True
+        for loc in update.get("locations") or []:
+            if isinstance(loc, dict) and _repo_path(loc.get("path")):
+                call["repo"] = True
+        if isinstance(update.get("status"), str):
+            call["status"] = update["status"].lower()
+        for item in update.get("content") or []:
+            inner = item.get("content") if isinstance(item, dict) else None
+            text = inner.get("text") if isinstance(inner, dict) else None
+            if isinstance(text, str) and OFFLOAD_MARK in text:
+                call["offloaded"] = True
+    reads = sum(1 for c in order if c["repo"] and not c["mcp"] and c["kind"] not in NOT_READ_KINDS
+                and c["status"] == "completed")  # fmt: skip
+    return min(reads, 100_000), min(sum(1 for c in order if c["offloaded"]), 100_000)
+
+
 def read_events(raw: bytes, stderr: bytes = b"") -> KiroOutput:
     text = raw.decode("utf-8", "replace")
     if _is_acp(text):

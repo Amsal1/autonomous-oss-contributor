@@ -21,6 +21,8 @@ COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/fetch.sh sandbox/entrypoints/e
      sandbox/entrypoints/validate.sh sandbox/entrypoints/package.sh sandbox/entrypoints/unbundle.sh \
      sandbox/entrypoints/snapshot.sh sandbox/entrypoints/probe.sh sandbox/entrypoints/extract_text.sh \
      sandbox/entrypoints/run_code.sh /opt/ossbot/entrypoints/
+# Helpers the entrypoints call (not job entrypoints themselves: SANDBOX_JOB_ENTRYPOINTS stays as it is).
+COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/lib/repo_tree.sh /opt/ossbot/entrypoints/lib/
 
 # Safety-probe fixture as a tar so its symlinks survive (DESIGN §10.1, §10.9).
 COPY --chown=0:0 sandbox/fixtures/ /tmp/fixtures/

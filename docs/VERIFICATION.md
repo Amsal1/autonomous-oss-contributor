@@ -976,6 +976,20 @@ HEAD `130ba68` (Parts C `3eb8320`, A `26e2318`, B `cbfef67`, docs `130ba68`); th
 
 Not run: a live terminal FYI (needs a real contribution to fail after gate 1).
 
+## Post-v1: scout checks main (OD-C7, STEP 2)
+
+Owner message 12 (2026-10-22, "allow listing directories/reading repo code"); plan `.ossbot-local/postv1/plan-scout-repo-read.md`; ADR-0011 addendum "scout repo read". No agent JSON, `permissions.yaml` or `TRUST_TOOLS` change (`git diff --stat .kiro/agents sandbox/kiro` empty).
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all checks passed; 594 files formatted; no issues in 271 files; 16 contracts kept |
+| Shell | `DEV shellcheck sandbox/entrypoints/lib/repo_tree.sh sandbox/entrypoints/fetch.sh` | clean |
+| Targeted | `DEV pytest tests/unit/runner tests/unit/sandboxd tests/unit/sandbox tests/unit/common tests/unit/gatekeeper/test_proposals.py tests/telegram/test_proposal_card.py tests/telegram/test_proposal_versions.py tests/telegram/test_proposal_undo.py --timeout=120 -q -n auto` | 1311 passed |
+| Hermetic | `DEV pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120 -q` | 4773 passed in 160.6 s |
+| Live test | `DEV pytest --collect-only -m sandbox tests/sandbox/test_scout_reads_snapshot.py` | 1 test collected (the run needs root, the key and passed probes) |
+
+Not run in this step (close-out, root): redeploy (sandbox-full gets `lib/repo_tree.sh`, sandbox-llm the new `prompts/scout.md`) with the image digest pin, `ossctl doctor --probes`, `ROOTDEV pytest -m sandbox tests/sandbox/test_scout_reads_snapshot.py`, gitleaks.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

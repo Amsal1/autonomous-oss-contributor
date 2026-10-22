@@ -226,7 +226,7 @@ def card_view(ctx: AppContext, row: sqlite3.Row) -> k.View | None:
     if facts:
         blocks.append(k.Block((k.Lines(((k.Const("✅ Signals: "), k.Text(" · ".join(facts), 200)),)),),
                               required=False, priority=1, name="signals"))  # fmt: skip
-    warnings = _warnings(ctx, contrib, vet, areas, user)
+    warnings = _warnings(ctx, contrib, vet, areas, user, prop)
     if warnings:
         blocks.append(k.Block((k.Lines(tuple(warnings)),), name="warnings"))
     if prop.get("rationale"):
@@ -314,9 +314,20 @@ def policy_line(vet: dict[str, Any]) -> k.Line | None:
             k.Const(f": {ci}"))  # fmt: skip
 
 
+def code_not_inspected(prop: dict[str, Any]) -> bool:
+    """§14.11.15: the runner measured no read of ``/work/repo`` in the scout's session, or the scout
+    said it could not read the code. Legacy versions without ``code_inspection`` show nothing."""
+    seen = prop.get("code_inspection")
+    if not isinstance(seen, dict):
+        return False
+    return seen.get("repo_reads") == 0 or seen.get("self_reported_unread") is True
+
+
 def _warnings(ctx: AppContext, contrib: sqlite3.Row, vet: dict[str, Any], areas: list[str],
-              user: bool) -> list[k.Line]:  # fmt: skip
+              user: bool, prop: dict[str, Any]) -> list[k.Line]:  # fmt: skip
     out: list[k.Line] = []
+    if code_not_inspected(prop):
+        out.append(k.line("⚠ code not inspected"))
     hits = forbidden_hits(ctx, areas)
     if hits:
         # the paths are scout text (🤖): made visible and defused, in code style (U6, U8)

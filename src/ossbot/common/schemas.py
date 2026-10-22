@@ -233,19 +233,34 @@ class Proposal(ApiModel):
     citations: Annotated[list[Annotated[str, Field(max_length=500)]], Field(max_length=30)] = Field(
         default_factory=list
     )
+    # §9.5a check-main duty: anything but needs_change only stops work (SKIPPED, no card), never starts it
+    on_main: Literal["needs_change", "already_fixed", "not_reproducible"] = "needs_change"
+    on_main_evidence: Annotated[list[Line300], Field(max_length=5)] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _tests_or_reason(self) -> Proposal:
         """Tests are expected (§9.14): name them, or say why the repo has no suite."""
         if not self.tests and not self.no_suite_reason:
             raise ValueError("tests is empty: name the tests to add, or give no_suite_reason")
+        if self.on_main != "needs_change" and not self.on_main_evidence:
+            raise ValueError(f"on_main is {self.on_main}: cite on_main_evidence (path:line or a PR/commit URL)")
         return self
+
+
+class CodeInspection(ApiModel):
+    """Runner-measured from the scout's own event stream (§9.5a, §14.11.15 ``⚠ code not inspected``);
+    not part of ``Proposal``, so model output cannot set it."""
+
+    repo_reads: Annotated[int, Field(ge=0, le=100_000)]
+    offloaded: Annotated[int, Field(ge=0, le=100_000)]
+    self_reported_unread: bool
 
 
 class ProposalSubmit(ApiModel):
     """``POST /v1/contributions/{id}/proposal`` (worker): a new version (1, 2, ...)."""
 
     proposal: Proposal
+    code_inspection: CodeInspection | None = None
     revises: Annotated[int, Field(ge=1)] | None = None  # the version this one answers (adjust/smaller)
     feedback: Annotated[str, Field(max_length=2000)] | None = None  # "You asked" (echoed from the request)
 

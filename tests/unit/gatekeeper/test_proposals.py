@@ -44,8 +44,12 @@ def scouting(ctx: AppContext, source: str = "discover", **cols: Any) -> str:
     return insert_contribution(ctx, S.SCOUTING, source=source, **cols)
 
 
-def submit(ctx: AppContext, cid: str, revises: int | None = None, **over: Any) -> dict[str, Any]:
-    req = ProposalSubmit.model_validate({"proposal": sample(**over), "revises": revises})
+def submit(ctx: AppContext, cid: str, revises: int | None = None, code_inspection: dict[str, Any] | None = None,
+           **over: Any) -> dict[str, Any]:  # fmt: skip
+    body: dict[str, Any] = {"proposal": sample(**over), "revises": revises}
+    if code_inspection is not None:
+        body["code_inspection"] = code_inspection
+    req = ProposalSubmit.model_validate(body)
     return ProposalService(ctx).submit(cid, req, WORKER)
 
 
@@ -341,6 +345,53 @@ def test_no_suite_reason_replaces_tests() -> None:
     ProposalSubmit.model_validate({"proposal": sample(tests=[], no_suite_reason="docs-only change")})
     with pytest.raises(ValueError, match="no_suite_reason"):
         ProposalSubmit.model_validate({"proposal": sample(tests=[])})
+
+
+def test_on_main_verdict_needs_evidence_and_code_inspection_is_not_model_output() -> None:
+    """§9.5a: ``on_main`` defaults to needs_change; a skip verdict cites evidence; the runner-measured
+    ``code_inspection`` lives on ``ProposalSubmit`` only (``extra=forbid`` keeps it out of model output)."""
+    assert ProposalSubmit.model_validate({"proposal": sample()}).proposal.on_main == "needs_change"
+    with pytest.raises(ValueError, match="on_main_evidence"):
+        ProposalSubmit.model_validate({"proposal": sample(on_main="already_fixed")})
+    with pytest.raises(ValueError):
+        ProposalSubmit.model_validate({"proposal": sample(on_main="maybe", on_main_evidence=["x"])})
+    with pytest.raises(ValueError):
+        ProposalSubmit.model_validate({"proposal": sample(on_main_evidence=["x" * 301])})
+    with pytest.raises(ValueError):
+        ProposalSubmit.model_validate({"proposal": sample(on_main_evidence=["x"] * 6)})
+    seen = {"repo_reads": 0, "offloaded": 0, "self_reported_unread": False}
+    with pytest.raises(ValueError, match="code_inspection"):
+        ProposalSubmit.model_validate({"proposal": sample(code_inspection=seen)})
+    ok = ProposalSubmit.model_validate({"proposal": sample(), "code_inspection": seen})
+    assert ok.code_inspection is not None and ok.code_inspection.repo_reads == 0
+    for bad in ({**seen, "repo_reads": -1}, {**seen, "offloaded": 100_001}, {**seen, "extra": 1},
+                {"repo_reads": 1, "offloaded": 0}):  # fmt: skip
+        with pytest.raises(ValueError):
+            ProposalSubmit.model_validate({"proposal": sample(), "code_inspection": bad})
+
+
+def test_code_inspection_is_stored_inside_the_bound_doc(ctx: AppContext) -> None:
+    seen = {"repo_reads": 7, "offloaded": 1, "self_reported_unread": False}
+    one, two, legacy = scouting(ctx), scouting(ctx), scouting(ctx)
+    a = submit(ctx, one, code_inspection=seen)
+    b = submit(ctx, two, code_inspection={**seen, "repo_reads": 0})
+    c = submit(ctx, legacy)
+    doc = json.loads(db.one(ctx.conn, "SELECT proposal_json FROM proposals WHERE cid = ?", (one,))[0])  # type: ignore[index]
+    assert doc["code_inspection"] == seen and doc["on_main"] == "needs_change"
+    assert len({a["proposal_sha256"], b["proposal_sha256"], c["proposal_sha256"]}) == 3  # hash-bound
+    old = json.loads(db.one(ctx.conn, "SELECT proposal_json FROM proposals WHERE cid = ?", (legacy,))[0])  # type: ignore[index]
+    assert "code_inspection" not in old
+
+
+@pytest.mark.parametrize("verdict", ["already_fixed", "not_reproducible"])
+def test_a_skip_verdict_is_not_a_proposal(ctx: AppContext, verdict: str) -> None:
+    cid = scouting(ctx)
+    with pytest.raises(ProposalRefused) as info:
+        submit(ctx, cid, on_main=verdict, on_main_evidence=["src/a.go:10"])
+    assert (info.value.status, info.value.code) == (422, "not_a_proposal")
+    assert db.one(ctx.conn, "SELECT 1 FROM proposals WHERE cid = ?", (cid,)) is None
+    assert db.one(ctx.conn, "SELECT 1 FROM proposal_approvals WHERE cid = ?", (cid,)) is None
+    assert contribution(ctx, cid)["state"] == "SCOUTING"
 
 
 def test_sweep_ignores_live_cards(ctx: AppContext, clock: FakeClock) -> None:

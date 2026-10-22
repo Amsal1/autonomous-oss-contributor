@@ -314,6 +314,41 @@ async def test_seed_card_is_unchanged(rig: TgRig) -> None:
     golden.check("proposal_seed_card.html", _normalized(str(body), card.cid) + "\n")
 
 
+INSPECTED = {"repo_reads": 5, "offloaded": 0, "self_reported_unread": False}
+NOT_INSPECTED = "⚠ code not inspected"
+
+
+@pytest.mark.parametrize(
+    ("seen", "marked"),
+    [
+        ({**INSPECTED, "repo_reads": 0}, True),
+        (INSPECTED, False),
+        (None, False),  # a legacy version without code_inspection
+        ({**INSPECTED, "self_reported_unread": True}, True),
+    ],
+)  # fmt: skip
+async def test_code_not_inspected_marker(rig: TgRig, seen: dict[str, object] | None, marked: bool) -> None:
+    """§14.11.15: the runner-measured inspection adds one fixed warning line, never model text."""
+    card = await proposal_card(rig, vetting={"claim_status": "unclaimed", "ai_policy": "unstated"},
+                               code_inspection=seen)  # fmt: skip
+    body = str(latest(rig, card.message_id)["text"])
+    assert (NOT_INSPECTED in body) is marked
+    assert labels(rig, card.message_id) == SEED_LABELS  # Start work stays: a warning, never a gate
+    if seen is None:
+        golden.check("proposal_seed_card.html", _normalized(body, card.cid) + "\n")
+    elif marked and seen["repo_reads"] == 0:
+        golden.check("proposal_card_code_not_inspected.html", _normalized(body, card.cid) + "\n")
+
+
+async def test_code_not_inspected_survives_the_budget_rule(rig: TgRig) -> None:
+    card = await proposal_card(
+        rig, problem="p" * 300, approach=[f"step {i} " + "x" * 90 for i in range(6)], rationale="r" * 160,
+        areas=[f"src/very/long/path/{i}/" + "y" * 40 for i in range(8)],
+        code_inspection={**INSPECTED, "repo_reads": 0}, vetting={"claim_status": "unclaimed", "ai_policy": "unstated"},
+    )  # fmt: skip
+    assert NOT_INSPECTED in str(latest(rig, card.message_id)["text"])
+
+
 async def test_seed_card_shows_the_default_branch_activity_from_vet(rig: TgRig) -> None:
     """Owner addition (2026-10-21): seed targets get the line too, from vet's read of the default branch."""
     when = (rig.ctx.clock.now() - timedelta(days=8)).strftime("%Y-%m-%dT%H:%M:%SZ")

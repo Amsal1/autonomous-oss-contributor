@@ -128,9 +128,12 @@ class Gatekeeper:
 
     # --------------------------------------------------------------- gate 1
     def submit_proposal(
-        self, cid: str, proposal: dict[str, Any], revises: int | None, feedback: str | None
-    ) -> dict[str, Any]:
-        body = {"proposal": proposal, "revises": revises, "feedback": feedback}
+        self, cid: str, proposal: dict[str, Any], revises: int | None, feedback: str | None,
+        *, code_inspection: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:  # fmt: skip
+        body: dict[str, Any] = {"proposal": proposal, "revises": revises, "feedback": feedback}
+        if code_inspection is not None:
+            body["code_inspection"] = code_inspection
         doc: dict[str, Any] = self._call("POST", f"/v1/contributions/{cid}/proposal", body)
         return doc
 

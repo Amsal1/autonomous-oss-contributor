@@ -14,7 +14,7 @@ from ossbot.runner.output_parse import OutputInvalid, parse_model, read_events
 from ossbot.runner.outputs import SCHEMA_HINTS, Plan, ReviewVerdict
 from ossbot.runner.pipeline import StageContext
 from tests.conftest import REPO_ROOT
-from tests.unit.runner.conftest import FakeSbx, events, fenced
+from tests.unit.runner.conftest import FakeSbx, acp_events, events, fenced
 
 PLAN = {"feasible": True, "summary": "guard empty spans", "validation_commands": [{"name": "unit", "cmd": "npm test"}]}
 
@@ -117,6 +117,37 @@ def test_v3_acp_stream_final_text_and_model_in_effect() -> None:
     out = output_parse.read_events(_acp(_models("claude-sonnet-5"), tool_out, _models("claude-haiku-4.5"), done))
     assert out.model_actual == "claude-haiku-4.5" and not out.agent_fallback
     assert output_parse.last_json_block(out.text) == {"answer": "pong"}
+
+
+@pytest.mark.parametrize(
+    ("call", "reads"),
+    [
+        ({"kind": "read", "rawInput": {"path": "/work/repo/x.go"}}, 1),
+        ({"kind": "read", "rawInput": {"path": "/work/repo", "depth": 1}, "title": "List"}, 1),
+        ({"kind": "search", "rawInput": {"args": {"path": "/work/repo/pkg"}}}, 1),  # nested, depth 2
+        ({"kind": "read", "rawInput": {}, "locations": [{"path": "/work/repo/README.md"}]}, 1),
+        ({"kind": "read", "rawInput": {"path": "/work/repo/x.go"}, "status": "failed"}, 0),
+        ({"kind": "read", "rawInput": {"path": "/work/repo/x.go"}, "status": "denied"}, 0),
+        ({"title": "Tool Load", "kind": "other",
+          "rawInput": {"tool_id": "github::get_file_contents", "arguments": {"path": "/work/repo/x"}}}, 0),
+        ({"kind": "fetch", "rawInput": {"url": "https://example.invalid/work/repo"}}, 0),
+        ({"kind": "execute", "rawInput": {"command": "cat /work/repo/x"}}, 0),
+        ({"kind": "read", "rawInput": {"path": "/io/input/issue.md"}}, 0),
+        ({"kind": "read", "rawInput": {"path": "/work/repo2/x"}}, 0),
+    ],
+)  # fmt: skip
+def test_repo_inspection_counts_completed_builtin_repo_reads(call: dict, reads: int) -> None:  # type: ignore[type-arg]
+    assert output_parse.repo_inspection(acp_events("done", [call])) == (reads, 0)
+
+
+def test_repo_inspection_counts_offloaded_results_and_fails_visible() -> None:
+    preview = 'The output from "list_directory" (52311 chars) exceeded the 30,000-char limit; here is a preview: …'
+    stream = acp_events("done", [{"kind": "read", "rawInput": {"path": "/work/repo"}, "output": preview},
+                                 {"kind": "read", "rawInput": {"path": "/work/repo/a.go"}}])  # fmt: skip
+    assert output_parse.repo_inspection(stream) == (2, 1)
+    assert output_parse.repo_inspection(b"") == (0, 0)
+    assert output_parse.repo_inspection(b"not json\n{]\n" + stream) == (2, 1)  # unparseable lines skipped
+    assert output_parse.repo_inspection(events(fenced(PLAN))) == (0, 0)  # a non-ACP stream: no reads seen
 
 
 def test_v3_agent_fallback_is_flagged() -> None:

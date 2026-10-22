@@ -51,6 +51,23 @@ def test_permissions_deny_sys_on_every_file_tool() -> None:
                                                 "subagent"}  # fmt: skip
 
 
+def test_offloaded_tool_outputs_stay_denied() -> None:
+    """ADR-0011 addendum (scout repo read, owner decision B): kiro-cli 2.32.0 saves a tool result over
+    30,000 characters under ``/home/agent/.kiro/sessions/…/tool-outputs/``; that stays unreadable.
+    The scout reads narrowly instead: no carve-out (``exclude``) anywhere, global or per agent."""
+    doc = safe_load((SETTINGS / "permissions.yaml").read_bytes())
+    assert {"capability": "fs_read", "match": DENY_SYS, "effect": "deny"} in doc["rules"]
+    assert "/home/agent/.kiro/**" in DENY_SYS
+    assert not [r for r in doc["rules"] if "exclude" in r]
+    for path in sorted((ROOT / ".kiro" / "agents").glob("ossbot-*.json")):
+        agent = json.loads(path.read_text(encoding="utf-8"))
+        rules = (agent.get("permissions") or {}).get("rules", [])
+        assert not [r for r in rules if "exclude" in r], path.name
+        read = (agent.get("toolsSettings") or {}).get("read")
+        if read is not None:
+            assert "/home/agent/.kiro/**" in read["deniedPaths"], path.name
+
+
 def test_probe_hashes_change_with_content() -> None:
     cli = (SETTINGS / "cli.json").read_bytes()
     perms = (SETTINGS / "permissions.yaml").read_bytes()

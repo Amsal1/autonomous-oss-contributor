@@ -73,6 +73,8 @@ if [[ -n "$BASE_SHA" ]]; then
 fi
 HEAD_SHA="$("${G[@]}" rev-parse HEAD)"
 [[ -z "$BASE_SHA" || "$HEAD_SHA" == "$BASE_SHA" ]] || fail base_mismatch "checked out $HEAD_SHA"
+# The scout's repository tree (git ls-files only, nothing from the repo runs; §9.5a rule 6). Non-fatal.
+bash "$(dirname -- "$0")/lib/repo_tree.sh" "$REPO" "$OUT/repo-tree.txt" || rm -f -- "$OUT/repo-tree.txt"
 
 # Ecosystem detection and best-effort dependency prefetch (failures are recorded, not fatal).
 export GOMODCACHE="$WORK/cache/go/mod" GOCACHE="$WORK/cache/go/build" GOTOOLCHAIN=auto GOFLAGS=-mod=mod \

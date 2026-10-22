@@ -41,6 +41,27 @@ def events(text: str, model: str = "claude-opus-5.5") -> bytes:
     return ("\n".join(json.dumps(x) for x in lines) + "\n").encode()
 
 
+def acp_events(text: str, tool_calls: list[dict[str, Any]] | None = None) -> bytes:
+    """A V3 ACP stream (kiro-cli 2.32 shapes, ``sandboxd/probes.py``): ``runStarted``, one
+    ``tool_call`` + ``tool_call_update`` per call (``kind``, ``rawInput``, ``status`` default
+    ``completed``, optional ``locations`` and ``output``), then ``runFinished.finalText``."""
+    lines: list[dict[str, Any]] = [{"type": "runStarted", "data": {"payloadSchema": "acp"}}]
+    for i, call in enumerate(tool_calls or []):
+        tid = f"tooluse_{i}"
+        first: dict[str, Any] = {"sessionUpdate": "tool_call", "toolCallId": tid, "title": call.get("title", "Read"),
+                                 "kind": call.get("kind", "read"), "rawInput": call.get("rawInput", {}),
+                                 "status": "pending"}  # fmt: skip
+        if "locations" in call:
+            first["locations"] = call["locations"]
+        output = {"type": "content", "content": {"type": "text", "text": call.get("output", "ok")}}
+        done = {"sessionUpdate": "tool_call_update", "toolCallId": tid, "status": call.get("status", "completed"),
+                "content": [output]}  # fmt: skip
+        lines += [{"type": "sessionUpdate", "data": {"update": first}},
+                  {"type": "sessionUpdate", "data": {"update": done}}]  # fmt: skip
+    lines.append({"type": "runFinished", "data": {"finalText": text}})
+    return ("\n".join(json.dumps(x) for x in lines) + "\n").encode()
+
+
 def fetch_json(spec: dict[str, Any], out: Path, *, has_test_suite: bool = True) -> int:
     """What fetch.sh writes (the scout clone and the build clone)."""
     doc = {"base_sha": "1" * 40, "base_ref": "main", "ecosystems": ["node"], "test_files": 12 if has_test_suite else 0,
