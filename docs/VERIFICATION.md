@@ -913,6 +913,25 @@ PART B of `.ossbot-local/postv1/plan-stale-queue-copy.md` (row OD-C3; DESIGN §1
 
 What the tests show: every golden and every Bot API call of every `TgRig` test and of the demo transcript shows its prefixed ids inside `<code>`/a `code` node; ids in `Text` and `Verbatim` are never rewritten (and the lint flags them); FYIs are escaped HTML whose `classify` and merge read the raw/shown text; a stale card, a 5-item `/queue` page (≤ 1,500 characters, item lines ≤ 120 shown characters) and a 15-FYI merge still fit their budgets with the extra markup. The goldens changed only by `<code>` wrappers (S1 headers, commit/base SHAs, base branch, `PR #12`, proposal header, hold card cid). The full marker run is the close-out's (C2).
 
+## Post-v1: stale cards, /queue, copyable ids close-out
+
+PART C of `.ossbot-local/postv1/plan-stale-queue-copy.md` (rows OD-C1, OD-C2, OD-C3). Range `ea7135d..725332e`; no code change in the close-out. Dry-run stayed OFF (untouched), zero GitHub writes.
+
+| Check | Command | Result |
+|---|---|---|
+| Hermetic suites | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` (log `.ossbot-local/logs/postv1-closeout.log`) | 4666 passed in 157 s |
+| Lint gate | `DEV ruff check src tests ; DEV ruff format --check src tests ; DEV mypy ; DEV lint-imports` | clean; 586 files formatted; 270 source files; 16 contracts kept |
+| Hygiene | `DEV ossctl lint personal ; DEV ossctl docs commands --check ; ROOT gitleaks git --redact --config .gitleaks.toml .` | 0 hits; README command table current; 319 commits, no leaks |
+| Demo media | `scripts\dev\make-demo.ps1 -Check` | PASS (render digest f3aed5305b30) |
+| Config unchanged | `git diff --stat ea7135d..HEAD -- config/` | empty |
+| Pre-deploy state (read-only, 2026-10-22 01:49Z) | GET `/v1/control/lifecycle`, `/v1/contributions?active=true`, `/v1/contributions/{cid}`, `/v1/stage-runs?cid=` as ossadmin | running, executing_actions 0, running_stages 0, pending+armed approvals 0; grafana/loki `c_D1BVZ6N1HZ` WATCHING, all stage runs succeeded |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` (once) | rc 0; app-deploy and enable-start changed (six services restarted), rest unchanged; doctor PASS 42, WARN 1 (hermes tool surface read while hermes restarted) |
+| After the deploy | `scripts\ossctl.ps1 status`; `systemctl is-active` | running, lifecycle up, dry_run false, Telegram polling ok; all seven units active |
+| First live sweep | `scripts\ossctl.ps1 logs gatekeeper -Since 15m -Grep "auto_reissue\|card_tokens_deferred\|card_render_failed\|internal_error\|config_snapshot_changed\|config_loaded\|Traceback\|ERROR"` | two `auto_reissue` lines: the owed PROPOSED proposal cards of runatlantis/atlantis `c_D1B6RE1ZRS` and getsops/sops `c_D1B5S1S09Q`; no `config_snapshot_changed`, render error or traceback |
+| Loki after the deploy | same read-only GETs | `c_D1BVZ6N1HZ` still WATCHING, same `updated_at`, nothing re-sent for it |
+
+Live `/queue` and `/status`: the bot can't send these views on its own (no product path; `/v1/notify` relays plain FYIs only), and no send path was added. They are left as owner check **PV-QUEUE (pending)**, rows OD-C1, OD-C2, OD-C3, to be recorded with `powershell -NoProfile -File scripts\dev\record-owner-check.ps1 -Check PV-QUEUE -Rows OD-C1,OD-C2,OD-C3 -Result "<summary>"`. What to look for: `/queue` lists the waiting items, including the two re-sent proposals (atlantis `c_D1B6RE1ZRS`, sops `c_D1B5S1S09Q`), each with an Open button, and Loki (WATCHING) is not listed; every cid in `/queue` and `/status` is tap-to-copy code; no error reply. Until then the rendering evidence is the hermetic goldens and `tests/telegram/test_copyable_ids.py`.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
