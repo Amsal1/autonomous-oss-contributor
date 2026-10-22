@@ -7,6 +7,7 @@ which is never logged (the redacting log formatter also knows it).
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,12 +19,17 @@ API_VERSION = "2022-11-28"
 
 
 class GitHubError(Exception):
-    """A GitHub call failed. ``transient``: network or 5xx (retry); ``auth``: 401/403."""
+    """A GitHub call failed. ``transient``: network or 5xx (retry); ``auth``: 401/403. A rate-limit
+    answer (403/429) also carries ``reset_epoch`` (``x-ratelimit-reset`` when ``x-ratelimit-remaining``
+    is 0) and/or ``retry_after_s`` (``retry-after``), else None."""
 
-    def __init__(self, message: str, *, status: int | None = None, transient: bool = False) -> None:
+    def __init__(self, message: str, *, status: int | None = None, transient: bool = False,
+                 reset_epoch: float | None = None, retry_after_s: float | None = None) -> None:  # fmt: skip
         super().__init__(message)
         self.status = status
         self.transient = transient
+        self.reset_epoch = reset_epoch
+        self.retry_after_s = retry_after_s
 
     @property
     def auth(self) -> bool:
@@ -41,11 +47,25 @@ def make_client(
     return httpx.AsyncClient(base_url=API_BASE, headers=headers, proxy=proxy, timeout=30.0, trust_env=False)
 
 
+def _header_float(resp: httpx.Response, name: str) -> float | None:
+    """A finite numeric header, else None (absent or malformed values are ignored)."""
+    try:
+        value = float(resp.headers[name]) if name in resp.headers else None
+    except ValueError:
+        return None
+    return value if value is not None and math.isfinite(value) else None
+
+
 def raise_for(resp: httpx.Response, what: str) -> None:
     if resp.status_code >= 500:
         raise GitHubError(f"{what}: HTTP {resp.status_code}", status=resp.status_code, transient=True)
     if resp.status_code >= 400:
-        raise GitHubError(f"{what}: HTTP {resp.status_code}", status=resp.status_code)
+        limited = resp.status_code in {403, 429}
+        reset = (_header_float(resp, "x-ratelimit-reset")
+                 if limited and resp.headers.get("x-ratelimit-remaining") == "0" else None)  # fmt: skip
+        retry = _header_float(resp, "retry-after") if limited else None
+        raise GitHubError(f"{what}: HTTP {resp.status_code}", status=resp.status_code, reset_epoch=reset,
+                          retry_after_s=retry)  # fmt: skip
 
 
 @dataclass(frozen=True)

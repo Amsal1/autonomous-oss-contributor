@@ -15,6 +15,7 @@ from ossbot.common.clock import FakeClock
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.github_read import GitHubError
 from ossbot.gatekeeper.telegram import status_card
 from tests.conftest import insert_contribution
 from tests.telegram.tgharness import TgRig, make_rig
@@ -81,6 +82,137 @@ async def test_card_is_sent_then_edited_only_on_change_and_at_most_once_a_minute
     await status_card.refresh(rig.ctx, reader, cid)
     await rig.flush()
     assert "CI: ✅ 2 · ⏳ 0" in json.dumps(rig.req.last("editMessageText"), ensure_ascii=False)
+
+
+class CountingReader(Reader):
+    """Counts PR reads; ``error`` makes every read raise it (a 403, a rate limit)."""
+
+    def __init__(self, error: Exception | None = None) -> None:
+        super().__init__()
+        self.calls = 0
+        self.error = error
+
+    async def pull(self, upstream: str, number: int) -> dict[str, Any]:
+        self.calls += 1
+        if self.error is not None:
+            raise self.error
+        return self.pr
+
+
+@pytest.fixture(autouse=True)
+def _poll_gate() -> None:
+    status_card.reset_poll_gate()
+
+
+def _state(rig: TgRig) -> dict[str, Any]:
+    row = _status(rig)
+    assert row is not None
+    return dict(json.loads(row["state_json"] or "{}"))
+
+
+def _contribution_state(rig: TgRig, cid: str) -> str:
+    row = db.one(rig.ctx.conn, "SELECT state FROM contributions WHERE id = ?", (cid,))
+    assert row is not None
+    return str(row["state"])
+
+
+async def test_tick_does_not_repoll_after_the_edit_is_delivered(rig: TgRig, clock: FakeClock) -> None:
+    """The 2026-10-22 loop: the delivered edit used to wipe ``polled_at``/``hash``, so every tick re-polled."""
+    cid, reader = _pr(rig.ctx), CountingReader()
+    assert await status_card.tick(rig.ctx, reader) == 1  # the card is sent
+    await rig.flush()
+    clock.advance(timedelta(seconds=301))
+    await status_card.tick(rig.ctx, reader)  # first poll with a card: hash recorded, the card edited
+    await rig.flush()  # the edit is delivered (mark_sent writes the view row)
+    assert reader.calls == 2 and rig.req.last("editMessageText") is not None
+    state = _state(rig)
+    assert {"polled_at", "hash", "edited_at"} <= set(state)
+    await status_card.tick(rig.ctx, reader)
+    clock.advance(timedelta(seconds=299))
+    await status_card.tick(rig.ctx, reader)
+    await rig.flush()
+    assert reader.calls == 2
+    clock.advance(timedelta(seconds=2))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 3
+    assert _contribution_state(rig, cid) == "WATCHING"
+
+
+async def test_a_raising_reader_is_not_repolled_at_once(rig: TgRig, clock: FakeClock) -> None:
+    cid, reader = _pr(rig.ctx), CountingReader(GitHubError("GET /pulls: HTTP 403", status=403))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 1
+    await status_card.tick(rig.ctx, reader)
+    clock.advance(timedelta(seconds=299))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 1
+    clock.advance(timedelta(seconds=2))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 2
+    clock.advance(timedelta(seconds=599))  # the second failure in a row waits 600 s
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 2
+    clock.advance(timedelta(seconds=2))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 3
+    assert _contribution_state(rig, cid) == "WATCHING"
+
+
+async def test_rate_limit_reset_is_honoured(rig: TgRig, clock: FakeClock) -> None:
+    _pr(rig.ctx)
+    reset = clock.now().timestamp() + 1800
+    reader = CountingReader(GitHubError("GET /pulls: HTTP 403", status=403, reset_epoch=reset))
+    await status_card.tick(rig.ctx, reader)
+    clock.advance(timedelta(seconds=301))
+    await status_card.tick(rig.ctx, reader)
+    clock.advance(timedelta(seconds=1498))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 1
+    clock.advance(timedelta(seconds=2))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 2
+
+
+async def test_failure_backoff_survives_a_restart(rig: TgRig, clock: FakeClock) -> None:
+    """With a status row, ``poll_after`` and ``poll_failures`` are persisted: a restarted gatekeeper (an
+    empty memory gate) still waits, and a success clears them."""
+    cid, reader = _pr(rig.ctx), CountingReader()
+    await status_card.tick(rig.ctx, reader)
+    await rig.flush()
+    clock.advance(timedelta(seconds=301))
+    reader.error = GitHubError("GET /pulls: HTTP 403", status=403)
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 2 and _state(rig)["poll_failures"] == 1
+    status_card.reset_poll_gate()
+    clock.advance(timedelta(seconds=299))
+    await status_card.tick(rig.ctx, reader)
+    assert reader.calls == 2
+    clock.advance(timedelta(seconds=2))
+    await status_card.tick(rig.ctx, reader)  # second failure, counted from the persisted value
+    assert reader.calls == 3 and _state(rig)["poll_failures"] == 2
+    clock.advance(timedelta(seconds=601))
+    reader.error = None
+    await status_card.tick(rig.ctx, reader)
+    await rig.flush()
+    state = _state(rig)
+    assert reader.calls == 4 and "poll_after" not in state and "poll_failures" not in state
+    assert _contribution_state(rig, cid) == "WATCHING"
+
+
+async def test_timeline_edit_keeps_the_poll_bookkeeping(rig: TgRig, clock: FakeClock) -> None:
+    _pr(rig.ctx)
+    reader = CountingReader()
+    await status_card.tick(rig.ctx, reader)
+    await rig.flush()
+    clock.advance(timedelta(seconds=301))
+    await status_card.tick(rig.ctx, reader)
+    await rig.flush()
+    mid = int(_status(rig)["message_id"])
+    await rig.tap(rig.token_of(rig.req.last("editMessageText"), "📜 Timeline"), message=mid)
+    await rig.flush()
+    assert "Timeline" in json.dumps(rig.req.last("editMessageText"), ensure_ascii=False)
+    state = _state(rig)
+    assert {"events", "polled_at", "hash", "seen"} <= set(state)
 
 
 @pytest.mark.parametrize("gating", ["approval_required", "label_or_comment", "auto", None])

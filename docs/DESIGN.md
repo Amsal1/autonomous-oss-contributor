@@ -2707,6 +2707,7 @@ Watch: round 1/3 · next poll <tg-time r>
 [🔗 Open PR ↗] [🔄 Refresh]
 [📜 Timeline] [🛑 Stop watching]
 ```
+- **Polling** (post-v1, 2026-10-22, ADR-0020 addendum): the gatekeeper reads each open PR at most once per `POLL_S` (300 s), one PR per background pass. The attempt is stamped **before** the read, so a failed read (403, network) waits `POLL_S`, doubling per consecutive failure up to 1 h, and never less than GitHub's rate-limit reset (`x-ratelimit-reset` / `retry-after`). The bookkeeping (`polled_at`, `poll_after`, `poll_failures`, `hash`, `edited_at`, `seen`, `events`) lives in the status row's `state_json`, which an edit merges (§14.18.2 step 3), and survives a restart. `🔄 Refresh` is one read per tap and bypasses the gate. Polling never changes the contribution's state.
 - **CI line, gated repos** (post-v1, §9.5): with no checks yet on a PR whose vetted `ci_gating` is `approval_required` or `label_or_comment`, the CI line reads `⏳ CI waits for maintainer approval` instead of the counts; "no checks" is neither passing nor failing there.
 - **P1 events** (a maintainer review, a comment mentioning Amsal1, a ❌ check that blocks merge) are sent as **new messages that reply to the status card**. These are loud, subject to quiet hours.
 - **Drafted replies** (`comment` action) and fix rounds (`push_update`) arrive as normal approval cards, replying to the status card, and use the same S1/S8 flow with their per-kind keyboards (§14.18.4.1). Both can be open at once. Each card's views resolve their own action (§14.18.2), and `⬇️ Show card` from the `push_update` explorer (or `/queue → Open` on either) re-sends both (§14.11.2).
@@ -3556,7 +3557,7 @@ Approval and Confirm tokens (PR card, proposal card, skill card) keep the review
 3. `Outbox.mark_sent(row, result)` runs **one** transaction that:
    - sets `status='sent'` and writes `result_message_id = result.message_id`;
    - runs `UPDATE ui_tokens SET tg_message_id = :mid WHERE token IN (:bind_tokens) AND tg_message_id IS NULL`;
-   - inserts or updates the `tg_views` row from `view_json` with `message_id = :mid`. `view_json.kind` was already validated at **enqueue** against the `ViewKind` literal that mirrors the `tg_views.kind` CHECK (§14.20.2), so this insert can't fail on the CHECK after a successful send and leave the row `pending` to be re-sent every tick;
+   - inserts or updates the `tg_views` row from `view_json` with `message_id = :mid`. `view_json.kind` was already validated at **enqueue** against the `ViewKind` literal that mirrors the `tg_views.kind` CHECK (§14.20.2), so this insert can't fail on the CHECK after a successful send and leave the row `pending` to be re-sent every tick. On an update of a row of the **same kind**, `state_json` is merged (post-v1, 2026-10-22): the view's top-level keys override, other keys are kept, nested values are replaced whole; a kind change replaces it. A ForceReply prompt is correlated from the new view's own state only;
    - increments `tg_thread_seq` for `send*` methods (§14.11.3);
    - counts a delivered card part (existing). The UPDATE targets the table that the `approval_id` prefix names: `a_` → `approvals`, `s_` → `skill_approvals`. Proposal cards have no parts. **Part counting happens only here**, never in `on_sent`.
 

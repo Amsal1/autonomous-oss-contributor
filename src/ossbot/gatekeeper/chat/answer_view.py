@@ -206,7 +206,8 @@ def views(a: Answer, *, wrapped: bool, rich: bool, extra: k.Line | None = None, 
             blocks.append(k.Block((k.Lines(tuple(head)),), name="head"))
         blocks.append(k.Block((k.Markdown(part or "…", quoted=wrapped),), name="answer"))
         view_rows: k.Rows = []
-        state: dict[str, object] = {"turn_id": a.turn_id, "part": i}
+        # ``followups`` always set: an edit merges tg_views state, so old labels never outlive their buttons
+        state: dict[str, object] = {"turn_id": a.turn_id, "part": i, "followups": []}
         preview = None
         if last:
             if a.sources:

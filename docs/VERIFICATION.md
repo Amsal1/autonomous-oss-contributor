@@ -932,6 +932,20 @@ PART C of `.ossbot-local/postv1/plan-stale-queue-copy.md` (rows OD-C1, OD-C2, OD
 
 Live `/queue` and `/status`: the bot can't send these views on its own (no product path; `/v1/notify` relays plain FYIs only), and no send path was added. They are left as owner check **PV-QUEUE (pending)**, rows OD-C1, OD-C2, OD-C3, to be recorded with `powershell -NoProfile -File scripts\dev\record-owner-check.ps1 -Check PV-QUEUE -Rows OD-C1,OD-C2,OD-C3 -Result "<summary>"`. What to look for: `/queue` lists the waiting items, including the two re-sent proposals (atlantis `c_D1B6RE1ZRS`, sops `c_D1B5S1S09Q`), each with an Open button, and Loki (WATCHING) is not listed; every cid in `/queue` and `/status` is tap-to-copy code; no error reply. Until then the rendering evidence is the hermetic goldens and `tests/telegram/test_copyable_ids.py`.
 
+## Post-v1: status-card poll loop (Part C)
+
+Part C of `.ossbot-local/postv1/plan-terminal-fyi.md` (row OD-C4; diagnosis `.agents/tasks/stuck-after-gate1-2026-10-17.md` finding 4; DESIGN §14.11.11, §14.18.2 step 3; ADR-0020 addendum "tg_views state merge and status-card backoff"). Baseline `e7f7e47` (owner-check docs committed first as `60df865`). Targeted tests only, no redeploy (a later step), no live call, no Telegram message; dry-run, kill, pause and every contribution untouched (c_D1BVZ6N1HZ stays `WATCHING`). Details: `.ossbot-local/postv1/verify-c-statuscard.md`, not tracked. DEV = the ossadmin dev venv (`uv run --frozen`).
+
+| Check | Command | Result |
+|---|---|---|
+| Red first | the new tests with `merge_view_state` forced to replace (temporary edit, reverted) | 6 failed (the loop test, the timeline test, 4 outbox merge cases) |
+| Lint | `DEV ruff check` and `ruff format --check` on the 8 touched py files; `DEV mypy`; `DEV lint-imports` | clean; mypy no issues in 270 files; 16 contracts kept |
+| Part C tests | `DEV pytest tests/telegram/test_status_card.py tests/unit/gatekeeper/test_outbox.py tests/unit/gatekeeper/test_github_read.py` | 35 passed |
+| Affected views | `DEV pytest tests/telegram tests/unit/gatekeeper/test_outbox.py tests/unit/gatekeeper/test_github_read.py -n auto` | 781 passed |
+| Gatekeeper unit + demo e2e | `DEV pytest tests/e2e/test_demo_capture.py tests/unit/gatekeeper -n auto` | 1896 passed |
+
+Pending (later step): redeploy, then count `pulls/25527` reads in the gatekeeper journal over 10 min (expect ≤ 3 cycles, was ~120) and confirm c_D1BVZ6N1HZ is still `WATCHING`.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

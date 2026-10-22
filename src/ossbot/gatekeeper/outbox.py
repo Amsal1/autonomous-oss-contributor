@@ -90,6 +90,22 @@ def _no_hold(req: HoldRequest) -> HoldDecision:
     return HoldDecision()
 
 
+def merge_view_state(old_kind: str | None, old_json: str | None, kind: str, new: Mapping[str, Any]) -> dict[str, Any]:
+    """The ``tg_views.state_json`` written for a delivered view (§14.18.2 step 3).
+
+    No existing row, or a row of another kind (a confirm prompt edited into an FYI, a stubbed card):
+    the new view's state replaces it. Same kind: a shallow merge, the new view's top-level keys override
+    and the others are kept; nested values are replaced whole. Invalid or non-object old JSON counts
+    as ``{}``."""
+    if old_kind is None or old_kind != kind:
+        return dict(new)
+    try:
+        old = json.loads(old_json or "{}")
+    except ValueError:
+        old = {}
+    return {**(old if isinstance(old, dict) else {}), **new}
+
+
 def _has_buttons(payload: Mapping[str, Any]) -> bool:
     markup = payload.get("reply_markup")
     return isinstance(markup, dict) and bool(markup.get("inline_keyboard"))
@@ -184,7 +200,8 @@ class Outbox:
 
     def mark_sent(self, row: OutboxRow, result: Mapping[str, Any] | None = None) -> None:
         """One transaction (delta 6, §14.18.2 step 3): the row is sent with its result message id,
-        the kit tokens it carries are bound to that message, its ``tg_views`` row is written, the
+        the kit tokens it carries are bound to that message, its ``tg_views`` row is written (an edit
+        of a row of the same kind merges ``state_json``, ``merge_view_state``), the
         thread counter moves for ``send*`` methods, and a delivered card part is counted (by id
         prefix: ``a_`` approvals, ``s_`` skill approvals). Part counting happens only here."""
         mid = (result or {}).get("message_id")
@@ -221,6 +238,18 @@ class Outbox:
                     )
 
     def _write_view(self, message_id: int, payload: Mapping[str, Any], view: Mapping[str, Any]) -> None:
+        """Insert or update the message's ``tg_views`` row. On an update of a row of the same kind,
+        ``state_json`` is merged (``merge_view_state``): bookkeeping a view's owner keeps outside the
+        View (the status card's ``polled_at``/``hash``/``seen``) survives the edit. A ForceReply prompt
+        is read from the new view's own state only, so an edit never re-opens a stale prompt."""
+        old = db.one(self.conn, "SELECT kind, state_json FROM tg_views WHERE message_id = ?", (message_id,))
+        new_state = view.get("state") or {}
+        state = merge_view_state(
+            str(old["kind"]) if old is not None else None,
+            old["state_json"] if old is not None else None,
+            str(view["kind"]),
+            new_state if isinstance(new_state, Mapping) else {},
+        )
         self.conn.execute(
             "INSERT INTO tg_views (message_id, chat_id, thread_id, kind, approval_id, cid, rev, action_id, path, page,"
             " state_json, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(message_id) DO UPDATE SET"
@@ -230,7 +259,7 @@ class Outbox:
             (
                 message_id, int(payload.get("chat_id", 0)), payload.get("message_thread_id"), view["kind"],
                 view.get("approval_id"), view.get("cid"), view.get("rev"), view.get("action_id"), view.get("path"),
-                view.get("page"), json.dumps(view.get("state", {}), sort_keys=True), to_iso(self.clock.now()),
+                view.get("page"), json.dumps(state, sort_keys=True), to_iso(self.clock.now()),
             ),
         )  # fmt: skip
         prompt = (view.get("state") or {}).get("prompt")

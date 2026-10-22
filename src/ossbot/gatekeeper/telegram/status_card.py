@@ -4,6 +4,9 @@ One ``tg_views(kind='status')`` message per open LIVE PR in ✅ Reviews, a reply
 from the gatekeeper's read-only GitHub client (PR, reviews, check runs, comments) in a spawned
 ``github_read`` task, polled every ``POLL_S`` per PR (and on ``🔄 Refresh``); the card is edited in place
 at most once per ``telegram.status_card.min_edit_interval_s`` (60 s) and only when its content changes.
+Each poll attempt is stamped before the read, so a failed read waits ``POLL_S``, doubling per consecutive
+failure up to ``POLL_MAX_S`` (1 h), and never less than GitHub's rate-limit reset. The bookkeeping lives in
+the status row's ``tg_views.state_json``, which an edit merges rather than replaces (``outbox``).
 
 * **CI line**: ``CI: ✅ n · ⏳ n · ❌ n``; with no checks yet on a repo whose vetted ``ci_gating`` is
   ``approval_required`` or ``label_or_comment``, ``⏳ CI waits for maintainer approval`` instead.
@@ -23,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any
@@ -44,6 +48,11 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 POLL_S = 300
+POLL_MAX_S = 3600  # the longest wait after consecutive failed reads
+# In-memory poll gate per cid: covers the window before the status row exists (first send still queued);
+# the persisted ``polled_at`` / ``poll_after`` / ``poll_failures`` in the row's state survive a restart.
+_NEXT_POLL: dict[str, datetime] = {}
+_FAILURES: dict[str, int] = {}
 CHECKS_SHOWN = 8
 EVENTS_KEPT = 200
 OPEN_STATES = (State.SUBMITTED.value, State.WATCHING.value)
@@ -282,8 +291,70 @@ async def refresh(ctx: AppContext, reader: Any, cid: str, *, force: bool = False
     return queued
 
 
+def reset_poll_gate() -> None:
+    """Forget the in-memory poll gate (tests; a restart starts from the persisted row state)."""
+    _NEXT_POLL.clear()
+    _FAILURES.clear()
+
+
+def _row_state(existing: Any) -> dict[str, Any]:
+    if existing is None:
+        return {}
+    try:
+        state = json.loads(existing["state_json"] or "{}")
+    except ValueError:
+        return {}
+    return state if isinstance(state, dict) else {}
+
+
+def _before(now: datetime, iso: Any, seconds: float = 0.0) -> bool:
+    """``now`` is earlier than ``iso + seconds`` (an unreadable stamp never blocks a poll)."""
+    if not isinstance(iso, str):
+        return False
+    try:
+        return now < from_iso(iso) + timedelta(seconds=seconds)
+    except ValueError:
+        return False
+
+
+def _due(cid: str, state: dict[str, Any], now: datetime) -> bool:
+    gate = _NEXT_POLL.get(cid)
+    if gate is not None and now < gate:
+        return False
+    return not (_before(now, state.get("poll_after")) or _before(now, state.get("polled_at"), POLL_S))
+
+
+def _wait_s(exc: Exception, failures: int, now: datetime) -> int:
+    """Back off ``POLL_S`` doubling per consecutive failure, never less than GitHub's rate-limit reset
+    (``GitHubError.retry_after_s`` / ``reset_epoch``), capped at ``POLL_MAX_S``."""
+    wait = float(min(POLL_S * 2 ** min(failures - 1, 16), POLL_MAX_S))
+    retry = getattr(exc, "retry_after_s", None)
+    if isinstance(retry, (int, float)):
+        wait = max(wait, float(retry))
+    reset = getattr(exc, "reset_epoch", None)
+    if isinstance(reset, (int, float)):
+        wait = max(wait, float(reset) - now.timestamp())
+    return int(min(math.ceil(wait), POLL_MAX_S))
+
+
+def _stamp(ctx: AppContext, cid: str, updates: dict[str, Any], drop: tuple[str, ...] = ()) -> None:
+    """Read-modify-write the status row's poll bookkeeping (no row yet: the memory gate covers it)."""
+    existing = _existing(ctx, cid)
+    if existing is None:
+        return
+    state = _row_state(existing)
+    if not updates and not any(key in state for key in drop):
+        return
+    for key in drop:
+        state.pop(key, None)
+    state.update(updates)
+    _set_state(ctx, int(existing["message_id"]), state)
+
+
 async def tick(ctx: AppContext, reader: Any) -> int:
-    """Poll every open LIVE PR whose card was polled ``POLL_S`` ago or never (one PR per tick)."""
+    """Poll the first open LIVE PR that is due (one PR per tick). The attempt is stamped before the read,
+    so a failed read (403, network) waits ``POLL_S``, doubling per consecutive failure up to ``POLL_MAX_S``
+    and never less than GitHub's rate-limit reset. Polling never changes the contribution's state."""
     if reader is None:
         return 0
     marks = ",".join("?" * len(OPEN_STATES))
@@ -291,14 +362,28 @@ async def tick(ctx: AppContext, reader: Any) -> int:
                             " ORDER BY updated_at", OPEN_STATES).fetchall()  # fmt: skip
     now = ctx.clock.now()
     for r in rows:
-        existing = _existing(ctx, str(r["id"]))
-        polled = json.loads(existing["state_json"] or "{}").get("polled_at") if existing is not None else None
-        if polled is None or now - from_iso(polled) >= timedelta(seconds=POLL_S):
-            try:
-                await refresh(ctx, reader, str(r["id"]))
-            except Exception:  # noqa: BLE001 - one PR's failed read never stops the others
-                log.warning("status card refresh failed", extra={"event": "status_card_failed"})
-            return 1
+        cid = str(r["id"])
+        state = _row_state(_existing(ctx, cid))
+        if not _due(cid, state, now):
+            continue
+        _NEXT_POLL[cid] = now + timedelta(seconds=POLL_S)
+        _stamp(ctx, cid, {"polled_at": to_iso(now)})
+        try:
+            await refresh(ctx, reader, cid)
+        except Exception as exc:  # noqa: BLE001 - one PR's failed read never stops the others
+            stored = state.get("poll_failures")
+            prior = stored if isinstance(stored, int) and not isinstance(stored, bool) and stored > 0 else 0
+            failures = _FAILURES.get(cid, prior) + 1
+            _FAILURES[cid] = failures
+            wait = _wait_s(exc, failures, now)
+            _NEXT_POLL[cid] = now + timedelta(seconds=wait)
+            _stamp(ctx, cid, {"poll_after": to_iso(now + timedelta(seconds=wait)), "poll_failures": failures})
+            log.warning("status card refresh failed for %s (%s); next poll in %d s", cid, type(exc).__name__, wait,
+                        extra={"event": "status_card_failed", "cid": cid})  # fmt: skip
+        else:
+            _FAILURES.pop(cid, None)
+            _stamp(ctx, cid, {}, drop=("poll_after", "poll_failures"))
+        return 1
     return 0
 
 
