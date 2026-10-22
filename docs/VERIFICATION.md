@@ -1003,7 +1003,7 @@ Close-out (2026-10-22, HEAD `5d99ba0`):
 
 ## Post-v1 discovery fix, part A (fixes 1-4, 2026-10-22)
 
-Owner message 12 ("no good proposal today"); diagnosis `.agents/tasks/discovery-no-proposals-2026-10-22.md`; plan `.ossbot-local/postv1/plan-discovery-fix.md` Part A; ADR-0003 addendum "discovery pacing"; TRACEABILITY `DF-1`…`DF-4` (OD-7, OD-13 amended). Hermetic code only: no redeploy, no live GitHub call, no `/reload`, dry-run and contributions untouched, `ossctl targets discovered --untry` not run. Details: `.ossbot-local/postv1/discovery-fix/verify-a.md` (not tracked). DEV = `wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen`.
+Commit 22ef255. Owner message 12 ("no good proposal today"); diagnosis `.agents/tasks/discovery-no-proposals-2026-10-22.md`; plan `.ossbot-local/postv1/plan-discovery-fix.md` Part A; ADR-0003 addendum "discovery pacing"; TRACEABILITY `DF-1`…`DF-4` (OD-7, OD-13 amended). Hermetic code only: no redeploy, no live GitHub call, no `/reload`, dry-run and contributions untouched, `ossctl targets discovered --untry` not run. Details: `.ossbot-local/postv1/discovery-fix/verify-a.md` (not tracked). DEV = `wsl.exe -d ossbot -u ossadmin --cd /mnt/d/Work/autonomous-oss-contributor --exec /usr/bin/env UV_PROJECT_ENVIRONMENT=/home/ossadmin/.venvs/ossbot /opt/ossbot/bin/uv run --frozen`.
 
 | Check | Command | Result |
 |---|---|---|
