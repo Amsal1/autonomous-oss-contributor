@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
-from ossbot.runner import output_parse
+from ossbot.runner import output_parse, outputs
+from ossbot.runner.errors import OutputInvalidFailed
 from ossbot.runner.llm import Kiro, StageFailed
 from ossbot.runner.output_parse import OutputInvalid, parse_model, read_events
-from ossbot.runner.outputs import Plan, ReviewVerdict
+from ossbot.runner.outputs import SCHEMA_HINTS, Plan, ReviewVerdict
 from ossbot.runner.pipeline import StageContext
+from tests.conftest import REPO_ROOT
 from tests.unit.runner.conftest import FakeSbx, events, fenced
 
 PLAN = {"feasible": True, "summary": "guard empty spans", "validation_commands": [{"name": "unit", "cmd": "npm test"}]}
@@ -46,6 +49,35 @@ def test_one_repair_retry_then_stage_fails(sc: StageContext, sbx: FakeSbx) -> No
     with pytest.raises(StageFailed) as info:
         Kiro(sc.gk, sc.sbx, sc.models, sc.inputs_root).invoke("c_0000000001", "reviewer", ReviewVerdict, "t")
     assert info.value.error_class == "output_invalid"
+
+
+def test_second_invalid_answer_keeps_its_text(sc: StageContext, sbx: FakeSbx) -> None:
+    """The stage may read a narrower verdict from it (plan ``feasible: false``, §9.7); it is still StageFailed."""
+    second = fenced({"feasible": False, "summary": "already fixed", "approach": ["x" * 480]})
+    sbx.kiro("planner", "no json", second)
+    with pytest.raises(OutputInvalidFailed) as info:
+        Kiro(sc.gk, sc.sbx, sc.models, sc.inputs_root).invoke("c_0000000001", "planner", Plan, "t")
+    assert isinstance(info.value, StageFailed) and info.value.error_class == "output_invalid"
+    assert "already fixed" in info.value.last_text and "approach.0" in str(info.value)
+
+
+def test_planner_limits_are_stated_in_the_hint_and_the_prompt() -> None:
+    """No drift: every Plan limit number is in SCHEMA_HINTS["planner"] and prompts/planner.md."""
+    prompt = (REPO_ROOT / "prompts" / "planner.md").read_text(encoding="utf-8")
+    hint = SCHEMA_HINTS["planner"]
+    numbers = {outputs.LINE_MAX, outputs.SHORT_MAX, outputs.PLAN_SUMMARY_MAX, outputs.PLAN_APPROACH_MAX,
+               outputs.PLAN_FILES_MAX, outputs.PLAN_CONVENTIONS_MAX, outputs.PLAN_CITATIONS_MAX,
+               outputs.PLAN_COMMANDS_MAX, outputs.PLAN_SMOKE_MAX, outputs.COMMAND_CMD_MAX}  # fmt: skip
+    assert {300, 2000, 20, 100, 500, 1000, 5, 30} <= numbers
+    for n in numbers:
+        assert re.search(rf"(?<!\d){n}(?!\d)", hint), n
+        assert re.search(rf"(?<!\d){n}(?!\d)", prompt), n
+    assert outputs.COMMAND_NAME_PATTERN in hint and outputs.COMMAND_NAME_PATTERN in prompt
+    plan = Plan.model_json_schema()["properties"]  # the model really uses the constants
+    assert plan["summary"]["maxLength"] == outputs.PLAN_SUMMARY_MAX
+    assert plan["approach"]["maxItems"] == outputs.PLAN_APPROACH_MAX
+    assert plan["approach"]["items"]["maxLength"] == outputs.LINE_MAX
+    assert plan["files_to_touch"]["maxItems"] == outputs.PLAN_FILES_MAX
 
 
 def test_model_resolution_on_the_invocation_path(sc: StageContext, sbx: FakeSbx) -> None:

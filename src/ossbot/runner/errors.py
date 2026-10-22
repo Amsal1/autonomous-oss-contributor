@@ -36,6 +36,16 @@ class StageFailed(RuntimeError):
         self.summary = summary[:SUMMARY_MAX]
 
 
+class OutputInvalidFailed(StageFailed):
+    """``output_invalid``: the answer failed the schema after the one repair retry. ``last_text`` is the last
+    answer's assistant text (untrusted, capped by ``output_parse.MAX_TEXT``) so a stage may read a narrower
+    verdict from it (the planner's ``feasible: false``, §9.7); everything else treats it as ``StageFailed``."""
+
+    def __init__(self, message: str, last_text: str) -> None:
+        super().__init__("output_invalid", message)
+        self.last_text = last_text
+
+
 class Interrupted(RuntimeError):
     """The stage must stop now and be re-queued later (kill, pause, drain, down, host sleep)."""
 

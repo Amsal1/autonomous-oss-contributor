@@ -43,9 +43,10 @@ class LlmResult[T: BaseModel]:
 
 @runtime_checkable
 class ModelBackend(Protocol):
-    """``run_role`` -> a validated result (or ``StageFailed``/``Interrupted``); ``list_models`` -> the
-    gatekeeper's catalog rows the backend resolves against; ``probe_surface`` -> what the backend must
-    pass and declare (probes, credential names, key pairs)."""
+    """``run_role`` -> a validated result (or ``StageFailed``/``Interrupted``; an answer still invalid after
+    the one repair retry is ``errors.OutputInvalidFailed``, a ``StageFailed`` carrying the last answer's text
+    as ``last_text``); ``list_models`` -> the gatekeeper's catalog rows the backend resolves against;
+    ``probe_surface`` -> what the backend must pass and declare (probes, credential names, key pairs)."""
 
     def run_role[T: BaseModel](
         self,

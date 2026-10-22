@@ -266,6 +266,59 @@ def test_start_work_then_fetch_and_plan(sc: StageContext, ctx: AppContext, sbx: 
     assert json.loads(db.one(ctx.conn, "SELECT plan_json FROM contributions WHERE id = ?", (cid,))[0])["feasible"]
 
 
+def _fetched(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub, number: int) -> str:
+    """Scout, Start work (gate 1) and fetch: the item waits in FETCHED for the planner."""
+    github.add_issue("langfuse/langfuse", number, title="Bug", body="b", labels=[{"name": "bug"}])
+    cid = insert_contribution(ctx, State.SCOUTING, issue_number=number)
+    sbx.kiro("scout", fenced(sample()))
+    scout.run(sc, sc.gk.contribution(cid))
+    start(ctx, db.one(ctx.conn, "SELECT id FROM proposal_approvals WHERE cid = ?", (cid,))[0])
+    sbx.handlers["fetch"] = fetch_ok
+    fetch.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "FETCHED"
+    return cid
+
+
+def test_infeasible_plan_failing_the_schema_twice_is_abandoned_with_its_summary(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub
+) -> None:
+    """c_D1CB6PG35G: feasible: false with a 480-char approach item failed output_invalid; now it abandons."""
+    cid = _fetched(sc, ctx, sbx, github, 8413)
+    answer = fenced({"feasible": False, "summary": "No visible tab bug on main; ask for steps on #8413.",
+                     "approach": ["x" * 480]})  # fmt: skip
+    sbx.kiro("planner", answer, answer)
+    Scheduler(sc, synchronous=True).run_one(cid)
+    row = db.one(ctx.conn, "SELECT state, state_reason, plan_json FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("ABANDONED", "plan_infeasible", None)
+    evidence = _evidence(ctx, cid, "ABANDONED")
+    assert evidence["schema_salvaged"] is True and evidence["summary"].startswith("No visible tab bug")
+    shown = _terminal(ctx, cid)
+    assert len(shown) == 1 and "No visible tab bug on main" in shown[0]
+
+
+def test_feasible_plan_failing_the_schema_twice_still_fails(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                            github: FakeGitHub) -> None:  # fmt: skip
+    cid = _fetched(sc, ctx, sbx, github, 8414)
+    sbx.kiro("planner", fenced({**PLAN, "approach": ["x" * 480]}))
+    Scheduler(sc, synchronous=True).run_one(cid)
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", "output_invalid")
+    assert len(_terminal(ctx, cid)) == 1  # the owner hears of it too (A)
+
+
+def test_valid_infeasible_plan_carries_its_summary(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                   github: FakeGitHub) -> None:  # fmt: skip
+    """c_D1B6RE1ZRS: the planner found the bug already fixed upstream; the FYI says so."""
+    cid = _fetched(sc, ctx, sbx, github, 2607)
+    sbx.kiro("planner", fenced({"feasible": False, "summary": "Already fixed on main (db_updater.go)."}))
+    plan.run(sc, sc.gk.contribution(cid))
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("ABANDONED", "plan_infeasible")
+    evidence = _evidence(ctx, cid, "ABANDONED")
+    assert evidence["summary"] == "Already fixed on main (db_updater.go)." and "schema_salvaged" not in evidence
+    assert "Already fixed on main" in _terminal(ctx, cid)[0]
+
+
 def test_adjust_plan_re_scouts_a_new_version(sc: StageContext, ctx: AppContext, sbx: FakeSbx) -> None:
     cid = insert_contribution(ctx, State.SCOUTING)
     sbx.kiro("scout", fenced(sample()), fenced(sample(approach=["Keep the debug log behind a flag"])))

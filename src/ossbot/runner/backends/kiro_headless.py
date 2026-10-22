@@ -21,7 +21,7 @@ from ossbot.common.backends import KIRO_HEADLESS, BackendSpec
 from ossbot.common.models import Catalog, DistinctUnavailable, ModelsFile, ModelUnavailable, ResolvedModel
 from ossbot.runner import output_parse
 from ossbot.runner.backends.base import ROLE_PROFILE, Check, LlmResult, new_run_id
-from ossbot.runner.errors import Interrupted, StageFailed, sandbox_run
+from ossbot.runner.errors import Interrupted, OutputInvalidFailed, StageFailed, sandbox_run
 from ossbot.runner.gk_client import Gatekeeper, GkError
 from ossbot.runner.sbx_client import Sandbox
 
@@ -136,7 +136,7 @@ class KiroHeadlessBackend:
             try:
                 value = parse(output.text)
             except output_parse.OutputInvalid as again:
-                raise StageFailed("output_invalid", again.reason[:200]) from again
+                raise OutputInvalidFailed(again.reason[:200], output.text) from again
         mismatch = output.model_mismatch or (output.model_actual is not None and output.model_actual != model.model)
         return LlmResult(value, model, output.model_actual, mismatch, runs, artifact)
 

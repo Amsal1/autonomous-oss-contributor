@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from typing import Any
 
 import httpx
@@ -206,6 +207,38 @@ def test_assignment_required_is_recorded_for_gate_1() -> None:
 def test_plan_checks(over: dict[str, object], user: bool, reason: str | None) -> None:
     p = Plan.model_validate({"feasible": True, "summary": "x", **over})
     assert plan.check(p, forbidden=[".github/workflows/**"], max_lines=6000, user=user) == reason
+
+
+def _fence(raw: str) -> str:
+    return "Checked main.\n```json\n" + raw + "\n```\n"
+
+
+def test_salvage_infeasible_reads_a_strict_false_verdict() -> None:
+    """§9.7: an answer that failed the schema (a 480-char approach item) but says feasible: false."""
+    text = _fence(json.dumps({"feasible": False, "summary": "already fixed on main", "approach": ["x" * 480],
+                              "shell": "ignored: only feasible and summary are read"}))  # fmt: skip
+    verdict = plan.salvage_infeasible(text)
+    assert verdict is not None and verdict.feasible is False and verdict.summary == "already fixed on main"
+    no_summary = plan.salvage_infeasible(_fence('{"feasible": false}'))
+    assert no_summary is not None and no_summary.summary == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        _fence('{"feasible": true, "summary": "s", "approach": ["' + "x" * 480 + '"]}'),  # feasible: no salvage
+        _fence('{"feasible": "false", "summary": "s"}'),  # a string is not a boolean
+        _fence('{"feasible": 0, "summary": "s"}'),  # nor is 0
+        _fence('{"summary": "s"}'),  # no verdict at all
+        _fence('{"feasible": false, "summary": 7}'),  # summary must be a string
+        _fence(json.dumps({"feasible": False, "summary": "s" * 20_001})),  # over the model's bound
+        _fence("[false]"),  # not an object
+        _fence("{nope"),  # not JSON
+        "feasible: false, but no fenced block",
+    ],
+)
+def test_salvage_infeasible_refuses_anything_else(text: str) -> None:
+    assert plan.salvage_infeasible(text) is None
 
 
 DIFF_CODE = "diff --git a/src/a.py b/src/a.py\n+x\n"
