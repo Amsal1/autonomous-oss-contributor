@@ -285,6 +285,10 @@ class DiscoveryPolicy(Strict):
     interval_hours: PosInt = 6
     top_n: PosInt = 5
     proposals_per_cycle: PosInt = 3  # §9.14: proposal cards per discovery cycle
+    # Discovery fix 7 (2026-10-22): while fewer autonomous proposals than this reached gate 1 in 24 h and
+    # none is on its way, the next cycle runs after interval_hours / 2. 0 = off; <= proposal.max_per_day.
+    # Config-only (/reload), not a Telegram preference; it never raises max_per_day or the size ceiling.
+    target_proposals_per_day: Annotated[int, Field(ge=0, le=50)] = 2
     # §9.4 (post-v1): a ranking boost for repos whose CI ran tests/lint on merged PRs; never a filter.
     # Config-only (/reload), not a Telegram-tunable discovery preference.
     ci_on_pr_weight: Annotated[float, Field(ge=0.0, le=30.0)] = 6.0
@@ -406,6 +410,15 @@ class PolicyConfig(Strict):
             raise ValueError(
                 f"size.autonomous_max_class {self.size.autonomous_max_class!r} ({max_lines} lines, {max_files} files)"
                 f" exceeds the hard ceiling diff ({self.diff.max_changed_lines} lines, {self.diff.max_files} files)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _target_within_daily_cap(self) -> PolicyConfig:
+        if self.discovery.target_proposals_per_day > self.proposal.max_per_day:
+            raise ValueError(
+                f"discovery.target_proposals_per_day {self.discovery.target_proposals_per_day} exceeds"
+                f" proposal.max_per_day {self.proposal.max_per_day}"
             )
         return self
 

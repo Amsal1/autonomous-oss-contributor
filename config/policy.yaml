@@ -81,6 +81,7 @@ discovery:
   interval_hours: 6
   top_n: 5
   proposals_per_cycle: 3           # proposal cards per discovery cycle
+  target_proposals_per_day: 2      # 0..max_per_day: while fewer autonomous proposals reached gate 1 in 24 h, discovery runs after interval_hours/2
   ci_on_pr_weight: 6.0             # 0..30: ranking boost for repos whose CI runs tests/lint on PRs; never a filter
   ci_facts_ttl_hours: 168          # 1..720: how long a repo's CI-on-PR facts are reused
   max_default_branch_age_days: 180 # 30..3650: skip a repo (seed or discovered) whose default branch's last commit is older

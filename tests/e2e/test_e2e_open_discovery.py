@@ -16,6 +16,7 @@ Scenario 7 holds throughout: FakeGitHub records no write and the dry-run flag is
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, tzinfo
@@ -143,6 +144,12 @@ async def test_one_cycle_finds_the_go_repo_and_its_card(rig: Rig, caplog: pytest
     assert [rig.upstream(c) for c in created] == [OPEN]
     c = rig.e2e.sc.gk.contribution(created[0])
     assert (c["issue_number"], c["source"], c["category"]) == (41, "discover", OPEN_CATEGORY)
+    await rig.tg.flush()  # discovery fix 5b: the finished cycle's silent Discovery FYI, its cid copyable
+    ((priority, thread, payload),) = rig.ctx.conn.execute(
+        "SELECT priority, thread_key, payload_json FROM tg_outbox WHERE dedupe_key LIKE 'discovery_cycle:%'"
+    )
+    assert (priority, thread) == (2, "feed") and f"<code>{created[0]}</code>" in payload
+    assert json.loads(payload).get("disable_notification") is True
     mid = await rig.card(created[0])
     body = text(rig.tg, mid)
     assert "🔎 open discovery · topic gitops · ★ 24,440" in body

@@ -102,6 +102,7 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/discovered-targets"): frozenset({W}),
     ("POST", "/v1/discovered-targets/decision"): frozenset({O}),
     ("POST", "/v1/discovered-targets/untry"): frozenset({O}),  # discovery pacing (2026-10-22): a go
+    ("POST", "/v1/discovery-cycles"): frozenset({W}),  # discovery fix 5: cycle reports, record + FYI only
     ("GET", "/v1/targets/resolve"): frozenset({W}),
     # open-discovery design §13.3: a hold is a stop (sandbox, worker); its release is a go (operator)
     ("POST", "/v1/contributions/{cid}/hold"): frozenset({S, W}),

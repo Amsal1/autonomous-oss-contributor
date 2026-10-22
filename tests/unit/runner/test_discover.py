@@ -9,11 +9,14 @@ import logging
 from datetime import timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from ossbot.common.config import all_targets
+from ossbot.common.schemas import DiscoveryCycleReport, State
 from ossbot.gatekeeper.context import AppContext
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.stages import discover
+from tests.conftest import insert_contribution
 from tests.fakes.fake_github import FakeGitHub
 from tests.unit.gatekeeper.test_discovered_targets import OPERATOR
 from tests.unit.runner.test_discover_open import (
@@ -109,6 +112,64 @@ def test_the_core_floor_stops_reading_and_the_cycle_still_finishes(
     assert core_paths == {f"/repos/{SEED}", f"/repos/{SEED}/commits", f"/repos/{SEED}/issues"}  # no kept/open/CI read
     assert searched(github, "repositories") == []
     assert github.writes == []
+
+
+SECOND = "langfuse/langfuse-python"  # another enabled target
+
+
+def test_discover_done_counts_and_the_cycle_report(sc: StageContext, ctx: AppContext, github: FakeGitHub,
+                                                   caplog: pytest.LogCaptureFixture) -> None:  # fmt: skip
+    """Discovery fix 5a: two seed targets (one inactive), three candidates: one with a linked PR, one the
+    gatekeeper refuses (an active item on the issue), one created. The report body validates."""
+    github.add_repo(SECOND, default_branch="main", language="Python")
+    github.commit_dates[SECOND.lower()] = iso(ctx, 400)  # no commit on main for > 180 days
+    for n in (1, 2, 3):
+        seed_issue(github, ctx, n, "bug")
+    github.mentions[(SEED.lower(), 2)] = 1
+    insert_contribution(ctx, State.VETTING, upstream=SEED, issue_number=3)
+    progress = discover.CycleProgress(now_of(ctx))
+    with caplog.at_level(logging.INFO, logger="ossbot.runner.stages.discover"):
+        created = discover.run(sc, repos=[SEED, SECOND], now=now_of(ctx), progress=progress)
+    assert numbers(sc, created) == [1]
+    (done,) = [r for r in caplog.records if getattr(r, "event", "") == "discover_done"]
+    counts = done.counts  # type: ignore[attr-defined]
+    assert done.scope == "repos"  # type: ignore[attr-defined]
+    assert {k: counts[k] for k in ("targets_read", "inactive", "candidates", "ranked", "linked_pr", "refused",
+                                   "created_total", "open_candidates", "resumes")} == {
+        "targets_read": 1, "inactive": 1, "candidates": 3, "ranked": 3, "linked_pr": 1, "refused": 1,
+        "created_total": 1, "open_candidates": 0, "resumes": 0}  # fmt: skip
+    body = discover.cycle_report(progress, outcome="finished", scope="repos", cut_reason=None, created=created,
+                                 ended_at=now_of(ctx))  # fmt: skip
+    report = DiscoveryCycleReport.model_validate(body)
+    assert report.created == created and report.created_total == 1 and report.cut_reason is None
+    assert github.writes == []
+
+
+def test_the_report_carries_the_top_drops_and_at_most_ten_cids(ctx: AppContext) -> None:
+    progress = discover.CycleProgress(now_of(ctx))
+    progress.stats.drops.update({f"reason_{i:02d}": 20 - i for i in range(15)} | {"Bad Reason!": 99})
+    cids = [f"c_{i:010d}" for i in range(12)]
+    body = discover.cycle_report(progress, outcome="cut", scope="full", cut_reason="search_limit", created=cids,
+                                 ended_at=now_of(ctx))  # fmt: skip
+    report = DiscoveryCycleReport.model_validate(body)
+    assert list(report.drops) == [f"reason_{i:02d}" for i in range(12)]  # the top 12, a bad code dropped
+    assert len(report.created) == 10 and report.created_total == 12 and report.cut_reason == "search_limit"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"outcome": "cut"}, {"cut_reason": "stopped"}, {"bogus": 1}, {"candidates": -1}, {"candidates": 100_001},
+     {"drops": {"Bad Reason": 1}}, {"drops": {f"r{i}": 1 for i in range(13)}}, {"created": ["c_bad"]},
+     {"cut_reason": "anything"}, {"started_at": "yesterday"}],
+    ids=["cut-without-reason", "reason-without-cut", "extra-key", "negative", "too-big", "bad-reason-code",
+         "too-many-drops", "bad-cid", "unknown-cut-reason", "bad-timestamp"],
+)  # fmt: skip
+def test_the_report_schema_is_bounded(ctx: AppContext, change: dict[str, object]) -> None:
+    body = discover.cycle_report(discover.CycleProgress(now_of(ctx)), outcome="finished", scope="full",
+                                 cut_reason=None, created=[], ended_at=now_of(ctx))  # fmt: skip
+    DiscoveryCycleReport.model_validate(body)
+    with pytest.raises(ValidationError):
+        DiscoveryCycleReport.model_validate({**body, **change})
 
 
 def test_a_stale_core_remaining_does_not_stop_the_next_cycle(sc: StageContext, ctx: AppContext,

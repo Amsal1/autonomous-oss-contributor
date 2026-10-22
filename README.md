@@ -295,7 +295,16 @@ recently merged PRs rank higher (`policy.discovery.ci_on_pr_weight`; a boost, ne
 proposal and preview cards say so: `CI on PRs: ✅ tests, lint (8/10 merged PRs)`, plus
 `runs after maintainer approval` when a maintainer has to start CI for outside PRs. The top few per
 cycle become proposal cards (at most five a day). A repo whose default branch has had no commit for
-more than 180 days (`policy.discovery.max_default_branch_age_days`) is skipped for the cycle.
+more than 180 days (`policy.discovery.max_default_branch_age_days`) is skipped for the cycle. While
+fewer than `policy.discovery.target_proposals_per_day` (default 2, at most `proposal.max_per_day`)
+autonomous proposals reached you in the last 24 h and nothing is on its way, the next cycle runs after
+half of `interval_hours`.
+
+Every finished cycle posts one silent **🔎 Discovery** note in 📈 OSS feed (candidates, the items it
+created with their ids one tap to copy, the top reasons candidates were dropped), the daily digest has a
+Discovery section (cycles finished and cut, proposals, drop reasons, "already fixed on main" skips), and
+you get one warning when no cycle has finished for 12 h. `ossctl doctor` shows the runner's GitHub core
+and search rate limits.
 
 **Open discovery.** The seed list is a priority list, not a fence. Each cycle the bot also searches
 GitHub for popular repos by topic (`devops`, `platform-engineering`, `kubernetes`, `terraform`, `gitops`,

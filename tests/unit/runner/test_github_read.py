@@ -540,3 +540,35 @@ def test_readme_and_directory_listing_on_the_fake() -> None:
     assert gh.dir_entries("acme/widgets", "nope") == []
     assert gh.file_text("acme/widgets", ".github") is None  # a directory is not a file
     assert fake.writes == [] and {r.method for r in fake.requests} == {"GET"}
+
+
+# ---------------------------------------- discovery fix 6: rate-limit headers in the log, GET /rate_limit
+def test_a_rate_limit_answer_logs_the_ratelimit_headers(caplog: pytest.LogCaptureFixture) -> None:
+    headers = {"x-ratelimit-limit": "30", "x-ratelimit-remaining": "0", "x-ratelimit-used": "30",
+               "x-ratelimit-resource": "search", "x-ratelimit-reset": str(int(T0) + 40)}  # fmt: skip
+    gh, _, _, _ = recording(lambda r: httpx.Response(403, json={"message": "API rate limit"}, headers=headers))
+    with caplog.at_level("INFO", logger="ossbot.runner.github_read"), pytest.raises(GitHubRateLimited) as exc:
+        gh.open_prs_mentioning("o/r", 1)
+    assert exc.value.bucket == "search"
+    (record,) = [r for r in caplog.records if getattr(r, "event", "") == "github_rate_limited"]
+    fields = {k: getattr(record, k) for k in github_read.RATE_HEADERS}
+    assert fields == {"limit": "30", "remaining": "0", "used": "30", "resource": "search", "reset": str(int(T0) + 40)}
+    assert "limit 30, remaining 0, used 30, resource search" in record.getMessage()
+
+
+def test_missing_ratelimit_headers_log_as_none_and_long_values_are_cut(caplog: pytest.LogCaptureFixture) -> None:
+    headers = {"retry-after": "20", "x-ratelimit-resource": "core" + "x" * 100}
+    gh, _, _, _ = recording(lambda r: httpx.Response(429, json={"message": "slow down"}, headers=headers))
+    with caplog.at_level("INFO", logger="ossbot.runner.github_read"), pytest.raises(GitHubRateLimited) as exc:
+        gh.repo("o/r")
+    assert exc.value.bucket == "core"
+    (record,) = [r for r in caplog.records if getattr(r, "event", "") == "github_rate_limited"]
+    assert record.limit is None and record.used is None  # type: ignore[attr-defined]
+    assert len(record.resource) == github_read.RATE_HEADER_MAX  # type: ignore[attr-defined]
+
+
+def test_rate_limit_is_one_get_of_rate_limit() -> None:
+    fake = FakeGitHub()
+    doc = GitHubRead(fake.sync_client(), sleep=lambda s: None).rate_limit()
+    assert doc is not None and doc["resources"]["search"]["limit"] == 30
+    assert [(r.method, r.path, r.params) for r in fake.requests] == [("GET", "/rate_limit", {})]

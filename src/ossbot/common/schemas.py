@@ -516,6 +516,47 @@ class DiscoveredUntry(ApiModel):
     apply: bool
 
 
+REASON_CODE_RE = r"^[a-z0-9_:.-]{1,64}$"
+CID_RE = r"^c_[0-9A-Z]{10}$"
+CycleCount = Annotated[int, Field(ge=0, le=100_000)]
+ReasonCode = Annotated[str, Field(pattern=REASON_CODE_RE)]
+CutReason = Literal["search_limit", "core_limit", "github_unavailable", "stopped", "gatekeeper"]
+
+
+class DiscoveryCycleReport(ApiModel):
+    """``POST /v1/discovery-cycles`` (worker; discovery fix 5): what one finished or cut discovery cycle
+    did. Runner counts from GitHub reads, no LLM output; bounded, audited as ``discovery_cycle`` and only
+    rendered escaped. It cannot express any state change."""
+
+    outcome: Literal["finished", "cut"]
+    scope: Literal["full", "repos"]
+    cut_reason: CutReason | None = None
+    started_at: IsoTs
+    ended_at: IsoTs
+    targets_read: CycleCount = 0
+    kept_read: CycleCount = 0
+    inactive: CycleCount = 0
+    open_repos_scanned: CycleCount = 0
+    candidates: CycleCount = 0
+    open_candidates: CycleCount = 0
+    ranked: CycleCount = 0
+    open_ranked: CycleCount = 0
+    refused: CycleCount = 0
+    linked_pr: CycleCount = 0
+    created_total: CycleCount = 0
+    resumes: CycleCount = 0
+    core_floor: bool = False
+    open_ended: Literal["rate_limited", "http_error"] | None = None
+    drops: Annotated[dict[ReasonCode, CycleCount], Field(max_length=12)] = Field(default_factory=dict)
+    created: Annotated[list[Annotated[str, Field(pattern=CID_RE)]], Field(max_length=10)] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _cut_reason_iff_cut(self) -> DiscoveryCycleReport:
+        if (self.outcome == "cut") != (self.cut_reason is not None):
+            raise ValueError("cut_reason is required for outcome cut and only then")
+        return self
+
+
 class DiscoveredView(ApiModel):
     """One ``discovered_targets`` row."""
 

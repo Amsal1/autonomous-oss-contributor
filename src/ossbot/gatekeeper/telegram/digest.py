@@ -10,6 +10,12 @@ and stars gained (gatekeeper GitHub reads, snapshotted in ``digest_runs.stats_js
 delta to the previous snapshot), the streak, top error classes, Hermes usage, and the merge rate by size
 class (weekly, and daily when a proposal or merge happened that day). No button changes the size
 preference; the digest only names ``/size``.
+
+Discovery section (discovery fix 5c and 10): cycles finished and cut by reason (the ``discovery_cycle``
+audit rows the runner's reports left), candidates found, new ``source = 'discover'`` items, their gate-1
+proposals, the top terminal drop reasons (vet and scout), the scout's on-main skips (always shown, 0
+included) and discovery stage error classes, all from the gatekeeper's own tables; reasons are ``k.Text``.
+A period without a finished cycle shows a warning line.
 """
 
 from __future__ import annotations
@@ -147,7 +153,98 @@ def collect(ctx: AppContext, period: Period, gh: dict[str, int]) -> dict[str, An
     )
     stats["errors"] = dict(errors.most_common(3))
     stats["streak"] = outcomes.streak(live_days(ctx), period.start)
+    stats["discovery"] = discovery_stats(ctx, span)
     return stats
+
+
+ON_MAIN = ("already_fixed_on_main", "not_reproducible_on_main")  # scout's check-main skips (fix 10)
+DROPS_SHOWN = 6
+
+
+def discovery_stats(ctx: AppContext, span: tuple[str, str]) -> dict[str, Any]:
+    """Discovery fix 5c and 10, from the gatekeeper's own tables only: ``discovery_cycle`` audit rows
+    (finished, cut by reason, candidates found), ``source = 'discover'`` items created, their terminal
+    drops by ``state_reason`` (vet and scout, the on-main skips counted apart, always), gate-1 proposals
+    and stage error classes in the window."""
+    finished, candidates = 0, 0
+    cuts: Counter[str] = Counter()
+    for (data,) in ctx.conn.execute("SELECT data_json FROM audit_events WHERE event = 'discovery_cycle' AND ts >= ?"
+                                    " AND ts < ?", span):  # fmt: skip
+        doc = json.loads(data)
+        if not isinstance(doc, dict):
+            continue
+        if doc.get("outcome") == "finished":
+            finished += 1
+            candidates += int(doc.get("candidates") or 0) + int(doc.get("open_candidates") or 0)
+        else:
+            cuts[str(doc.get("cut_reason"))] += 1
+    drops = Counter({
+        str(r[0]): int(r[1])
+        for r in ctx.conn.execute(
+            "SELECT state_reason, COUNT(*) FROM contributions WHERE source = 'discover' AND state IN"
+            " ('SKIPPED','FAILED','ABANDONED') AND state_reason IS NOT NULL AND updated_at >= ? AND updated_at < ?"
+            " GROUP BY state_reason", span)
+    })  # fmt: skip
+    errors = Counter({
+        str(r[0]): int(r[1])
+        for r in ctx.conn.execute(
+            "SELECT s.error_class, COUNT(*) FROM stage_runs s JOIN contributions c ON c.id = s.cid WHERE"
+            " c.source = 'discover' AND s.error_class IS NOT NULL AND s.started_at >= ? AND s.started_at < ?"
+            " GROUP BY s.error_class", span)
+    })  # fmt: skip
+    return {
+        "finished": finished,
+        "cut": dict(cuts.most_common()),
+        "candidates": candidates,
+        "created": _count(ctx, "SELECT COUNT(*) FROM contributions WHERE source = 'discover' AND created_at >= ?"
+                               " AND created_at < ?", span),
+        "proposals": _count(ctx, "SELECT COUNT(*) FROM outcomes WHERE source = 'discover' AND proposed_at >= ?"
+                                 " AND proposed_at < ?", span),
+        "drops": dict(Counter({r: n for r, n in drops.items() if r not in ON_MAIN}).most_common(DROPS_SHOWN)),
+        "on_main": {r: drops.get(r, 0) for r in ON_MAIN},
+        "errors": dict(errors.most_common(3)),
+    }  # fmt: skip
+
+
+CUT_SHOWN = {"search_limit": "search limit", "core_limit": "core limit", "github_unavailable": "GitHub down",
+             "stopped": "stopped", "gatekeeper": "gatekeeper"}  # fmt: skip
+REASON_SHOWN = 64
+
+
+def _n(count: Any, noun: str) -> str:
+    return f"{int(count)} {noun}{'' if int(count) == 1 else 's'}"
+
+
+def discovery_block(disc: dict[str, Any]) -> k.Block:
+    """🔁 cycles · 🔎 found · 🚫 dropped · 🌿 on main · ❌ errors; a warning line when no cycle finished."""
+    cut = {str(r): int(n) for r, n in dict(disc.get("cut") or {}).items()}
+    cycles = f"{disc['finished']} finished · {sum(cut.values())} cut"
+    if cut:
+        cycles += " (" + " · ".join(f"{CUT_SHOWN.get(r, r)} ×{n}" for r, n in cut.items()) + ")"
+    lines: list[k.Line] = [
+        (k.Const("🔎 "), k.Bold(k.Const("Discovery"))),
+        k.fact("🔁 Cycles:", cycles),
+        k.fact("🔎 Found:", f"{_n(disc['candidates'], 'candidate')} · {_n(disc['created'], 'new item')} ·"
+                           f" {_n(disc['proposals'], 'proposal')}"),
+    ]  # fmt: skip
+    drops = dict(disc.get("drops") or {})
+    if drops:
+        spans: list[k.Span] = [k.Const("🚫 Dropped: ")]
+        for i, (reason, n) in enumerate(drops.items()):
+            spans += [*([k.Const(" · ")] if i else []), k.Text(str(reason), REASON_SHOWN), k.Const(f" ×{int(n)}")]
+        lines.append(tuple(spans))
+    on_main = dict(disc.get("on_main") or {})
+    lines.append(k.fact("🌿 On main:", f"{int(on_main.get(ON_MAIN[0], 0))} already fixed ·"
+                                      f" {int(on_main.get(ON_MAIN[1], 0))} not reproducible"))  # fmt: skip
+    errors = dict(disc.get("errors") or {})
+    if errors:
+        spans = [k.Const("❌ Discovery errors: ")]
+        for i, (error, n) in enumerate(errors.items()):
+            spans += [*([k.Const(", ")] if i else []), k.Text(str(error), REASON_SHOWN), k.Const(f" ×{int(n)}")]
+        lines.append(tuple(spans))
+    if not disc["finished"]:
+        lines.append(k.line("⚠️ No discovery cycle finished in this period"))
+    return k.Block((k.Lines(tuple(lines)),), required=False, priority=2, name="discovery")
 
 
 def _gained(stats: dict[str, Any], prev: dict[str, Any], key: str) -> str | None:
@@ -185,6 +282,8 @@ def view(ctx: AppContext, period: Period, stats: dict[str, Any], prev: dict[str,
     if stats["hermes_demoted"]:
         lines.append(k.line(f"🤖 Hermes asked for {stats['hermes_demoted']} more loud notices today"))
     blocks = [k.Block((k.Lines(tuple(lines)),), name="facts")]
+    if isinstance(stats.get("discovery"), dict):  # older stats_json rows have no discovery section
+        blocks.append(discovery_block(stats["discovery"]))
     if period.kind == "weekly" or stats["proposed"] or stats["merged"]:
         since = to_iso(ctx.clock.now() - timedelta(days=WINDOW_DAYS))
         rows = outcomes.merge_rate_rows(ctx.conn, since)

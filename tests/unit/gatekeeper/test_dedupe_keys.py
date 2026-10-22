@@ -40,6 +40,7 @@ KEY_FORMATS: dict[str, bool] = {
     "mirror_row4:{approval_id}": False,  # card row 4 once per approval (item 51)
     "topic_delete:{thread_id}": False,  # the implicit topic of a command typed in All, deleted once
     "terminal:{cid}": False,  # post-v1: the terminal FYI after gate 1 (an item ends once)
+    "discovery_cycle:{audit_seq}": False,  # discovery fix 5b: one FYI per recorded cycle report (seq is unique)
 }
 
 

@@ -1,0 +1,25 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🔎 ",
+    {
+     "text": "Discovery",
+     "type": "bold"
+    },
+    " · 44 candidates · created 0",
+    " (ossctl discover)"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "No new items this cycle",
+   "type": "paragraph"
+  },
+  {
+   "text": "Read: 71 targets · 1 kept · 5 open repos · 2 with a linked PR · 9 refused",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

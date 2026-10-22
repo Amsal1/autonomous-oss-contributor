@@ -28,6 +28,11 @@ wait out a search limit of ≤ 65 s; a longer one ends only the open phase. A cy
 progress in a ``CycleProgress`` (the scheduler's), and the re-run skips the targets already read and
 an open phase that finished; the merge runs again with every pick's mention check. Open repos are
 recorded ``tried`` only after a merge that ended normally (``od.mark_tried``).
+
+Visibility (discovery fix 5a): ``CycleProgress.stats`` (a ``CycleStats``) counts what the cycle read,
+ranked, dropped, was refused and created, across its resumes; a finished run logs INFO
+``discover_done`` with every count, and ``cycle_report`` builds the body the scheduler sends to the
+gatekeeper (``POST /v1/discovery-cycles``) for every finished or cut cycle.
 """
 
 from __future__ import annotations
@@ -35,11 +40,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from ossbot.common.clock import from_iso
+from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.config import (
     ConfigBundle,
     DiscoveryFilters,
@@ -65,6 +72,44 @@ class GitHubUnavailable(Deferred):
     """GitHub's API stayed unavailable through a read's retries: the cycle ends and runs again later."""
 
 
+REASON_CODE_RE = re.compile(r"^[a-z0-9_:.-]{1,64}$")  # schemas.DiscoveryCycleReport drops keys
+DROPS_REPORTED = 12  # the top drop reasons a cycle report carries
+CREATED_REPORTED = 10  # the cids a cycle report carries
+COUNT_MAX = 100_000
+
+
+@dataclass
+class CycleStats:
+    """What one discovery cycle did (discovery fix 5a): logged as INFO ``discover_done`` when the cycle
+    finishes and sent to the gatekeeper as a cycle report (``POST /v1/discovery-cycles``). Read and merge
+    counts accumulate across the resumes of a cut cycle; the ranking counts and ``drops`` are those of the
+    last ranking."""
+
+    targets_read: int = 0  # seed targets whose issues were read
+    kept_read: int = 0  # kept discovered repos whose issues were read
+    inactive: int = 0  # repos skipped by the default-branch activity gate
+    open_repos_scanned: int = 0
+    candidates: int = 0  # seed and kept candidates after keep_issue
+    open_candidates: int = 0
+    ranked: int = 0  # tier 0 after the filters
+    open_ranked: int = 0
+    drops: Counter[str] = field(default_factory=Counter)  # scoring.rank drop reasons, both tiers
+    refused: int = 0  # gatekeeper 400/409 (not_rediscoverable, duplicate_active)
+    linked_pr: int = 0  # an open PR mentions the issue
+    created_total: int = 0  # contributions this cycle created (all attempts)
+    resumes: int = 0
+    core_floor: bool = False
+    open_ended: str | None = None  # "rate_limited" | "http_error"
+
+    def counts(self) -> dict[str, Any]:
+        out: dict[str, Any] = {k: min(int(v), COUNT_MAX) for k, v in vars(self).items()
+                               if isinstance(v, int) and not isinstance(v, bool)}  # fmt: skip
+        out["core_floor"] = self.core_floor
+        out["open_ended"] = self.open_ended
+        out["drops"] = {r: min(n, COUNT_MAX) for r, n in self.drops.most_common() if REASON_CODE_RE.fullmatch(r)}
+        return out
+
+
 @dataclass
 class CycleProgress:
     """What a full cycle has read so far (the scheduler keeps it across a cut, in memory only).
@@ -83,6 +128,19 @@ class CycleProgress:
     opened: od.OpenResult | None = None
     open_done: bool = False
     reached: set[str] = field(default_factory=set)  # open repos a merge attempt got to (od.mark_tried)
+    stats: CycleStats = field(default_factory=CycleStats)
+
+
+def cycle_report(progress: CycleProgress, *, outcome: Literal["finished", "cut"], scope: Literal["full", "repos"],
+                 cut_reason: str | None, created: list[str], ended_at: datetime) -> dict[str, Any]:  # fmt: skip
+    """The body of ``POST /v1/discovery-cycles`` (``schemas.DiscoveryCycleReport``): counts only, the top
+    drop reasons and the first cids created; runner data, never shown before the gatekeeper validated it."""
+    progress.stats.created_total = len(created)
+    counts = progress.stats.counts()
+    drops = dict(list(counts.pop("drops").items())[:DROPS_REPORTED])
+    return {"outcome": outcome, "scope": scope, "cut_reason": cut_reason if outcome == "cut" else None,
+            "started_at": to_iso(progress.started_at), "ended_at": to_iso(ended_at),
+            "created": created[:CREATED_REPORTED], "drops": drops, **counts}  # fmt: skip
 
 
 def _core_low(sc: StageContext, progress: CycleProgress) -> bool:
@@ -125,14 +183,16 @@ def _check(sc: StageContext) -> None:
 
 
 def _rank_open(opened: od.OpenResult | None, *, prefs: dict[str, Any], filters: DiscoveryFilters, now: datetime,
-               bundle: ConfigBundle) -> list[scoring.Ranked]:  # fmt: skip
+               bundle: ConfigBundle, drops: Counter[str]) -> list[scoring.Ranked]:  # fmt: skip
     """Tier 1 (§7.3, review-3 L3): ranked with ``signals={}`` and ``ci_weight=0``; the repo's CI boost
-    is already in ``Candidate.repo_bonus``, so it counts once. The global autonomous class applies."""
+    is already in ``Candidate.repo_bonus``, so it counts once. The global autonomous class applies.
+    Drop reasons are added to ``drops``."""
     if opened is None or not opened.candidates:
         return []
-    kept, _dropped = scoring.rank(opened.candidates, filters=filters, max_class=str(prefs["autonomous_max_class"]),
-                                  preferred=list(prefs["preferred_classes"]), signals={}, now=now, ci_weight=0.0,
-                                  interests=bundle.profile.interests.categories_priority)  # fmt: skip
+    kept, dropped = scoring.rank(opened.candidates, filters=filters, max_class=str(prefs["autonomous_max_class"]),
+                                 preferred=list(prefs["preferred_classes"]), signals={}, now=now, ci_weight=0.0,
+                                 interests=bundle.profile.interests.categories_priority)  # fmt: skip
+    drops.update(dropped.values())
     return kept
 
 
@@ -240,9 +300,11 @@ def _kept_one(sc: StageContext, row: dict[str, Any], *, now: datetime, egress_mo
             return
         bonus = _activity(sc, repo, info, now, disc.max_default_branch_age_days)
         if bonus is None:
+            progress.stats.inactive += 1
             return
         progress.per_repo_max[repo] = str(repo_prefs["autonomous_max_class"])
         _scan_issues(sc, target, info, now, bonus, progress.candidates, progress.hashes)
+        progress.stats.kept_read += 1
     except GitHubReadError as exc:
         log.warning("discovery read failed for %s: %s", repo, exc, extra={"event": "discover_read_failed"})
         _end_if_unavailable(exc)
@@ -315,8 +377,10 @@ def _seed_one(sc: StageContext, entry: ResolvedTarget, *, now: datetime, progres
             return
         bonus = _activity(sc, entry.repo, info, now, sc.config().policy.discovery.max_default_branch_age_days)
         if bonus is None:
+            progress.stats.inactive += 1
             return  # skipped this cycle, kept in targets.yaml
         _scan_issues(sc, entry, info, now, bonus, progress.candidates, progress.hashes)
+        progress.stats.targets_read += 1
     except GitHubReadError as exc:
         log.warning("discovery read failed for %s: %s", entry.repo, exc, extra={"event": "discover_read_failed"})
         _end_if_unavailable(exc)
@@ -345,9 +409,10 @@ def _seed(sc: StageContext, *, repos: list[str] | None, active: set[str], now: d
 
 
 def _rank_seed(sc: StageContext, progress: CycleProgress, *, prefs: dict[str, Any], filters: DiscoveryFilters,
-               active: set[str], now: datetime) -> list[scoring.Ranked]:  # fmt: skip
+               active: set[str], now: datetime, drops: Counter[str]) -> list[scoring.Ranked]:  # fmt: skip
     """Tier 0: the carried seed and kept candidates, ranked with the repo's CI facts (cached; not read
-    at the core floor, where the status is ``unknown``)."""
+    at the core floor, where the status is ``unknown``). The drop reasons of each repo's final ranking
+    are added to ``drops``."""
     bundle = sc.config()
     disc = bundle.policy.discovery
     by_repo: dict[str, list[scoring.Candidate]] = {}
@@ -359,8 +424,9 @@ def _rank_seed(sc: StageContext, progress: CycleProgress, *, prefs: dict[str, An
         rank_args: dict[str, Any] = {"filters": filters, "max_class": progress.per_repo_max[repo], "now": now,
                                      "preferred": list(prefs["preferred_classes"]),
                                      "interests": bundle.profile.interests.categories_priority}  # fmt: skip
-        kept, _dropped = scoring.rank(cands, signals={}, **rank_args)
+        kept, dropped = scoring.rank(cands, signals={}, **rank_args)
         if not kept:
+            drops.update(dropped.values())
             continue
         _check(sc)  # CI detection reads (cached per repo): a stop, kill, pause or drain ends the cycle here
         ci: Literal["yes", "no", "unknown"] = "unknown"
@@ -370,8 +436,9 @@ def _rank_seed(sc: StageContext, progress: CycleProgress, *, prefs: dict[str, An
             except GitHubReadError as exc:
                 log.warning("CI detection failed for %s: %s", repo, exc, extra={"event": "discover_ci_failed"})
                 _end_if_unavailable(exc)
-        kept, _dropped = scoring.rank(cands, signals={repo: scoring.RepoSignals(ci_on_pr=ci)},
-                                      ci_weight=disc.ci_on_pr_weight, **rank_args)  # fmt: skip
+        kept, dropped = scoring.rank(cands, signals={repo: scoring.RepoSignals(ci_on_pr=ci)},
+                                     ci_weight=disc.ci_on_pr_weight, **rank_args)  # fmt: skip
+        drops.update(dropped.values())
         ranked += kept
     ranked.sort(key=lambda r: -r.score)
     return ranked
@@ -414,8 +481,15 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
     created = created if created is not None else []
     already = len(created)
     budget = disc.proposals_per_cycle
-    ranked = _rank_seed(sc, progress, prefs=prefs, filters=filters, active=active, now=now)
-    tier1 = _rank_open(opened, prefs=prefs, filters=filters, now=now, bundle=bundle)
+    stats = progress.stats
+    stats.drops = Counter()  # the drops of this (last) ranking
+    ranked = _rank_seed(sc, progress, prefs=prefs, filters=filters, active=active, now=now, drops=stats.drops)
+    tier1 = _rank_open(opened, prefs=prefs, filters=filters, now=now, bundle=bundle, drops=stats.drops)
+    stats.candidates, stats.ranked, stats.open_ranked = len(progress.candidates), len(ranked), len(tier1)
+    stats.core_floor = progress.floor
+    if opened is not None:
+        stats.open_repos_scanned, stats.open_candidates = len(opened.scanned), len(opened.candidates)
+        stats.open_ended = opened.ended
     order = _merge(ranked, tier1, budget - len(created), disc.open.reserved_slots)
     sources = opened.sources if opened is not None else {}
     hashes = {**progress.hashes, **(opened.hashes if opened is not None else {})}
@@ -437,12 +511,14 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
             # a longer one cuts the cycle (the scheduler keeps the progress and re-runs the merge)
             if sc.gh.open_prs_mentioning(repo, number, check=lambda: _check(sc)) > 0:
                 refused.add(key)
+                stats.linked_pr += 1
                 continue
             created.append(sc.gk.create(repo, number, sources.get(key, "discover"), round(item.score, 2),
                                         hashes.get(key)))  # fmt: skip
         except GkError as exc:
             if exc.status in {400, 409}:
                 refused.add(key)  # not_rediscoverable / duplicate_active: cached for this cycle
+                stats.refused += 1
                 continue
             raise
         except GitHubReadError as exc:
@@ -450,4 +526,10 @@ def run(sc: StageContext, *, repos: list[str] | None = None, now: datetime | Non
             continue
     if opened is not None:  # the merge ended normally: record which open repos it used (fix 2)
         od.mark_tried(sc, opened, reached=reached, ranked={r.candidate.repo.lower() for r in tier1})
+    stats.created_total = len(created)
+    counts = stats.counts()
+    log.info("discovery cycle done: %d candidates (%d open), %d ranked (%d open), %d created, %d refused,"
+             " %d with a linked PR", stats.candidates, stats.open_candidates, stats.ranked, stats.open_ranked,
+             stats.created_total, stats.refused, stats.linked_pr,
+             extra={"event": "discover_done", "scope": "repos" if repos else "full", "counts": counts})  # fmt: skip
     return created[already:]

@@ -1,0 +1,58 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🔎 ",
+    {
+     "text": "Discovery",
+     "type": "bold"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "🔁 Cycles: ",
+    "2 finished · 3 cut (search limit ×2 · core limit ×1)"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "🔎 Found: ",
+    "44 candidates · 6 new items · 1 proposal"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "🚫 Dropped: ",
+    "ai_policy_unclear",
+    " ×2",
+    " · ",
+    "claimed_by_other",
+    " ×1",
+    " · ",
+    "output_invalid",
+    " ×1"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "🌿 On main: ",
+    "1 already fixed · 0 not reproducible"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "❌ Discovery errors: ",
+    "output_invalid",
+    " ×1"
+   ],
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

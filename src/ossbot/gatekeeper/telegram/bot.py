@@ -35,7 +35,7 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.outbox import OutboxRow, OutboxWorker, SendError
 from ossbot.gatekeeper.pollstats import PollStats
-from ossbot.gatekeeper.telegram import digest, reminders, status_card
+from ossbot.gatekeeper.telegram import digest, discovery_fyi, reminders, status_card
 from ossbot.gatekeeper.telegram.commands import admin as admin_cmds
 from ossbot.gatekeeper.telegram.commands.registry import load_plugins
 from ossbot.gatekeeper.telegram.handlers import Handlers
@@ -357,8 +357,8 @@ class TelegramFrontend:
         self.ui.dashboard.tick()
 
     async def _background_reads(self) -> None:
-        """Digest runs and status cards: GitHub GETs off the outbox loop, one pass at a time."""
-        for step in (digest.tick, status_card.tick):
+        """Digest runs, status cards and the discovery stall check: off the outbox loop, one pass at a time."""
+        for step in (digest.tick, status_card.tick, discovery_fyi.watch):
             try:
                 await step(self.ctx, self.reader)
             except Exception:

@@ -17,6 +17,7 @@ import socket
 import subprocess
 from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -817,6 +818,61 @@ def check_github_mcp(quick: bool) -> Result:
     return Result(PASS if ok else FAIL, name, detail, "" if ok else "check GITHUB_READ_TOKEN and github_login")
 
 
+APP_PYTHON = "/opt/ossbot/app/.venv/bin/python"
+RATE_LIMIT_CORE_WARN = 1000  # runner.stages.discover.CORE_FLOOR: below it discovery stops its seed loop
+RATE_LIMIT_SEARCH_DOC = 30  # docs.github.com/en/rest/search/search: 30 requests/min authenticated
+
+
+def _rate_bucket(doc: dict[str, Any], bucket: str) -> dict[str, int] | None:
+    raw = doc.get(bucket)
+    if not isinstance(raw, dict):
+        return None
+    vals = {k: raw.get(k) for k in ("limit", "used", "remaining", "reset")}
+    if not all(isinstance(v, int) and not isinstance(v, bool) for v in vals.values()):
+        return None
+    return {k: int(v) for k, v in vals.items() if isinstance(v, int)}
+
+
+def check_github_rate_limit(quick: bool) -> Result:
+    """Discovery fix 6: the runner's core and search buckets, read by ``ossbot.runner.rate_limit`` as uid
+    ``ossrunner`` through proxy 3140 (``GET /rate_limit`` does not count against the limit). The read token
+    goes only into the child's environment; the output is numbers only."""
+    name = "GitHub rate limit (as ossrunner)"
+    if quick:
+        return Result(SKIP, name, "full mode only")
+    missing = _secret("runner.env", "GITHUB_READ_TOKEN", name)
+    if missing:
+        return missing
+    env = {"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "HOME": "/",
+           "GITHUB_READ_TOKEN": env_value("runner.env", "GITHUB_READ_TOKEN") or ""}  # fmt: skip
+    argv = ["/usr/sbin/runuser", "-u", "ossrunner", "--", APP_PYTHON, "-I", "-m", "ossbot.runner.rate_limit"]
+    try:
+        proc = subprocess.run(argv, env=env, cwd="/", capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return Result(FAIL, name, type(exc).__name__)
+    try:
+        doc = json.loads(proc.stdout.strip().splitlines()[-1]) if proc.stdout.strip() else {}
+    except ValueError:
+        doc = {}
+    if not isinstance(doc, dict):
+        doc = {}
+    if proc.returncode != 0 or "error" in doc:
+        error = str(doc.get("error") or "no answer")[:64]
+        return Result(FAIL, name, f"exit {proc.returncode}: {error}", "check GITHUB_READ_TOKEN and proxy 3140")
+    core, search = _rate_bucket(doc, "core"), _rate_bucket(doc, "search")
+    if core is None or search is None:
+        return Result(FAIL, name, "unexpected answer from GET /rate_limit")
+    reset = datetime.fromtimestamp(core["reset"], UTC).strftime("%H:%MZ")
+    detail = (f"core {core['remaining']}/{core['limit']} left (used {core['used']}, reset {reset})"
+              f" · search {search['remaining']}/{search['limit']} left")  # fmt: skip
+    if core["remaining"] < RATE_LIMIT_CORE_WARN:
+        return Result(WARN, name, detail, f"discovery stops its seed loop below {RATE_LIMIT_CORE_WARN} core requests")
+    if search["limit"] < RATE_LIMIT_SEARCH_DOC:
+        return Result(WARN, name, detail, f"search limit under the documented {RATE_LIMIT_SEARCH_DOC}/min; the"
+                      " search bucket is shared by every token of the account")  # fmt: skip
+    return Result(PASS, name, detail)
+
+
 def _top_profile_value(key: str) -> str | None:
     from ossbot.common.yamlio import YamlError, safe_load  # noqa: PLC0415
 
@@ -953,6 +1009,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps += [
         check_firewall, check_squid_verifiable, check_gatekeeper, check_egress_mode, check_hermes_tier,
         lambda: check_github(quick),
+        lambda: check_github_rate_limit(quick),
         lambda: check_commit_signing(quick),
         lambda: check_github_mcp(quick),
         lambda: check_telegram(quick),

@@ -409,6 +409,22 @@ def test_default_branch_age_gate_key() -> None:
                              f"version: 1\ndiscovery: {{max_default_branch_age_days: {bad}}}\n".encode())  # fmt: skip
 
 
+def test_target_proposals_per_day() -> None:
+    """Discovery fix 7: default 2, 0..50, never above ``proposal.max_per_day``, config-only (extra=forbid)."""
+    shipped = parse_bundle(bundle_files()).policy
+    assert shipped.discovery.target_proposals_per_day == 2 == PolicyConfig(version=1).discovery.target_proposals_per_day
+    too_many = b"version: 1\nproposal: {max_per_day: 5}\ndiscovery: {target_proposals_per_day: 6}\n"
+    with pytest.raises(ConfigError, match=r"target_proposals_per_day 6 exceeds proposal\.max_per_day 5"):
+        parse_yaml_model(PolicyConfig, "policy.yaml", too_many)
+    for bad in (b"target_proposals_per_day: -1", b"target_proposals_per_day: 51", b"target_proposal_per_day: 1"):
+        with pytest.raises(ConfigError):
+            parse_yaml_model(PolicyConfig, "policy.yaml", b"version: 1\ndiscovery: {" + bad + b"}\n")
+    off = b"version: 1\nproposal: {max_per_day: 1}\ndiscovery: {target_proposals_per_day: 0}\n"
+    assert parse_yaml_model(PolicyConfig, "policy.yaml", off).discovery.target_proposals_per_day == 0
+    equal = b"version: 1\nproposal: {max_per_day: 3}\ndiscovery: {target_proposals_per_day: 3}\n"
+    assert parse_yaml_model(PolicyConfig, "policy.yaml", equal).discovery.target_proposals_per_day == 3
+
+
 def test_reserved_slots_within_proposals_per_cycle() -> None:
     text = b"version: 1\ndiscovery: {proposals_per_cycle: 1, open: {reserved_slots: 2}}\n"
     with pytest.raises(ConfigError, match=r"discovery\.open\.reserved_slots 2 exceeds"):

@@ -1,0 +1,27 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "⚠️ ",
+    {
+     "text": "Discovery: no cycle has finished in 12 h",
+     "type": "bold"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Last finished: none since the gatekeeper started",
+   "type": "paragraph"
+  },
+  {
+   "text": "No cut cycle was reported since either",
+   "type": "paragraph"
+  },
+  {
+   "text": "The runner keeps retrying. Details: ossctl status, journalctl -u ossbot-runner.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

@@ -171,6 +171,11 @@ class Gatekeeper:
     def egress_mode(self) -> str:
         return str(self._call("GET", "/v1/control/egress-mode")["mode"])
 
+    def discovery_cycle(self, report: dict[str, Any]) -> None:
+        """``POST /v1/discovery-cycles``: one finished or cut discovery cycle (audited; a finished one gets
+        the silent Discovery FYI). It records and notifies only; it changes no state."""
+        self._call("POST", "/v1/discovery-cycles", report)
+
     def pacing(self) -> dict[str, Any]:
         """``proposal.max_per_day`` state: ``remaining`` and ``next_slot_at`` (§9.5b)."""
         doc: dict[str, Any] = self._call("GET", "/v1/discovery-prefs")

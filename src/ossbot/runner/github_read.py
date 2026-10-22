@@ -27,6 +27,11 @@ slice and after the last, at most ``SEARCH_WAITS_MAX`` waits per call. A longer 
 without ``check`` (scout, ``ossctl targets search``), raises at once as before. ``core_remaining`` and
 ``core_reset`` follow the ``x-ratelimit-*`` headers of core answers (discovery's core floor). Issues of
 a repo are read with one ``GET /repos/{r}/issues`` page of 100 (labels are matched by the caller).
+
+Rate-limit diagnosis (fix 6): the ``github_rate_limited`` log line carries GitHub's
+``x-ratelimit-limit``, ``-remaining``, ``-used``, ``-resource`` and ``-reset`` headers (each cut to 32
+characters, None when absent); ``GitHubRateLimited.bucket`` names the bucket that answered;
+``rate_limit()`` reads ``GET /rate_limit`` (it does not count against the limit; ``ossctl doctor``).
 """
 
 from __future__ import annotations
@@ -71,11 +76,26 @@ class GitHubReadError(StageFailed):
 
 
 class GitHubRateLimited(Deferred):
-    """GitHub's rate limit: reads wait until ``until`` (epoch seconds); the stage is delayed."""
+    """GitHub's rate limit: reads wait until ``until`` (epoch seconds); the stage is delayed. ``bucket``
+    is the bucket that is limited (``search`` or ``core``)."""
 
-    def __init__(self, until: float, message: str) -> None:
+    def __init__(self, until: float, message: str, bucket: Bucket = "core") -> None:
         super().__init__(message)
         self.until = until
+        self.bucket: Bucket = bucket
+
+
+RATE_HEADERS = ("limit", "remaining", "used", "resource", "reset")
+RATE_HEADER_MAX = 32
+
+
+def rate_headers(resp: httpx.Response) -> dict[str, str | None]:
+    """GitHub's ``x-ratelimit-*`` headers of an answer, each cut to 32 characters (None when absent)."""
+    out: dict[str, str | None] = {}
+    for name in RATE_HEADERS:
+        value = resp.headers.get(f"x-ratelimit-{name}")
+        out[name] = value[:RATE_HEADER_MAX] if value is not None else None
+    return out
 
 
 def make_client(token: str | None, *, transport: httpx.BaseTransport | None = None) -> httpx.Client:
@@ -165,7 +185,7 @@ class GitHubRead:
         for attempt in range(len(RETRY_DELAYS_S) + 1):
             blocked = self.search_limited_until if search else self.limited_until
             if not after_wait and self._wall() < blocked:
-                raise GitHubRateLimited(blocked, f"GET {path}: rate limited")
+                raise GitHubRateLimited(blocked, f"GET {path}: rate limited", "search" if search else "core")
             try:
                 resp = self._client.get(path, params=params)
             except httpx.HTTPError as exc:
@@ -186,10 +206,12 @@ class GitHubRead:
                         self.search_limited_until = until = max(self.search_limited_until, until)
                     else:
                         self.limited_until = until = max(self.limited_until, until)
-                    log.info("GitHub rate limit (%s) on GET %s; reads wait %d s", bucket, path,
-                             int(until - self._wall()),
-                             extra={"event": "github_rate_limited", "bucket": bucket})  # fmt: skip
-                    raise GitHubRateLimited(until, f"GET {path}: HTTP {resp.status_code} rate limited")
+                    rl = rate_headers(resp)
+                    log.info("GitHub rate limit (%s) on GET %s; reads wait %d s (limit %s, remaining %s, used %s,"
+                             " resource %s, reset %s)", bucket, path, int(until - self._wall()), rl["limit"],
+                             rl["remaining"], rl["used"], rl["resource"], rl["reset"],
+                             extra={"event": "github_rate_limited", "bucket": bucket, **rl})  # fmt: skip
+                    raise GitHubRateLimited(until, f"GET {path}: HTTP {resp.status_code} rate limited", bucket)
                 error = GitHubReadError(f"GET {path}: HTTP {resp.status_code}", resp.status_code)
                 if resp.status_code < 500:
                     raise error
@@ -205,6 +227,12 @@ class GitHubRead:
     def _list(self, path: str, params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         doc = self._get(path, params)
         return [d for d in doc if isinstance(d, dict)] if isinstance(doc, list) else []
+
+    def rate_limit(self) -> dict[str, Any] | None:
+        """``GET /rate_limit`` (``resources.core``, ``resources.search``, ...); it does not count against the
+        limit. None on a 404."""
+        doc = self._get("/rate_limit")
+        return doc if isinstance(doc, dict) else None
 
     # ------------------------------------------------------------------ repos
     def repo(self, repo: str) -> dict[str, Any] | None:
@@ -317,7 +345,7 @@ class GitHubRead:
             blocked = self.search_limited_until - self._wall()
             if check is not None and blocked > 0:
                 if blocked > SEARCH_WAIT_MAX_S or waits >= SEARCH_WAITS_MAX:
-                    raise GitHubRateLimited(self.search_limited_until, f"GET {path}: rate limited")
+                    raise GitHubRateLimited(self.search_limited_until, f"GET {path}: rate limited", "search")
                 self._wait_search(blocked, check, path)
                 waits += 1
                 after_wait = True

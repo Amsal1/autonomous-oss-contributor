@@ -1,0 +1,46 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🔎 ",
+    {
+     "text": "Discovery",
+     "type": "bold"
+    },
+    " · 44 candidates · created 1"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "• ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    },
+    " · ",
+    "runatlantis/atlantis#2607"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Read: 71 targets · 1 kept · 5 open repos · 2 with a linked PR · 9 refused",
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Top drops: ",
+    "stale_issue",
+    " ×14",
+    " · ",
+    "too_big:m",
+    " ×7",
+    " · ",
+    "labels",
+    " ×3"
+   ],
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

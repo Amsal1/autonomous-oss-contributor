@@ -67,6 +67,11 @@ class FakeGitHub:
     # discovery pacing (2026-10-22): headers merged into every non-search 2xx answer, e.g.
     # {"x-ratelimit-remaining": "900"} for the core floor
     core_headers: dict[str, str] = field(default_factory=dict)
+    # GET /rate_limit (discovery fix 6): the resources GitHub reports (core and search buckets)
+    rate_limits: dict[str, dict[str, int]] = field(default_factory=lambda: {
+        "core": {"limit": 5000, "used": 790, "remaining": 4210, "reset": 1_790_003_600},
+        "search": {"limit": 30, "used": 0, "remaining": 30, "reset": 1_790_000_060},
+    })  # fmt: skip
     router: respx.MockRouter = field(init=False)
 
     def __post_init__(self) -> None:
@@ -157,6 +162,9 @@ class FakeGitHub:
             if self.token_expiration:
                 headers["github-authentication-token-expiration"] = self.token_expiration
             return httpx.Response(200, json={"login": self.login}, headers=headers)
+        if path == "/rate_limit" and method == "GET":
+            core = self.rate_limits.get("core", {})
+            return httpx.Response(200, json={"resources": self.rate_limits, "rate": core})
         if path == "/search/issues":
             return self._search_issues(params.get("q", ""))
         if path == "/search/repositories":

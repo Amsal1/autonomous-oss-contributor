@@ -22,7 +22,11 @@ after ``DISCOVER_UNAVAILABLE_RETRY``: an outage costs one read's retries, not on
 cycle (a stop, a rate limit, an outage, a gatekeeper 503) keeps its ``discover.CycleProgress`` in memory
 and resumes, no sooner than ``DISCOVER_RESUME_MIN`` (or the reset; 503: ``DISCOVER_GK_RETRY``), without
 re-reading the targets it finished; progress older than ``interval_hours`` is dropped, and a fresh full
-cycle never starts within ``FULL_RESCAN_MIN_GAP`` of the previous one's start. Interruptions
+cycle never starts within ``FULL_RESCAN_MIN_GAP`` of the previous one's start. Every finished or cut
+cycle is reported to the gatekeeper (``POST /v1/discovery-cycles``, audited; a finished one gets the
+silent Discovery FYI); a failed report changes nothing. While fewer autonomous proposals than
+``discovery.target_proposals_per_day`` reached gate 1 in 24 h and none is on its way, the next full
+cycle is due after ``interval_hours / 2`` (``_early``, INFO ``discover_early``). Interruptions
 (control state, a sandbox job cut by a drain or crash, sandboxd unreachable) only end the stage
 run as ``interrupted`` and the next tick re-queues it (max 3 by the gatekeeper). On start, stage
 runs left ``running`` by a crashed runner become ``interrupted``; ``resumed`` counts them
@@ -76,6 +80,18 @@ DISCOVER_UNAVAILABLE_RETRY = timedelta(minutes=15)  # a cycle ended by github_un
 DISCOVER_RESUME_MIN = timedelta(minutes=1)  # a cut cycle resumes no sooner than this (or the rate-limit reset)
 DISCOVER_GK_RETRY = timedelta(minutes=5)  # a full cycle cut by a gatekeeper 503 resumes after this
 FULL_RESCAN_MIN_GAP = timedelta(minutes=30)  # a fresh full cycle never starts sooner after the last one's start
+
+
+IN_FLIGHT = frozenset({"DISCOVERED", "VETTING", "VETTED", "SCOUTING"})  # may still become a gate-1 proposal
+
+
+def cut_reason(exc: BaseException) -> str:
+    """Why a discovery cycle was cut (``discover_interrupted``, the cycle report's ``cut_reason``)."""
+    if isinstance(exc, discover.GitHubUnavailable):
+        return "github_unavailable"
+    if isinstance(exc, GitHubRateLimited):
+        return "search_limit" if exc.bucket == "search" else "core_limit"
+    return "stopped"
 
 
 @dataclasses.dataclass
@@ -267,13 +283,35 @@ class Scheduler:
                 asked, self.pending_discover = self.pending_discover, None  # cut short earlier: again
             if asked is not None:
                 self.discover(asked or None)
-            elif self.last_discovery is None or self.now() - self.last_discovery >= interval:
+            elif self.last_discovery is None or self.now() - self.last_discovery >= interval or self._early(interval):
                 self.discover()
         if self.sc.stopping():
             out.skipped = "stopping"  # SIGTERM during discovery: start nothing new
             return out
         self._dispatch(out)
         return out
+
+    def _early(self, interval: timedelta) -> bool:
+        """Discovery fix 7: the next full cycle is due after ``interval_hours / 2`` while fewer autonomous
+        first proposals than ``discovery.target_proposals_per_day`` reached gate 1 in 24 h (``pacing().used``),
+        ``proposal.max_per_day`` has room, and no autonomous item is still on its way to gate 1. A
+        gatekeeper error counts as "not below target". ``max_per_day`` and the size ceiling stay enforced at
+        scout and at proposal submit; the 30 min full re-scan gap still applies."""
+        target = self.sc.config().policy.discovery.target_proposals_per_day
+        if target <= 0 or self.last_discovery is None or self.now() - self.last_discovery < interval / 2:
+            return False
+        try:
+            pacing = self.sc.gk.pacing()
+            if int(pacing.get("used", 0)) >= target or int(pacing.get("remaining", 0)) <= 0:
+                return False
+            if any(c.get("source") != "user" and str(c.get("state")) in IN_FLIGHT
+                   for c in self.sc.gk.active_contributions()):  # fmt: skip
+                return False
+        except GkError:
+            return False
+        log.info("discovery runs early: %s of %d proposals in 24 h", pacing.get("used"), target,
+                 extra={"event": "discover_early", "used": pacing.get("used"), "target": target})  # fmt: skip
+        return True
 
     def _start_full(self, now: datetime) -> discover.CycleProgress | None:
         """The progress a full cycle runs with: the cut cycle's (resumed), or a fresh one. A cycle that
@@ -283,6 +321,7 @@ class Scheduler:
         interval = timedelta(hours=self.sc.config().policy.discovery.interval_hours)
         progress = self.cycle_progress
         if self.cycle_cut and progress is not None and now - progress.started_at < interval:
+            progress.stats.resumes += 1
             return progress  # a cut cycle's re-run keeps its refusals, its spent budget and what it read
         if self.last_full_start is not None and now - self.last_full_start < FULL_RESCAN_MIN_GAP:
             self.discover_after = self.last_full_start + FULL_RESCAN_MIN_GAP
@@ -302,20 +341,37 @@ class Scheduler:
         self.cycle_cut = True
         self.discover_after = until
 
+    def _report(self, progress: discover.CycleProgress, *, full: bool, cut_reason: str | None,
+                created: list[str]) -> None:  # fmt: skip
+        """One cycle report to the gatekeeper (discovery fix 5): audited, and a finished cycle gets the
+        silent Discovery FYI. A failed report is logged and never changes the scheduling."""
+        body = discover.cycle_report(progress, outcome="cut" if cut_reason else "finished",
+                                     scope="full" if full else "repos", cut_reason=cut_reason, created=created,
+                                     ended_at=self.now())  # fmt: skip
+        try:
+            self.sc.gk.discovery_cycle(body)
+        except GkError as exc:
+            log.warning("discovery cycle report failed: %s %s", exc.status, exc.code,
+                        extra={"event": "discovery_report_failed"})  # fmt: skip
+
     def discover(self, repos: list[str] | None = None) -> list[str]:
         now = self.now()
         full = repos is None
-        progress: discover.CycleProgress | None = None
         if full:
-            progress = self._start_full(now)
-            if progress is None:
+            started = self._start_full(now)
+            if started is None:
                 return []
+            progress = started
             self.last_discovery = now
             self.cycle_cut = False
+        else:
+            progress = discover.CycleProgress(now)  # ossctl discover: one attempt, its own counts
+        created = self.cycle_created if full else []
         try:
             out = discover.run(self.sc, repos=repos, now=now, refused=self.refused,
-                               created=self.cycle_created if full else None, progress=progress)  # fmt: skip
+                               created=created, progress=progress)  # fmt: skip
         except (Interrupted, Deferred) as exc:  # stopped or rate limited mid-cycle: it runs again later
+            reason = cut_reason(exc)
             if isinstance(exc, discover.GitHubUnavailable):
                 until = now + DISCOVER_UNAVAILABLE_RETRY
             elif isinstance(exc, GitHubRateLimited):
@@ -328,19 +384,25 @@ class Scheduler:
                 self.pending_discover = repos  # the claimed ossctl discover request is not lost
                 if isinstance(exc, GitHubRateLimited | discover.GitHubUnavailable):
                     self.discover_after = until
-            log.info("discovery interrupted: %s", exc, extra={"event": "discover_interrupted"})
+            log.info("discovery interrupted (%s): %s", reason, exc,
+                     extra={"event": "discover_interrupted", "cut_reason": reason})  # fmt: skip
+            self._report(progress, full=full, cut_reason=reason, created=created)
             return []
         except GkError as exc:
             if full and exc.status == 503:  # the gatekeeper restarting: resume soon, keep what was read
                 self._cut(now + DISCOVER_GK_RETRY)
-                log.info("discovery interrupted: %s", exc, extra={"event": "discover_interrupted"})
+                log.info("discovery interrupted (gatekeeper): %s", exc,
+                         extra={"event": "discover_interrupted", "cut_reason": "gatekeeper"})  # fmt: skip
+                self._report(progress, full=full, cut_reason="gatekeeper", created=created)
                 return []
             if full:
                 self.cycle_progress = None
             log.warning("discovery skipped: %s", exc, extra={"event": "discover_skipped"})
+            self._report(progress, full=full, cut_reason="gatekeeper", created=created)
             return []
         if full:
             self.cycle_progress = None  # finished: the next full cycle starts fresh
+        self._report(progress, full=full, cut_reason=None, created=created)
         return out
 
     def _eligible(self, c: dict[str, Any], stage: object) -> bool:

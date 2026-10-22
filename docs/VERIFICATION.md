@@ -1016,6 +1016,19 @@ Commit 22ef255. Owner message 12 ("no good proposal today"); diagnosis `.agents/
 
 Not run in this step (close-out): the redeploy and the live `GET /rate_limit` read (Part B / close-out).
 
+## Post-v1 discovery fix, part B (fixes 5a-d, 6, 7, 10, 2026-10-22)
+
+Plan `.ossbot-local/postv1/plan-discovery-fix.md` Part B; ADR-0003 addendum "discovery pacing" (items 5-7, Part B verified facts, "Measured: pending close-out"); TRACEABILITY `DF-5`…`DF-7`. Hermetic code only: no redeploy, no live GitHub call, no `/reload`, dry-run and contributions untouched. Details: `.ossbot-local/postv1/discovery-fix/verify-b.md` (not tracked). DEV as in part A.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all checks passed; 604 files formatted; no issues in 274 files; 16 contracts kept, 0 broken |
+| Hygiene | `DEV ossctl docs commands --check`; `DEV ossctl lint personal` | README command table current (no command changed); 0 hits |
+| Part B targeted | `DEV pytest tests/unit/runner/test_github_read.py tests/unit/runner/test_rate_limit.py tests/unit/runner/test_discover.py tests/unit/runner/test_scheduler.py tests/unit/common/test_config.py tests/unit/ctl/test_doctor_rate_limit.py tests/unit/gatekeeper/test_api_discovery_cycles.py tests/unit/gatekeeper/test_authz.py tests/unit/gatekeeper/test_ceiling_not_writable.py tests/telegram/test_discovery_fyi.py tests/telegram/test_digest.py tests/telegram/test_digest_discovery.py tests/telegram/test_copyable_ids.py --timeout=120 -q` | 293 passed |
+| Affected packages incl. e2e | `DEV pytest tests/unit/runner tests/unit/ctl tests/unit/gatekeeper tests/unit/common tests/telegram tests/e2e -m "unit or telegram or e2e" -n auto --timeout=120 -q` (log `.ossbot-local/logs/discovery-fix-B.log`, not tracked) | 3883 passed (incl. `tests/e2e/test_e2e_open_discovery.py` scenario 1 with the Discovery FYI) |
+
+Not run in this step (close-out): the redeploy and V-B, the live `ossctl doctor` rate-limit read as ossrunner (the ADR line "Measured: pending close-out").
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).

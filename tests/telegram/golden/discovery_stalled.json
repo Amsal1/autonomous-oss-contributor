@@ -1,0 +1,35 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "⚠️ ",
+    {
+     "text": "Discovery: no cycle has finished in 12 h",
+     "type": "bold"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Last finished: ",
+    {
+     "date_time_format": "r",
+     "text": "2026-10-22 01:30 UTC",
+     "type": "date_time",
+     "unix_time": 1792632600
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Cut since: search limit ×71 · core limit ×14",
+   "type": "paragraph"
+  },
+  {
+   "text": "The runner keeps retrying. Details: ossctl status, journalctl -u ossbot-runner.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}
