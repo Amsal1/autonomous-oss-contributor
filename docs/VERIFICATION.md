@@ -990,6 +990,17 @@ Owner message 12 (2026-10-22, "allow listing directories/reading repo code"); pl
 
 Not run in this step (close-out, root): redeploy (sandbox-full gets `lib/repo_tree.sh`, sandbox-llm the new `prompts/scout.md`) with the image digest pin, `ossctl doctor --probes`, `ROOTDEV pytest -m sandbox tests/sandbox/test_scout_reads_snapshot.py`, gitleaks.
 
+Close-out (2026-10-22, HEAD `5d99ba0`):
+
+| Check | Command | Result |
+|---|---|---|
+| gitleaks | `ROOT gitleaks git --redact --config .gitleaks.toml .` | 329 commits, no leaks |
+| Redeploy | `REDEPLOY` | rc 0 (distro log `provision-20261022T130310Z.log`); sandbox-full `sha256:b5e31553…` and sandbox-llm `sha256:4cb3d743…` rebuilt and pinned in `config/versions.lock.yaml`; `agent_configs_sha256` and `settings_sha256` unchanged; doctor PASS 41, WARN 2 (probes not yet run for the new tuple; Hermes tool surface ConnectError while restarting) |
+| Probes | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor --probes` | all five passed for tuple `c9fd5cc478ca`; PASS 49 |
+| Doctor | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor` | PASS 48, no WARN |
+| Live state | `ROOT ossctl status`, GET-only contribution facts | lifecycle up, state running, dry_run false (unchanged), no running stages or pending approvals; grafana/loki `c_D1BVZ6N1HZ` still WATCHING (updated 2026-10-22T00:09:04Z) |
+| Live scout read | `ROOTDEV pytest -m sandbox tests/sandbox/test_scout_reads_snapshot.py tests/sandbox/test_profiles.py -k "scout_reads or scout_lists or symlink_snapshot or fetch_clones" --timeout=900` | 3 passed in 32.8 s: a scout-profile research job listed `/work/repo`, read `README.md` (`repo_inspection` ≥ 2), with no key-shaped text in its events |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
