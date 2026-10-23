@@ -1,0 +1,8 @@
+🌐 <b>Egress mode</b> · now sandbox_open
+Applies to research, Hermes, agent LLM and catalog traffic; only sandbox_open also gives fetch and validate web_public (strict repos keep the allowlist).
+Implement network: on_request (active) · the coder's executor gets web_public only when you allow it
+--
+allowlist | research
+open | sandbox_open ✅
+impl: off | impl: on_request ✅
+impl: auto

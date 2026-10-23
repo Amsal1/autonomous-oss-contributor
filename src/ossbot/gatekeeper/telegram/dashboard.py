@@ -99,7 +99,10 @@ class Dashboard:
         tier = ctx.control.hermes_tier(ctx.config.policy.hermes.capability_tier_default)
         rich_pref = prefs.get("rich_views", ctx.config.telegram.rich_views_default)
         size = ctx.discovery_prefs.effective(None).autonomous_max_class
-        facts = f"Egress: {egress} · Hermes: {tier} · Rich views: {rich_pref} · Auto size ≤ {size}"
+        impl = ctx.control.implement_network()  # ADR-0024: effective only in sandbox_open
+        inactive = " (inactive)" if impl != "off" and egress != "sandbox_open" else ""
+        facts = (f"Egress: {egress} · Impl. network: {impl}{inactive} · Hermes: {tier} · Rich views: {rich_pref}"
+                 f" · Auto size ≤ {size}")  # fmt: skip
         out: list[k.Line] = []
         if control.state != "running":  # why it is paused or killed, and since when (old /status line)
             reason: list[k.Span] = [k.Const("Reason: "), k.Text(control.reason or "-", 200)]

@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ossbot.common.clock import to_iso
 from ossbot.common.config import ConfigError, resolve_target
 from ossbot.common.control_flags import EGRESS_MODES, HERMES_TIERS, HermesTier
-from ossbot.common.schemas import PrefsUpdate
+from ossbot.common.schemas import IMPLEMENT_NETWORK_VALUES, PrefsUpdate
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.chat.hermes_surface import allowed_toolsets
 from ossbot.gatekeeper.config_snapshot import ReloadConflict
@@ -52,15 +52,27 @@ def _egress_now(app: AppContext) -> str:
     return app.control.egress_mode(app.config.egress.mode_default)
 
 
+def implement_network_state(value: str, mode: str) -> str:
+    """``on_request (active)``, ``auto (inactive)``, ``off`` (ADR-0024: effective only in sandbox_open)."""
+    if value == "off":
+        return "off"
+    return f"{value} ({'active' if mode == 'sandbox_open' else 'inactive'})"
+
+
 def egress_picker(app: AppContext) -> k.View:
     cur = _egress_now(app)
+    impl = app.control.implement_network()
     opts = [
         k.button(m + (" ✅" if m == cur else ""), "egress_pick", {"mode": m}, single_use=True) for m in EGRESS_MODES
     ]
+    impl_opts = [k.button(f"impl: {v}" + (" ✅" if v == impl else ""), "implnet_pick", {"value": v}, single_use=True)
+                 for v in IMPLEMENT_NETWORK_VALUES]  # fmt: skip
     return k.plain("picker", (k.Const("🌐 "), k.Bold(k.Const("Egress mode")), k.Const(f" · now {cur}")),
                    k.line("Applies to research, Hermes, agent LLM and catalog traffic; only sandbox_open also"
                           " gives fetch and validate web_public (strict repos keep the allowlist)."),
-                   rows=picker_rows(opts))  # fmt: skip
+                   k.line(f"Implement network: {implement_network_state(impl, cur)} · the coder's executor gets"
+                          " web_public only when you allow it"),
+                   rows=[*picker_rows(opts), *picker_rows(impl_opts)])  # fmt: skip
 
 
 def egress_changes(app: AppContext, cur: str, new: str) -> list[str]:
@@ -95,13 +107,67 @@ def egress_confirm_view(app: AppContext, mode: str) -> k.View:
                                                style="danger" if widens else "primary"))  # fmt: skip
 
 
-@command(
-    "egress", help="Egress mode allowlist / research / open / sandbox_open (asks for confirmation)", safety="config"
-)
+IMPLNET_WHAT = {
+    "off": "off: the coder's executor never gets a network.",
+    "on_request": "on_request: only a 🌐 Rerun with network you confirm gets it.",
+    "auto": ("auto: every implement run of a non-strict repo, including fix rounds on your open PRs, gives the"
+             " coder's executor (agent-exec, no credentials) the public web through the proxy, only while the"
+             " egress mode is sandbox_open"),
+}  # fmt: skip
+
+
+def implnet_confirm_view(app: AppContext, value: str) -> k.View:
+    """The confirm panel of an implement-network change (ADR-0024): what it does, the guard, what stays."""
+    cur, mode = app.control.implement_network(), _egress_now(app)
+    order: list[str] = list(IMPLEMENT_NETWORK_VALUES)
+    widens = order.index(value) > order.index(cur)
+    what = IMPLNET_WHAT[value]
+    if value == "auto":
+        active = mode == "sandbox_open"
+        what += " (now: sandbox_open, so active)." if active else f" (now: {mode}, so inactive until you switch)."
+    lines = [k.line(f"🌐 Implement network {cur} → {value}."), k.line(what)]
+    if value != "off":
+        a = app.config.egress.anomaly
+        lines.append(k.line(f"Guarded like fetch and validate: always-denied floors, ≤ {a.max_hosts} hosts,"
+                            f" ↑ {a.max_upload_mb} MB, ↓ {a.max_download_mb} MB per job; a breach holds only"
+                            " that contribution. The Kiro key container is unchanged; strict repos never get"
+                            " it."))  # fmt: skip
+    lines.append(k.line("Approvals stay valid. Running jobs keep the network they started with."))
+    return confirm_panel(lines, confirm_button(f"✅ Set {value}", "implnet_confirm", value,
+                                               style="danger" if widens else "primary"))  # fmt: skip
+
+
+@command("egress", help="Egress mode and implement network (asks for confirmation)", safety="config")
 async def egress(ctx: CommandContext, args: list[str]) -> Reply:
-    if args and args[0] in EGRESS_MODES and args[0] != _egress_now(ctx.app):
+    if len(args) >= 2 and args[0] == "implement" and args[1] in IMPLEMENT_NETWORK_VALUES:
+        if args[1] != ctx.app.control.implement_network():
+            return Reply("", view=implnet_confirm_view(ctx.app, args[1]))
+    elif args and args[0] in EGRESS_MODES and args[0] != _egress_now(ctx.app):
         return Reply("", view=egress_confirm_view(ctx.app, args[0]))
     return Reply("", view=egress_picker(ctx.app))
+
+
+class ImplNetArg(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: Literal["off", "on_request", "auto"]
+
+
+@action("implnet_pick", arg=ImplNetArg)
+async def implnet_pick(tap: Tap) -> str:
+    if tap.arg.value == tap.app.control.implement_network():
+        ui_send.edit(tap.app, egress_picker(tap.app), message_id=tap.message_id)
+        return f"Already {tap.arg.value}."
+    ui_send.edit(tap.app, implnet_confirm_view(tap.app, tap.arg.value), message_id=tap.message_id)
+    return ""
+
+
+@confirm_handler("implnet_confirm", effect="local")
+async def implnet_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
+    """ADR-0024: the human's only Telegram path to the setting (SQLite only); audited and announced."""
+    if arg not in IMPLEMENT_NETWORK_VALUES:
+        return Reply("This button is no longer valid.")
+    previous = ctx.app.control.set_implement_network(arg, ctx.actor, ctx.app.config.egress.mode_default)
+    return Reply(f"🌐 {b('Implement network')} {esc(previous)} → {b(arg)}")
 
 
 @action("egress_pick", arg=ModeArg)

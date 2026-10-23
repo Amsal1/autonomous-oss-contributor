@@ -60,6 +60,20 @@ def test_one_builder_classic_and_rich_renders_are_identical(ctx: AppContext) -> 
     assert len(classic.render(copy).text) <= 1500
 
 
+@pytest.mark.parametrize(("mode", "value", "shown"), [
+    ("open", "off", "Impl. network: off ·"), ("open", "auto", "Impl. network: auto (inactive) ·"),
+    ("sandbox_open", "on_request", "Impl. network: on_request ·"),
+])  # fmt: skip
+def test_status_shows_the_implement_network(ctx: AppContext, mode: str, value: str, shown: str) -> None:
+    """ADR-0024 / R2.12: the setting and whether it is active (inactive outside sandbox_open)."""
+    default = ctx.config.egress.mode_default
+    if mode != default:
+        ctx.control.set_egress_mode(mode, "tg:4242", default, egress=ctx.config.egress)  # type: ignore[arg-type]
+    ctx.control.set_implement_network(value, "tg:4242", default)  # type: ignore[arg-type]
+    body = classic.render(ui_of(ctx).dashboard.view(None, kind="status")).text
+    assert shown in body and (("(inactive)" in body) is (value != "off" and mode != "sandbox_open"))
+
+
 @pytest.mark.parametrize("where", ["all", "control", "reviews"])
 async def test_status_equals_the_pinned_dashboard_in_the_asking_topic(ctx: AppContext, rig: TgRig, where: str) -> None:
     topics = _topics(ctx)

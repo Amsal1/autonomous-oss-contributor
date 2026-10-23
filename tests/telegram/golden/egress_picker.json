@@ -1,0 +1,24 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🌐 ",
+    {
+     "text": "Egress mode",
+     "type": "bold"
+    },
+    " · now open"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Applies to research, Hermes, agent LLM and catalog traffic; only sandbox_open also gives fetch and validate web_public (strict repos keep the allowlist).",
+   "type": "paragraph"
+  },
+  {
+   "text": "Implement network: off · the coder's executor gets web_public only when you allow it",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}
