@@ -3,7 +3,11 @@
 * ``ALLOWED[from][to]`` is the set of actors that may drive an edge. FAILED edges are generated:
   W|G from every working state, G|H from every gate state (N1).
 * Live-PR redirect (M4): with ``pr_number`` set, a move to FAILED/ABANDONED becomes WATCHING
-  (except the human WATCHING->ABANDONED), cancelling the fix's open actions and approvals.
+  (except the human WATCHING->ABANDONED), cancelling the fix's open actions and approvals. A redirect
+  with ``branch_moved`` also sets ``fixes_disabled_reason``, which refuses every later fix round.
+* Owner fix round (ADR-0003 addendum 2026-10-23): WATCHING->IMPLEMENTING is also H (``owner_fix`` only),
+  guarded by an open change request and ``owner_fix_rounds < owner_fix_rounds_max``; it counts
+  ``owner_fix_rounds``, never ``watch_rounds``. ``reason=owner_fix_round`` is reserved for H (403).
 * Guards answer 409 ``guard_failed:<guard>``; a known edge with the wrong actor answers 403.
 * Kill/pause is checked on entry to working states (and SUBMITTING); moves that stop work (the
   redirect, into SUBMIT_FAILED, into WATCHING from a gate state) are allowed while paused/killed.
@@ -114,8 +118,13 @@ _LISTED: dict[State, dict[State, frozenset[Actor]]] = {
     S.SUBMITTING: {S.SUBMITTED: G, S.DRY_RUN_DONE: G, S.SUBMIT_FAILED: G, S.WATCHING: G},
     S.SUBMIT_FAILED: {S.AWAITING_APPROVAL: H, S.WATCHING: H},  # WATCHING only when pr_number set
     S.SUBMITTED: {S.WATCHING: G},
-    S.WATCHING: {S.WATCHING: W, S.IMPLEMENTING: W, S.MERGED: W, S.CLOSED: W, S.ABANDONED: H},
+    # IMPLEMENTING H: owner fix round (/fix, 🔧 Fix with notes), owner_fix.start_round only (ADR-0003 addendum)
+    S.WATCHING: {S.WATCHING: W, S.IMPLEMENTING: W | H, S.MERGED: W, S.CLOSED: W, S.ABANDONED: H},
 }
+
+# Reserved for the human WATCHING->IMPLEMENTING edge: the runner's unbundle rule and the queue label key on it,
+# so no other actor may store it as state_reason (I13).
+OWNER_FIX_REASON = "owner_fix_round"
 
 
 def _build_allowed() -> dict[State, dict[State, frozenset[Actor]]]:
@@ -244,7 +253,23 @@ class StateMachine:
                 return "snoozed"
         return None
 
-    def _guard(self, row: sqlite3.Row, from_: State, to: State, redirected: bool) -> str | None:
+    def _owner_fix_guard(self, row: sqlite3.Row, actor: Actor, limits: Limits) -> str | None:
+        """WATCHING->IMPLEMENTING: branch_moved disables both actors' rounds (M4); the human edge needs a PR,
+        a free owner round (separate from watch_rounds) and an open change request; W keeps watch_rounds."""
+        if row["fixes_disabled_reason"] is not None:
+            return "fixes_disabled"
+        if actor is not Actor.HUMAN:
+            return "watch_rounds" if row["watch_rounds"] >= limits.watch_rounds_max else None
+        if row["pr_number"] is None:
+            return "pr_number_set"
+        if row["owner_fix_rounds"] >= limits.owner_fix_rounds_max:
+            return "owner_fix_rounds"
+        open_request = self.conn.execute(
+            "SELECT 1 FROM change_requests WHERE cid = ? AND consumed_at IS NULL LIMIT 1", (row["id"],)
+        ).fetchone()
+        return None if open_request is not None else "change_request"
+
+    def _guard(self, row: sqlite3.Row, from_: State, to: State, redirected: bool, actor: Actor) -> str | None:
         pr = row["pr_number"]
         gate1 = self._gate1_guard(row, from_, to)
         if gate1 is not None:
@@ -289,8 +314,8 @@ class StateMachine:
                 return "review_rounds"
             if from_ is S.CHANGES_REQUESTED and row["change_rounds"] >= limits.max_change_rounds:
                 return "change_rounds"
-            if from_ is S.WATCHING and row["watch_rounds"] >= limits.watch_rounds_max:
-                return "watch_rounds"
+            if from_ is S.WATCHING:
+                return self._owner_fix_guard(row, actor, limits)
         if (
             not redirected
             and from_ is S.WATCHING
@@ -301,9 +326,11 @@ class StateMachine:
         return None
 
     @staticmethod
-    def _counter_updates(from_: State, to: State, redirected: bool) -> dict[str, str]:
+    def _counter_updates(from_: State, to: State, redirected: bool, actor: Actor) -> dict[str, str]:
         if redirected:
             return {}
+        if to is S.IMPLEMENTING and from_ is S.WATCHING and actor is Actor.HUMAN:
+            return {"owner_fix_rounds": "owner_fix_rounds + 1"}  # an owner round never spends watch_rounds
         if to is S.IMPLEMENTING:
             column = {
                 S.VALIDATION_FAILED: "implement_attempts",
@@ -340,9 +367,11 @@ class StateMachine:
             target = resolve_target(from_, to, row["pr_number"])
             if actor not in target.actors:
                 forbidden = TransitionError(403, "forbidden_transition", f"{from_.value}->{to.value} by {actor.value}")
+            elif actor is not Actor.HUMAN and evidence.get("reason") == OWNER_FIX_REASON:
+                forbidden = TransitionError(403, "reserved_reason", f"{OWNER_FIX_REASON} is the human's")
             else:
                 redirected = target.redirected_from is not None
-                guard = self._guard(row, from_, target.to, redirected)
+                guard = self._guard(row, from_, target.to, redirected, actor)
                 if guard is not None:
                     raise TransitionError(409, f"guard_failed:{guard}")
                 stops_work = redirected or target.to is S.SUBMIT_FAILED or (target.to is S.WATCHING and from_ in GATE)
@@ -373,11 +402,13 @@ class StateMachine:
             stored_reason = str(reason)[:200] if reason is not None else None
         params.append(stored_reason)
         params.append(to_iso(self.clock.now()))
-        for column, expr in self._counter_updates(from_, target.to, target.redirected_from is not None).items():
+        redirected = target.redirected_from is not None
+        for column, expr in self._counter_updates(from_, target.to, redirected, actor).items():
             sets[column] = expr
-        if target.redirected_from is not None and error_class == "branch_moved":
+        if redirected and error_class == "branch_moved":
             sets["watch_rounds"] = "?"
             params.append(self.limits().watch_rounds_max)
+            sets["fixes_disabled_reason"] = "'branch_moved'"  # M4: blocks the owner's rounds too
         if from_ in {S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED, S.PROPOSAL_EXPIRED}:
             # Undo or re-scout: the decline record goes with the state (§14.11.15 Undo step 2)
             sets.update({"declined_at": "NULL", "declined_reason": "NULL", "snooze_until": "NULL"})

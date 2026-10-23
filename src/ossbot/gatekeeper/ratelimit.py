@@ -78,7 +78,7 @@ async def check(
     exclude_action_id: str | None = None,
 ) -> RateDecision:
     if kind == "push_update":
-        return RateDecision(True, None, 0, None)  # bounded by watch_rounds_max instead
+        return RateDecision(True, None, 0, None)  # bounded by watch_rounds_max and owner_fix_rounds_max instead
     if kind == "comment":
         used = used_in_window(conn, clock, "comment", exclude_action_id)
         return RateDecision(used < limits.comments_per_24h, "comments_per_24h", used, limits.comments_per_24h)

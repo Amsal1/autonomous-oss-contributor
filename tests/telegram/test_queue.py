@@ -82,6 +82,35 @@ def test_maintainer_fix_expired_items_and_size_cards(ctx: AppContext) -> None:
     assert items[2].label.endswith("· ⌛ expired")
 
 
+def _transition(ctx: AppContext, cid: str, from_: str, to: str, reason: str | None) -> None:
+    evidence = {"reason": reason} if reason else {}
+    with db.transaction(ctx.conn):
+        ctx.audit.append("x", "transition", {"from": from_, "to": to, "evidence": evidence}, cid)
+
+
+def test_owner_fix_round_is_labelled_and_ranked_separately(ctx: AppContext) -> None:
+    """ADR-0003 addendum (2026-10-23): the owner's /fix round is class 1 ``🔧 PR #n your fix``; a maintainer
+    round stays class 0 after an in-round VALIDATION_FAILED -> IMPLEMENTING retry (the round boundary is
+    the newest WATCHING -> IMPLEMENTING)."""
+    owner_cid, owner = packaged_contribution(ctx, pr_number=8)
+    _transition(ctx, owner_cid, "WATCHING", "IMPLEMENTING", "owner_fix_round")
+    _approve(ctx, owner, hours=60)
+    maint_cid, maint = packaged_contribution(ctx, pr_number=9)
+    _transition(ctx, maint_cid, "WATCHING", "IMPLEMENTING", "fix_round")
+    _transition(ctx, maint_cid, "VALIDATION_FAILED", "IMPLEMENTING", None)
+    _approve(ctx, maint, hours=60)
+    plain_cid, plain = packaged_contribution(ctx, pr_number=10)  # a gate-2 Request changes round only
+    _transition(ctx, plain_cid, "CHANGES_REQUESTED", "IMPLEMENTING", None)
+    _approve(ctx, plain, hours=60)
+    items = {i.subject: i for i in queue.ordered(ctx)}
+    assert (items[owner_cid].class_rank, items[maint_cid].class_rank, items[plain_cid].class_rank) == (1, 0, 2)
+    assert items[owner_cid].label.startswith("🔧 PR #8 your fix · ")
+    assert items[maint_cid].label.startswith("🔁 PR #9 fix · ")
+    assert items[plain_cid].label.startswith("🔁 PR #10 fix · ")
+    assert queue.fix_trigger(ctx, owner_cid) == "owner" and queue.maintainer_triggered(ctx, maint_cid)
+    assert queue.fix_trigger(ctx, plain_cid) is None
+
+
 def test_autonomous_proposals_rank_by_score_not_target_priority() -> None:
     when = datetime(2026, 10, 19, tzinfo=UTC)
     a = queue.Item(1, 4, when, 9, "t", "p", "c_A", "a", score=0.2)

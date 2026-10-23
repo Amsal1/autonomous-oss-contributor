@@ -21,6 +21,19 @@ INTERVAL_S = 900
 SCHEMA = '{"action": "reply|fix|rebase|none", "reply_body": "...", "fix_request": "..."}'
 
 
+def task_text(repo: str, number: int, body: str) -> str:
+    """The watch decision task: the summarizer agent with the watcher's role prompt and schema (no new
+    model role); the PR comments are untrusted data."""
+    return prompts.task(
+        "summarizer",
+        "Decide what the new PR feedback needs: reply, fix, rebase or none.",
+        [prompts.untrusted(f"github:{repo}#{number} new comments", body)],
+        SCHEMA,
+        role_file="watcher_reply",
+        schema_name="watcher",
+    )
+
+
 def due(sc: StageContext, c: dict[str, Any]) -> bool:
     last = sc.load(str(c["id"])).get("watched_at")
     return last is None or sc.clocks.wall() - float(last) >= INTERVAL_S
@@ -44,12 +57,7 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
             else:
                 body = "\n\n".join(f"## {(cm.get('user') or {}).get('login', '?')}\n{cm.get('body') or ''}"
                                    for cm in new[-20:])  # fmt: skip
-                text = prompts.task(
-                    "summarizer",
-                    (prompts.prompts_dir() / "watcher_reply.md").read_text("utf-8"),
-                    [prompts.untrusted(f"github:{repo}#{number} new comments", body)],
-                    SCHEMA,
-                )
+                text = task_text(repo, int(number), body)
                 result = sc.kiro().invoke(cid, "summarizer", WatchDecision, text, timeout_s=600, schema_hint=SCHEMA)
                 run_.model_actual = result.model_actual
                 decision = result.value

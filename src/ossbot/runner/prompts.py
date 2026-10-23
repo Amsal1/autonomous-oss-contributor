@@ -46,15 +46,19 @@ def human(text: str, limit: int = 4000) -> str:
     return f"<human_instruction>\n{body}\n</human_instruction>"
 
 
-def task(role: str, instruction: str, sections: list[str], schema_hint: str) -> str:
+def task(role: str, instruction: str, sections: list[str], schema_hint: str, *, role_file: str | None = None,
+         schema_name: str | None = None) -> str:  # fmt: skip
     """The shared rules, the role prompt (also the agent's ``file://`` prompt; inlined because
-    kiro-cli 2.32's V3 engine flags ``file://`` agent prompts, ADR-0011 addendum), the task."""
+    kiro-cli 2.32's V3 engine flags ``file://`` agent prompts, ADR-0011 addendum), the task.
+    ``role_file`` picks another role prompt for an agent that runs a second task (the watcher's
+    ``watcher_reply`` on the summarizer agent); ``schema_name`` names the answer's schema (default ``role``)."""
     common = (prompts_dir() / "_common.md").read_text(encoding="utf-8")
-    role_file = prompts_dir() / f"{role}.md"
-    role_prompt = role_file.read_text(encoding="utf-8").rstrip() if role_file.is_file() else ""
+    path = prompts_dir() / f"{role_file or role}.md"
+    role_prompt = path.read_text(encoding="utf-8").rstrip() if path.is_file() else ""
+    schema = schema_name or role
     parts = [common.rstrip(), *([role_prompt] if role_prompt else []), f"## Task ({role})\n\n{instruction.strip()}",
              *sections,
-             f"## Answer\n\nOne fenced ```json block matching the {role} schema:\n{schema_hint}"]  # fmt: skip
+             f"## Answer\n\nOne fenced ```json block matching the {schema} schema:\n{schema_hint}"]  # fmt: skip
     return "\n\n".join(parts) + "\n"
 
 

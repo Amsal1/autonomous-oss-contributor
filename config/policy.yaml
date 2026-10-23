@@ -20,6 +20,7 @@ limits:
   confirm_ttl_seconds: 300
   contribution_expiry_days: 7
   watch_rounds_max: 3
+  owner_fix_rounds_max: 5            # owner /fix rounds per PR; separate from watch_rounds_max (ADR-0003 addendum 2026-10-23)
   repo_cooldown_days_after_close: 30
   repo_cooldown_days_after_user_reject: 7
   rediscover_cooldown_days: 7        # M6: per issue, after FAILED/ABANDONED/EXPIRED/other SKIPPED

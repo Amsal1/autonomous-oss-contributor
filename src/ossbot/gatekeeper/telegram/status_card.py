@@ -17,6 +17,9 @@ the status row's ``tg_views.state_json``, which an edit merges rather than repla
 * **Closed**: ``🗂 Closed`` with the closer and the last maintainer comment (≤ 300, quoted, untrusted).
 * ``📜 Timeline`` edits in place to the PR's events; ``🛑 Stop watching`` asks for a confirm tap, then
   ``WATCHING → ABANDONED`` (actor human, M4); the PR stays open on GitHub.
+* ``🔧 Fix with notes`` (WATCHING, fixes not disabled, owner rounds left): a ForceReply prompt, then the
+  one-tap confirm of an owner fix round (``telegram/commands/fix.py``; this module never imports
+  ``owner_fix``).
 
 Every GitHub-authored string (titles, logins, comments, check names) is untrusted ``Text``.
 """
@@ -147,6 +150,13 @@ def _ci_line(c: dict[str, Any], f: Facts, ok: int, pending: int, failed: int) ->
     return k.line(f"CI: {OK} {ok} · {PENDING} {pending} · {FAILED} {failed}")
 
 
+def fix_offered(ctx: AppContext, c: dict[str, Any]) -> bool:
+    """🔧 Fix with notes is shown only where /fix would be accepted (the tap and the confirm re-check):
+    WATCHING, fixes not disabled (branch_moved, M4) and owner rounds left."""
+    return (c.get("state") == State.WATCHING.value and c.get("fixes_disabled_reason") is None
+            and int(c.get("owner_fix_rounds") or 0) < ctx.config.policy.limits.owner_fix_rounds_max)  # fmt: skip
+
+
 def view(ctx: AppContext, c: dict[str, Any], f: Facts) -> k.View:
     repo = str(c["upstream"])
     ok = sum(1 for _, i in f.checks if i == OK)
@@ -186,6 +196,8 @@ def view(ctx: AppContext, c: dict[str, Any], f: Facts) -> k.View:
                      k.button("🔄 Refresh", "status_refresh", {"cid": cid})],
                     [k.button("📜 Timeline", "status_timeline", {"cid": cid}),
                      k.button("🛑 Stop watching", "stop_watch", {"cid": cid})]]  # fmt: skip
+    if fix_offered(ctx, c):
+        rows.append([k.button("🔧 Fix with notes", "pr_fix", {"cid": cid})])
     return k.View(kind="status", cid=cid, blocks=blocks, rows=rows, rich=True)
 
 

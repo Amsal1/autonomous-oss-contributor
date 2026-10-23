@@ -395,6 +395,7 @@ async def test_push_update_branch_moved_at_submit(gctx: AppContext, world: GitWo
     row = contribution(gctx, doc["cid"])
     assert row["state"] == "SUBMIT_FAILED"
     assert row["watch_rounds"] == gctx.config.policy.limits.watch_rounds_max
+    assert row["fixes_disabled_reason"] == "branch_moved"
     assert action(gctx, doc["action_id"])["error_class"] == "branch_moved"
 
 
@@ -502,6 +503,9 @@ async def test_restart_reconciles_executing(
     assert contribution(ctx, cid)["state"] == state
     if outcome == "branch_moved":
         assert contribution(ctx, cid)["watch_rounds"] == ctx.config.policy.limits.watch_rounds_max
+        assert contribution(ctx, cid)["fixes_disabled_reason"] == "branch_moved"
+    else:
+        assert contribution(ctx, cid)["fixes_disabled_reason"] is None
 
 
 async def test_reconcile_dry_run_needs_no_reads(ctx: AppContext, gh: FakeGitHub) -> None:

@@ -45,7 +45,24 @@ def guard_columns(from_: State, to: State) -> dict[str, object]:
         cols["source"] = "operator"
     if from_ in {S.PROPOSAL_REJECTED, S.PROPOSAL_SNOOZED} and to is S.PROPOSED:
         cols.update(declined_at=to_iso(FakeClock().now()), declined_reason="skipped")
+    if from_ is S.WATCHING and to is S.IMPLEMENTING:
+        cols["pr_number"] = 7
     return cols
+
+
+def change_request(ctx: AppContext, cid: str, *, consumed: bool = False) -> str:
+    """An owner change request (the human WATCHING -> IMPLEMENTING edge needs an open one)."""
+    rid = f"r_{cid[2:]}"
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("INSERT INTO change_requests (id, cid, text, created_at, consumed_at) VALUES (?,?,?,?,?)",
+                         (rid, cid, "fix it", "t", "t" if consumed else None))  # fmt: skip
+    return rid
+
+
+def prepare_edge(ctx: AppContext, cid: str, from_: State, to: State, actor: Actor) -> None:
+    """Rows besides the contribution's own columns that an edge's guard needs."""
+    if (from_, to, actor) == (S.WATCHING, S.IMPLEMENTING, Actor.HUMAN):
+        change_request(ctx, cid)
 
 
 def make(ctx: AppContext, state: State, **cols: object) -> str:
@@ -76,6 +93,7 @@ def test_every_allowed_edge_succeeds_for_its_actors(
 ) -> None:
     for actor in sorted(actors):
         cid = make(ctx, from_, **guard_columns(from_, to))
+        prepare_edge(ctx, cid, from_, to, actor)
         result = ctx.state_machine.transition(cid, from_, to, actor)
         assert result.redirected_from is None
         assert state_of(ctx, cid) == to.value
@@ -414,12 +432,128 @@ def test_branch_moved_disables_fixes(ctx: AppContext) -> None:
     notes: list[str] = []
     ctx.state_machine.notify = notes.append
     ctx.state_machine.transition(cid, S.PACKAGING, S.FAILED, Actor.GATEKEEPER, {"error_class": "branch_moved"})
-    row = db.one(ctx.conn, "SELECT watch_rounds FROM contributions WHERE id = ?", (cid,))
+    row = db.one(ctx.conn, "SELECT watch_rounds, fixes_disabled_reason FROM contributions WHERE id = ?", (cid,))
     assert row is not None and row[0] == ctx.config.policy.limits.watch_rounds_max
+    assert row["fixes_disabled_reason"] == "branch_moved"
     assert "fixes disabled" in notes[0]
+    change_request(ctx, cid)
+    for actor in (Actor.WORKER, Actor.HUMAN):  # M4: the owner's separate cap doesn't bypass it
+        with pytest.raises(TransitionError) as info:
+            ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, actor, {"reason": "x"})
+        assert info.value.code == "guard_failed:fixes_disabled"
+    assert state_of(ctx, cid) == "WATCHING"
+
+
+def test_other_redirects_leave_fixes_enabled(ctx: AppContext) -> None:
+    cid = make(ctx, S.PACKAGING, pr_number=7)
+    ctx.state_machine.transition(cid, S.PACKAGING, S.FAILED, Actor.GATEKEEPER, {"error_class": "patch_mismatch"})
+    row = db.one(ctx.conn, "SELECT watch_rounds, fixes_disabled_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == (0, None)
+
+
+# ------------------------------------------------------------- owner fix round (ADR-0003 addendum)
+OWNER_FIX = {"reason": "owner_fix_round"}
+
+
+def owner_counters(ctx: AppContext, cid: str) -> tuple[int, int]:
+    row = db.one(ctx.conn, "SELECT owner_fix_rounds, watch_rounds FROM contributions WHERE id = ?", (cid,))
+    assert row is not None
+    return int(row[0]), int(row[1])
+
+
+def test_owner_fix_edge(ctx: AppContext) -> None:
+    cid, action = packaged_contribution(ctx, pr_number=7)
+    approval = ctx.approvals.create(action, tg_chat_id=4242, body_parts_total=1)
+    with db.transaction(ctx.conn):
+        ctx.conn.execute("UPDATE contributions SET state = 'WATCHING' WHERE id = ?", (cid,))
+    change_request(ctx, cid)
+    result = ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, Actor.HUMAN, OWNER_FIX, "tg:4242")
+    assert result.state is S.IMPLEMENTING and result.redirected_from is None
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("IMPLEMENTING", "owner_fix_round")
+    assert owner_counters(ctx, cid) == (1, 0)
+    inv = db.one(ctx.conn, "SELECT status, invalidated_reason FROM approvals WHERE id = ?", (approval,))
+    assert inv is not None and tuple(inv) == ("invalidated", "entered_implementing")
+    event = db.one(ctx.conn, "SELECT actor, data_json FROM audit_events WHERE event = 'transition' AND cid = ?"
+                   " ORDER BY seq DESC LIMIT 1", (cid,))  # fmt: skip
+    assert event is not None and event["actor"] == "tg:4242"
+    assert json.loads(event["data_json"])["evidence"] == OWNER_FIX
+
+
+def test_owner_fix_needs_an_open_change_request(ctx: AppContext) -> None:
+    cid = make(ctx, S.WATCHING, pr_number=7)
+    for consumed in (None, True):
+        if consumed:
+            change_request(ctx, cid, consumed=True)  # an answered request doesn't count
+        with pytest.raises(TransitionError) as info:
+            ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, Actor.HUMAN, OWNER_FIX)
+        assert info.value.status == 409 and info.value.code == "guard_failed:change_request"
+    assert state_of(ctx, cid) == "WATCHING" and owner_counters(ctx, cid) == (0, 0)
+
+
+def test_owner_fix_needs_a_pr(ctx: AppContext) -> None:
+    cid = make(ctx, S.WATCHING)
+    change_request(ctx, cid)
     with pytest.raises(TransitionError) as info:
-        ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, Actor.WORKER)
+        ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, Actor.HUMAN, OWNER_FIX)
+    assert info.value.code == "guard_failed:pr_number_set"
+
+
+def test_owner_fix_cap_is_separate(ctx: AppContext) -> None:
+    limits = ctx.config.policy.limits
+    cid = make(ctx, S.WATCHING, pr_number=7, watch_rounds=limits.watch_rounds_max)
+    change_request(ctx, cid)
+    ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, Actor.HUMAN, OWNER_FIX)  # watch cap spent: fine
+    assert owner_counters(ctx, cid) == (1, limits.watch_rounds_max)
+    capped = make(ctx, S.WATCHING, pr_number=7, owner_fix_rounds=limits.owner_fix_rounds_max)
+    change_request(ctx, capped)
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(capped, S.WATCHING, S.IMPLEMENTING, Actor.HUMAN, OWNER_FIX)
+    assert info.value.code == "guard_failed:owner_fix_rounds"
+    worker = make(ctx, S.WATCHING, pr_number=7, owner_fix_rounds=limits.owner_fix_rounds_max)
+    ctx.state_machine.transition(worker, S.WATCHING, S.IMPLEMENTING, Actor.WORKER, {"reason": "fix_round"})
+    assert owner_counters(ctx, worker) == (limits.owner_fix_rounds_max, 1)  # W counts only watch_rounds
+    spent = make(ctx, S.WATCHING, pr_number=7, watch_rounds=limits.watch_rounds_max)
+    with pytest.raises(TransitionError) as info:  # W stays bounded by watch_rounds
+        ctx.state_machine.transition(spent, S.WATCHING, S.IMPLEMENTING, Actor.WORKER, {"reason": "fix_round"})
     assert info.value.code == "guard_failed:watch_rounds"
+
+
+def test_fixes_disabled_blocks_both_actors(ctx: AppContext) -> None:
+    for actor, evidence in ((Actor.WORKER, {"reason": "fix_round"}), (Actor.HUMAN, OWNER_FIX)):
+        cid = make(ctx, S.WATCHING, pr_number=7, fixes_disabled_reason="branch_moved")
+        change_request(ctx, cid)
+        with pytest.raises(TransitionError) as info:
+            ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, actor, evidence)
+        assert info.value.code == "guard_failed:fixes_disabled"
+        assert state_of(ctx, cid) == "WATCHING" and owner_counters(ctx, cid) == (0, 0)
+
+
+@pytest.mark.parametrize("stop", ["pause", "kill"])
+def test_owner_fix_refused_while_paused_and_killed(ctx: AppContext, stop: str) -> None:
+    cid = make(ctx, S.WATCHING, pr_number=7)
+    change_request(ctx, cid)
+    write_flag(ctx.paths.paused_flag if stop == "pause" else ctx.paths.killed_flag, {"reason": "x"})
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.WATCHING, S.IMPLEMENTING, Actor.HUMAN, OWNER_FIX)
+    assert info.value.status == 423
+    assert state_of(ctx, cid) == "WATCHING" and owner_counters(ctx, cid) == (0, 0)
+
+
+def test_worker_cannot_use_the_owner_reason(ctx: AppContext) -> None:
+    cid = make(ctx, S.WATCHING, pr_number=7)
+    for actor, to in ((Actor.WORKER, S.IMPLEMENTING), (Actor.WORKER, S.WATCHING)):
+        with pytest.raises(TransitionError) as info:
+            ctx.state_machine.transition(cid, S.WATCHING, to, actor, OWNER_FIX)
+        assert info.value.status == 403 and info.value.code == "reserved_reason"
+    assert state_of(ctx, cid) == "WATCHING" and owner_counters(ctx, cid) == (0, 0)
+    forbidden = ctx.conn.execute("SELECT COUNT(*) FROM audit_events WHERE event = 'forbidden_transition' AND cid = ?",
+                                 (cid,)).fetchone()  # fmt: skip
+    assert forbidden[0] == 2
+    other = make(ctx, S.IMPLEMENTING)
+    with pytest.raises(TransitionError) as info:  # any edge, any non-human actor
+        ctx.state_machine.transition(other, S.IMPLEMENTING, S.IMPLEMENTED, Actor.WORKER, OWNER_FIX)
+    assert info.value.code == "reserved_reason"
 
 
 def test_stop_watching_human_only(ctx: AppContext) -> None:

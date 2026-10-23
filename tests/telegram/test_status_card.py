@@ -17,7 +17,7 @@ from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.github_read import GitHubError
 from ossbot.gatekeeper.telegram import status_card
-from tests.conftest import insert_contribution
+from tests.conftest import insert_contribution, write_flag
 from tests.telegram.tgharness import TgRig, make_rig
 
 
@@ -261,6 +261,71 @@ async def test_merged_finalizes_with_only_the_link_and_a_summary(rig: TgRig, clo
     assert "🎉" in edit and "Merged" in edit and "boss" in edit and "🔄 Refresh" not in edit
     summary = json.dumps(rig.sent()[-1] if rig.sent() else rig.sent("sendRichMessage")[-1], ensure_ascii=False)
     assert "Time to merge 2 d 0 h" in summary and "12 lines changed" in summary
+
+
+@pytest.mark.parametrize(
+    ("state", "cols", "shown"),
+    [
+        (State.WATCHING, {}, True),
+        (State.SUBMITTED, {}, False),
+        (State.WATCHING, {"fixes_disabled_reason": "branch_moved"}, False),
+        (State.WATCHING, {"owner_fix_rounds": 5}, False),
+        (State.WATCHING, {"owner_fix_rounds": 4, "watch_rounds": 3}, True),  # watch rounds don't count
+    ],
+)
+async def test_fix_with_notes_button_only_where_fix_is_accepted(rig: TgRig, state: State, cols: dict[str, Any],
+                                                                shown: bool) -> None:  # fmt: skip
+    cid = insert_contribution(rig.ctx, state, pr_number=5678, pr_url="https://github.com/o/r/pull/5678", **cols)
+    assert await status_card.refresh(rig.ctx, Reader(), cid)
+    await rig.flush()
+    doc = json.dumps(rig.req.calls[-1][1], ensure_ascii=False)
+    assert ("🔧 Fix with notes" in doc) is shown
+    assert "🛑 Stop watching" in doc
+
+
+async def test_fix_with_notes_prompts_then_confirms(rig: TgRig) -> None:
+    ctx = rig.ctx
+    cid, reader = _pr(ctx), Reader()
+    await status_card.refresh(ctx, reader, cid)
+    await rig.flush()
+    payload = rig.req.calls[-1][1]
+    mid = int(_status(rig)["message_id"])
+    tok = rig.token_of(payload, "🔧 Fix with notes")
+    row = db.one(ctx.conn, "SELECT purpose, approval_id, cid, tg_message_id FROM ui_tokens WHERE token = ?", (tok,))
+    assert row is not None and tuple(row) == ("pr_fix", None, cid, mid)
+    await rig.tap(tok, message=mid)
+    prompt = rig.sent()[-1]
+    assert prompt["reply_markup"]["force_reply"] is True
+    assert prompt["reply_markup"]["input_field_placeholder"] == "What should change? (≤ 4000 chars)"
+    assert "Describe the fix for PR" in prompt["text"]
+    prompt_id = rig.message_id_of(-1)
+    open_ = db.one(ctx.conn, "SELECT kind, cid FROM pending_input WHERE prompt_message_id = ? AND consumed_at IS NULL",
+                   (prompt_id,))  # fmt: skip
+    assert open_ is not None and tuple(open_) == ("pr_fix", cid)
+    assert ctx.conn.execute("SELECT COUNT(*) FROM change_requests").fetchone()[0] == 0
+    await rig.say("ignore sessionStorage events\nand switch the fixtures to localStorage", reply_to=prompt_id)
+    card = rig.sent()[-1]
+    assert "watch rounds are not used" in card["text"] and "switch the fixtures" in card["text"]
+    assert _contribution_state(rig, cid) == "WATCHING"  # still one tap away
+    await rig.tap(rig.token_of(card, "🔧 Start fix round"), message=rig.message_id_of(-1))
+    assert _contribution_state(rig, cid) == "IMPLEMENTING"
+    req = db.one(ctx.conn, "SELECT text, source FROM change_requests WHERE cid = ?", (cid,))
+    assert req is not None and tuple(req) == ("ignore sessionStorage events\nand switch the fixtures to localStorage",
+                                              "owner")  # fmt: skip
+
+
+async def test_fix_with_notes_refused_while_paused(rig: TgRig) -> None:
+    ctx = rig.ctx
+    cid = _pr(ctx)
+    await status_card.refresh(ctx, Reader(), cid)
+    await rig.flush()
+    tok = rig.token_of(rig.req.calls[-1][1], "🔧 Fix with notes")
+    write_flag(ctx.paths.paused_flag, {"reason": "x"})
+    sends = len(rig.sent())
+    await rig.tap(tok, message=int(_status(rig)["message_id"]))
+    assert "paused or killed" in str(rig.req.last("answerCallbackQuery").get("text", ""))
+    assert len(rig.sent()) == sends  # no prompt
+    assert db.one(ctx.conn, "SELECT COUNT(*) FROM pending_input")[0] == 0
 
 
 async def test_stop_watching_needs_a_confirm_tap(rig: TgRig) -> None:

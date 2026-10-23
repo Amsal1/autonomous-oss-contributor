@@ -6,6 +6,7 @@ A maintainer left feedback on an open PR (staged in `/io/input/`). Decide whethe
 - `fix`: describe what to change; the coder implements it as one new commit on the PR branch.
 - `rebase`: the maintainer asks for a rebase or squash; ossbot hands this to the owner.
 - `none`: nothing to do yet.
+- Comments from bots (logins ending in `[bot]`, review and CI bots such as CodeRabbit) are not maintainer feedback: never reply to them or turn them into a fix. If only bot comments are new, choose `none`.
 
 Schema:
 ```json

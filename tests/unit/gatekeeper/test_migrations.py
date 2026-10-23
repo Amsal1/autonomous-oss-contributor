@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from importlib import resources
 from pathlib import Path
@@ -14,7 +15,7 @@ CR004_TABLES = {"runner_requests"}
 HERMES_TABLES = {"skill_reviews", "chat_turns", "chat_sessions"}  # 0004_hermes.sql (FEAT-007)
 UX_TABLES = {"tg_topics", "pending_input", "review_comments", "ux_prefs"}  # 0005_telegram_ux.sql (FEAT-009)
 UX_OUTBOX_COLUMNS = {"priority", "thread_key", "coalesce_key", "merged_into"}
-LATEST = 7
+LATEST = 8
 M2_TABLES = {"digest_runs", "reminders", "review_mirror", "telegraph_pages"}  # 0006_telegram_m2.sql (FEAT-010)
 OPEN_TABLES = {"discovered_targets", "contribution_holds"}  # 0007_open_discovery.sql (post-v1)
 MIGRATIONS = ((1, "0001_init.sql"), (2, "0002_decisions.sql"), (3, "0003_cr004.sql"), (4, "0004_hermes.sql"),
@@ -33,7 +34,9 @@ def test_from_empty(tmp_path: Path) -> None:
     conn = db.connect(tmp_path / "a.db")
     assert db.migrate(conn) == LATEST
     assert _tables(conn) >= DECISION_TABLES | CR004_TABLES | HERMES_TABLES | UX_TABLES | M2_TABLES | OPEN_TABLES
-    assert "pending_input_v7" not in _tables(conn)
+    assert not {"pending_input_v7", "pending_input_v8"} & _tables(conn)
+    assert {"owner_fix_rounds", "fixes_disabled_reason"} <= _columns(conn, "contributions")
+    assert {"source", "source_ref", "untrusted_text"} <= _columns(conn, "change_requests")
     assert _columns(conn, "tg_outbox") >= OUTBOX_COLUMNS | UX_OUTBOX_COLUMNS
     assert "comments_json" in _columns(conn, "change_requests")
     assert db.migrate(conn) == LATEST  # idempotent
@@ -144,6 +147,65 @@ def test_from_version_6_rebuilds_pending_input_and_adds_open_discovery(tmp_path:
         pass
     else:  # pragma: no cover
         raise AssertionError("unknown pending_input kind accepted")
+
+
+def _at_version_7(path: Path) -> sqlite3.Connection:
+    conn = _at_version_6(path)
+    sql = (resources.files("ossbot.gatekeeper.migrations") / "0007_open_discovery.sql").read_text(encoding="utf-8")
+    conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = 7;\nCOMMIT;")
+    return conn
+
+
+def _audit_transition(conn: sqlite3.Connection, cid: str, evidence: dict[str, object]) -> None:
+    data = json.dumps({"from": "PACKAGING", "to": "WATCHING", "redirected_from": "FAILED", "evidence": evidence})
+    conn.execute(
+        "INSERT INTO audit_events (ts, actor, event, cid, data_json, prev_hash, row_hash)"
+        " VALUES ('t', 'gatekeeper_internal', 'transition', ?, ?, 'p', 'h')",
+        (cid, data),
+    )
+
+
+def test_from_version_7_adds_owner_fix_columns(tmp_path: Path) -> None:
+    """0008 (post-v1 owner fix rounds): counters, the backfilled fixes-disabled flag, change-request
+    source columns and the pending_input rebuild for 'pr_fix'."""
+    conn = _at_version_7(tmp_path / "g.db")
+    for issue, (cid, pr) in enumerate((("c_0000000001", 7), ("c_0000000002", 8), ("c_0000000003", None)), 5):
+        conn.execute(
+            "INSERT INTO contributions (id, upstream, issue_number, source, state, pr_number, created_at, updated_at)"
+            " VALUES (?, 'o/r', ?, 'discover', 'WATCHING', ?, 't', 't')",
+            (cid, issue, pr),
+        )
+    _audit_transition(conn, "c_0000000001", {"error_class": "branch_moved"})
+    _audit_transition(conn, "c_0000000002", {"error_class": "patch_mismatch"})
+    _audit_transition(conn, "c_0000000003", {"error_class": "branch_moved"})  # no PR: not a live fix
+    _insert_prompt(conn, "p1", "changes")
+    conn.execute("INSERT INTO change_requests (id, cid, text, created_at) VALUES ('r1', 'c_0000000001', 't', 'x')")
+    assert db.migrate(conn) == LATEST
+    rows = conn.execute("SELECT id, owner_fix_rounds, fixes_disabled_reason FROM contributions ORDER BY id").fetchall()
+    assert [tuple(r) for r in rows] == [
+        ("c_0000000001", 0, "branch_moved"),
+        ("c_0000000002", 0, None),
+        ("c_0000000003", 0, None),
+    ]
+    request = conn.execute("SELECT source, source_ref, untrusted_text FROM change_requests").fetchone()
+    assert tuple(request) == ("owner", None, None)
+    prompt = conn.execute("SELECT id, kind, consumed_at FROM pending_input").fetchone()
+    assert tuple(prompt) == ("p1", "changes", None)
+    assert "pending_input_v8" not in _tables(conn)
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "pending_input_open" in indexes
+    _insert_prompt(conn, "p2", "pr_fix")
+    bad = (
+        ("INSERT INTO change_requests (id, cid, text, created_at, source) VALUES ('r2', 'c', 't', 'x', 'x')", ()),
+        ("UPDATE contributions SET fixes_disabled_reason = 'x' WHERE id = 'c_0000000002'", ()),
+    )
+    for sql, params in bad:
+        try:
+            conn.execute(sql, params)
+        except sqlite3.IntegrityError:
+            continue
+        raise AssertionError(f"CHECK not enforced: {sql}")  # pragma: no cover
 
 
 def _discovered(conn: sqlite3.Connection, repo: str, **cols: object) -> None:

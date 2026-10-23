@@ -71,6 +71,7 @@ class Limits(Strict):
     confirm_ttl_seconds: PosInt = 300
     contribution_expiry_days: PosInt = 7
     watch_rounds_max: NonNegInt = 3
+    owner_fix_rounds_max: NonNegInt = 5  # owner /fix rounds per PR, separate from watch_rounds_max (ADR-0003)
     repo_cooldown_days_after_close: NonNegInt = 30
     repo_cooldown_days_after_user_reject: NonNegInt = 7
     rediscover_cooldown_days: NonNegInt = 7

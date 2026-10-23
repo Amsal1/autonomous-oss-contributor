@@ -20,7 +20,8 @@ log = logging.getLogger(__name__)
 # read: immediate, no change; stop: immediate (stopping is always safe); go/config: confirm tap first;
 # personal: presentation-only owner preferences (quiet, notify, rich views), immediate (§14.14.1);
 # tune: autonomous-discovery preferences (/size, /filters), immediate + 60 s Undo, never the ceiling (U13);
-# request: /work, creates a scouting item only (both gates still apply)
+# request: /work, creates a scouting item only (both gates still apply); /fix, starts an owner fix round
+# on a watched PR after a confirm tap (its push_update still needs gate 2)
 Safety = Literal["read", "stop", "go", "config", "personal", "tune", "request"]
 ENTRY_POINT_GROUP = "ossbot.telegram_commands"
 

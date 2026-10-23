@@ -13,6 +13,7 @@ from ossbot.common.config import (
     AiPolicyRules,
     ConfigError,
     EgressConfig,
+    Limits,
     ModelsConfig,
     PolicyConfig,
     ProfileConfig,
@@ -188,6 +189,13 @@ def test_profile_example_validates_with_placeholders_only() -> None:
     assert profile.commit_email.endswith("@example.com")
 
 
+def test_owner_fix_rounds_max() -> None:
+    """ADR-0003 addendum (2026-10-23): a separate owner cap, default 5, in the policy file too."""
+    assert Limits().owner_fix_rounds_max == 5
+    policy = parse_yaml_model(PolicyConfig, "policy.yaml", load("policy.yaml"))
+    assert policy.limits.owner_fix_rounds_max == 5 and policy.limits.watch_rounds_max == 3
+
+
 def test_targets_seed_resolves_defaults() -> None:
     targets = parse_yaml_model(TargetsConfig, "targets.yaml", load("targets.yaml"))
     langfuse = resolve_target(targets, "langfuse/langfuse")
@@ -208,6 +216,8 @@ def test_targets_seed_resolves_defaults() -> None:
         (PolicyConfig, "version: 1\ndry_run_default: false\n", "dry_run_default"),
         (PolicyConfig, "version: 1\nlimits: {prs_per_24h: '2'}\n", "prs_per_24h"),  # strict: no str->int
         (PolicyConfig, "version: 1\nlimits: {prs_per_24h: -1}\n", "prs_per_24h"),
+        (PolicyConfig, "version: 1\nlimits: {owner_fix_rounds_max: -1}\n", "owner_fix_rounds_max"),
+        (PolicyConfig, "version: 1\nlimits: {owner_fix_rounds: 5}\n", "owner_fix_rounds"),  # extra=forbid
         (PolicyConfig, "version: 1\nvalidation: {stack: {enabled: true}}\n", "enabled"),
         (PolicyConfig, "version: 1\ndiscovery: {proactive: true}\n", "proactive"),
         (PolicyConfig, "version: 1\ntelegram: {mode: dual}\n", "mode"),

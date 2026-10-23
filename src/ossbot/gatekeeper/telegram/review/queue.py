@@ -5,6 +5,7 @@ Ordering is deterministic: ``(class_rank, expires_at, -target_priority, created_
 * Class 0: someone is waiting (a ``comment`` on our PR).
 * Class 1: ``issue_claim`` and every 👤 user-directed preview or proposal.
 * Class 0 also: a ``push_update`` whose fix round a maintainer review started.
+* Class 1 also: a ``push_update`` of the owner's own fix round (``/fix``), labelled ``🔧 PR #n your fix``.
 * Class 2: other ``push_update`` and ceiling-hit cards; autonomous proposals within 6 h of expiry.
 * Class 3: ``open_pr`` previews, RESCOPE_REQUIRED cards and skill cards.
 * Class 4: autonomous proposals (CR-004 rank score, descending, instead of the target priority).
@@ -80,15 +81,25 @@ def _priority(ctx: AppContext, upstream: str) -> int:
     return int(getattr(target, "priority", 0) or 0) if target is not None else 0
 
 
-def maintainer_triggered(ctx: AppContext, cid: str) -> bool:
-    """A ``push_update`` whose fix round a maintainer review started (WATCHING -> IMPLEMENTING, fix_round)."""
+FixTrigger = Literal["maintainer", "owner"]
+_TRIGGERS: dict[str, FixTrigger] = {"fix_round": "maintainer", "owner_fix_round": "owner"}
+
+
+def fix_trigger(ctx: AppContext, cid: str) -> FixTrigger | None:
+    """Who started the current fix round: the newest WATCHING -> IMPLEMENTING transition (the round
+    boundary; in-round edges such as a validation retry are skipped) with reason ``fix_round`` (the
+    watcher, after maintainer feedback) or ``owner_fix_round`` (the owner's /fix)."""
     for (data,) in ctx.conn.execute("SELECT data_json FROM audit_events WHERE cid = ? AND event = 'transition'"
                                     " ORDER BY seq DESC", (cid,)):  # fmt: skip
         doc = json.loads(data or "{}")
-        if doc.get("to") == "IMPLEMENTING":
-            reason = (doc.get("evidence") or {}).get("reason")
-            return doc.get("from") == "WATCHING" and reason == "fix_round"
-    return False
+        if doc.get("from") == "WATCHING" and doc.get("to") == "IMPLEMENTING":
+            return _TRIGGERS.get(str((doc.get("evidence") or {}).get("reason")))
+    return None
+
+
+def maintainer_triggered(ctx: AppContext, cid: str) -> bool:
+    """A ``push_update`` whose fix round a maintainer review started (WATCHING -> IMPLEMENTING, fix_round)."""
+    return fix_trigger(ctx, cid) == "maintainer"
 
 
 def _action_rank(ctx: AppContext, r: Any) -> int:
@@ -96,18 +107,21 @@ def _action_rank(ctx: AppContext, r: Any) -> int:
     if kind == "comment":
         target = json.loads(r["payload_json"]).get("target_number")
         return 0 if r["pr_number"] and target == r["pr_number"] else 5
-    if kind == "push_update" and maintainer_triggered(ctx, str(r["cid"])):
+    trigger = fix_trigger(ctx, str(r["cid"])) if kind == "push_update" else None
+    if trigger == "maintainer":
         return 0
-    if kind == "issue_claim" or r["source"] == "user":
+    if kind == "issue_claim" or r["source"] == "user" or trigger == "owner":
         return 1
     return 2 if kind == "push_update" else 3
 
 
-def _action_label(r: Any) -> str:
+def _action_label(ctx: AppContext, r: Any) -> str:
     kind = str(r["kind"])
     icon = {"open_pr": "🧩", "push_update": "🔁", "comment": "💬", "issue_claim": "🙋"}[kind]
     what = {"open_pr": "PR preview", "push_update": f"PR #{r['pr_number']} fix", "comment": "comment",
             "issue_claim": "claim"}[kind]  # fmt: skip
+    if kind == "push_update" and fix_trigger(ctx, str(r["cid"])) == "owner":
+        icon, what = "🔧", f"PR #{r['pr_number']} your fix"
     return f"{icon} {what} · {middle_cut(str(r['upstream']), 30)}" + (" · 👤" if r["source"] == "user" else "")
 
 
@@ -149,7 +163,7 @@ def items(ctx: AppContext) -> list[Item]:
         (live,),
     ).fetchall():
         add(Item(2, _action_rank(ctx, r), from_iso(r["expires_at"]), _priority(ctx, str(r["upstream"])),
-                 str(r["created_at"]), "a", str(r["cid"]), _action_label(r)), live_card=True)  # fmt: skip
+                 str(r["created_at"]), "a", str(r["cid"]), _action_label(ctx, r)), live_card=True)  # fmt: skip
     # gate 2 without a live card: an eligible action, nothing open or being submitted, not held
     for r in ctx.conn.execute(
         "SELECT o.id AS action_id, o.kind, o.payload_json, o.created_at AS action_created, c.id AS cid, c.state,"
@@ -166,7 +180,7 @@ def items(ctx: AppContext) -> list[Item]:
                         " created_at DESC, rowid DESC LIMIT 1", (r["action_id"],))  # fmt: skip
         expires = from_iso(newest["expires_at"]) if newest else from_iso(r["updated_at"]) + RESCOPE_TTL
         add(Item(2, _action_rank(ctx, r), expires, _priority(ctx, str(r["upstream"])), str(r["action_created"]), "a",
-                 str(r["cid"]), _action_label(r) + _marker(expires, now)))  # fmt: skip
+                 str(r["cid"]), _action_label(ctx, r) + _marker(expires, now)))  # fmt: skip
     for r in ctx.conn.execute(
         "SELECT p.id, p.expires_at, p.created_at, p.version, c.id AS cid, c.upstream, c.source, c.issue_number,"
         " c.est_class, c.score FROM proposal_approvals p JOIN contributions c ON c.id = p.cid"

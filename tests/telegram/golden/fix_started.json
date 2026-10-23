@@ -1,0 +1,31 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🔧 ",
+    {
+     "text": "Fix round 2/5 started",
+     "type": "bold"
+    },
+    [
+     " · PR ",
+     {
+      "text": "#5678",
+      "type": "code"
+     },
+     " · "
+    ],
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "The update card arrives in ✅ Reviews; nothing is pushed before you approve it.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

@@ -540,7 +540,8 @@ class Submitter:
                 )
                 if error_class == "branch_moved":
                     ctx.conn.execute(
-                        "UPDATE contributions SET watch_rounds = ? WHERE id = ?",
+                        "UPDATE contributions SET watch_rounds = ?, fixes_disabled_reason = 'branch_moved'"
+                        " WHERE id = ?",
                         (ctx.config.policy.limits.watch_rounds_max, snap.cid),
                     )
             ctx.audit.append(

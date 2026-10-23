@@ -392,10 +392,12 @@ async def test_push_update_branch_moved(gctx: AppContext, world: GitWorld) -> No
                                                  body=None))  # fmt: skip
     assert resp.status_code == 422
     assert resp.json()["error"] == "branch_moved"
-    row = db.one(gctx.conn, "SELECT state, state_reason, watch_rounds FROM contributions WHERE id = ?", (cid,))
+    row = db.one(gctx.conn, "SELECT state, state_reason, watch_rounds, fixes_disabled_reason FROM contributions"
+                 " WHERE id = ?", (cid,))  # fmt: skip
     assert row["state"] == "WATCHING"
     assert row["state_reason"] == "fix_round_failed:branch_moved"
     assert row["watch_rounds"] == gctx.config.policy.limits.watch_rounds_max
+    assert row["fixes_disabled_reason"] == "branch_moved"
     pending = gctx.conn.execute(
         "SELECT COUNT(*) FROM outbound_actions WHERE cid = ? AND kind = 'push_update'", (cid,)
     ).fetchone()[0]

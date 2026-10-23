@@ -208,6 +208,17 @@ forbidden_modules = ["ossbot.gatekeeper.holds"]
 allow_indirect_imports = false
 
 [[tool.importlinter.contracts]]
+# ADR-0003 addendum (post-v1 owner fix rounds, 2026-10-23): the human WATCHING->IMPLEMENTING edge is
+# reachable only from an owner tap. No API route, chat relay (Hermes) or feature reaches owner_fix,
+# directly or indirectly (I9, I13); the Telegram action modules are its only importers.
+name = "Only Telegram handlers reach ossbot.gatekeeper.owner_fix"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.api", "ossbot.gatekeeper.chat", "ossbot.gatekeeper.features"]
+forbidden_modules = ["ossbot.gatekeeper.owner_fix"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
 # DESIGN §18.10, plan D8: the gatekeeper's retention deleter runs only through the operator API.
 name = "Only ossbot.gatekeeper.api.retention imports ossbot.gatekeeper.retention"
 type = "forbidden"

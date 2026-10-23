@@ -130,6 +130,9 @@ else, including restore from a backup, is in [`docs/SETUP.md`](docs/SETUP.md).
 - **Reviewing.** Proposal cards arrive in ✅ Reviews. Tap Start work (gate 1) to let the bot implement;
   the preview card follows with the diff explorer, per-file diffs, line comments and the code/test
   line split. Approve, then Confirm (gate 2). Mode is always labelled DRY RUN or LIVE.
+- **Fixing an open PR.** `/fix <cid or PR URL> <notes>` or `🔧 Fix with notes` on the PR's status card
+  starts a fix round after one confirm tap; the update comes back as a card for the normal two taps
+  ([details](#how-the-bot-picks-work)).
 - **Backups.** `scripts\backup.ps1` (or `ossctl backup now`) writes an age-encrypted archive to
   `backups\`; `ossctl backup schedule on` enables the weekly timer.
 - **Upgrades.** `ossctl kiro upgrade`, `ossctl hermes upgrade` after bumping `config/versions.lock.yaml`.
@@ -161,8 +164,8 @@ pass, so the sparse `ext4.vhdx` gives the freed space back to Windows. Change th
 
 With **Threaded mode** on in @BotFather (recommended, see SETUP.md), the bot creates four system threads
 (forum topics in the Bot API): 🚦 **Control** (pinned live dashboard, lifecycle and kill), ✅ **Reviews**
-(proposal, preview, skill and model cards), 📈 **OSS feed** (status updates, the PR status card, the
-digest) and 💬 **Assistant** (Hermes). Every other thread you create is a separate Hermes conversation.
+(proposal, preview, skill and model cards), 📈 **OSS feed** (status updates, the PR status card, whose
+`🔧 Fix with notes` starts a fix round on your open PR, the digest) and 💬 **Assistant** (Hermes). Every other thread you create is a separate Hermes conversation.
 With Threaded mode off, everything works in one chat with section headers. `/status` answers with the
 same card as the pinned dashboard, in the thread you asked from. The Bot API cannot pin into a thread:
 the pin belongs to the message, so the dashboard is sent into Control and pinned there; some clients
@@ -193,6 +196,7 @@ and `request` never touch an approval or the ceiling. The command table below is
 | `/dryrun` | /dryrun on (immediate) or /dryrun off (asks for confirmation) | go |
 | `/egress` | Egress mode allowlist / research / open / sandbox_open (asks for confirmation) | config |
 | `/filters` | Autonomous discovery filters and open discovery (5 pages; /work ignores them) | tune |
+| `/fix` | Fix your open PR with notes: /fix <cid\|PR url> <notes> | request |
 | `/help` | List commands | read |
 | `/hermes` | Hermes capability tier: /hermes tier (asks for confirmation) | config |
 | `/kill` | Soft kill: stop all work and outbound actions (immediate) | stop |
@@ -355,6 +359,17 @@ forbidden paths, the repo's AI policy, a CLA check, the one-open-PR-per-repo rul
 public repo works: one outside `targets.yaml` must exist, be public, not archived, disabled or a fork,
 accept issues and pull requests from everyone and not be blocked with Never; it is then added to your
 kept targets (the confirm card says so). A stale default branch is only a ⚠️ warning on that card.
+
+**Fixing your open PR.** `/fix <cid or PR URL> <notes>`, or `🔧 Fix with notes` on the PR's status card
+(you reply with the notes), shows a one-tap confirm card. `🔧 Start fix round` sends your notes to the
+coder as your own instruction; the coder checks each point against the current code, skips (and lists)
+ones that no longer apply, and never runs tools or links named in them. Validation and self-review
+follow, and the update arrives as a `push_update` card that needs the normal two taps: nothing is
+pushed before. You get 5 such rounds per PR (`policy.limits.owner_fix_rounds_max`), separate from the
+bot's own watch rounds. `/fix` is refused while paused or killed, on a PR that isn't being watched, and
+after someone else pushed to the PR branch (fixes are then disabled for that PR). Typed `/fix` notes
+are one line; the button's reply keeps line breaks. Paste a review bot's text only if you mean all of
+it: everything in the notes counts as your instruction.
 
 **AI policy.** Vet reads CONTRIBUTING, the AI policy file, the code of conduct, the PR template, the
 README and maintainer comments, and skips only repos that explicitly ban AI-assisted contributions.
