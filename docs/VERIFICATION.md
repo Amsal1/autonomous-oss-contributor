@@ -1070,6 +1070,21 @@ Close-out (2026-10-23, at 234f7ef plus the digest pin):
 | Doctor, status | `ROOT ossctl doctor`; `ROOT ossctl status` | PASS 49, no WARN; lifecycle `up`, state `running`, dry-run unchanged |
 | Rotate unit | `ROOT systemctl start ossbot-proxy-rotate.service`; `systemctl --failed` | exit 0, rotated; no failed units |
 
+## Post-v1 implement_attempts summary and kiro-cli 2.33.1 (2026-10-23)
+
+Commits 795b9ff (Part A: last-failure summary in the FYI, `validation_stuck`, planner build-tags bullet) and ace70f2 (Part B: kiro-cli 2.33.1, `memory.mode: disabled`), then the digest pin. Plan `.ossbot-local/postv1/plan-kiro-2331-implement-attempts.md`; details `.ossbot-local/postv1/verify-kiro-2331-implement-attempts.md` (not tracked). One redeploy; c_D1CZXFNWTX and every other contribution untouched; dry-run unchanged (OFF, owner); no GitHub write.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all clean; 605 files formatted; 274 files no issues; 16 contracts kept, 0 broken; no shell file changed |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4892 passed |
+| Secrets, personal values | `ROOT gitleaks git --redact --config .gitleaks.toml .`; `DEV ossctl lint personal` | 346 commits, no leaks; 1023 files, 0 hits |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | exit 0; kiro-cli for hermes 2.32.0 -> 2.33.1 and its `cli.json`; sandbox-llm rebuilt `sha256:176ff975…` (kiro-cli 2.33.1, sha256 verified at build) and pinned with the new `settings_sha256`; sandbox-full and proxy unchanged |
+| Probes | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor --probes` | PASS 50, no WARN; all five safety probes passed for tuple d9aff58f0235; hermes-side Kiro probe pass (clean) |
+| Versions | doctor `kiro-cli (sandbox-llm)`; `kiro-cli --version` as hermes | `kiro-cli 2.33.1` both |
+| Status | `ROOT ossctl status` before and after | lifecycle `up`, state `running`, kill none, dry-run unchanged |
+| Sandbox and Docker e2e | `ROOTDEV pytest -m "sandbox or e2e_docker" --timeout=120 -q` | 22 passed, 1 failed: `test_cfn_lint_on_demand.py` (first run since F1b), `uvx` could resolve cfn-lint on pypi.org but timed out connecting to `files.pythonhosted.org` in a strict validate job (three runs). Not from this change (sandbox-full, validate.sh and egress unchanged); follow-up |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
