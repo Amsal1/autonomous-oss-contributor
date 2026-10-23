@@ -170,6 +170,13 @@ def test_proxy_rotate_units_are_wired_everywhere() -> None:
     assert script.startswith("#!/usr/bin/env bash\n") and "\nset -euo pipefail\n" in script
     assert 'docker exec --user proxy "$CONTAINER" squid -k rotate -f /etc/squid/squid.conf' in script
     assert 'mv -- "$LOG" "$target"' in script and "date -u +%Y%m%dT%H%M%SZ" in script
+    # Boot race (bot-down-after-boot F1): no rename unless the proxy container is running.
+    assert "CONTAINER=${OSSBOT_PROXY_CONTAINER:-ossbot-proxy}" in script
+    assert "docker inspect -f '{{.State.Running}}' \"$CONTAINER\"" in script
+    guard = script.index("docker inspect")
+    assert guard < script.index('mv -- "$LOG" "$target"')
+    not_running = script[guard:].split("if [[ $running != true ]]; then", 1)[1].split("fi\n", 1)[0]
+    assert "is not running" in not_running and "exit 0" in not_running
     squid = (root / "sandbox" / "proxy" / "squid.conf.j2").read_text(encoding="utf-8")
     assert "access_log stdio:/var/log/squid/access.log logformat=ossbot rotate=0" in squid
 

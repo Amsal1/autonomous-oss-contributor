@@ -6,16 +6,25 @@
 # signals squid inside the proxy container. Until squid reopens, it keeps writing the renamed file, so
 # no line is lost; sandboxd's egress meter reads its held fd to the end before it follows the new file.
 # Rotated files keep their owner and group (proxy:ossart); `ossctl gc` deletes them after
-# retention.proxy_logs_days (>= 30). Exit 0 done (or nothing to rotate), 1 the rotate signal failed
-# (the next run retries; nothing is lost meanwhile).
+# retention.proxy_logs_days (>= 30). Exit 0 done, nothing to rotate, or the proxy is not running; 1 the
+# rotate signal failed (the next run retries; nothing is lost meanwhile).
+# OSSBOT_PROXY_CONTAINER overrides the container name for tests only; the systemd unit sets no environment.
 set -euo pipefail
 
 LOG_DIR=/srv/ossbot/logs/proxy
 LOG=$LOG_DIR/access.log
-CONTAINER=ossbot-proxy
+CONTAINER=${OSSBOT_PROXY_CONTAINER:-ossbot-proxy}
 
 if [[ ! -s $LOG ]]; then
   echo "ossbot-proxy-rotate: $LOG is empty or missing, nothing to rotate"
+  exit 0
+fi
+# At boot the Persistent timer can fire before ossbot-proxy-run has created the container
+# (ossbot-proxy.service is Type=simple). Leave access.log in place: squid opens it when it starts,
+# and the next run rotates it.
+running=$(/usr/bin/docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || true)
+if [[ $running != true ]]; then
+  echo "ossbot-proxy-rotate: $CONTAINER is not running; squid opens a fresh access.log when it starts, nothing rotated"
   exit 0
 fi
 stamp=$(date -u +%Y%m%dT%H%M%SZ)

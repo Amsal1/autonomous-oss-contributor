@@ -4,6 +4,7 @@
 # (10.213.63.224/28) downloads from and uploads to pypi.org through proxy:3128; its CONNECT lines must
 # show %<st (down) >= the bytes curl received and %>st (up) >= the bytes curl sent. Then the live
 # access.log is rotated: the earlier line is in the renamed file, a new request lands in the new file.
+# V11b first: with the proxy container not running the rotation is skipped (exit 0, access.log untouched).
 # On a failure here, stop and ask the owner before sandbox_open is offered (V10 fallback, design §15).
 # Read-only for the mode: it switches no egress mode (the fetch pool reaches pypi in every mode).
 # shellcheck source=tests/system/lib.sh disable=SC1091
@@ -85,6 +86,21 @@ if [[ -n $up ]] && ((up >= 65536)); then
 else
   fail "the upload probe sent too little to judge ('$up' bytes)"
 fi
+
+# ------------------------------------------------------------- V11b: proxy not running
+# The boot race (bot-down-after-boot F1): with no running container the script exits 0 and leaves
+# access.log alone. An absent container name stands in for a stopped proxy; the live proxy keeps running.
+ino=$(stat -c %i "$LOG")
+size=$(stat -c %s "$LOG")
+newest=$(find "$LOG_DIR" -maxdepth 1 -name 'access.log.2*' -print | sort | tail -n 1)
+rc=0
+out=$(OSSBOT_PROXY_CONTAINER=ossbot-t-absent-$$ /opt/ossbot/bin/ossbot-proxy-rotate 2>&1) || rc=$?
+check "proxy not running: ossbot-proxy-rotate exits 0 (got $rc)" test "$rc" = 0
+if [[ $out == *"is not running"* ]]; then pass "proxy not running: the message says so"; else fail "unexpected output: $out"; fi
+check "proxy not running: access.log keeps its inode" test "$(stat -c %i "$LOG")" = "$ino"
+check "proxy not running: access.log not truncated" test "$(stat -c %s "$LOG")" -ge "$size"
+check "proxy not running: no new rotated file" test \
+  "$(find "$LOG_DIR" -maxdepth 1 -name 'access.log.2*' -print | sort | tail -n 1)" = "$newest"
 
 # ----------------------------------------------------------------------- V11: rotation
 before=$(wc -l <"$LOG")
