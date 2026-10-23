@@ -16,7 +16,7 @@ from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
 from ossbot.common.schemas import HoldView, State
-from ossbot.gatekeeper import auto_reissue, db, policy, proposals, secret_scan, signing
+from ossbot.gatekeeper import auto_reissue, db, implement_network, policy, proposals, secret_scan, signing
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
 from ossbot.gatekeeper.approvals import ApprovalError, ApprovalService, ArtifactSource, Invalidated
@@ -406,6 +406,8 @@ def build_context(
         terminal_fyi.queue_terminal_fyi(ctx, row, from_, to, reason, evidence)
 
     ctx.state_machine.on_terminal = on_terminal
+    # ADR-0024: the H-only FAILED -> PROPOSAL_APPROVED edge and the Telegram card share this one guard
+    ctx.state_machine.rerun_guard = lambda row: implement_network.rerun_guard(ctx, row)
     decisions.proposals.rows_hook = lambda approval_id, tokens: proposal_cards.card_rows(ctx, approval_id, tokens)
     ctx.skill_reviews = SkillReviews(conn, paths, clock, audit, decisions.skills, hermes_tier, owner_chat,
                                      on_card=lambda approval_id: ctx.on_approval_created(approval_id))  # noqa: PLW0108 - late-bound: the front-end replaces it  # fmt: skip

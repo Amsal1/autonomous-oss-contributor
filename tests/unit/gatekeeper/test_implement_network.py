@@ -13,10 +13,20 @@ from ossbot.common.schemas import State
 from ossbot.common.yamlio import safe_load
 from ossbot.gatekeeper import implement_network
 from ossbot.gatekeeper.context import AppContext
-from tests.conftest import FIXTURES, UID_OPERATOR, UID_REQUESTER, UID_SANDBOX, UID_WORKER, insert_contribution
+from ossbot.gatekeeper.state_machine import Actor
+from tests.conftest import (
+    FIXTURES,
+    UID_OPERATOR,
+    UID_REQUESTER,
+    UID_SANDBOX,
+    UID_WORKER,
+    consumed_proposal,
+    insert_contribution,
+)
 from tests.unit.gatekeeper.api_helpers import client
 
 S = State
+W, G, H = Actor.WORKER, Actor.GATEKEEPER, Actor.HUMAN
 TABLE: list[dict[str, str]] = safe_load((FIXTURES / "implement_network_table.yaml").read_text(encoding="utf-8"))["rows"]
 STRICT_REPO = "acme/strict-tool"
 
@@ -95,6 +105,35 @@ def test_grant_version_mismatch_is_no_grant(ctx: AppContext) -> None:
     assert implement_network.decide(ctx, nulled) == ("none", "not_requested")
     configure(ctx, "auto", "sandbox_open")
     assert implement_network.decide(ctx, cid) == ("web", "auto")
+
+
+def _walk(ctx: AppContext, cid: str, *edges: tuple[State, State, Actor]) -> None:
+    for from_, to, actor in edges:
+        ctx.state_machine.transition(cid, from_, to, actor, {"reason": "size"} if to is S.RESCOPE_REQUIRED else None)
+
+
+def test_rescope_then_new_gate1_on_request_is_not_requested(ctx: AppContext) -> None:
+    """C-D17 end to end in the gatekeeper: a rerun's grant does not survive a rescope and a new gate 1."""
+    configure(ctx, "on_request", "sandbox_open")
+    cid = insert_contribution(ctx, S.FAILED, upstream="langfuse/langfuse", state_reason="needs_network",
+                              proposal_version=1)  # fmt: skip
+    consumed_proposal(ctx, cid)
+    ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN,
+                                 {"reason": "network_rerun", "rerun": 1, "max": 1})  # fmt: skip
+    to_implementing = ((S.PROPOSAL_APPROVED, S.FETCHING, W), (S.FETCHING, S.FETCHED, W), (S.FETCHED, S.PLANNING, W),
+                       (S.PLANNING, S.PLANNED, W), (S.PLANNED, S.IMPLEMENTING, W))  # fmt: skip
+    _walk(ctx, cid, *to_implementing)
+    assert implement_network.decide(ctx, cid) == ("web", "rerun")
+    _walk(ctx, cid, (S.IMPLEMENTING, S.IMPLEMENTED, W), (S.IMPLEMENTED, S.RESCOPE_REQUIRED, G),
+          (S.RESCOPE_REQUIRED, S.PROPOSED, G))  # fmt: skip
+    ctx.conn.execute("UPDATE contributions SET proposal_version = 2 WHERE id = ?", (cid,))  # the new version (§9.2)
+    ctx.conn.execute(
+        "INSERT INTO proposal_approvals (id, cid, version, binding_json, binding_hash, status, tg_chat_id,"
+        " created_at, expires_at) VALUES (?, ?, 2, '{}', 'h2', 'consumed', 1, 't', '2999-01-01T00:00:00Z')",
+        (f"p2_{cid[2:]}", cid),
+    )
+    _walk(ctx, cid, (S.PROPOSED, S.PROPOSAL_APPROVED, H), *to_implementing)
+    assert implement_network.decide(ctx, cid) == ("none", "not_requested")
 
 
 def _decisions(ctx: AppContext) -> list[tuple[str | None, dict[str, Any]]]:

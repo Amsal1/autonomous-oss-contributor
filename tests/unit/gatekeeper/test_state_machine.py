@@ -11,6 +11,7 @@ import pytest
 
 from ossbot.common.clock import FakeClock, to_iso
 from ossbot.common.schemas import TERMINAL_STATES, State
+from ossbot.common.yamlio import safe_load
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.state_machine import (
@@ -25,6 +26,7 @@ from ossbot.gatekeeper.state_machine import (
 )
 from ossbot.gatekeeper.telegram import terminal_fyi
 from tests.conftest import (
+    FIXTURES,
     consumed_proposal,
     insert_action,
     insert_contribution,
@@ -47,7 +49,16 @@ def guard_columns(from_: State, to: State) -> dict[str, object]:
         cols.update(declined_at=to_iso(FakeClock().now()), declined_reason="skipped")
     if from_ is S.WATCHING and to is S.IMPLEMENTING:
         cols["pr_number"] = 7
+    if from_ is S.FAILED and to is S.PROPOSAL_APPROVED:  # ADR-0024 rerun with network
+        cols.update(state_reason="needs_network", proposal_version=1)
     return cols
+
+
+def allow_reruns(ctx: AppContext) -> None:
+    """The owner's switches a rerun with network needs: egress mode sandbox_open, implement network on."""
+    default = ctx.config.egress.mode_default
+    ctx.control.set_egress_mode("sandbox_open", "tg:4242", default, egress=ctx.config.egress)
+    ctx.control.set_implement_network("on_request", "tg:4242", default)
 
 
 def change_request(ctx: AppContext, cid: str, *, consumed: bool = False) -> str:
@@ -63,6 +74,10 @@ def prepare_edge(ctx: AppContext, cid: str, from_: State, to: State, actor: Acto
     """Rows besides the contribution's own columns that an edge's guard needs."""
     if (from_, to, actor) == (S.WATCHING, S.IMPLEMENTING, Actor.HUMAN):
         change_request(ctx, cid)
+    if (from_, to) == (S.FAILED, S.PROPOSAL_APPROVED):
+        consumed_proposal(ctx, cid)
+        if ctx.control.implement_network() == "off":
+            allow_reruns(ctx)
 
 
 def make(ctx: AppContext, state: State, **cols: object) -> str:
@@ -661,6 +676,215 @@ def test_terminal_fyi_without_telegram_is_dropped(ctx: AppContext) -> None:
     cid = after_gate1(ctx, S.PLANNING)
     ctx.state_machine.transition(cid, S.PLANNING, S.ABANDONED, Actor.WORKER, {"reason": "plan_infeasible"})
     assert state_of(ctx, cid) == "ABANDONED" and terminal_rows(ctx) == []
+
+
+# ---------------------------------------------------------- rerun with network (ADR-0024, design §4d)
+RERUN = {"reason": "network_rerun", "rerun": 1, "max": 1}
+TABLE = safe_load((FIXTURES / "implement_network_table.yaml").read_text(encoding="utf-8"))["rows"]
+
+
+def failed_item(ctx: AppContext, **cols: object) -> str:
+    """A FAILED needs_network item that passed gate 1 (an eligible rerun once the owner's switches allow it)."""
+    cols.setdefault("state_reason", "needs_network")
+    return after_gate1(ctx, S.FAILED, **cols)
+
+
+def _outcome_result(ctx: AppContext, cid: str) -> object:
+    row = db.one(ctx.conn, "SELECT result FROM outcomes WHERE cid = ?", (cid,))
+    assert row is not None
+    return row["result"]
+
+
+def network_cols(ctx: AppContext, cid: str) -> tuple[object, ...]:
+    sql = ("SELECT network_reruns, network_grant, network_grant_version, rerun_hint, implement_attempts,"
+           " review_rounds, change_rounds FROM contributions WHERE id = ?")  # fmt: skip
+    row = db.one(ctx.conn, sql, (cid,))
+    assert row is not None
+    return tuple(row)
+
+
+def test_rerun_edge_is_human_only(ctx: AppContext) -> None:
+    allow_reruns(ctx)
+    for actor in (Actor.WORKER, Actor.GATEKEEPER):
+        cid = failed_item(ctx)
+        with pytest.raises(TransitionError) as info:
+            ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, actor, RERUN)
+        assert info.value.status == 403 and state_of(ctx, cid) == "FAILED"
+    assert S.FAILED in TERMINAL_STATES  # terminal unless the human taps the rerun
+
+
+def test_network_rerun_reason_is_reserved(ctx: AppContext) -> None:
+    cid = make(ctx, S.VALIDATING)
+    for evidence in ({"reason": "network_rerun"}, {"error_class": "network_rerun"}):
+        with pytest.raises(TransitionError) as info:
+            ctx.state_machine.transition(cid, S.VALIDATING, S.FAILED, Actor.WORKER, evidence)
+        assert (info.value.status, info.value.code) == (403, "reserved_reason")
+    assert state_of(ctx, cid) == "VALIDATING"
+
+
+def test_rerun_unavailable_without_the_guard(ctx: AppContext) -> None:
+    allow_reruns(ctx)
+    cid = failed_item(ctx)
+    ctx.state_machine.rerun_guard = None
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN)
+    assert info.value.code == "guard_failed:rerun_unavailable"
+
+
+def _guard_case(ctx: AppContext, code: str) -> str:
+    """A FAILED item whose first failing guard is ``code`` (every earlier guard passes)."""
+    allow_reruns(ctx)
+    if code == "rerun_reason":
+        return failed_item(ctx, state_reason="implement_attempts")  # untagged: rerun_hint 0
+    if code == "rerun_gate1":
+        return insert_contribution(ctx, S.FAILED, upstream="runatlantis/atlantis", state_reason="needs_network",
+                                   proposal_version=1)  # fmt: skip
+    if code == "pr_number_null":
+        return failed_item(ctx, pr_number=7)
+    if code == "rerun_window":
+        return failed_item(ctx, updated_at=to_iso(ctx.clock.now() - timedelta(days=7, minutes=1)))
+    if code == "network_reruns":
+        return failed_item(ctx, network_reruns=ctx.config.policy.limits.network_reruns_max)
+    if code == "duplicate_active":
+        cid = failed_item(ctx, issue_number=4242)
+        insert_contribution(ctx, S.VETTED, upstream="runatlantis/atlantis", issue_number=4242)
+        return cid
+    if code == "held":
+        cid = failed_item(ctx)
+        ctx.conn.execute("INSERT INTO contribution_holds (id, cid, reason, detail_json, held_by, held_at)"
+                         " VALUES ('h_1', ?, 'egress_anomaly', '{}', 'sandbox', 't')", (cid,))  # fmt: skip
+        return cid
+    if code == "strict":
+        ctx.conn.execute("INSERT INTO discovered_targets (repo, source, status, first_seen, updated_at,"
+                         " egress_strict) VALUES ('acme/strict-tool', 'owner', 'kept', 't', 't', 1)")  # fmt: skip
+        cid = insert_contribution(ctx, S.FAILED, upstream="acme/strict-tool", state_reason="needs_network",
+                                  proposal_version=1)  # fmt: skip
+        consumed_proposal(ctx, cid)
+        return cid
+    default = ctx.config.egress.mode_default
+    if code == "egress_mode":
+        ctx.control.set_egress_mode("open", "tg:4242", default, egress=ctx.config.egress)
+    if code == "setting_off":
+        ctx.control.set_implement_network("off", "tg:4242", default)
+    return failed_item(ctx)
+
+
+GUARD_ORDER = ["rerun_reason", "rerun_gate1", "pr_number_null", "rerun_window", "network_reruns", "duplicate_active",
+               "held", "strict", "egress_mode", "setting_off"]  # fmt: skip
+
+
+@pytest.mark.parametrize("code", GUARD_ORDER)
+def test_rerun_guard_codes(ctx: AppContext, code: str) -> None:
+    cid = _guard_case(ctx, code)
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN)
+    assert (info.value.status, info.value.code) == (409, f"guard_failed:{code}")
+    assert state_of(ctx, cid) == "FAILED" and network_cols(ctx, cid)[1] == 0
+
+
+def test_operator_import_is_never_rerun(ctx: AppContext) -> None:
+    allow_reruns(ctx)
+    cid = failed_item(ctx, source="operator")
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN)
+    assert info.value.code == "guard_failed:rerun_gate1"
+
+
+@pytest.mark.parametrize("stop", ["pause", "kill"])
+def test_rerun_refused_while_paused_and_killed(ctx: AppContext, stop: str) -> None:
+    allow_reruns(ctx)
+    cid = failed_item(ctx)
+    write_flag(ctx.paths.paused_flag if stop == "pause" else ctx.paths.killed_flag, {"reason": "x"})
+    with pytest.raises(TransitionError) as info:
+        ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN)
+    assert info.value.status == 423
+    assert state_of(ctx, cid) == "FAILED" and network_cols(ctx, cid)[0] == 0
+
+
+@pytest.mark.parametrize("row", TABLE, ids=[f"{r['setting']}-{r['mode']}-{r['repo']}" for r in TABLE])
+def test_rerun_tap_column_ii(ctx: AppContext, row: dict[str, str]) -> None:
+    default = ctx.config.egress.mode_default
+    if row["mode"] != default:
+        ctx.control.set_egress_mode(row["mode"], "tg:4242", default, egress=ctx.config.egress)  # type: ignore[arg-type]
+    ctx.control.set_implement_network(row["setting"], "tg:4242", default)  # type: ignore[arg-type]
+    if row["repo"] == "strict":
+        ctx.conn.execute("INSERT INTO discovered_targets (repo, source, status, first_seen, updated_at,"
+                         " egress_strict) VALUES ('acme/strict-tool', 'owner', 'kept', 't', 't', 1)")  # fmt: skip
+        cid = insert_contribution(ctx, S.FAILED, upstream="acme/strict-tool", state_reason="needs_network",
+                                  proposal_version=1)  # fmt: skip
+        consumed_proposal(ctx, cid)
+    else:
+        cid = failed_item(ctx)
+    if row["tap"] == "web":
+        assert ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN).state \
+            is S.PROPOSAL_APPROVED  # fmt: skip
+        assert network_cols(ctx, cid)[1:3] == (1, 1)
+    else:
+        with pytest.raises(TransitionError) as info:
+            ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN)
+        assert info.value.code == f"guard_failed:{row['tap']}"
+
+
+def test_rerun_effects_and_grant_cleared_on_packaging(ctx: AppContext) -> None:
+    allow_reruns(ctx)
+    cid = after_gate1(ctx, S.IMPLEMENTING, implement_attempts=2, review_rounds=1, change_rounds=3)
+    ctx.state_machine.transition(cid, S.IMPLEMENTING, S.FAILED, Actor.WORKER, {"error_class": "needs_network"})
+    assert _outcome_result(ctx, cid) == "failed"
+    ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN, "tg:4242")
+    assert network_cols(ctx, cid) == (1, 1, 1, 0, 0, 0, 0)
+    audit = ctx.conn.execute("SELECT actor, data_json FROM audit_events WHERE event = 'transition' AND cid = ?"
+                             " ORDER BY seq DESC LIMIT 1", (cid,)).fetchone()  # fmt: skip
+    assert audit["actor"] == "tg:4242" and json.loads(audit["data_json"])["evidence"] == RERUN
+    assert _outcome_result(ctx, cid) is None  # the rerun is a new attempt of the same item
+    for from_, to in ((S.PROPOSAL_APPROVED, S.FETCHING), (S.FETCHING, S.FETCHED), (S.FETCHED, S.PLANNING),
+                      (S.PLANNING, S.PLANNED), (S.PLANNED, S.IMPLEMENTING), (S.IMPLEMENTING, S.IMPLEMENTED),
+                      (S.IMPLEMENTED, S.VALIDATING), (S.VALIDATING, S.VALIDATION_FAILED),
+                      (S.VALIDATION_FAILED, S.IMPLEMENTING)):  # fmt: skip
+        ctx.state_machine.transition(cid, from_, to, Actor.WORKER)
+        assert network_cols(ctx, cid)[1:3] == (1, 1), to  # the grant covers the rerun's loop re-entries
+    to_packaging = [(S.IMPLEMENTING, S.IMPLEMENTED), (S.IMPLEMENTED, S.VALIDATING), (S.VALIDATING, S.VALIDATED)]
+    to_packaging += [(S.VALIDATED, S.REVIEWING), (S.REVIEWING, S.REVIEW_PASSED), (S.REVIEW_PASSED, S.PACKAGING)]
+    for from_, to in to_packaging:
+        ctx.state_machine.transition(cid, from_, to, Actor.WORKER)
+    assert network_cols(ctx, cid)[1:3] == (0, None)
+
+
+@pytest.mark.parametrize("to", [S.AWAITING_APPROVAL, S.FAILED, S.ABANDONED])
+def test_grant_cleared_on_gate2_and_terminal_moves(ctx: AppContext, to: State) -> None:
+    from_ = {S.AWAITING_APPROVAL: S.PACKAGING, S.FAILED: S.IMPLEMENTING, S.ABANDONED: S.REVISE}[to]
+    actor = Actor.GATEKEEPER if to is S.AWAITING_APPROVAL else Actor.WORKER
+    cid = after_gate1(ctx, from_, network_grant=1, network_grant_version=1, network_reruns=1)
+    ctx.state_machine.transition(cid, from_, to, actor)
+    assert network_cols(ctx, cid)[1:3] == (0, None)
+
+
+@pytest.mark.parametrize("from_", [S.IMPLEMENTED, S.VALIDATED, S.REVIEW_PASSED])
+def test_rescope_clears_network_grant(ctx: AppContext, from_: State) -> None:
+    """C-D17: a move into RESCOPE_REQUIRED ends the grant, so a new gate 1 never inherits it."""
+    cid = after_gate1(ctx, from_, network_grant=1, network_grant_version=1, network_reruns=1)
+    assert network_cols(ctx, cid)[1:3] == (1, 1)
+    ctx.state_machine.transition(cid, from_, S.RESCOPE_REQUIRED, Actor.GATEKEEPER, {"reason": "size"})
+    assert network_cols(ctx, cid)[1:3] == (0, None)
+
+
+@pytest.mark.parametrize(("evidence", "hint"), [({"error_class": "implement_attempts", "sandbox_gap": True}, 1),
+                                                ({"error_class": "implement_attempts", "sandbox_gap": "true"}, 0),
+                                                ({"error_class": "implement_attempts", "sandbox_gap": 1}, 0),
+                                                ({"error_class": "implement_attempts"}, 0)])  # fmt: skip
+def test_rerun_hint_only_for_a_strict_bool_sandbox_gap(ctx: AppContext, evidence: dict[str, object], hint: int) -> None:
+    cid = after_gate1(ctx, S.VALIDATION_FAILED, rerun_hint=1 - hint)
+    ctx.state_machine.transition(cid, S.VALIDATION_FAILED, S.FAILED, Actor.WORKER, evidence)
+    assert network_cols(ctx, cid)[3] == hint
+
+
+def test_terminal_dedupe_key_per_run(ctx: AppContext) -> None:
+    """``terminal:<cid>`` before any rerun (unchanged), ``terminal:<cid>:<n>`` after the n-th rerun fails again."""
+    allow_reruns(ctx)
+    cid = after_gate1(ctx, S.IMPLEMENTING)
+    ctx.state_machine.transition(cid, S.IMPLEMENTING, S.FAILED, Actor.WORKER, {"error_class": "needs_network"})
+    ctx.state_machine.transition(cid, S.FAILED, S.PROPOSAL_APPROVED, Actor.HUMAN, RERUN)
+    ctx.state_machine.transition(cid, S.PROPOSAL_APPROVED, S.FAILED, Actor.WORKER, {"error_class": "needs_network"})
+    assert sorted(r["dedupe_key"] for r in terminal_rows(ctx)) == [f"terminal:{cid}", f"terminal:{cid}:1"]
 
 
 # ------------------------------------------------------------------------- expiry

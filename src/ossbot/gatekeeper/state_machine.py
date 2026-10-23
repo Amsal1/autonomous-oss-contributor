@@ -8,6 +8,11 @@
 * Owner fix round (ADR-0003 addendum 2026-10-23): WATCHING->IMPLEMENTING is also H (``owner_fix`` only),
   guarded by an open change request and ``owner_fix_rounds < owner_fix_rounds_max``; it counts
   ``owner_fix_rounds``, never ``watch_rounds``. ``reason=owner_fix_round`` is reserved for H (403).
+* Rerun with network (ADR-0024): FAILED->PROPOSAL_APPROVED is H only (``network_rerun``, reserved like
+  ``owner_fix_round``), guarded by the injected ``rerun_guard`` (design §4d order) and the running check. It
+  counts ``network_reruns``, resets the loop counters and grants network for the current proposal version
+  (``network_grant``/``network_grant_version``); every move into PACKAGING, AWAITING_APPROVAL,
+  RESCOPE_REQUIRED or a terminal state clears the grant. FAILED stays in TERMINAL_STATES.
 * Guards answer 409 ``guard_failed:<guard>``; a known edge with the wrong actor answers 403.
 * Kill/pause is checked on entry to working states (and SUBMITTING); moves that stop work (the
   redirect, into SUBMIT_FAILED, into WATCHING from a gate state) are allowed while paused/killed.
@@ -38,7 +43,7 @@ from ossbot.common.clock import Clock, from_iso, to_iso
 from ossbot.common.config import Limits
 from ossbot.common.control_flags import Blocked
 from ossbot.common.hashing import canonical_json
-from ossbot.common.schemas import State, TransitionResponse
+from ossbot.common.schemas import TERMINAL_STATES, State, TransitionResponse
 from ossbot.gatekeeper import db, outcomes
 from ossbot.gatekeeper.approvals import ApprovalService
 from ossbot.gatekeeper.audit import AuditLog
@@ -120,11 +125,20 @@ _LISTED: dict[State, dict[State, frozenset[Actor]]] = {
     S.SUBMITTED: {S.WATCHING: G},
     # IMPLEMENTING H: owner fix round (/fix, 🔧 Fix with notes), owner_fix.start_round only (ADR-0003 addendum)
     S.WATCHING: {S.WATCHING: W, S.IMPLEMENTING: W | H, S.MERGED: W, S.CLOSED: W, S.ABANDONED: H},
+    # ADR-0024: "🌐 Rerun with network" (network_rerun.start_rerun only), guarded by the injected rerun_guard
+    S.FAILED: {S.PROPOSAL_APPROVED: H},
 }
 
 # Reserved for the human WATCHING->IMPLEMENTING edge: the runner's unbundle rule and the queue label key on it,
 # so no other actor may store it as state_reason (I13).
 OWNER_FIX_REASON = "owner_fix_round"
+# Reserved for the human FAILED->PROPOSAL_APPROVED edge (ADR-0024; I9, I13), like OWNER_FIX_REASON.
+NETWORK_RERUN_REASON = "network_rerun"
+RESERVED_REASONS = frozenset({OWNER_FIX_REASON, NETWORK_RERUN_REASON})
+# ADR-0024 (carried criterion D17): the rerun grant ends on every move into one of these (and every terminal state)
+GRANT_CLEARING: frozenset[State] = frozenset({S.PACKAGING, S.AWAITING_APPROVAL, S.RESCOPE_REQUIRED}) | TERMINAL_STATES
+# (row) -> the first failing rerun guard code of design §4d, or None (wired in context.py)
+RerunGuard = Callable[[sqlite3.Row], str | None]
 
 
 def _build_allowed() -> dict[State, dict[State, frozenset[Actor]]]:
@@ -215,6 +229,8 @@ class StateMachine:
         self.notify = notify or (lambda text: None)
         self.claim_comment = claim_comment  # policy proposal.claim_comment == 'on'
         self.on_terminal: TerminalHook | None = None  # set by context.build_context (no Telegram import here)
+        # ADR-0024: the rerun-with-network guard (needs config, targets and control); None refuses the edge
+        self.rerun_guard: RerunGuard | None = None
 
     # ---------------------------------------------------------------- guards
     def _passed_gate1(self, row: sqlite3.Row) -> bool:
@@ -271,6 +287,8 @@ class StateMachine:
 
     def _guard(self, row: sqlite3.Row, from_: State, to: State, redirected: bool, actor: Actor) -> str | None:
         pr = row["pr_number"]
+        if from_ is S.FAILED and to is S.PROPOSAL_APPROVED:  # ADR-0024: the same guard backs the Telegram card
+            return "rerun_unavailable" if self.rerun_guard is None else self.rerun_guard(row)
         gate1 = self._gate1_guard(row, from_, to)
         if gate1 is not None:
             return gate1
@@ -343,6 +361,27 @@ class StateMachine:
             return {"watch_rounds": "watch_rounds + 1"}
         return {}
 
+    @staticmethod
+    def _network_updates(row: sqlite3.Row, from_: State, to: State, evidence: dict[str, Any]) -> dict[str, str]:
+        """ADR-0024 column updates (constants and columns only, never caller values). The rerun edge counts the
+        rerun, grants network for the current proposal version and resets the loop budget; every move into
+        PACKAGING, AWAITING_APPROVAL, RESCOPE_REQUIRED or a terminal state ends the grant (C-D17); a FAILED
+        move sets the rerun hint only for a strict-bool ``sandbox_gap``."""
+        out: dict[str, str] = {}
+        if from_ is S.FAILED and to is S.PROPOSAL_APPROVED:
+            version = row["proposal_version"]
+            out.update({
+                "network_reruns": "network_reruns + 1", "network_grant": "1",
+                "network_grant_version": str(int(version)) if version is not None else "NULL", "rerun_hint": "0",
+                "implement_attempts": "0", "review_rounds": "0", "change_rounds": "0",
+            })  # fmt: skip
+            return out
+        if to in GRANT_CLEARING:
+            out.update({"network_grant": "0", "network_grant_version": "NULL"})
+        if to is S.FAILED:
+            out["rerun_hint"] = "1" if evidence.get("sandbox_gap") is True else "0"
+        return out
+
     # ------------------------------------------------------------ transition
     def transition(
         self,
@@ -366,11 +405,12 @@ class StateMachine:
                 raise TransitionError(409, "stale_from", f"current {row['state']}")
             target = resolve_target(from_, to, row["pr_number"])
             # _apply stores reason or else error_class as state_reason: both are reserved
-            claims_owner = OWNER_FIX_REASON in (evidence.get("reason"), evidence.get("error_class"))
+            claimed = RESERVED_REASONS & {v for v in (evidence.get("reason"), evidence.get("error_class"))
+                                          if isinstance(v, str)}  # fmt: skip
             if actor not in target.actors:
                 forbidden = TransitionError(403, "forbidden_transition", f"{from_.value}->{to.value} by {actor.value}")
-            elif actor is not Actor.HUMAN and claims_owner:
-                forbidden = TransitionError(403, "reserved_reason", f"{OWNER_FIX_REASON} is the human's")
+            elif actor is not Actor.HUMAN and claimed:
+                forbidden = TransitionError(403, "reserved_reason", f"{sorted(claimed)[0]} is the human's")
             else:
                 redirected = target.redirected_from is not None
                 guard = self._guard(row, from_, target.to, redirected, actor)
@@ -417,6 +457,7 @@ class StateMachine:
         for column, value in _evidence_columns(from_, target.to, evidence).items():
             sets[column] = "?"
             params.append(value)
+        sets.update(self._network_updates(row, from_, target.to, evidence))
         assignments = ", ".join(f"{k} = {v}" for k, v in sets.items())
         self.conn.execute(f"UPDATE contributions SET {assignments} WHERE id = ?", (*params, cid))
         outcomes.on_transition(self.conn, row, target.to, to_iso(self.clock.now()))

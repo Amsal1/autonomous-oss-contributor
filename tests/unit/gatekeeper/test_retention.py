@@ -15,7 +15,7 @@ from ossbot.common.ids import new_approval_id, new_proposal_approval_id, new_ski
 from ossbot.common.schemas import TERMINAL_STATES, State
 from ossbot.gatekeeper import audit, db, retention
 from ossbot.gatekeeper.context import AppContext
-from ossbot.gatekeeper.state_machine import ALLOWED, GATE, WAITING_W, WORKING
+from ossbot.gatekeeper.state_machine import ALLOWED, GATE, WAITING_W, WORKING, Actor
 from tests.conftest import UID_OPERATOR, UID_WORKER, insert_action, insert_contribution, write_flag
 from tests.unit.gatekeeper.api_helpers import client
 
@@ -133,8 +133,11 @@ def row_counts(ctx: AppContext) -> dict[str, int]:
 
 # ------------------------------------------------------------------------------ selection
 def test_terminal_list_matches_state_machine() -> None:
-    for state in TERMINAL_STATES - {State.PROPOSAL_REJECTED}:  # its Undo lasts 10 min
+    # PROPOSAL_REJECTED: its Undo lasts 10 min; FAILED: the human's rerun with network (ADR-0024), refused after
+    # 7 days (rerun_window), so a row retention may delete (>= 7 days, contributions_days) is never rerun
+    for state in TERMINAL_STATES - {State.PROPOSAL_REJECTED, State.FAILED}:
         assert not ALLOWED.get(state), state
+    assert {t: set(a) for t, a in ALLOWED[State.FAILED].items()} == {State.PROPOSAL_APPROVED: {Actor.HUMAN}}
     assert not TERMINAL_STATES & (WORKING | GATE | WAITING_W | {State.PROPOSED, State.PROPOSAL_APPROVED,
                                                                  State.RESCOPE_REQUIRED})  # fmt: skip
 

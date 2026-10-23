@@ -219,6 +219,17 @@ forbidden_modules = ["ossbot.gatekeeper.owner_fix"]
 allow_indirect_imports = false
 
 [[tool.importlinter.contracts]]
+# ADR-0024 (post-v1 sandbox network, 2026-10-23): the human FAILED->PROPOSAL_APPROVED edge ("Rerun with
+# network") is reachable only from an owner tap. No API route, chat relay (Hermes) or feature reaches
+# network_rerun, directly or indirectly (I9, I13); the Telegram handler module is its only importer.
+name = "Only Telegram handlers reach ossbot.gatekeeper.network_rerun"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.api", "ossbot.gatekeeper.chat", "ossbot.gatekeeper.features"]
+forbidden_modules = ["ossbot.gatekeeper.network_rerun"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
 # DESIGN §18.10, plan D8: the gatekeeper's retention deleter runs only through the operator API.
 name = "Only ossbot.gatekeeper.api.retention imports ossbot.gatekeeper.retention"
 type = "forbidden"

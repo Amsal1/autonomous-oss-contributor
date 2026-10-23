@@ -71,5 +71,12 @@ def queue_terminal_fyi(
     raw = evidence.get("summary")
     summary = raw.strip() if isinstance(raw, str) else ""
     view = terminal_view(cid, subject(row), from_, to, reason, summary, evidence)
-    return ui_send.deliver(ctx, view, thread="feed", priority=2, dedupe_key=f"terminal:{cid}", category="stages",
+    return ui_send.deliver(ctx, view, thread="feed", priority=2, dedupe_key=dedupe_key(row), category="stages",
                            holdable=True)  # fmt: skip
+
+
+def dedupe_key(row: sqlite3.Row) -> str:
+    """Once per run (ADR-0024): ``terminal:<cid>`` before any rerun with network (existing outbox rows and
+    goldens stay valid), ``terminal:<cid>:<n>`` after the n-th, so a rerun that ends again is reported."""
+    reruns = int(row["network_reruns"] or 0)
+    return f"terminal:{row['id']}" if reruns == 0 else f"terminal:{row['id']}:{reruns}"
