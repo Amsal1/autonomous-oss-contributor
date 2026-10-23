@@ -174,3 +174,63 @@ The owner decision of 2026-10-21 (fetch/validate get `web_public` in a fourth mo
 - **Egress precheck (open-discovery rule 14) and its limits.** It runs only when the effective egress is strict (mode not `sandbox_open`, unknown, or the repo is strict): the runner lists the repo root and reads at most 6 known manifests (`Chart.yaml`, `.npmrc`, `.yarnrc.yml`, pip files, Gradle, Maven, `.cargo/config.toml`, each ≤ 200 KB, GET only), extracts registry hosts with fixed regexes and compares them with squid `dstdomain` semantics to the fetch base categories ∪ `pkg_helm` ∪ `targets.defaults.egress_extra`. An uncovered host skips a discovered repo (`egress_extra_needed[_strict]:<hosts>`). Nested manifests are not scanned; a missed host shows up as a failed prefetch or validate, the existing path.
 - **The access log** also feeds the meter: the ten `ossbot` tokens are parsed by `ossbot.common.egress_log` (stdlib only); rotated by `ossbot-proxy-rotate` (rename + `squid -k rotate`, daily 00:10 UTC) and deleted by `ossctl gc` (store `proxy-logs`) after `retention.proxy_logs_days` (≥ 30); never the live `access.log`.
 - **F1 (toolchains, follow-up, owner answer O3).** `sandbox-full` has no cfn-lint, Rust toolchain or Maven (checked in `sandbox/images/full-base/Dockerfile`, 2026-10-21). Pins for when F1 is built (V9, re-checked then): cfn-lint 1.58.0 (PyPI 2026-10-20, wheel sha256 `9d9f06043160756a6158f5c3f92a44ce38254b1c578127461608305bc8262987`, Python ≥3.10,<3.15) in a hash-pinned root-owned venv, Rust stable 1.99.1 (2026-10-13), Maven 3.9.16, plus a `cloudformation` ecosystem in `fetch.sh`. Meanwhile cfn-lint runs on demand (`uvx --from cfn-lint==1.58.0`, `pkg_python`, every mode; `tests/sandbox/test_cfn_lint_on_demand.py`, close-out). No image is rebuilt in this run.
+
+## Implementation addendum 2026-10-23 (JVM sandbox)
+
+sandbox-network Part 1 (design `.ossbot-local/postv1/sandbox-network/design.md` §2, §3; owner: yes to all, Maven
+= follow-up F1). Every Gradle repo failed for sandbox reasons (kestra `c_D1D18SPWQ5`, `c_D1D18TQJ75`): the JVM
+ignores `HTTPS_PROXY`, `GRADLE_OPTS=--offline` is not a JVM option and killed every `./gradlew`, there was no JDK
+25, and Maven had no prefetch, no `mvn` and no proxy. I5 is unchanged: `agent-exec` stays `--network none`, no
+new env name crosses the Docker filter except `OSSBOT_ARG_REFETCH` (the `OSSBOT_` prefix rule), no egress
+category changes.
+
+Verified facts (read-only GETs, 2026-10-23; fetched content treated as data; pins in `config/versions.lock.yaml`):
+- **V-J1** `openjdk-25-jdk-headless` 25.0.4.1+1-1~24.04.4 is published for noble amd64 (Updates and Security,
+  universe, 2026-09-21); JDK 21 there is 21.0.12.1+1-1~24.04.4, JDK 17 17.0.20.1+1-1~24.04 (Launchpad API
+  `getPublishedBinaries`, https://api.launchpad.net/1.0/ubuntu/+archive/primary).
+- **V-J2 (assertion-backed only).** No readable Debian packaging source gave the alternatives priority. The image
+  does not depend on it: the JDK `RUN` sets every JDK 21 tool with `update-alternatives --set` and asserts
+  `java -version` and `javac -version` report 21 in the same `RUN`; lock `openjdk_25.default_java`.
+- **V-M1** noble ships Maven 3.8.7; Apache Maven 3.9.16 is used instead (tarball from archive.apache.org, the
+  sha512 equal on archive.apache.org and Maven Central, `sha512sum -c` at build, `/opt/maven`,
+  `/usr/local/bin/mvn`). **V-M2** settings: `<proxies>`, `<offline>`, `<localRepository>`, user settings at
+  `${user.home}/.m2/settings.xml` (https://maven.apache.org/settings.html, …/guides/mini/guide-proxies.html).
+  **V-M3** only `MAVEN_OPTS` is used (`-Duser.home`), `MAVEN_ARGS` stays unset (https://maven.apache.org/configure.html).
+  **V-M4** `dependency:go-offline` of maven-dependency-plugin 3.11.0 (Maven Central metadata: latest = release =
+  3.11.0). **V-M5** `bin`-type Maven wrappers download with Java: online modes add the JVM proxy properties to
+  `MAVEN_OPTS` (https://maven.apache.org/tools/wrapper/).
+- **V-M6 and the decision "Maven online in validate".** surefire resolves its providers only when tests run (a
+  filter that matches no test caches none), so validate's Maven settings are online (`<offline>false</offline>`
+  plus the proxies; validate has `pkg_jvm` in every egress mode, strict included) and fill `/work/cache/m2` on the
+  task volume; only the offline `agent-exec` uses `<offline>true</offline>`, where a missing provider is a
+  sandbox gap. Running the repo's tests at fetch was rejected (double test time, before the change exists).
+- **V-G1** Gradle proxy = `systemProp.http(s).proxyHost/Port` and `systemProp.http.nonProxyHosts` in
+  `$GRADLE_USER_HOME/gradle.properties`, also read by the wrapper (https://docs.gradle.org/current/userguide/networking.html).
+  **V-G2** Gradle has no offline property; offline is `--offline` or `StartParameter.offline`; init scripts load
+  from `init.d/*.init.gradle` (…/build_environment.html, …/init_scripts.html). **V-G4** toolchains:
+  `org.gradle.java.installations.paths` (17/21/25 homes) and `auto-download=false` in the offline modes
+  (…/toolchains.html). **V-G5** Gradle 9.8.2 is current; `gradle-9.8.2-bin.zip` sha256 `21bd5da2…9607`, wrapper jar
+  `3b8a2577…8e98` (https://services.gradle.org/versions/current); the fixture's wrapper jar is the v9.8.2 one of the
+  Gradle repository and equals that checksum.
+- **V-G3 (live check pending close-out).** `StartParameterResolutionOverride` reads `startParameter.isOffline()`
+  when it wraps each repository, so the init script's `gradle.startParameter.offline = true` should reach
+  resolution; `tests/sandbox/test_jvm_offline.py` proves it (an un-prefetched configuration must fail with
+  "offline mode"). **Pre-agreed fallback** if it fails: drop the init script, `validate.DEFAULTS` and the prompts
+  say "pass `--offline`", nothing else changes; offline is a correctness aid only (`--network none` and the
+  allowlist are the controls).
+- **V-E1** `pkg_jvm` already lists the Maven Central, Gradle plugin, services/downloads.gradle.org and Google hosts;
+  `pkg_python` already lists `files.pythonhosted.org`. No egress change.
+- **ARG placement.** Dockerfile reference, "Impact on build caching" (re-read 2026-10-23,
+  https://docs.docker.com/reference/dockerfile/): every `RUN` after an `ARG` uses it as an implicit env var and may
+  miss the cache. The three new ARGs (`OPENJDK25_VERSION`, `MAVEN_VERSION`, `MAVEN_SHA512`) are declared directly
+  above the new JDK `RUN`, after the code-job venv; the earlier text is a byte-identical prefix of the old file
+  (`tests/unit/sandbox/test_gitcmd_image_env.py` stores its sha256), so only the new layers rebuild.
+
+What shipped: `sandbox/entrypoints/lib/jvm_env.sh` (`ossbot_jvm_setup online|validate|offline`, every file
+rewritten fresh, never through a symlink; a malformed proxy writes no proxy lines and never fails the job),
+`sandbox/gradle/ossbot-prefetch.init.gradle` (resolve every resolvable configuration of every project) and
+`ossbot-offline.init.gradle`, both baked to `/opt/ossbot/gradle/`; the fetch Gradle warm-up, the Maven branch,
+`prefetch_failed` and the refetch mode; `execd.fixed_env()` without `GRADLE_OPTS` and with `JAVA_HOME`,
+`MAVEN_USER_HOME`, `MAVEN_OPTS`; `pipefail` in execd and validate. Trust note: repo code can write `/work/cache`
+in fetch (other `init.d` scripts, a `settings-security.xml`); that gives it nothing its build scripts don't have in
+validate, and our files are rewritten at every job start.

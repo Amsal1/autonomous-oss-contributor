@@ -1085,6 +1085,21 @@ Commits 795b9ff (Part A: last-failure summary in the FYI, `validation_stuck`, pl
 | Status | `ROOT ossctl status` before and after | lifecycle `up`, state `running`, kill none, dry-run unchanged |
 | Sandbox and Docker e2e | `ROOTDEV pytest -m "sandbox or e2e_docker" --timeout=120 -q` | 22 passed, 1 failed: `test_cfn_lint_on_demand.py` (first run since F1b), `uvx` could resolve cfn-lint on pypi.org but timed out connecting to `files.pythonhosted.org` in a strict validate job (three runs). Not from this change (sandbox-full, validate.sh and egress unchanged); follow-up |
 
+## Post-v1 sandbox-network Part 1 (2026-10-23)
+
+Commits bf545f3 (sandbox: JVM proxy and offline mode, Gradle warm-up, Maven, JDK 25 and Maven in the image, refetch mode, pipefail) and 9b9640f (runner: sandbox gaps, one bounded re-fetch, the FYI next step). Design and plan `.ossbot-local/postv1/sandbox-network/` (not tracked); the command log is `part1-verify.md` there. No redeploy in Part 1 (the close-out rebuilds the images once); no contribution touched; dry-run, the egress mode and every approval unchanged; no GitHub write.
+
+| Check | Command | Result |
+|---|---|---|
+| Pins (web) | Launchpad `getPublishedBinaries` openjdk-25/21/17-jdk-headless noble amd64; Maven Central and archive.apache.org `apache-maven-3.9.16-bin.tar.gz.sha512`; `services.gradle.org/versions/current` and the 9.8.2 `.sha256` files; maven-dependency-plugin metadata; Dockerfile reference "Impact on build caching" | all as in the design (25.0.4.1+1-1~24.04.4; sha512 `831a8591…58b6f6` equal on both hosts; 9.8.2 `21bd5da2…` / wrapper `3b8a2577…`; 3.11.0 latest); recorded in `config/versions.lock.yaml` and the ADR-0005 addendum |
+| Lint gate | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | clean; 623 files formatted; 279 files no issues; 17 contracts kept, 0 broken |
+| Shell | `shellcheck` and `shellcheck -x` on `lib/jvm_env.sh`, `fetch.sh`, `validate.sh`, `exec.sh`, `probe.sh` | clean |
+| Affected tests | `DEV pytest` on tests/unit/sandbox, test_execd, test_scout_clone, sandboxd test_jobs/test_argv, test_doctor_toolchains, test_outputs, test_stage_flow, test_stage_rules, test_pipeline_gates, test_output_parse, test_implement_unbundle, tests/telegram/test_terminal_fyi.py, test_no_hardcoded_models, test_ci_workflow | 571 passed, 2 failed on the first run (the two new golden tests write their missing goldens and fail by design); after review the terminal-FYI file 11 passed; existing goldens unchanged |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 5109 passed |
+| Hygiene | `DEV ossctl lint personal`; `DEV ossctl docs commands --check` | 0 hits; README command table current |
+| Deferred sandbox tests | `ROOTDEV pytest --collect-only -q tests/sandbox/test_jvm_offline.py tests/sandbox/test_profiles.py` | 16 collected; the runs (gradle-multi and maven-multi fixtures, V-G3, the offline agent-exec Gradle/Maven/pipefail cases) need the rebuilt sandbox-full and run in the close-out |
+| R1.9 cfn-lint (classification) | `ROOTDEV pytest tests/sandbox/test_cfn_lint_on_demand.py` (once, deployed stack); `ROOT ossctl egress jobs --cid c_SMOKETEST6`; the proxy access log | failed again: `cfn-version` exit 2 after 49 s. No meter summary (the sandbox JobService runs no meter: `[]`). Squid: every `files.pythonhosted.org` and, in this run, `pypi.org` CONNECT to `151.101.0.223` is `TCP_TUNNEL/200` with 39 bytes from upstream and a 10 000 ms duration, repeated by uv's retries; earlier runs reached `pypi.org` through `151.101.64.223` in full (≈128 KB). Not a render bug (no `TCP_DENIED`), not uv's 30 s read timeout: a TLS handshake that stalls on one Fastly route. No one-line fix: **follow-up F1c** (route/MTU of the proxy's path to that address); the test now prints uv's message for the close-out's confirming run |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
