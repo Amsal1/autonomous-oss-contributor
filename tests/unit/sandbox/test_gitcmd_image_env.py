@@ -96,9 +96,10 @@ def test_tools_and_entrypoints_baked_where_needed() -> None:
     assert "execd.py" not in llm and "build-essential" not in llm
 
 
-# sha256 of sandbox/images/full-base/Dockerfile at 12856539 (everything up to and including the code-job
-# venv RUN): the JDK 25 / Maven layers are appended after it, so no toolchain layer above is rebuilt.
-BASE_PREFIX_SHA256 = "a54408030d4da1b5dcef83d9efddc343c14a3ccba20cf8b4d15e4263843b383d"
+# sha256 of sandbox/images/full-base/Dockerfile up to and including the code-job venv RUN: the JDK 25 / Maven
+# layers are appended after it, so no toolchain layer above is rebuilt. Baseline 12856539 plus one change: the
+# poppler-utils pin 24.02.0-1ubuntu9.10 -> 9.11 (2026-10-24; 9.10 left the noble index).
+BASE_PREFIX_SHA256 = "5a6f72efd7386c48a5a20a0cb50f7360a26e47d791c8230ed9a0abf2846b3b3f"
 VENV_RUN_END = " && find /opt/ossbot/code-py -perm /go+w -exec chmod go-w {} +\n"
 
 

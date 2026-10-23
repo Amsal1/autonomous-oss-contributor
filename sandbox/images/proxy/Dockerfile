@@ -4,7 +4,7 @@
 # read-only at /etc/squid/squid.conf; access logs go to the mounted /var/log/squid.
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 
-ARG SQUID_VERSION=6.14-0ubuntu0.24.04.4
+ARG SQUID_VERSION=6.14-0ubuntu0.24.04.5
 
 ENV DEBIAN_FRONTEND=noninteractive LANG=C.UTF-8
 

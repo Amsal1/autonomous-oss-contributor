@@ -82,13 +82,16 @@ mise:
 
 squid:
   # Ubuntu noble-updates package installed in ossbot/proxy (ADR-0005 addendum, §23 item 16).
-  apt_version: "6.14-0ubuntu0.24.04.4"
-  source: "apt-cache policy squid on the ossbot distro, 2026-10-17"
+  # 2026-10-24: .4 was superseded by the security update .5 and left the noble index (close-out of sandbox-network).
+  apt_version: "6.14-0ubuntu0.24.04.5"
+  source: "Launchpad API getPublishedBinaries squid noble amd64 (Security 2026-10-20, Updates 2026-10-21), https://api.launchpad.net/1.0/ubuntu/+archive/primary, checked 2026-10-24 (was 6.14-0ubuntu0.24.04.4, apt-cache policy on the distro, 2026-10-17)"
 
 poppler_utils:
   # Ubuntu noble-updates package in ossbot/sandbox-full: pdftotext for the extract_text entrypoint (§14.12.5).
-  apt_version: "24.02.0-1ubuntu9.10"
-  source: "apt-cache policy poppler-utils in the pinned ubuntu:24.04 base, FEAT-007 item 37"
+  # 2026-10-24: 9.10 was superseded by the security update 9.11 and left the noble index (the provision build
+  # failed with "Version '24.02.0-1ubuntu9.10' for 'poppler-utils' was not found").
+  apt_version: "24.02.0-1ubuntu9.11"
+  source: "Launchpad API getPublishedBinaries poppler-utils noble amd64 (Security 2026-10-21T17:15Z, Updates 2026-10-21T19:55Z), https://api.launchpad.net/1.0/ubuntu/+archive/primary, checked 2026-10-24 (was 24.02.0-1ubuntu9.10, FEAT-007 item 37)"
 
 openjdk_25:
   # Ubuntu noble-updates/security (universe) package in ossbot/sandbox-full-base next to JDK 17 and 21
