@@ -867,16 +867,20 @@ Separate Kiro session, by default a different model from the coder (`models.yaml
    $G init -q --object-format=sha1 /tmp/pkg && cd /tmp/pkg
    # ROUND_BASE = base_sha (first round) or old_head_sha (push_update fix round, present in /work/repo after unbundle)
    $G -c protocol.file.allow=always fetch -q --no-tags /work/repo/.git "$ROUND_BASE"   # objects only; source config not honoured by fetch
-   $G checkout -q -B ossbot-change "$ROUND_BASE"                     # named branch, never a detached HEAD (M1)
-   rsync -a --delete --exclude=/.git /work/repo/ /tmp/pkg/          # working tree as edited by the coder
-   $G add -A
+   $G symbolic-ref HEAD refs/heads/ossbot-change                    # named branch, never a detached HEAD (M1)
+   $G update-ref refs/heads/ossbot-change "$ROUND_BASE"
+   $G read-tree "$ROUND_BASE"                                        # base in the index only; nothing written to /tmp
+   W="$G --git-dir=/tmp/pkg/.git --work-tree=/work/repo"             # stage the coder's tree in place
+   cd /work/repo && $W add -A
    GIT_AUTHOR_NAME="$NAME" GIT_AUTHOR_EMAIL="$EMAIL" GIT_COMMITTER_NAME="$NAME" GIT_COMMITTER_EMAIL="$EMAIL" \
    GIT_AUTHOR_DATE="$PACKAGE_TS" GIT_COMMITTER_DATE="$PACKAGE_TS" \
-     $G commit -q --no-verify -F /io/input/commit_message.txt --trailer "Signed-off-by: $NAME <$EMAIL>"
+     $W commit -q --no-verify -F /io/input/commit_message.txt --trailer "Signed-off-by: $NAME <$EMAIL>"
+   cd /tmp/pkg
    $G bundle create /io/output/change.bundle refs/heads/ossbot-change "^$ROUND_BASE"
    $G $OSSBOT_FORMAT_PATCH "$ROUND_BASE..refs/heads/ossbot-change" > /io/output/change.patch   # M7, fixed command below
    $G $OSSBOT_NUMSTAT "$ROUND_BASE" refs/heads/ossbot-change | /opt/ossbot/bin/numstat2json > /io/output/diffstat.json   # R4-N6, fixed command below
    ```
+   The work tree is staged in place, not copied (ADR-0006 addendum 2026-10-23): a copy of `/work/repo` would also copy ignored dependency trees such as an npm `node_modules` into the 2 GiB `/tmp` tmpfs and fail with ENOSPC (c_D1CYR0EKGR). The git semantics are the same (the work tree's `.gitignore`/`.gitattributes` apply as before), and `/work/repo/.git` (config, hooks, `info/*`) is never read because `--git-dir` names the fresh repository. Every step that can fail writes `result.json` with a named `error_class` (`base_missing`, `empty_change`, `stage_failed`, `commit_failed`, `bundle_failed`, `patch_failed`, `diffstat_failed`; an `ERR` trap gives `package_failed` for any other step), and the runner turns it into a fixed owner sentence in the terminal FYI.
    `protocol.file.allow=never` stays the default in `$G`. The only overrides are the scoped `-c protocol.file.allow=always` on the fetch from `/work/repo/.git` above and on the bundle fetches in `unbundle.sh` (9.8) and the gatekeeper (12.5); `bundle create`, `bundle list-heads` and `bundle verify` do not use git's transport and need none (R4-M1).
    `NAME`/`EMAIL` come from `profile.yaml` in the config snapshot (`commit_name: Amsal Khan`, `commit_email: md.amsalkhan@gmail.com`). The sign-off is always appended (harmless when DCO is not required). **[VERIFY]** `git commit --trailer` on the image's git version (≥ 2.32); fallback `git interpret-trailers`.
 

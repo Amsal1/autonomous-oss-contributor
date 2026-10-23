@@ -6,6 +6,10 @@
 #   /io/output/change.patch   (fixed OSSBOT_FORMAT_PATCH, M7)
 #   /io/output/diffstat.json  (fixed OSSBOT_NUMSTAT | numstat2json, R4-N6)
 #   /io/output/result.json    ({"ok", "error_class", "head_sha", "round_base"})
+# The work tree /work/repo is staged in place against the fresh repository's index
+# (--git-dir=<fresh>/.git --work-tree=/work/repo), never copied: ignored dependency trees such as an npm
+# node_modules stay out of the 2 GiB /tmp (c_D1CYR0EKGR), and /work/repo/.git is never read.
+# Every failure writes result.json with a named error_class and exits 3.
 #
 # Usage: package.sh --round-base <sha> --package-ts <iso8601> --name <name> --email <email>
 # OSSBOT_FORMAT_PATCH / OSSBOT_NUMSTAT come from the image environment (ossbot.common.gitcmd).
@@ -60,6 +64,15 @@ mkdir -p "$OUT"
 [[ "$EMAIL" =~ ^[^@[:space:]\<\>]+@[^@[:space:]\<\>]+$ ]] || fail bad_args "--email invalid"
 [[ -n "${OSSBOT_FORMAT_PATCH:-}" && -n "${OSSBOT_NUMSTAT:-}" ]] || fail bad_env "OSSBOT_FORMAT_PATCH/OSSBOT_NUMSTAT unset"
 [[ -f "$IO/input/commit_message.txt" ]] || fail bad_args "missing input commit_message.txt"
+# Backstop: a step without its own `fail` still leaves result.json with a named class.
+on_err() { # on_err <line>
+  local rc=$?
+  echo "package: unexpected failure (exit $rc) at line $1" >&2
+  echo "error_class=package_failed" >&2
+  result false package_failed
+  exit 3
+}
+trap 'on_err "$LINENO"' ERR
 
 export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
 export HOME="$PKG_ROOT/pkg-home"
@@ -75,20 +88,31 @@ cd "$PKG"
 # Objects only: the source repository's config is not honoured by a fetch (scoped override, R4-M1).
 "${G[@]}" -c protocol.file.allow=always fetch -q --no-tags --no-recurse-submodules "$REPO/.git" "$ROUND_BASE" \
   || fail base_missing "round base $ROUND_BASE not in $REPO"
-"${G[@]}" checkout -q -B ossbot-change "$ROUND_BASE"
-# --ignore-times: never trust rsync's size+mtime quick check (a same-size edit in the same second
-# as the checkout above would otherwise be skipped and silently dropped from the commit).
-rsync -a --ignore-times --delete --exclude=/.git "$REPO/" "$PKG/"
-"${G[@]}" add -A
-if "${G[@]}" diff --cached --quiet; then
+# ROUND_BASE into the branch and the index only: no tracked file is written to /tmp.
+"${G[@]}" symbolic-ref HEAD refs/heads/ossbot-change
+"${G[@]}" update-ref refs/heads/ossbot-change "$ROUND_BASE" || fail base_missing "round base $ROUND_BASE is not a commit"
+"${G[@]}" read-tree "$ROUND_BASE" || fail base_missing "round base tree unreadable"
+# Stage /work/repo as edited by the coder WITHOUT copying it (c_D1CYR0EKGR: a 2 GiB /tmp can't hold an
+# npm node_modules). --git-dir is the fresh repository, so /work/repo/.git (its config, hooks, info/exclude)
+# is never read; the work tree's .gitignore/.gitattributes apply exactly as they did to the old copy.
+# read-tree leaves no stat data, so add -A re-hashes every tracked path (no mtime trust needed).
+W=("${G[@]}" --git-dir="$PKG/.git" --work-tree="$REPO")
+cd "$REPO"
+"${W[@]}" add -A || fail stage_failed "git add of the work tree failed"
+if "${W[@]}" diff --cached --quiet; then
   fail empty_change "the working tree equals the round base"
 fi
 GIT_AUTHOR_NAME="$NAME" GIT_AUTHOR_EMAIL="$EMAIL" GIT_COMMITTER_NAME="$NAME" GIT_COMMITTER_EMAIL="$EMAIL" \
 GIT_AUTHOR_DATE="$PACKAGE_TS" GIT_COMMITTER_DATE="$PACKAGE_TS" \
-  "${G[@]}" commit -q --no-verify -F "$IO/input/commit_message.txt" --trailer "Signed-off-by: $NAME <$EMAIL>"
+  "${W[@]}" commit -q --no-verify -F "$IO/input/commit_message.txt" --trailer "Signed-off-by: $NAME <$EMAIL>" \
+  || fail commit_failed "git commit failed"
+cd "$PKG"
 HEAD_SHA="$("${G[@]}" rev-parse refs/heads/ossbot-change)"
 
-"${G[@]}" bundle create -q "$OUT/change.bundle" refs/heads/ossbot-change "^$ROUND_BASE"
-"${G[@]}" "${FORMAT_PATCH[@]}" "$ROUND_BASE..refs/heads/ossbot-change" >"$OUT/change.patch"
-"${G[@]}" "${NUMSTAT[@]}" "$ROUND_BASE" refs/heads/ossbot-change | "$NUMSTAT2JSON" >"$OUT/diffstat.json"
+"${G[@]}" bundle create -q "$OUT/change.bundle" refs/heads/ossbot-change "^$ROUND_BASE" \
+  || fail bundle_failed "git bundle create failed"
+"${G[@]}" "${FORMAT_PATCH[@]}" "$ROUND_BASE..refs/heads/ossbot-change" >"$OUT/change.patch" \
+  || fail patch_failed "git format-patch failed"
+"${G[@]}" "${NUMSTAT[@]}" "$ROUND_BASE" refs/heads/ossbot-change | "$NUMSTAT2JSON" >"$OUT/diffstat.json" \
+  || fail diffstat_failed "numstat to diffstat.json failed"
 result true null "$HEAD_SHA"

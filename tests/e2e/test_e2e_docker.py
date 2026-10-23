@@ -101,12 +101,17 @@ def test_build_fetch_validate_package(box: Sandbox) -> None:
     base = json.loads((Path(job["artifact_dir"]) / "fetch.json").read_text())["base_sha"]
     diff_cmd = (f"git -c core.hooksPath=/dev/null add -A --intent-to-add && git -c core.quotePath=true diff"
                 f" --no-ext-diff --no-textconv --no-color {base}")  # fmt: skip
+    # c_D1CYR0EKGR: an ignored dependency tree bigger than the package job's 2 GiB /tmp (sparse: free on the
+    # volume). The old copy-to-/tmp package step died here with rsync exit 11; in-place staging skips it.
+    deps = ("mkdir -p node_modules/big && truncate -s 3G node_modules/big/blob"
+            " && printf 'node_modules/\\n' >> .gitignore")  # fmt: skip
     plan = {"commands": [{"name": "edit", "cmd": "printf 'hello from e2e\\n' >> README", "timeout_s": 60},
+                         {"name": "deps", "cmd": deps, "timeout_s": 60},
                          {"name": "ossbot-diff", "cmd": diff_cmd, "timeout_s": 120}]}  # fmt: skip
     job = submit(box, "e2e-validate-1", BUILD_CID, "validate", "validate", {"plan_file": "validate.json"},
                  {"validate.json": write_input(box, "validate.json", json.dumps(plan))})  # fmt: skip
     out = Path(job["artifact_dir"])
-    assert [c["exit_code"] for c in json.loads((out / "validation.json").read_text())["commands"]] == [0, 0]
+    assert [c["exit_code"] for c in json.loads((out / "validation.json").read_text())["commands"]] == [0, 0, 0]
     assert "+hello from e2e" in (out / "logs" / "ossbot-diff.log").read_text()
     args = {"rev": 1, "round_base": base, "package_ts": "2026-10-18T00:00:00Z", "name": "Test Person",
             "email": "test.person@example.org"}  # fmt: skip
@@ -115,7 +120,8 @@ def test_build_fetch_validate_package(box: Sandbox) -> None:
     out = Path(job["artifact_dir"])
     for name in ("change.bundle", "change.patch", "diffstat.json"):
         assert (out / name).is_file()
-    assert "+hello from e2e" in (out / "change.patch").read_text()
+    patch = (out / "change.patch").read_text()
+    assert "+hello from e2e" in patch and "+node_modules/" in patch and "node_modules/big/blob" not in patch
     ossart = grp.getgrnam("ossart").gr_gid
     if (box.root / "artifacts").stat().st_gid == ossart:  # sandboxd's real artifacts root
         assert all(p.stat().st_gid == ossart for p in out.rglob("*"))
