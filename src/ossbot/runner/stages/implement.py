@@ -5,7 +5,10 @@ loops and refuses past the maxima) and from a WATCHING fix round, which first un
 approved bundle (``mode=fix_round``, args fixed from gatekeeper state). The coder adds tests that
 cover the change (tests-required rule, §9.14). ``needs_network`` (a new dependency) fails the stage
 with ``needs_network`` (v1 has no second fetch into a populated task volume; the owner is told by the
-gatekeeper's terminal FYI, which shows the summary carried in the FAILED evidence).
+gatekeeper's terminal FYI, which shows the summary carried in the FAILED evidence). A validation
+loop that ends (``implement_attempts``, or ``validation_stuck`` when a retry left the diff
+byte-identical and the same checks failing, so another coder run would only repeat it) carries
+``last_failure_summary`` the same way.
 """
 
 from __future__ import annotations
@@ -23,6 +26,11 @@ from ossbot.runner.stages.common import issue_text, job, owner_notes, write_inpu
 STAGE = "implement"
 ENTRY = ("PLANNED", "VALIDATION_FAILED", "REVISE", "CHANGES_REQUESTED")
 UNBUNDLE_TIMEOUT_S = 600  # the package profile allows at most 900 s (sandboxd PROFILE_MAX_TIMEOUT)
+SUMMARY_MAX = 900  # the FAILED evidence summary (well under EVIDENCE_MAX_BYTES; the FYI shows 600)
+CHECK_LINE_MAX = 160  # the last tail line of one failed check
+CONCERN_MAX = 300  # the coder's first open concern
+NAMED_IN_FULL = 3  # failed checks named with their line; the rest as "+N more"
+STUCK_LEAD = "The last retry changed nothing and the same checks failed."
 
 
 def _unbundle(sc: StageContext, c: dict[str, Any]) -> None:
@@ -53,19 +61,73 @@ def feedback(sc: StageContext, c: dict[str, Any]) -> list[str]:
     return out
 
 
+def _last_line(tail: object) -> str:
+    for line in reversed(str(tail or "").splitlines()):
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def last_failure_summary(sc: StageContext, c: dict[str, Any], lead: str = "") -> str:
+    """The owner-facing words for a validation loop that ended (§14.13.1): which checks of the last
+    attempt failed, the last non-empty line of each, and the coder's first open concern. Untrusted
+    text (log tails, the model's note): the terminal FYI redacts and escapes it."""
+    notes = sc.load(str(c["id"]))
+    commands = (notes.get("validation") or {}).get("commands") or []
+    failed = [cmd for cmd in commands if isinstance(cmd, dict) and cmd.get("exit_code") != 0]
+    if not lead:
+        attempts = int(c.get("implement_attempts") or 0) + 1
+        lead = f"All {attempts} implement attempts failed validation."
+    parts = [lead]
+    if failed:
+        named: list[str] = []
+        for cmd in failed[:NAMED_IN_FULL]:
+            line = _clip(_last_line(cmd.get("tail")), CHECK_LINE_MAX)
+            text = f"{_clip(str(cmd.get('name', '?')), 64)} exited {cmd.get('exit_code')}"
+            named.append(f"{text} ({line})" if line else text)
+        more = f"; +{len(failed) - NAMED_IN_FULL} more" if len(failed) > NAMED_IN_FULL else ""
+        parts.append(f"Last attempt: {'; '.join(named)}{more}.")
+    concerns = (notes.get("implement") or {}).get("open_concerns") or []
+    if concerns and str(concerns[0]).strip():
+        parts.append(f"Coder's note: {_clip(str(concerns[0]).strip(), CONCERN_MAX)}")
+    return _clip(" ".join(parts), SUMMARY_MAX)
+
+
+def _stuck(sc: StageContext, cid: str) -> bool:
+    """The retry changed nothing: a byte-identical diff and the same failing checks as the attempt before."""
+    notes = sc.load(cid)
+    sig = notes.get("validation_sig")
+    return sig is not None and sig == notes.get("validation_prev_sig")
+
+
 def run(sc: StageContext, c: dict[str, Any]) -> None:
     cid, state = str(c["id"]), str(c["state"])
+    if state == "VALIDATION_FAILED" and _stuck(sc, cid):  # another coder run would repeat it (§9.8)
+        summary = last_failure_summary(sc, c, STUCK_LEAD)
+        sc.transition(cid, state, "FAILED", {"error_class": "validation_stuck", "summary": summary})
+        return
+    if state in ENTRY and state != "VALIDATION_FAILED":  # a new round: no earlier failure to compare with
+        sc.save(cid, validation_sig=None, validation_prev_sig=None)
     if state in ENTRY:
         try:
             sc.transition(cid, state, "IMPLEMENTING")
         except GkError as exc:
             if exc.code.startswith("guard_failed:"):  # a loop maximum: the item fails (WATCHING with a PR)
-                sc.transition(cid, state, "FAILED", {"error_class": exc.code.split(":", 1)[1]})
+                guard = exc.code.split(":", 1)[1]
+                evidence: dict[str, Any] = {"error_class": guard}
+                if guard == "implement_attempts":
+                    evidence["summary"] = last_failure_summary(sc, c)
+                sc.transition(cid, state, "FAILED", evidence)
                 return
             raise
     plan = json.loads(c["plan_json"]) if c.get("plan_json") else {}
     with StageRun(sc, cid, STAGE, profile="coder", coder_mode="split") as run_:
         if c.get("pr_number") is not None and sc.load(cid).get("watch_fix"):
+            sc.save(cid, validation_sig=None, validation_prev_sig=None)  # a new fix round starts the comparison
             _unbundle(sc, c)
         issue, _ = issue_text(sc, c)
         sections = [issue, *owner_notes(c), prompts.untrusted("approved plan", json.dumps(plan, indent=1)),

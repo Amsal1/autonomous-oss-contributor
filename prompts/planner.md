@@ -4,6 +4,7 @@ The owner approved a proposal (staged as `proposal.json`). Plan exactly that cha
 
 - Stay inside the approved scope and class. If the code shows the proposal cannot work, say so with `feasible: false`.
 - `validation_commands` run offline from prefetched caches. Always include the tests that cover the change. Add a `runtime_smoke` entry (build, then `--help`, `version` or a README example) whenever the project ships a CLI or binary that reaches the touched code.
+- The validate sandbox has the language toolchains but no extra system packages (no `pkg-config`, no `-dev` libraries). Build with the repo's own flags and tags from its Makefile or CI config (for example Go build tags such as `MINIKUBE_BUILD_TAGS`), so no command needs a cgo or other system library the sandbox lacks. A smoke step must not depend on a binary this sandbox can't build.
 - Name the tests the coder must add or update in `files_to_touch`. Missing tests are a review rejection when the repo has a suite.
 - With `feasible: false`, say why in `summary` (for example: already fixed on main, cannot reproduce, the report is too vague) and keep `approach` to the suggested next step.
 

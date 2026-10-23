@@ -20,7 +20,7 @@ from ossbot.gatekeeper.proposals import ProposalService
 from ossbot.runner import stages
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.scheduler import Scheduler
-from ossbot.runner.stages import discover, fetch, package, plan, review, scout, vet
+from ossbot.runner.stages import discover, fetch, implement, package, plan, review, scout, validate, vet
 from tests.conftest import consumed_proposal, insert_contribution
 from tests.fakes.fake_github import FakeGitHub
 from tests.unit.gatekeeper.test_proposals import sample, start
@@ -405,6 +405,139 @@ def test_needs_network_after_gate_1_is_one_gatekeeper_fyi(sc: StageContext, ctx:
     shown = _terminal(ctx, cid)
     assert len(shown) == 1 and "left-pad@1.3.0" in shown[0]
     assert "left-pad@1.3.0" in _evidence(ctx, cid, "FAILED")["summary"]
+
+
+# ------------------------------------------------- validation loops that end (c_D1CZXFNWTX, §9.8, §9.9)
+PKG_CONFIG = 'libvirt.org/go/libvirt: exec: "pkg-config": executable file not found in $PATH'
+FAILING = [
+    {"name": "unit", "exit_code": 0, "tail": "ok"},
+    {"name": "build", "exit_code": 1, "tail": f"# libvirt.org/go/libvirt\n{PKG_CONFIG}\n\n"},
+    {"name": "version", "exit_code": 127, "tail": "bash: ./out/minikube: No such file or directory\n"},
+]
+CONCERN = "Build with -tags libvirt_dlopen (the Makefile's MINIKUBE_BUILD_TAGS); without it the build needs pkg-config."
+CODER = fenced({"files_changed": ["cmd/flags.go"], "tests_changed": ["cmd/flags_test.go"], "open_concerns": [CONCERN]})
+
+
+def _validations(*runs: tuple[str, list[dict[str, Any]]]) -> Any:
+    """A validate handler answering ``(diff, checks)`` per job, in order (the last one repeats)."""
+    queue = list(runs)
+
+    def handler(spec: dict[str, Any], out: Path) -> int:
+        diff, checks = queue.pop(0) if len(queue) > 1 else queue[0]
+        doc = {"commands": [{"name": "ossbot-diff", "exit_code": 0, "tail": ""}, *checks]}
+        (out / "validation.json").write_text(json.dumps(doc))
+        (out / "logs").mkdir(exist_ok=True)
+        (out / "logs" / "ossbot-diff.log").write_text(diff)
+        return 0
+
+    return handler
+
+
+def _drive(sc: StageContext, cid: str, runs: int) -> None:
+    scheduler = Scheduler(sc, synchronous=True)
+    for _ in range(runs):
+        scheduler.run_one(cid)
+
+
+def _coder_jobs(sbx: FakeSbx) -> int:
+    return sum(1 for j in sbx.jobs if j["entrypoint"] == "kiro" and j["args"]["role"] == "coder")
+
+
+def test_implement_attempts_fyi_names_the_last_failure(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                       github: FakeGitHub) -> None:  # fmt: skip
+    """c_D1CZXFNWTX: the FYI said only ``reason: implement_attempts``; now it names what failed and why."""
+    said: list[str] = []
+    sc = dataclasses.replace(sc, notify=said.append)
+    cid = _after_gate1(ctx, github, State.VALIDATION_FAILED, 95, plan_json=json.dumps(PLAN), implement_attempts=2)
+    sc.save(cid, validation={"commands": FAILING[1:]}, implement={"open_concerns": [CONCERN]})
+    Scheduler(sc, synchronous=True).run_one(cid)
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", "implement_attempts")
+    assert _coder_jobs(sbx) == 0
+    summary = _evidence(ctx, cid, "FAILED")["summary"]
+    assert summary.startswith("All 3 implement attempts failed validation.")
+    assert f"build exited 1 ({PKG_CONFIG})" in summary and "version exited 127" in summary
+    assert "unit" not in summary.split("Coder's note")[0]  # a passing check is not named
+    assert f"Coder's note: {CONCERN}" in summary
+    assert said == []
+    shown = _terminal(ctx, cid)
+    assert len(shown) == 1 and "pkg-config" in shown[0] and "libvirt_dlopen" in shown[0]
+
+
+def test_last_failure_summary_is_bounded(sc: StageContext, ctx: AppContext) -> None:
+    cid = insert_contribution(ctx, State.VALIDATION_FAILED)
+    long_tail = "x" * 3000 + "\n" + "E" * 400 + "\n"
+    checks = [{"name": f"check-{i}", "exit_code": 1, "tail": long_tail} for i in range(10)]
+    sc.save(cid, validation={"commands": checks}, implement={"open_concerns": ["n" * 1000]})
+    summary = implement.last_failure_summary(sc, {"id": cid, "implement_attempts": 2})
+    assert len(summary) <= implement.SUMMARY_MAX
+    assert "check-2 exited 1" in summary and "check-3" not in summary and "+7 more" in summary
+    assert "E" * implement.CHECK_LINE_MAX not in summary and "xxx" not in summary  # the last line only, clipped
+    assert "n" * implement.CONCERN_MAX not in summary
+    empty = insert_contribution(ctx, State.VALIDATION_FAILED)
+    assert implement.last_failure_summary(sc, {"id": empty}) == "All 1 implement attempts failed validation."
+
+
+def test_identical_failed_retry_stops_as_validation_stuck(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                          github: FakeGitHub) -> None:  # fmt: skip
+    """The same diff and the same failing checks twice: a third coder run would only repeat it."""
+    said: list[str] = []
+    sc = dataclasses.replace(sc, notify=said.append)
+    cid = _after_gate1(ctx, github, State.PLANNED, 96, plan_json=json.dumps(PLAN), base_sha="1" * 40)
+    sbx.kiro("coder", CODER)
+    sbx.handlers["validate"] = _validations(("diff --git a/x b/x\n+same\n", FAILING))
+    _drive(sc, cid, 5)  # implement, validate, implement, validate, (stuck)
+    row = db.one(ctx.conn, "SELECT state, state_reason, implement_attempts FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", "validation_stuck", 1)
+    assert _coder_jobs(sbx) == 2
+    summary = _evidence(ctx, cid, "FAILED")["summary"]
+    assert summary.startswith(implement.STUCK_LEAD) and PKG_CONFIG in summary and CONCERN in summary
+    assert said == []
+    shown = _terminal(ctx, cid)
+    assert len(shown) == 1 and "changed nothing" in shown[0] and "pkg-config" in shown[0]
+
+
+@pytest.mark.parametrize("second", [("diff --git a/x b/x\n+other\n", FAILING),
+                                    ("diff --git a/x b/x\n+same\n", FAILING[:2])],
+                         ids=["new-diff", "new-failing-set"])  # fmt: skip
+def test_retry_that_changed_something_keeps_going(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                  github: FakeGitHub, second: Any) -> None:  # fmt: skip
+    cid = _after_gate1(ctx, github, State.PLANNED, 97, plan_json=json.dumps(PLAN), base_sha="1" * 40)
+    sbx.kiro("coder", CODER)
+    sbx.handlers["validate"] = _validations(("diff --git a/x b/x\n+same\n", FAILING), second)
+    _drive(sc, cid, 4)
+    assert state(ctx, cid) == "VALIDATION_FAILED"
+    implement.run(sc, sc.gk.contribution(cid))  # not stuck: the next attempt starts
+    row = db.one(ctx.conn, "SELECT state, implement_attempts FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("IMPLEMENTED", 2)
+    assert _coder_jobs(sbx) == 3
+
+
+def test_a_new_round_does_not_compare_with_an_old_failure(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                          github: FakeGitHub) -> None:  # fmt: skip
+    """A pass, or a new round from REVISE, clears the signatures: only consecutive failures compare."""
+    cid = _after_gate1(ctx, github, State.REVISE, 98, plan_json=json.dumps(PLAN), base_sha="1" * 40)
+    sc.save(cid, validation_sig="a" * 64, validation_prev_sig="b" * 64)
+    sbx.kiro("coder", CODER)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert sc.load(cid)["validation_sig"] is None and sc.load(cid)["validation_prev_sig"] is None
+    sc.save(cid, validation_sig="a" * 64, validation_prev_sig="a" * 64)
+    sbx.handlers["validate"] = _validations(("diff --git a/x b/x\n+same\n", FAILING[:1]))
+    validate.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "VALIDATED"
+    assert sc.load(cid)["validation_sig"] is None and sc.load(cid)["validation_prev_sig"] is None
+
+
+def test_validation_stuck_on_a_live_pr_returns_to_watching(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                           github: FakeGitHub) -> None:  # fmt: skip
+    """M4: the state machine redirects the stop to WATCHING; the runner has no special case."""
+    cid = _after_gate1(ctx, github, State.VALIDATION_FAILED, 99, plan_json=json.dumps(PLAN), pr_number=7,
+                       head_sha="2" * 40, implement_attempts=0)  # fmt: skip
+    sc.save(cid, validation={"commands": FAILING[1:]}, validation_sig="c" * 64, validation_prev_sig="c" * 64)
+    implement.run(sc, sc.gk.contribution(cid))
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("WATCHING", "fix_round_failed:validation_stuck")
+    assert _coder_jobs(sbx) == 0 and _terminal(ctx, cid) == []
 
 
 SUMMARY = {"commit_message": "fix: handle empty spans", "pr_title": "Fix empty spans", "pr_body": "Handles it."}
