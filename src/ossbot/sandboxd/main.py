@@ -48,6 +48,7 @@ log = logging.getLogger("ossbot.sandboxd")
 SOCKET = Path("/run/ossbot/sandboxd.sock")
 SOCKET_GROUP = "osssbx"
 PROXY_ACCESS_LOG = Path("/srv/ossbot/logs/proxy/access.log")
+IMPLEMENT_EGRESS_TIMEOUT_S = 5.0
 
 
 class GatekeeperClient:
@@ -100,6 +101,19 @@ class GatekeeperClient:
                 code = "error"
             raise HoldError(resp.status_code, code[:40])
 
+    def implement_egress(self, cid: str, run_id: str) -> str:
+        """``POST /v1/contributions/{cid}/implement-egress`` (role sandbox; ADR-0024): the gatekeeper's audited
+        decision for one coder run. Raises on any transport error, non-200 or malformed body; the caller
+        treats every exception as ``none``."""
+        with uds_client(self.sock, timeout=httpx.Timeout(IMPLEMENT_EGRESS_TIMEOUT_S)) as c:
+            resp = c.post(f"/v1/contributions/{cid}/implement-egress", json={"run_id": run_id})
+        resp.raise_for_status()
+        doc = resp.json()
+        egress = doc.get("egress") if isinstance(doc, dict) else None
+        if egress not in {"web", "none"}:
+            raise ValueError("malformed implement-egress answer")
+        return str(egress)
+
 
 def anomaly_limits(root: Path) -> EgressAnomaly:
     """``egress.yaml anomaly`` from the gatekeeper snapshot; raises when unreadable (the meter then uses the
@@ -108,9 +122,11 @@ def anomaly_limits(root: Path) -> EgressAnomaly:
     return parse_bundle(files).egress.anomaly
 
 
-def egress_mode_now(paths: Paths) -> str:
-    """The live egress mode (the control file, else the snapshot's ``mode_default``): a summary label."""
-    default: EgressMode = "open"
+def egress_mode_now(paths: Paths, fallback: EgressMode = "open") -> str:
+    """The live egress mode (the control file, else the snapshot's ``mode_default``). With the default
+    fallback it is a summary label; the agent-exec network decision (ADR-0024) reads it with
+    ``fallback="allowlist"`` so an unreadable snapshot never widens anything."""
+    default: EgressMode = fallback
     try:
         _, files = read_current(paths.snapshot_root)
         default = parse_bundle(files).egress.mode_default
@@ -203,6 +219,7 @@ def main() -> int:
         trust_mode=lambda: trust_mode_from_snapshot(paths.snapshot_root),
         networks=Networks(runtime, SubnetAllocator(store, clock)),
         meter=meter, egress_mode=lambda: egress_mode_now(paths),
+        exec_egress_mode=lambda: egress_mode_now(paths, "allowlist"),
     )  # fmt: skip
     jobs.recover()  # CR-001 crash safety: whatever a killed/crashed predecessor left behind
     meter.on_breach = jobs.flag_anomaly

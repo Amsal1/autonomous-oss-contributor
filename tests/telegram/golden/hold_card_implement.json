@@ -1,0 +1,46 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🚨 ",
+    {
+     "text": "Egress anomaly",
+     "type": "bold"
+    },
+    " · ",
+    "acme/widgets#123",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    },
+    " · coder's executor (implement) job stopped"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "↑ 312 MB (limit 50 MB) · ↓ 1.2 GB (limit 6144 MB) · 14 hosts (limit 60) · mode sandbox_open",
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Top hosts: ",
+    "pypi.org:443",
+    ", ",
+    "files.pythonhosted.org:443",
+    ", ",
+    "paste.example.net:443"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Denied requests: 3",
+   "type": "paragraph"
+  },
+  {
+   "text": "Only this contribution is paused.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

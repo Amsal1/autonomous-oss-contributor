@@ -53,6 +53,10 @@ def variants() -> dict[str, RunSpec]:
                               network="ossbot-t-c-01abcdefgh-llm", repo_mode="none", env=coder_env),
         "agent-exec": job_spec("agent-exec", run_id=RUN, cid=CID, entrypoint="exec", image_ref=FULL, network="none",
                                repo_mode="rw"),
+        # ADR-0024: agent-exec on its own -exec network (pool_fetch) under implement_network
+        "agent-exec-web": job_spec("agent-exec", run_id=RUN, cid=CID, entrypoint="exec", image_ref=FULL,
+                                   network="ossbot-t-c-01abcdefgh-exec", repo_mode="rw",
+                                   env={"OSSBOT_EXEC_NETWORK": "web"}),
         "catalog": job_spec("catalog", run_id=RUN, cid="sys-catalog", entrypoint="list_models", image_ref=LLM,
                             network="ossbot-t-sys-catalog-catalog", repo_mode="none"),
         "extract": job_spec("extract", run_id=RUN, cid="sys-chat", entrypoint="extract_text", image_ref=FULL,

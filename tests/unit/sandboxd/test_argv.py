@@ -201,6 +201,32 @@ def test_build_argv_rechecks_every_value(change: dict[str, Any]) -> None:
         build_argv(spec)
 
 
+@pytest.mark.parametrize(
+    ("variant", "network", "ok"),
+    [
+        ("agent-exec", "none", True),
+        ("agent-exec", "ossbot-t-c-01abcdefgh-exec", True),
+        ("agent-exec", "ossbot-t-c-01abcdefgj-exec", False),  # another cid's
+        ("agent-exec", "ossbot-t-c-01abcdefgh-llm", False),
+        ("agent-exec", "ossbot-t-c-01abcdefgh-fetch", False),
+        ("agent-exec", "ossbot-t-c-01abcdefgh-validate-strict", False),
+        ("agent-llm", "ossbot-t-c-01abcdefgh-llm", True),
+        ("agent-llm", "ossbot-t-c-01abcdefgh-exec", False),
+        ("agent-llm", "ossbot-t-c-01abcdefgj-llm", False),
+        ("agent-llm", "none", False),
+    ],
+)
+def test_coder_pair_networks_are_bound_to_their_cid(variant: str, network: str, ok: bool) -> None:
+    """ADR-0024: agent-exec is offline or on its own -exec network; agent-llm only on its own -llm network."""
+    base = variants()[variant]
+    spec = RunSpec(**{**base.__dict__, "network": network})
+    if ok:
+        build_argv(spec)
+    else:
+        with pytest.raises(ArgvError):
+            build_argv(spec)
+
+
 def test_job_spec_never_takes_flags_from_values() -> None:
     spec = job_spec(
         "fetch",
@@ -282,6 +308,24 @@ def _spec(**kw: Any) -> JobSpec:
                 "profile": "coder",
                 "repo_mode": "rw",
                 "args": {"role": "coder", "prompt_file": "c.md", "model": "m", "effort": "low"},
+                "egress": "mode",
+            },
+            True,
+        ),
+        (  # ADR-0024: a coder job states its egress (fail closed)
+            {
+                "profile": "coder",
+                "repo_mode": "rw",
+                "args": {"role": "coder", "prompt_file": "c.md", "model": "m", "effort": "low"},
+            },
+            False,
+        ),
+        (
+            {
+                "profile": "coder",
+                "repo_mode": "rw",
+                "args": {"role": "coder", "prompt_file": "c.md", "model": "m", "effort": "low"},
+                "egress": "strict",
             },
             True,
         ),

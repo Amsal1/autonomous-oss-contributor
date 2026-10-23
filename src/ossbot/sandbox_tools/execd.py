@@ -21,6 +21,7 @@ import contextlib
 import errno
 import json
 import os
+import re
 import signal
 import socket
 import stat
@@ -45,8 +46,41 @@ DENIED_TOP = frozenset({".git", ".kiro"})
 OPS = ("read_file", "write_file", "list_dir", "run")
 
 
-def fixed_env(work: str = "/work") -> dict[str, str]:
-    """The complete environment of every ``run`` command (env -i + this set)."""
+PROXY_RE = re.compile(r"^http://([a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})/?$")  # lib/jvm_env.sh's
+OFFLINE_ONLY = ("GOPROXY", "npm_config_offline", "UV_OFFLINE", "PIP_NO_INDEX")
+
+
+def valid_proxy(value: str | None) -> tuple[str, str] | None:
+    """(host, port) of an ``http://host:port`` proxy URL, else None (same rule as lib/jvm_env.sh)."""
+    match = PROXY_RE.fullmatch(value or "")
+    if match is None or not 1 <= int(match.group(3)) <= 65535:
+        return None
+    return match.group(1), match.group(3)
+
+
+def fixed_env(work: str = "/work", online: bool = False, proxy: str | None = None) -> dict[str, str]:
+    """The complete environment of every ``run`` command (env -i + this set).
+
+    ``online`` (ADR-0024, agent-exec on its -exec network): the offline switches go, the proxy (execd's own
+    ``HTTPS_PROXY``, re-validated, else omitted) and the Maven proxy properties come in; caches stay.
+    ``OSSBOT_EXEC_NETWORK`` tells the coder's commands the real admission result."""
+    env = _base_env(work)
+    env["OSSBOT_EXEC_NETWORK"] = "web" if online else "none"
+    if not online:
+        return env
+    for name in OFFLINE_ONLY:
+        env.pop(name, None)
+    parsed = valid_proxy(proxy)
+    if parsed is not None:
+        host, port = parsed
+        url = f"http://{host}:{port}"
+        env.update({"HTTPS_PROXY": url, "HTTP_PROXY": url, "NO_PROXY": ""})
+        env["MAVEN_OPTS"] = (f"-Duser.home={work}/.home -Dhttps.proxyHost={host} -Dhttps.proxyPort={port}"
+                             f" -Dhttp.proxyHost={host} -Dhttp.proxyPort={port}")  # fmt: skip
+    return env
+
+
+def _base_env(work: str) -> dict[str, str]:
     cache = f"{work}/cache"
     return {
         "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/mise/shims",
@@ -85,9 +119,10 @@ def _under(path: str, root: str) -> bool:
 
 
 class Executor:
-    def __init__(self, repo: str = "/work/repo", work: str = "/work") -> None:
+    def __init__(self, repo: str = "/work/repo", work: str = "/work", online: bool = False,
+                 proxy: str | None = None) -> None:  # fmt: skip
         self.repo = os.path.realpath(repo)
-        self.env = fixed_env(work)
+        self.env = fixed_env(work, online, proxy)
         self.before_open: Callable[[str], None] = lambda _parent: None  # test hook (TOCTOU)
 
     # ------------------------------------------------------------------ paths
@@ -362,8 +397,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo", default="/work/repo")
     parser.add_argument("--work", default="/work")
     parser.add_argument("--log", default="/io/output/exec-log.jsonl")
+    # ADR-0024: exec.sh passes the admission result; "web" only on the -exec network (else no route anyway)
+    parser.add_argument("--network", choices=("none", "web"), default="none")
     args = parser.parse_args(argv)
-    serve(bind(args.socket), Executor(args.repo, args.work), args.log)
+    online = args.network == "web"
+    executor = Executor(args.repo, args.work, online, os.environ.get("HTTPS_PROXY") if online else None)
+    serve(bind(args.socket), executor, args.log)
     return 0
 
 

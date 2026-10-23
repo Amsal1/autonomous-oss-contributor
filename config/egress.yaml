@@ -42,6 +42,9 @@ host_callers:
 # agent-llm and catalog share the llm pool, so they always get the same list. fetch and validate
 # (repo code) may be granted web_public only in sandbox_open (ADR-0023, owner decision 2026-10-21),
 # both the same list; repos with `egress: strict` keep the base list in every mode (pool_strict).
+# pool_fetch also holds agent-exec (the coder's executor, no credential) when the owner's
+# implement_network allows it (ADR-0024): the same fetch list, so web_public only in sandbox_open;
+# a strict repo's agent-exec never gets a network.
 # mode_default stays open: the owner switches to sandbox_open himself with /egress (two-tap, audited).
 mode_default: open
 modes:

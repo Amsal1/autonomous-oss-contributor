@@ -37,3 +37,14 @@ def test_exec_runs_the_offline_jvm_setup_before_execd() -> None:
     assert "export WORK=/work HOME=/work/.home GRADLE_USER_HOME=/work/cache/gradle" in body
     assert SOURCE_LIB in body
     assert body.index("ossbot_jvm_setup offline") < body.index("exec /opt/ossbot/bin/ossbot-execd")
+
+
+def test_exec_validates_the_network_and_passes_it_to_execd() -> None:
+    """ADR-0024: OSSBOT_EXEC_NETWORK must be empty or web (else exit 3 before execd starts); online uses the
+    online JVM setup and execd --network web."""
+    body = code(EXEC_SH)
+    check = body.index("[[ ! $NET =~ ^(web)?$ ]]")
+    assert check < body.index("exit 3") < body.index("ossbot_jvm_setup")
+    assert "ossbot_jvm_setup online" in body and "NETWORK=web" in body and "NETWORK=none" in body
+    assert body.index("ossbot_jvm_setup online") < body.index("exec /opt/ossbot/bin/ossbot-execd")
+    assert '--network "$NETWORK"' in body

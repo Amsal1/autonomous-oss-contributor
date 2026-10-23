@@ -59,6 +59,11 @@ def _repo(ctx: AppContext, cid: str) -> str:
     return str(row["upstream"]) if row is not None else cid
 
 
+def _stage_label(stage: str) -> str:
+    """ADR-0024: a networked coder run is metered as stage implement; say which container that was."""
+    return "coder's executor (implement)" if stage == "implement" else stage
+
+
 def hold_view(ctx: AppContext, hold: HoldView) -> k.View:
     """🚨 Egress anomaly · owner/repo#N · c_… · <stage> job stopped, the numbers against the limits, ≤ 5 hosts."""
     d = hold.detail
@@ -70,7 +75,7 @@ def hold_view(ctx: AppContext, hold: HoldView) -> k.View:
     head: list[k.Span] = [k.Const("🚨 "), k.Bold(k.Const("Egress anomaly")), k.Const(" · ")]
     if subject != hold.cid:
         head += [k.Text(subject, 160), k.Const(" · ")]
-    head += [k.Id(hold.cid), k.Const(f" · {d.stage} job stopped")]  # the cid one tap to copy (§14.17.3)
+    head += [k.Id(hold.cid), k.Const(f" · {_stage_label(d.stage)} job stopped")]  # one tap to copy (§14.17.3)
     lines: list[k.Line] = [tuple(head), k.line(numbers)]
     hosts = d.top_hosts[:TOP_HOSTS_SHOWN]
     if hosts:
@@ -93,7 +98,7 @@ def confirm_view(ctx: AppContext, hold: HoldView) -> k.View:
     lines: list[k.Line] = [
         (k.Const("▶️ "), k.Bold(k.Const("Resume ")), k.Bold(k.Text(subject, 160)), k.Bold(k.Const("?"))),
         # the repo is the contribution's validated slug (REPO_RE): a copyable command, no link breakers
-        (k.Const(f"The {hold.detail.stage} job runs again with the same egress. To narrow it first: "),
+        (k.Const(f"The {_stage_label(hold.detail.stage)} job runs again with the same egress. To narrow it first: "),
          k.Code(k.Const(f"ossctl targets strict {repo}")), k.Const(".")),
     ]  # fmt: skip
     arg = {"cid": hold.cid, "hold": hold.id}

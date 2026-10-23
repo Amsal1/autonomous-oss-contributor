@@ -56,8 +56,10 @@ from ossbot.sandboxd.probes import (
 from ossbot.sandboxd.profiles import (
     CATALOG_CID,
     EGRESS_PROFILES,
+    EGRESS_REQUIRED,
     TEMPLATES,
     TRUST_TOOLS,
+    ExecNetwork,
     FetchArgs,
     JobEgress,
     JobSpec,
@@ -133,6 +135,7 @@ class Gatekeeper(Protocol):
     def probe_result(self, probe_key: str, probe: str, passed: bool, evidence_sha256: str, *,
                      verdict: str | None = None, attempts: int = 1) -> None: ...  # fmt: skip
     def hold(self, cid: str, body: dict[str, Any]) -> None: ...  # raises HoldError (open-discovery §13.3)
+    def implement_egress(self, cid: str, run_id: str) -> str: ...  # ADR-0024: "web" | "none"; may raise
 
 
 @dataclass(frozen=True)
@@ -162,7 +165,10 @@ class Plan:
     create_task_volume: bool = False
     release_network: bool = False
     exec_env: dict[str, str] = field(default_factory=dict)
-    egress: JobEgress | None = None  # fetch/validate only: "strict" -> the <net>-strict network profile
+    egress: JobEgress | None = None  # fetch/validate: "strict" -> the <net>-strict network profile; coder too
+    # ADR-0024: agent-exec of a coder run. Only admit() sets "web" (the safety probes build coder Plans
+    # directly and so always stay on "none" without asking the gatekeeper).
+    exec_network: ExecNetwork = "none"
 
 
 @dataclass
@@ -231,9 +237,12 @@ class JobService:
         background: bool = True,
         meter: EgressMeter | None = None,
         egress_mode: Callable[[], str] = lambda: "open",
+        exec_egress_mode: Callable[[], str] = lambda: "allowlist",
     ) -> None:
         self.meter = meter  # open-discovery §13.2: fetch/validate jobs are metered (None: not metered)
         self.egress_mode = egress_mode
+        # ADR-0024: the live mode for the agent-exec network decision; an unreadable snapshot is allowlist
+        self.exec_egress_mode = exec_egress_mode
         self._anomaly: dict[str, dict[str, Any]] = {}  # run_id -> the meter summary that stopped it
         self.store = store
         self.runtime = runtime
@@ -275,7 +284,7 @@ class JobService:
             raise ApiError(423, exc.info.state, str(exc)) from exc
         if self._draining:
             raise ApiError(423, "draining", "sandboxd is draining")
-        if spec.profile in EGRESS_PROFILES and self.pending_hold(spec.cid) is not None:
+        if spec.profile in EGRESS_REQUIRED and self.pending_hold(spec.cid) is not None:
             # §13.2 fail closed: the gatekeeper hasn't recorded the hold (yet, or it refused it)
             raise ApiError(423, EGRESS_ANOMALY_PENDING, f"an egress anomaly of {spec.cid} awaits its hold")
         trust_mode = self.trust_mode()
@@ -298,14 +307,33 @@ class JobService:
             dest = self.settings.artifacts_dir / spec.cid / "runs" / spec.run_id
         template = "coder" if spec.profile == "coder" else spec.profile
         refetch = isinstance(job.args, FetchArgs) and job.args.refetch  # §9.8: into the existing task volume
+        exec_network: ExecNetwork = self._exec_network(spec) if spec.profile == "coder" else "none"
         return Plan(
             run_id=spec.run_id, cid=spec.cid, template=template, entrypoint=spec.entrypoint,
             repo_mode=spec.repo_mode, env=_env_for(job, trust_mode),
             inputs={k: Path(v) for k, v in spec.inputs.items()}, timeout_s=spec.timeout_s, cpus=spec.cpus,
             memory_mb=spec.memory_mb, dest=dest,
             create_task_volume=spec.entrypoint == "fetch" and not refetch, release_network=spec.cid == CATALOG_CID,
-            egress=spec.egress,
+            egress=spec.egress, exec_network=exec_network,
+            exec_env={"OSSBOT_EXEC_NETWORK": "web"} if exec_network == "web" else {},
         )  # fmt: skip
+
+    def _exec_network(self, spec: JobSpec) -> ExecNetwork:
+        """ADR-0024, two independent checks, fail closed: ``strict`` never asks; otherwise ``web`` only if this
+        process's own read of the egress-mode flag is ``sandbox_open`` AND the gatekeeper's audited decision
+        for this cid and run says ``web``. Any error, timeout or other answer is ``none``."""
+        if spec.egress != "mode":
+            return "none"
+        try:
+            if self.exec_egress_mode() != "sandbox_open":
+                return "none"
+            answer = self.gatekeeper.implement_egress(spec.cid, spec.run_id)
+        except Exception as exc:  # noqa: BLE001 - transport, 4xx, 5xx, bad JSON: no network
+            extra = {"event": "implement_egress_unavailable", "cid": spec.cid, "run_id": spec.run_id}
+            log.warning("implement egress decision unavailable (%s); agent-exec runs offline",
+                        type(exc).__name__, extra=extra)  # fmt: skip
+            return "none"
+        return "web" if answer == "web" else "none"
 
     def submit(self, spec: JobSpec) -> dict[str, Any]:
         plan = self.admit(spec)
@@ -316,9 +344,11 @@ class JobService:
                 if conn.execute("SELECT 1 FROM jobs WHERE run_id = ?", (plan.run_id,)).fetchone():
                     raise ApiError(409, "run_id_exists")
                 conn.execute(
-                    "INSERT INTO jobs (run_id, cid, profile, entrypoint, state, created_at) VALUES (?,?,?,?,?,?)",
-                    (plan.run_id, plan.cid, spec.profile, spec.entrypoint, "queued", to_iso(self.clock.now())),
-                )
+                    "INSERT INTO jobs (run_id, cid, profile, entrypoint, state, created_at, exec_network)"
+                    " VALUES (?,?,?,?,?,?,?)",
+                    (plan.run_id, plan.cid, spec.profile, spec.entrypoint, "queued", to_iso(self.clock.now()),
+                     plan.exec_network if spec.profile == "coder" else None),
+                )  # fmt: skip
             self._active[plan.cid] = plan.run_id
         with self._idle:
             self._running.add(plan.run_id)
@@ -459,25 +489,33 @@ class JobService:
             for name in (vols.exec, vols.exec_output):
                 self.runtime.create_volume(name, labels)
                 volumes.append(name)
-            exec_spec = job_spec(
-                "agent-exec", run_id=plan.run_id, cid=plan.cid, entrypoint="exec",
-                image_ref=self._image("sandbox-full"), network="none", repo_mode="rw", env=plan.exec_env,
-                cpus=plan.cpus, memory_mb=plan.memory_mb,
-            )  # fmt: skip
-            self.runtime.run(exec_spec)
-            created.append(exec_spec.name)
-            self._track(plan.run_id, exec_spec.name)
-            self._wait_running(exec_spec.name)
-            llm_spec = job_spec(
-                "agent-llm", run_id=plan.run_id, cid=plan.cid, entrypoint=plan.entrypoint,
-                image_ref=self._image("sandbox-llm"), network=self._network("agent-llm", plan.cid),
-                repo_mode="none", env=plan.env,
-            )  # fmt: skip
-            self.runtime.run(llm_spec)
-            created.append(llm_spec.name)
-            self._track(plan.run_id, llm_spec.name)
-            self._wait(plan, llm_spec.name)
-            self._quiet(self.runtime.kill, exec_spec.name)
+            # ADR-0024: agent-exec (no credential) on its own -exec network in pool_fetch only when admit()
+            # decided "web"; a Docker error here fails the job (runtime), never falls back to another network
+            exec_net = self.networks.ensure(plan.cid, "exec") if plan.exec_network == "web" else "none"
+            metered = self._meter_exec_start(plan) if plan.exec_network == "web" else False
+            try:
+                exec_spec = job_spec(
+                    "agent-exec", run_id=plan.run_id, cid=plan.cid, entrypoint="exec",
+                    image_ref=self._image("sandbox-full"), network=exec_net, repo_mode="rw", env=plan.exec_env,
+                    cpus=plan.cpus, memory_mb=plan.memory_mb,
+                )  # fmt: skip
+                self.runtime.run(exec_spec)
+                created.append(exec_spec.name)
+                self._track(plan.run_id, exec_spec.name)
+                self._wait_running(exec_spec.name)
+                llm_spec = job_spec(
+                    "agent-llm", run_id=plan.run_id, cid=plan.cid, entrypoint=plan.entrypoint,
+                    image_ref=self._image("sandbox-llm"), network=self._network("agent-llm", plan.cid),
+                    repo_mode="none", env=plan.env,
+                )  # fmt: skip
+                self.runtime.run(llm_spec)
+                created.append(llm_spec.name)
+                self._track(plan.run_id, llm_spec.name)
+                self._wait(plan, llm_spec.name)
+                self._quiet(self.runtime.kill, exec_spec.name)
+            finally:
+                if metered and self.meter is not None:  # the finish check always runs (timeout, crash)
+                    self.meter.finish(plan.run_id)
             return [(llm_spec.name, ""), (exec_spec.name, "exec")]
         template = TEMPLATES[plan.template]
         network = self._network(plan.template, plan.cid, plan.egress)
@@ -508,6 +546,19 @@ class JobService:
             mode = "open"
         self.meter.register(plan.run_id, plan.cid, plan.template, subnet, self.clock.now().timestamp(),
                             plan.egress, mode)  # fmt: skip
+        return True
+
+    def _meter_exec_start(self, plan: Plan) -> bool:
+        """ADR-0024: a networked coder run is metered like fetch/validate (stage ``implement``, egress mode,
+        the exec /28); a breach kills both containers of the run and holds only that contribution."""
+        if self.meter is None:
+            return False
+        subnet = self.networks.subnets.allocate("exec", plan.cid)  # idempotent: the /28 ensure() created
+        try:
+            mode = self.egress_mode()
+        except Exception:  # noqa: BLE001 - the mode is a label of the summary only
+            mode = "open"
+        self.meter.register(plan.run_id, plan.cid, "implement", subnet, self.clock.now().timestamp(), "mode", mode)
         return True
 
     # ------------------------------------------------------------- egress anomaly (§13.2)

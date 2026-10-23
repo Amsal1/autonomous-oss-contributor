@@ -84,15 +84,23 @@ POOLS: dict[str, str] = {
     # every egress mode; 10.213.224.0/19 stays reserved for the Phase-2 stack profile
     "fetch-strict": "10.213.192.0/19",
     "validate-strict": "10.213.192.0/19",
+    # ADR-0024: the coder's executor (agent-exec, no credential) when implement_network allows it. It
+    # sits in pool_fetch, so it gets the fetch base list plus web_public only in sandbox_open, behind
+    # the always-denied floors; strict repos' agent-exec never gets this network (--network none).
+    "exec": "10.213.0.0/18",
 }
 # network profile -> the egress.yaml sandbox profile whose categories apply
 EGRESS_PROFILE: dict[str, str] = {
     "fetch": "fetch", "validate": "validate", "research": "research", "llm": "agent-llm", "catalog": "catalog",
-    "fetch-strict": "fetch", "validate-strict": "validate",
+    "fetch-strict": "fetch", "validate-strict": "validate", "exec": "fetch",
 }  # fmt: skip
-# fetch/validate run repo code; their spec must say which egress applies (fail closed, never defaulted)
+# fetch/validate run repo code; their strict jobs use the <net>-strict network profile (pool_strict)
 EGRESS_PROFILES = frozenset({"fetch", "validate"})
+# every job running repo code must say which egress applies (fail closed, never defaulted); the coder's
+# commands run in agent-exec, whose network follows implement_network for "mode" (ADR-0024)
+EGRESS_REQUIRED = frozenset({"fetch", "validate", "coder"})
 JobEgress = Literal["mode", "strict"]
+ExecNetwork = Literal["none", "web"]  # agent-exec of one coder run: --network none, or ossbot-t-<cid>-exec
 
 
 def network_profile(network: str, egress: JobEgress | None) -> str:
@@ -246,8 +254,9 @@ class JobSpec(BaseModel):
     timeout_s: Annotated[int, Field(ge=1)]
     cpus: Annotated[float, Field(gt=0, le=MAX_CPUS)] = 2.0
     memory_mb: Annotated[int, Field(ge=MIN_MEMORY_MB, le=MAX_MEMORY_MB)] = 4096
-    # required for fetch/validate, refused for every other profile (validate_job): "strict" puts the
-    # job's /28 in pool_strict (the base allowlist in every egress mode), "mode" follows the egress mode
+    # required for fetch/validate/coder, refused for every other profile (validate_job): for fetch/validate
+    # "strict" puts the job's /28 in pool_strict (the base allowlist in every egress mode), "mode" follows the
+    # egress mode; for coder "strict" keeps agent-exec on --network none, "mode" lets implement_network decide
     egress: JobEgress | None = None
 
 
@@ -287,10 +296,11 @@ def validate_job(spec: JobSpec) -> ValidatedJob:
         raise SpecError("probe jobs are created only by POST /v1/probes/run")
     if spec.entrypoint not in PROFILE_ENTRYPOINTS[spec.profile]:
         raise SpecError(f"entrypoint {spec.entrypoint} is not allowed in profile {spec.profile}")
-    if spec.profile in EGRESS_PROFILES and spec.egress is None:
+    if spec.profile in EGRESS_REQUIRED and spec.egress is None:
         raise SpecError(f"{spec.profile} jobs need egress (mode or strict)", "egress_required")
-    if spec.profile not in EGRESS_PROFILES and spec.egress is not None:
-        raise SpecError(f"egress applies to fetch and validate jobs only, not {spec.profile}", "egress_not_applicable")
+    if spec.profile not in EGRESS_REQUIRED and spec.egress is not None:
+        raise SpecError(f"egress applies to fetch, validate and coder jobs only, not {spec.profile}",
+                        "egress_not_applicable")  # fmt: skip
     args = _parse_args(spec.entrypoint, spec.args)
     if isinstance(args, KiroArgs):
         expected_role_profile = "coder" if args.role == "coder" else "research"

@@ -97,7 +97,9 @@ REQUIRED_DENIED_CIDRS = (
     "0.0.0.0/8", "::/128", "::1/128", "fc00::/7", "fe80::/10",
 )  # fmt: skip
 REQUIRED_DENIED_DOMAINS = ("uploads.github.com", "telegra.ph", "api.telegra.ph", "edit.telegra.ph")
-CODE_POOL_SRC = "pool_fetch"  # fetch + validate: untrusted code, web_public only in sandbox_open
+# fetch + validate, and agent-exec under implement_network (ADR-0024): untrusted code, web_public only in
+# sandbox_open
+CODE_POOL_SRC = "pool_fetch"
 CODE_WEB_MODE = "sandbox_open"
 LLM_POOL_SRC = "pool_llm"
 LLM_WEB_MODES = ("open", "sandbox_open")
@@ -250,7 +252,7 @@ def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
         if r["src"] == STRICT_POOL_SRC and r["dst"] == "all":
             raise RenderError("strict fetch/validate jobs (pool_strict) must never get web_public")
         if r["src"] == CODE_POOL_SRC and r["dst"] == "all" and ctx["mode"] != CODE_WEB_MODE:
-            raise RenderError(f"fetch/validate get web_public only in egress mode {CODE_WEB_MODE}")
+            raise RenderError(f"fetch/validate/agent-exec get web_public only in egress mode {CODE_WEB_MODE}")
         if r["port"] in TRUSTED_CALLERS and r["dst"] == "all":
             raise RenderError(f"host caller {r['port']} must never get web_public")
     web = {(r["port"], r["src"]) for r in rules if r["dst"] == "all"}

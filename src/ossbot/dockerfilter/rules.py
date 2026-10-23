@@ -58,7 +58,8 @@ KEY_PAIRS: frozenset[tuple[str, str]] = frozenset(
 GITHUB_READ_ROLES: frozenset[str] = frozenset({"scout", "reviewer"})
 # code: the validate rules (exec /tmp) with the network forced to none (owner decision F007-R1-2)
 TMP_EXEC_PROFILES: frozenset[str] = frozenset({"fetch", "validate", "agent-exec", "package", "code"})
-NETWORK_NONE_PROFILES: frozenset[str] = frozenset({"agent-exec", "package", "extract", "code", "snapshot", "stage-in"})
+# agent-exec is not here (ADR-0024): it may also use its own cid's -exec network (_check_network)
+NETWORK_NONE_PROFILES: frozenset[str] = frozenset({"package", "extract", "code", "snapshot", "stage-in"})
 LLM_IMAGE_PROFILES: frozenset[str] = frozenset({"research", "agent-llm", "catalog"})
 CATALOG_NETWORK = "ossbot-t-sys-catalog-catalog"
 STAGE_IN_CMD = ["/bin/true"]
@@ -80,6 +81,7 @@ SHM_MAX = 64 * MIB
 ULIMITS = [{"Name": "nofile", "Soft": 65536, "Hard": 65536}]
 ENV_VALUE_MAX = 4096
 TASK_POOL = ipaddress.IPv4Network("10.213.0.0/16")
+EXEC_POOL = ipaddress.IPv4Network("10.213.0.0/18")  # pool_fetch: the networked agent-exec's squid class
 PROXY_CONTAINER = "ossbot-proxy"
 KILL_SIGNALS: frozenset[str] = frozenset({"SIGKILL", "KILL", "9", "SIGTERM", "TERM", "15"})
 WAIT_CONDITIONS: frozenset[str] = frozenset({"not-running", "next-exit", "removed"})
@@ -431,12 +433,23 @@ def _check_image(image: Any, profile: str, policy: FilterPolicy) -> None:
         raise Denied(f"image_profile:{name}:{profile}")
 
 
-def _check_network(host: Mapping[str, Any], networking: Any, profile: str) -> None:
+def _task_network(cid: str, suffix: str) -> str:
+    """sandboxd's ``network_name``: ``ossbot-t-<cid label with _ -> ->-<suffix>``."""
+    return f"ossbot-t-{cid.replace('_', '-')}-{suffix}"
+
+
+def _check_network(host: Mapping[str, Any], networking: Any, profile: str, cid: str) -> None:
     mode = host.get("NetworkMode")
     if not isinstance(mode, str) or (mode != "none" and NETWORK_RE.fullmatch(mode) is None):
         raise Denied("network_mode")
     if profile in NETWORK_NONE_PROFILES and mode != "none":
         raise Denied(f"network_mode_must_be_none:{profile}")
+    # ADR-0024: the coder pair is bound to its own cid's per-task networks (the ossbot.cid label): agent-exec
+    # offline or on <cid>-exec (pool_fetch, checked at network create), agent-llm only on <cid>-llm
+    if profile == "agent-exec" and mode not in {"none", _task_network(cid, "exec")}:
+        raise Denied("network_mode_agent_exec")
+    if profile == "agent-llm" and mode != _task_network(cid, "llm"):
+        raise Denied("network_mode_agent_llm")
     if profile == "catalog" and mode != CATALOG_NETWORK:
         raise Denied("network_mode_catalog")
     if mode == "none":
@@ -566,7 +579,7 @@ def validate_create(req: Request, policy: FilterPolicy) -> CreateFacts:
     _zero_or(body, "StopSignal", {"SIGTERM"}, "")
     host = _obj(body.get("HostConfig"), "HostConfig")
     _check_hostconfig(host, profile)
-    _check_network(host, body.get("NetworkingConfig"), profile)
+    _check_network(host, body.get("NetworkingConfig"), profile, str(body["Labels"]["ossbot.cid"]))
     _check_rest_zero(body, CONFIG_KNOWN, "")
     return CreateFacts(name=name, profile=profile, entrypoint=entry, network=str(host["NetworkMode"]))
 
@@ -607,6 +620,8 @@ def validate_network_create(req: Request) -> str:
         raise Denied("ipam_subnet") from exc
     if not isinstance(net, ipaddress.IPv4Network) or net.prefixlen != 28 or not net.subnet_of(TASK_POOL):
         raise Denied("ipam_subnet")
+    if name.endswith("-exec") and not net.subnet_of(EXEC_POOL):  # ADR-0024: agent-exec only in pool_fetch
+        raise Denied("ipam_subnet_exec")
     _check_rest_zero(config, {"Subnet"}, "IPAM.Config[0].")
     _check_rest_zero(ipam, {"Driver", "Config", "Options"}, "IPAM.")
     _check_rest_zero(
@@ -709,10 +724,14 @@ def _check_connect(req: Request, lookup: Lookup, connect: bool) -> None:
     facts = lookup.container(target)
     if facts is None:
         raise Denied("connect_container")
-    is_proxy = facts.name == PROXY_CONTAINER
+    is_proxy = facts.name == PROXY_CONTAINER and not facts.sandbox
     if not (facts.sandbox or is_proxy):
         raise Denied("connect_container")
     if connect:
+        # ADR-0024: connect is proxy-only. No sandbox container (agent-exec, agent-llm, fetch, ...) is ever
+        # attached to a further network after create, so the create-time network binding can't be bypassed.
+        if not is_proxy:
+            raise Denied("connect_container_sandbox")
         endpoint = body.get("EndpointConfig")
         if not is_zero(endpoint):
             ep = _obj(endpoint, "EndpointConfig")

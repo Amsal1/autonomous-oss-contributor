@@ -13,7 +13,7 @@ import re
 from dataclasses import dataclass
 
 from ossbot.common import github_mcp_tools
-from ossbot.sandboxd.profiles import AGENT_LLM_CPUS, AGENT_LLM_MEMORY_MB, TEMPLATES, cid_slug
+from ossbot.sandboxd.profiles import AGENT_LLM_CPUS, AGENT_LLM_MEMORY_MB, TEMPLATES, cid_slug, network_name
 from ossbot.sandboxd.runtime.base import Mount, RunSpec
 
 ENTRYPOINTS_DIR = "/opt/ossbot/entrypoints"
@@ -162,6 +162,11 @@ def _check(spec: RunSpec) -> None:
     if _IMAGE.fullmatch(spec.image_ref) is None:
         raise ArgvError("image")
     if _NETWORK.fullmatch(spec.network) is None:
+        raise ArgvError("network")
+    # ADR-0024: agent-exec is offline or on its own cid's -exec network; agent-llm only on its own -llm network
+    if spec.profile == "agent-exec" and spec.network not in {"none", network_name(spec.cid, "exec")}:
+        raise ArgvError("network")
+    if spec.profile == "agent-llm" and spec.network != network_name(spec.cid, "llm"):
         raise ArgvError("network")
     if spec.entrypoint != "true" and _ENTRY.fullmatch(spec.entrypoint) is None:
         raise ArgvError("entrypoint")

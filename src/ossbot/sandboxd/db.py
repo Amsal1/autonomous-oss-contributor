@@ -20,7 +20,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   run_id TEXT PRIMARY KEY, cid TEXT NOT NULL, profile TEXT NOT NULL, entrypoint TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('queued','running','succeeded','failed','cancelled')),
   exit_code INTEGER, error_class TEXT, artifact_dir TEXT,
-  created_at TEXT NOT NULL, finished_at TEXT);
+  created_at TEXT NOT NULL, finished_at TEXT,
+  exec_network TEXT);  -- ADR-0024: coder runs only, 'web' | 'none' (agent-exec's admission result)
 -- open-discovery design §13.2 (review-3 M3): an egress anomaly whose gatekeeper hold isn't recorded.
 -- While a row exists the cid's fetch/validate jobs are refused (423 egress_anomaly_pending). Rows without
 -- rejected_code are retried every 30 s; a 4xx answer sets rejected_code and only ossctl egress release
@@ -48,6 +49,10 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        # ADR-0024 (carried criterion D18): a DB created before exec_network gets the column once
+        columns = {str(r["name"]) for r in self.conn.execute("PRAGMA table_info(jobs)")}
+        if "exec_network" not in columns:
+            self.conn.execute("ALTER TABLE jobs ADD COLUMN exec_network TEXT")
         self.lock = threading.RLock()
 
     @contextmanager

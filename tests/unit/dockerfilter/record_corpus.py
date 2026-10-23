@@ -147,6 +147,10 @@ def _ops(rt: DockerCliRuntime) -> dict[str, Any]:
     rec("network_connect", lambda: rt.connect("ossbot-t-c-01abcdefgh-research", "ossbot-proxy", alias="proxy"))
     rec("network_disconnect", lambda: rt.disconnect("ossbot-t-c-01abcdefgh-research", "ossbot-proxy"))
     rec("network_remove", lambda: rt.remove_network("ossbot-t-c-01abcdefgh-research"))
+    # ADR-0024: the networked agent-exec's per-task network, a /28 in pool_fetch
+    exec_labels = {**labels, "ossbot.profile": "exec"}
+    rec("network_create_exec",
+        lambda: rt.create_network("ossbot-t-c-01abcdefgh-exec", "10.213.0.32/28", True, exec_labels))  # fmt: skip
     rec(
         "volume_create", lambda: rt.create_volume("ossbot-in-r1-plan", {"ossbot.sandbox": "1", "ossbot.run": "r1-plan"})
     )

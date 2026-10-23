@@ -71,6 +71,17 @@ def test_recorded_operation_allowed(op: str, index: int, entry: dict[str, Any], 
     assert decision.allow, (op, decision.reason)
 
 
+def test_networked_agent_exec_is_recorded_and_no_sandbox_container_is_connected() -> None:
+    """ADR-0024: the recorded networked agent-exec create is on its own -exec network; networks/connect is
+    only ever recorded for the proxy container."""
+    body = RECORDED["creates"]["agent-exec-web"]["body"]
+    assert body["HostConfig"]["NetworkMode"] == "ossbot-t-c-01abcdefgh-exec"
+    assert "OSSBOT_EXEC_NETWORK=web" in body["Env"] and not [e for e in body["Env"] if e.startswith("KIRO_API_KEY")]
+    assert RECORDED["operations"]["network_create_exec"], "the -exec network create is recorded"
+    connects = [r for _, reqs in RECORDED["operations"].items() for r in reqs if r["path"].endswith("/connect")]
+    assert connects and all(r["body"]["Container"] == "ossbot-proxy" for r in connects)
+
+
 def test_followups_of_docker_run_allowed(tmp_path: Path) -> None:
     """docker run --detach sends wait (no condition) before start, both by container id."""
     for name, entry in RECORDED["creates"].items():

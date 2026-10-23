@@ -146,6 +146,14 @@ def test_schema_refuses_bad_bodies(overrides: dict[str, Any]) -> None:
         HoldRequest.model_validate(hold_body(**overrides))
 
 
+def test_schema_accepts_an_implement_hold(ctx: AppContext) -> None:
+    """ADR-0024: a networked coder run is metered as stage implement; its hold is recorded like the others."""
+    req = HoldRequest.model_validate(hold_body(stage="implement", run_id="impl-abc123"))
+    cid = insert_contribution(ctx, State.IMPLEMENTING)
+    view, created = ctx.holds.hold(cid, req, SANDBOX)
+    assert created and view.detail.stage == "implement" and ctx.holds.is_held(cid)
+
+
 def test_schema_accepts_the_unknown_host_marker() -> None:
     assert HoldRequest.model_validate(hold_body(top_hosts=["?", "pypi.org"])).top_hosts == ["?", "pypi.org"]
 

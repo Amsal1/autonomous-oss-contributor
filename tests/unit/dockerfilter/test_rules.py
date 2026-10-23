@@ -14,6 +14,7 @@ from ossbot.dockerfilter import rules
 from tests.conftest import write_flag
 from tests.sandboxharness import (
     DELETE,
+    ENVIRON,
     FakeLookup,
     body_request,
     create_body,
@@ -161,6 +162,117 @@ def test_read_token_env_only_for_research_kiro_mcp_roles(
     assert decision.allow is allowed, decision.reason
     if not allowed:
         assert decision.reason.startswith("env_read_token_not_allowed")
+
+
+# ------------------------------------------------- ADR-0024: the networked agent-exec shape
+EXEC_NET = "ossbot-t-c-01abcdefgh-exec"
+
+
+def _networked(base: str, network: str, dns: bool = True) -> dict[str, Any]:
+    body = copy.deepcopy(create_body(variants()[base]))
+    set_path(body, "HostConfig.NetworkMode", network)
+    if dns:
+        set_path(body, "HostConfig.Dns", ["127.0.0.1"])
+        set_path(body, "HostConfig.DnsSearch", ["."])
+    else:
+        set_path(body, "HostConfig.Dns", DELETE)
+        set_path(body, "HostConfig.DnsSearch", DELETE)
+    endpoints = body.get("NetworkingConfig", {}).get("EndpointsConfig")
+    if endpoints:
+        body["NetworkingConfig"]["EndpointsConfig"] = {network: next(iter(endpoints.values()))}
+    return body
+
+
+@pytest.mark.parametrize(
+    ("base", "network", "dns", "allowed"),
+    [
+        ("agent-exec-web", EXEC_NET, True, True),
+        ("agent-exec-web", "ossbot-t-c-01abcdefgj-exec", True, False),  # another cid's -exec
+        ("agent-exec-web", "ossbot-t-c-01abcdefgh-llm", True, False),
+        ("agent-exec-web", "ossbot-t-c-01abcdefgh-fetch", True, False),
+        ("agent-exec-web", "ossbot-t-c-01abcdefgh-validate-strict", True, False),
+        ("agent-exec-web", "ossbot-t-c-01abcdefgh-research", True, False),
+        ("agent-exec-web", EXEC_NET, False, False),  # networked without the DNS fields
+        ("agent-exec", "none", False, True),
+        ("agent-llm", "ossbot-t-c-01abcdefgh-llm", True, True),
+        ("agent-llm", EXEC_NET, True, False),
+        ("agent-llm", "ossbot-t-c-01abcdefgj-llm", True, False),  # another cid's -llm
+        ("probe-agent-llm", EXEC_NET, True, False),
+    ],
+)
+def test_coder_pair_network_binding(base: str, network: str, dns: bool, allowed: bool, tmp_path: Path) -> None:
+    body = _networked(base, network, dns) if network != "none" else create_body(variants()[base])
+    decision = rules.decide(body_request(body), _lookup(), policy(tmp_path))
+    assert decision.allow is allowed, decision.reason
+
+
+@pytest.mark.parametrize("name", ["KIRO_API_KEY", "GITHUB_READ_TOKEN"])
+def test_networked_agent_exec_never_gets_a_credential(name: str, tmp_path: Path) -> None:
+    body = _networked("agent-exec-web", EXEC_NET)
+    body["Env"] = [*body["Env"], f"{name}={ENVIRON[name]}"]
+    assert not rules.decide(body_request(body), _lookup(), policy(tmp_path)).allow
+
+
+def _network_create(name: str, subnet: str) -> rules.Request:
+    entry = copy.deepcopy(next(e for e in ALLOW["requests"] if e["name"] == "network-create"))
+    entry["body"]["Name"] = name
+    entry["body"]["IPAM"]["Config"][0]["Subnet"] = subnet
+    entry["body"]["Labels"]["ossbot.profile"] = name.rsplit("-", 1)[1]
+    return _request(entry)
+
+
+@pytest.mark.parametrize(
+    ("name", "subnet", "allowed"),
+    [
+        (EXEC_NET, "10.213.0.32/28", True),
+        (EXEC_NET, "10.213.63.240/28", True),
+        (EXEC_NET, "10.213.64.0/28", False),  # research pool
+        (EXEC_NET, "10.213.128.0/28", False),  # llm pool
+        (EXEC_NET, "10.213.192.0/28", False),  # pool_strict
+        ("ossbot-t-c-01abcdefgh-research", "10.213.64.0/28", True),  # other networks unchanged
+    ],
+)
+def test_exec_networks_only_in_pool_fetch(name: str, subnet: str, allowed: bool, tmp_path: Path) -> None:
+    decision = rules.decide(_network_create(name, subnet), _lookup(), policy(tmp_path))
+    assert decision.allow is allowed, decision.reason
+
+
+def _connect(container: str, aliases: list[str] | None = None, op: str = "connect") -> rules.Request:
+    body: dict[str, Any] = {"Container": container}
+    if op == "connect" and aliases is not None:
+        body["EndpointConfig"] = {"Aliases": aliases}
+    if op == "disconnect":
+        body["Force"] = True
+    return rules.Request("POST", f"/v1.52/networks/ossbot-t-c-01abcdefgh-research/{op}", {},
+                         json.dumps(body).encode())  # fmt: skip
+
+
+@pytest.mark.parametrize(
+    ("container", "aliases", "reason"),
+    [
+        ("ossbot-proxy", ["proxy"], None),
+        ("ossbot-proxy", None, None),
+        ("ossbot-proxy", ["other"], "connect_aliases"),
+        ("xe0001", None, "connect_container_sandbox"),  # agent-exec
+        ("xl0001", None, "connect_container_sandbox"),  # agent-llm
+        ("ccc333", None, "connect_container_sandbox"),  # fetch
+        ("aaa111", ["proxy"], "connect_container_sandbox"),
+    ],
+)
+def test_connect_is_proxy_only(container: str, aliases: list[str] | None, reason: str | None, tmp_path: Path) -> None:
+    lookup = _lookup()
+    lookup.add("xe0001", "agent-exec", "running")
+    lookup.add("xl0001", "agent-llm", "running")
+    decision = rules.decide(_connect(container, aliases), lookup, policy(tmp_path))
+    if reason is None:
+        assert decision.allow, decision.reason
+    else:
+        assert not decision.allow and reason in decision.reason
+
+
+@pytest.mark.parametrize("container", ["ossbot-proxy", "ccc333"])
+def test_disconnect_unchanged(container: str, tmp_path: Path) -> None:
+    assert rules.decide(_connect(container, op="disconnect"), _lookup(), policy(tmp_path)).allow
 
 
 # -------------------------------------------------------------------- kill / pause (N5)

@@ -58,6 +58,24 @@ def test_card_classic_and_rich(ctx: AppContext) -> None:
                  + "\n".join(" | ".join(r) for r in confirm.keyboard_labels()) + "\n")  # fmt: skip
 
 
+def test_implement_card_names_the_coders_executor(ctx: AppContext) -> None:
+    """ADR-0024: a hold from a networked coder run (stage implement), classic and rich, plus its confirm."""
+    cid = insert_contribution(ctx, State.IMPLEMENTING, upstream="acme/widgets", issue_number=123)
+    ctx.holds.publish_hold = lambda v: None
+    found, _ = ctx.holds.hold(cid, hold_request(stage="implement", run_id="impl-abc123"), SANDBOX)
+    view = hold_cards.hold_view(ctx, found)
+    keyboard = "\n".join(" | ".join(row) for row in view.keyboard_labels())
+    golden.check("hold_card_implement.html",
+                 classic.render(view).text.replace(cid, "c_CID") + "\n--\n" + keyboard + "\n")  # fmt: skip
+    doc = blocks.dump(rich.render(replace(view, rich=True)))
+    dumped = json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True)
+    golden.check("hold_card_implement.json", dumped.replace(cid, "c_CID") + "\n")
+    confirm = hold_cards.confirm_view(ctx, found)
+    golden.check("hold_card_implement_confirm.html", classic.render(confirm).text + "\n--\n"
+                 + "\n".join(" | ".join(r) for r in confirm.keyboard_labels()) + "\n")  # fmt: skip
+    assert "coder's executor (implement) job stopped" in classic.render(view).text
+
+
 def test_hostile_host_names_are_escaped_and_redacted(ctx: AppContext) -> None:
     cid = insert_contribution(ctx, State.VALIDATING, upstream="acme/widgets", issue_number=7)
     ctx.holds.publish_hold = lambda v: None

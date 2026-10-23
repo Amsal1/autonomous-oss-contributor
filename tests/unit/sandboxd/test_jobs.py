@@ -260,10 +260,12 @@ def test_coder_pair(sbx: Sbx) -> None:
             "repo_mode": "rw",
             "inputs": {"code.md": prompt},
             "timeout_s": 600,
+            "egress": "mode",
         }
     )
     view = sbx.jobs.submit(spec)
     assert view["state"] == "succeeded", view
+    assert view["exec_network"] == "none" and sbx.gatekeeper.egress_calls == []  # mode allowlist: never asks
     rt = sbx.runtime
     starts = _names(rt, "start")
     assert starts.index("ossbot-r3-exec") < starts.index("ossbot-r3")  # agent-exec first (M4 readiness)
@@ -276,6 +278,116 @@ def test_coder_pair(sbx: Sbx) -> None:
     exec_argv = next(a for a in rt.argvs if a[a.index("--name") + 1] == "ossbot-r3-exec")
     assert "KIRO_API_KEY" not in exec_argv and exec_argv[exec_argv.index("--network") + 1] == "none"
     assert (sbx.settings.artifacts_dir / "c_01ABCDEFGH" / "runs" / "r3" / "exec").is_dir()
+
+
+# ------------------------------------------------------------- ADR-0024: the coder's executor network
+def _coder(sbx: Sbx, run_id: str = "r3", egress: str | None = "mode") -> JobSpec:
+    body: dict[str, Any] = {
+        "run_id": run_id, "cid": "c_01ABCDEFGH", "profile": "coder", "entrypoint": "kiro",
+        "args": {"role": "coder", "prompt_file": "code.md", "model": "claude-test", "effort": "high"},
+        "repo_mode": "rw", "inputs": {"code.md": sbx.runner_input("code.md", b"implement")}, "timeout_s": 600,
+    }  # fmt: skip
+    if egress is not None:
+        body["egress"] = egress
+    return JobSpec.model_validate(body)
+
+
+def _argv(rt: FakeRuntime, name: str) -> list[str]:
+    return next(a for a in rt.argvs if "--name" in a and a[a.index("--name") + 1] == name)
+
+
+def _llm_shape(argv: list[str]) -> list[str]:
+    """agent-llm's argv without the run-specific names (byte-identical across exec networks)."""
+    return [a.replace("r3", "R").replace("r4", "R") for a in argv]
+
+
+def test_coder_without_egress_is_refused(sbx: Sbx) -> None:
+    pass_all_probes(sbx)
+    with pytest.raises(ApiError) as exc:
+        sbx.jobs.submit(_coder(sbx, egress=None))
+    assert (exc.value.status, exc.value.error_class) == (400, "egress_required")
+    assert sbx.runtime.calls == [] and sbx.gatekeeper.egress_calls == []
+
+
+def test_networked_agent_exec_when_mode_and_gatekeeper_agree(sbx: Sbx) -> None:
+    pass_all_probes(sbx)
+    sbx.mode[0] = "sandbox_open"
+    sbx.gatekeeper.egress_answer = "web"
+    view = sbx.jobs.submit(_coder(sbx))
+    assert view["state"] == "succeeded" and view["exec_network"] == "web"
+    assert sbx.gatekeeper.egress_calls == [("c_01ABCDEFGH", "r3")]
+    rt = sbx.runtime
+    exec_argv = _argv(rt, "ossbot-r3-exec")
+    assert exec_argv[exec_argv.index("--network") + 1] == "ossbot-t-c-01abcdefgh-exec"
+    assert "OSSBOT_EXEC_NETWORK=web" in exec_argv and "KIRO_API_KEY" not in exec_argv
+    assert exec_argv[exec_argv.index("--dns") + 1] == "127.0.0.1"
+    subnet = ipaddress.ip_network(rt.networks["ossbot-t-c-01abcdefgh-exec"])
+    assert subnet.prefixlen == 28 and subnet.subnet_of(ipaddress.ip_network("10.213.0.0/18"))
+    assert ("ossbot-t-c-01abcdefgh-exec", "ossbot-proxy", "proxy") in rt.connections
+    llm_argv = _argv(rt, "ossbot-r3")
+    assert llm_argv[llm_argv.index("--network") + 1] == "ossbot-t-c-01abcdefgh-llm"
+    assert "OSSBOT_EXEC_NETWORK=web" not in llm_argv
+
+
+@pytest.mark.parametrize(
+    ("mode", "answer", "egress", "calls"),
+    [
+        ("sandbox_open", "web", "strict", 0),  # strict: never asks, never networked
+        ("open", "web", "mode", 0),  # sandboxd's own mode read is not sandbox_open: no call
+        ("allowlist", "web", "mode", 0),
+        ("sandbox_open", "none", "mode", 1),
+        ("sandbox_open", RuntimeError("transport"), "mode", 1),
+        ("sandbox_open", ValueError("bad json"), "mode", 1),
+        ("sandbox_open", "WEB", "mode", 1),  # junk
+    ],
+)
+def test_agent_exec_stays_offline_otherwise(sbx: Sbx, mode: str, answer: Any, egress: str, calls: int,
+                                            caplog: pytest.LogCaptureFixture) -> None:  # fmt: skip
+    pass_all_probes(sbx)
+    sbx.jobs.submit(_coder(sbx, "r4", egress="mode"))  # the reference: offline (mode allowlist)
+    reference = _llm_shape(_argv(sbx.runtime, "ossbot-r4"))
+    sbx.runtime.argvs.clear()
+    sbx.mode[0] = mode
+    sbx.gatekeeper.egress_answer = answer
+    with caplog.at_level("WARNING"):
+        view = sbx.jobs.submit(_coder(sbx, "r3", egress=egress))
+    assert view["state"] == "succeeded" and view["exec_network"] == "none"
+    assert len(sbx.gatekeeper.egress_calls) == calls
+    exec_argv = _argv(sbx.runtime, "ossbot-r3-exec")
+    assert exec_argv[exec_argv.index("--network") + 1] == "none"
+    assert not any(a.startswith("OSSBOT_EXEC_NETWORK") for a in exec_argv)
+    assert "ossbot-t-c-01abcdefgh-exec" not in sbx.runtime.networks
+    assert _llm_shape(_argv(sbx.runtime, "ossbot-r3")) == reference  # agent-llm byte-identical
+    if isinstance(answer, Exception):
+        assert any(getattr(r, "event", "") == "implement_egress_unavailable" for r in caplog.records)
+
+
+def test_agent_llm_is_identical_with_a_networked_exec(sbx: Sbx) -> None:
+    pass_all_probes(sbx)
+    sbx.jobs.submit(_coder(sbx, "r4"))
+    reference = _llm_shape(_argv(sbx.runtime, "ossbot-r4"))
+    sbx.mode[0] = "sandbox_open"
+    sbx.gatekeeper.egress_answer = "web"
+    sbx.jobs.submit(_coder(sbx, "r3"))
+    assert _llm_shape(_argv(sbx.runtime, "ossbot-r3")) == reference
+
+
+def test_coder_refused_while_a_hold_is_pending(sbx: Sbx) -> None:
+    pass_all_probes(sbx)
+    sbx.jobs._pending("c_01ABCDEFGH", "r0", {"x": 1}, None)
+    with pytest.raises(ApiError) as exc:
+        sbx.jobs.submit(_coder(sbx))
+    assert (exc.value.status, exc.value.error_class) == (423, "egress_anomaly_pending")
+    assert sbx.gatekeeper.egress_calls == []
+
+
+def test_probe_coder_plans_never_ask(sbx: Sbx) -> None:
+    """The safety probes build coder Plans directly (no admit()): always offline, no decision call."""
+    from ossbot.sandboxd.jobs import ProbeRunner
+
+    plan = ProbeRunner(sbx.jobs)._plan("coder_surface", "coder", "kiro", "rw", {"ROLE": "coder"})
+    assert plan.exec_network == "none" and plan.exec_env == {}
+    assert sbx.gatekeeper.egress_calls == []
 
 
 def test_package_artifacts_go_to_rev_dir(sbx: Sbx) -> None:

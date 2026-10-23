@@ -20,7 +20,7 @@ from ossbot.common.schemas import HoldRequest
 from ossbot.sandboxd.egress_meter import MAX_READ, EgressMeter
 from ossbot.sandboxd.jobs import ApiError, HoldError
 from ossbot.sandboxd.profiles import JobSpec
-from tests.unit.sandboxd.conftest import Sbx
+from tests.unit.sandboxd.conftest import Sbx, pass_all_probes
 
 T0 = 1_792_600_000.0
 NET = "10.213.0.16/28"
@@ -249,6 +249,48 @@ def test_a_4xx_is_final_and_fails_closed(
         sbx.jobs.clear_pending(CID)
     sbx.jobs.meter = None
     assert sbx.jobs.submit(_job("fetch", "r3"))["state"] == "succeeded"
+
+
+def _coder(sbx: Sbx, run_id: str) -> JobSpec:
+    return JobSpec.model_validate({
+        "run_id": run_id, "cid": CID, "profile": "coder", "entrypoint": "kiro",
+        "args": {"role": "coder", "prompt_file": "code.md", "model": "claude-test", "effort": "high"},
+        "repo_mode": "rw", "inputs": {"code.md": sbx.runner_input("code.md", b"implement")}, "timeout_s": 600,
+        "egress": "mode",
+    })  # fmt: skip
+
+
+def test_networked_coder_breach_stops_both_containers_and_holds(sbx: Sbx, log_path: Path) -> None:
+    """ADR-0024 / R2.7: a networked coder run is metered (stage implement, the exec /28); over the limits both
+    containers are killed, the run ends egress_anomaly with its staging discarded, and the hold validates."""
+    pass_all_probes(sbx)
+    _metered(sbx, log_path, _upload)
+    sbx.mode[0] = "sandbox_open"
+    sbx.gatekeeper.egress_answer = "web"
+    view = sbx.jobs.submit(_coder(sbx, "r5"))
+    assert (view["state"], view["error_class"], view["exec_network"]) == ("failed", "egress_anomaly", "web")
+    kills = [n for c, n in sbx.runtime.calls if c == "kill"]
+    assert "ossbot-r5" in kills and "ossbot-r5-exec" in kills
+    assert not (sbx.settings.staging_dir / "r5").exists()
+    assert not (sbx.settings.artifacts_dir / CID / "runs" / "r5").exists()
+    [(cid, body)] = sbx.gatekeeper.holds
+    req = HoldRequest.model_validate(body)
+    assert (cid, req.stage, req.egress, req.egress_mode) == (CID, "implement", "mode", "sandbox_open")
+    doc = json.loads((sbx.settings.logs_dir / "runs" / "r5.egress.json").read_text(encoding="utf-8"))
+    assert ipaddress.IPv4Network(doc["subnet"]).subnet_of(ipaddress.IPv4Network("10.213.0.0/18"))
+    sbx.gatekeeper.hold_answers = [HoldError(503, "x")]  # the next breach's hold isn't recorded yet
+    assert sbx.jobs.submit(_coder(sbx, "r6"))["error_class"] == "egress_anomaly"
+    with pytest.raises(ApiError) as info:  # fail closed: the cid's coder runs wait for the hold
+        sbx.jobs.submit(_coder(sbx, "r7"))
+    assert (info.value.status, info.value.error_class) == (423, "egress_anomaly_pending")
+
+
+def test_offline_coder_is_not_metered(sbx: Sbx, log_path: Path) -> None:
+    pass_all_probes(sbx)
+    _metered(sbx, log_path, _upload)
+    view = sbx.jobs.submit(_coder(sbx, "r5"))  # mode allowlist: no network, nothing to meter
+    assert (view["state"], view["exec_network"]) == ("succeeded", "none")
+    assert sbx.gatekeeper.holds == [] and not (sbx.settings.logs_dir / "runs" / "r5.egress.json").exists()
 
 
 def test_pending_blocks_only_repo_code_jobs_of_that_cid(sbx: Sbx, log_path: Path) -> None:

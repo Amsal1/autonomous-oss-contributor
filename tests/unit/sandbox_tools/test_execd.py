@@ -237,6 +237,44 @@ def test_fixed_env_has_the_jvm_homes_and_no_gradle_opts() -> None:
     assert env["GRADLE_USER_HOME"] == "/work/cache/gradle"
 
 
+def test_fixed_env_offline_and_online() -> None:
+    """ADR-0024 / C-D22: OSSBOT_EXEC_NETWORK in both variants; online drops the offline switches and adds the
+    re-validated proxy and the Maven proxy properties; caches stay."""
+    offline = execd.fixed_env("/work")
+    assert offline["OSSBOT_EXEC_NETWORK"] == "none"
+    assert offline["GOPROXY"] == "off" and offline["UV_OFFLINE"] == "1" and "HTTPS_PROXY" not in offline
+    online = execd.fixed_env("/work", True, "http://proxy:3128")
+    assert online["OSSBOT_EXEC_NETWORK"] == "web"
+    for name in ("GOPROXY", "npm_config_offline", "UV_OFFLINE", "PIP_NO_INDEX"):
+        assert name not in online
+    assert online["HTTPS_PROXY"] == online["HTTP_PROXY"] == "http://proxy:3128" and online["NO_PROXY"] == ""
+    assert online["MAVEN_OPTS"] == ("-Duser.home=/work/.home -Dhttps.proxyHost=proxy -Dhttps.proxyPort=3128"
+                                    " -Dhttp.proxyHost=proxy -Dhttp.proxyPort=3128")  # fmt: skip
+    assert online["GOFLAGS"] == "-mod=mod" and online["GOMODCACHE"] == offline["GOMODCACHE"]
+    assert online["UV_CACHE_DIR"] == offline["UV_CACHE_DIR"] and online["JAVA_HOME"] == offline["JAVA_HOME"]
+
+
+@pytest.mark.parametrize("proxy", [None, "", "http://x;rm:1", "https://proxy:3128", "http://proxy:70000",
+                                   "http://PROXY:3128", "http://proxy:3128/x"])  # fmt: skip
+def test_fixed_env_online_omits_a_bad_proxy(proxy: str | None) -> None:
+    env = execd.fixed_env("/work", True, proxy)
+    assert env["OSSBOT_EXEC_NETWORK"] == "web"
+    assert "HTTPS_PROXY" not in env and "HTTP_PROXY" not in env
+    assert env["MAVEN_OPTS"] == "-Duser.home=/work/.home"
+
+
+def test_executor_run_env_carries_the_network(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (tmp_path / ".home").mkdir()
+    online = Executor(str(repo), str(tmp_path), True, "http://proxy:3128")
+    result, _ = online.run({"cmd": "echo $OSSBOT_EXEC_NETWORK $HTTPS_PROXY", "timeout_s": 10})
+    assert result["exit_code"] == 0 and "web http://proxy:3128" in result["stdout"]
+    offline = Executor(str(repo), str(tmp_path))
+    result, _ = offline.run({"cmd": "echo net=$OSSBOT_EXEC_NETWORK", "timeout_s": 10})
+    assert "net=none" in result["stdout"]
+
+
 @pytest.mark.parametrize(("cmd", "code"), [("false | cat", 1), ("true | cat", 0), ("exit 3 | cat", 3)])
 def test_run_has_pipefail(ex: Executor, cmd: str, code: int) -> None:
     result, _ = ex.run({"cmd": cmd, "timeout_s": 10})

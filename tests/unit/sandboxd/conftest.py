@@ -42,6 +42,15 @@ class FakeGatekeeper:
     catalog_calls: int = 0
     holds: list[tuple[str, dict[str, Any]]] = field(default_factory=list)  # (cid, body) of every hold call
     hold_answers: list[HoldError | None] = field(default_factory=list)  # queued answers; empty = recorded
+    # ADR-0024: the per-run implement-egress decision ("web", "none", junk, or an exception to raise)
+    egress_answer: Any = "none"
+    egress_calls: list[tuple[str, str]] = field(default_factory=list)
+
+    def implement_egress(self, cid: str, run_id: str) -> str:
+        self.egress_calls.append((cid, run_id))
+        if isinstance(self.egress_answer, BaseException):
+            raise self.egress_answer
+        return self.egress_answer  # type: ignore[no-any-return]
 
     def catalog(self) -> list[dict[str, Any]]:
         self.catalog_calls += 1
@@ -74,6 +83,7 @@ class Sbx:
     settings: Settings
     root: Path
     trust: list[TrustMode]
+    mode: list[str] = field(default_factory=lambda: ["allowlist"])  # sandboxd's live egress-mode read
 
     def runner_input(self, name: str, data: bytes) -> str:
         path = self.root / "srv" / "runner" / name
@@ -100,6 +110,7 @@ def sbx(tmp_path: Path) -> Iterator[Sbx]:
         input_roots=(tmp_path / "srv" / "runner", tmp_path / "srv" / "artifacts"),
     )
     trust: list[TrustMode] = ["ids"]
+    mode = ["allowlist"]
     jobs = JobService(
         store=store,
         runtime=runtime,
@@ -112,8 +123,9 @@ def sbx(tmp_path: Path) -> Iterator[Sbx]:
         trust_mode=lambda: trust[0],
         networks=Networks(runtime, SubnetAllocator(store, clock)),
         background=False,
+        exec_egress_mode=lambda: mode[0],
     )
-    yield Sbx(jobs, runtime, gatekeeper, clock, settings, tmp_path, trust)
+    yield Sbx(jobs, runtime, gatekeeper, clock, settings, tmp_path, trust, mode)
     store.close()
 
 
