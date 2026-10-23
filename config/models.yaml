@@ -23,7 +23,7 @@ roles:
   # live e2e/system tests) uses roles.test; production roles are verified from the catalog only.
   # fallback: none = fail with a clear message instead of using an expensive model (or list ids).
   # test/test_vision change here or with `ossctl model set test <id>`; Telegram /model never offers them.
-  test: {model: claude-haiku-4.5, effort: low, fallback: none}
+  test: {model: claude-haiku-5.5, effort: low, fallback: none}
   test_vision: {model: test}                      # the live image check; point it at an image-capable id if needed
 fallbacks: [claude-opus-5.5, claude-sonnet-5.5]   # tried in order when a role's model is missing from the catalog
 catalog:
