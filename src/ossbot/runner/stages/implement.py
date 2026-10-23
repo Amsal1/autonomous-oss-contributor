@@ -269,12 +269,16 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
             if changed:
                 found = {"deps_changed": changed, **{k: v for k, v in fetch_facts(info).items() if k != "ecosystems"}}
                 again = [*sections, prompts.untrusted("re-fetch result", json.dumps(found)[:FACTS_MAX])]
+                first_gaps = report.sandbox_gaps
                 result = _coder(sc, cid, f"{task_line} {REFETCH_LINE}", again, egress)
                 run_.model_actual = result.model_actual
                 report = result.value
                 if report.needs_network:  # the gatekeeper's terminal FYI carries the summary (§14.13.1)
                     deps = ", ".join(report.needs_network[:5])
                     raise StageFailed("needs_network", summary=NEEDS_NETWORK_SUMMARY.format(deps=deps))
+                # the first run's gaps still hold after the resume (review P1-1): merged, deduped, capped
+                merged = list(dict.fromkeys([*first_gaps, *report.sandbox_gaps]))[:SANDBOX_GAPS_MAX]
+                report = report.model_copy(update={"sandbox_gaps": merged})
             else:  # no dependency file changed: what the coder missed is a sandbox gap, left to validate
                 gaps = [*report.sandbox_gaps, *report.needs_network][:SANDBOX_GAPS_MAX]
                 report = report.model_copy(update={"sandbox_gaps": gaps, "needs_network": []})

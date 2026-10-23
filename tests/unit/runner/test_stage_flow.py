@@ -542,6 +542,23 @@ def test_changed_dependency_files_resume_the_coder(sc: StageContext, ctx: AppCon
     assert sc.load(cid)["sandbox_gap"] is False
 
 
+def test_resumed_coder_keeps_the_first_runs_sandbox_gaps(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                         github: FakeGitHub) -> None:  # fmt: skip
+    """Review P1-1: gaps the first coder run reported next to needs_network survive the resume (merged with
+    the second run's, deduped, capped at 10), so the note and a later FAILED evidence are gap-tagged."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 181, plan_json=json.dumps(PLAN))
+    first = fenced({"files_changed": ["go.mod"], "needs_network": ["example.com/m@v1.0.0"],
+                    "sandbox_gaps": ["no docker", "no JDK 25 offline"]})  # fmt: skip
+    second = fenced({"files_changed": ["go.mod"], "sandbox_gaps": ["no docker", *[f"g{i}" for i in range(9)]]})
+    sbx.kiro("coder", first, second)
+    sbx.handlers["fetch"] = _refetch_handler(["go.mod"])
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _coder_jobs(sbx) == 2
+    saved = sc.load(cid)["implement"]
+    assert saved["sandbox_gaps"] == ["no docker", "no JDK 25 offline", *[f"g{i}" for i in range(8)]]
+    assert sc.load(cid)["sandbox_gap"] is True
+
+
 @pytest.mark.parametrize("deps", ["go.mod", [f"m{i}/go.mod" for i in range(51)], ["web app/package.json"],
                                   [1, 2], None, {"go.mod": 1}])  # fmt: skip
 def test_malformed_deps_changed_counts_as_empty(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
