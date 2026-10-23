@@ -20,6 +20,7 @@ from ossbot.gatekeeper.approvals import (
     normalize_text,
 )
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.telegram.cards import network_provenance, view_for_action
 from tests.conftest import FakeArtifacts, insert_action, insert_contribution, packaged_contribution, write_flag
 
 CHAT = 4242
@@ -65,6 +66,18 @@ def test_binding_hash_stable(ctx: AppContext) -> None:
     b = compute_binding(ctx.conn, action, ctx.approvals.artifacts)
     assert binding_hash(a) == binding_hash(b)
     assert binding_hash(dict(reversed(list(a.items())))) == binding_hash(a)
+
+
+def test_network_provenance_line_is_not_in_the_binding(ctx: AppContext) -> None:
+    """ADR-0024 (design §4f): the gate-2 provenance line is informational; the binding is equal with and without."""
+    cid, action = packaged_contribution(ctx)
+    before = binding_hash(compute_binding(ctx.conn, action, ctx.approvals.artifacts))
+    assert network_provenance(ctx.conn, cid) == ()
+    with db.transaction(ctx.conn):
+        ctx.audit.append("sandbox", "implement_egress_decided", {"run_id": "r1", "egress": "web", "reason": "rerun"},
+                         cid=cid)  # fmt: skip
+    assert view_for_action(ctx.conn, action, True).network_reasons == ("rerun",)
+    assert binding_hash(compute_binding(ctx.conn, action, ctx.approvals.artifacts)) == before
 
 
 def _set(column: str, value: object) -> Callable[[AppContext, str, str, FakeArtifacts], None]:

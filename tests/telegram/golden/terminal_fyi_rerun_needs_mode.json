@@ -1,0 +1,51 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "❌ ",
+    {
+     "text": "Failed",
+     "type": "bold"
+    },
+    " · ",
+    "kestra-io/kestra#21375",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Stage: implementing",
+    " · reason: ",
+    "needs_network"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "blocks": [
+    {
+     "text": [
+      "🤖 ",
+      {
+       "text": "Why:",
+       "type": "bold"
+      },
+      " ",
+      "The change adds dependencies the sandbox could not fetch, even after one re-fetch: com.google.guava:guava:33.3.1-jre."
+     ],
+     "type": "paragraph"
+    }
+   ],
+   "type": "blockquote"
+  },
+  {
+   "text": "Next: a rerun with network needs egress mode sandbox_open (now open) and implement network on_request or auto (/egress); then tap below or use /queue.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

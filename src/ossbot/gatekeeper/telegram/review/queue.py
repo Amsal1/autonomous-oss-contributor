@@ -12,6 +12,7 @@ Ordering is deterministic: ``(class_rank, expires_at, -target_priority, created_
 * Class 5: other ``comment``.
 
 * Class 0 also: an open egress hold (a stage is stopped); class 1 also: a failed submission.
+* Gate 0 (listed after gate 1, ADR-0024): a FAILED item offered 🌐 Rerun with network, class 4, 7-day window.
 
 The queue lists what waits on the owner whether or not a live card exists (an invalidated or expired
 card of a still-eligible item is listed with ``· no live card`` / ``· ⌛ expired``). ``[📥 Open n]``
@@ -33,7 +34,7 @@ from typing import Any, Literal
 from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.config import resolve_target
 from ossbot.common.schemas import State
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import db, implement_network
 from ossbot.gatekeeper.approvals import reissue_eligible
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.ui import kit as k
@@ -48,12 +49,12 @@ NO_CARD_MARK = " · no live card"
 EXPIRED_MARK = " · ⌛ expired"
 _SAFE = re.compile(r"[^A-Za-z0-9_:-]")
 Sort = Literal["priority", "oldest"]
-Family = Literal["a", "p", "s", "r", "h", "f"]
+Family = Literal["a", "p", "s", "r", "h", "f", "n"]  # n: a rerun with network (ADR-0024)
 
 
 @dataclass(frozen=True)
 class Item:
-    gate: int  # 2 = approval cards, 1 = proposals
+    gate: int  # 2 = approval cards, 1 = proposals, 0 = reruns with network (ADR-0024)
     class_rank: int
     expires_at: datetime
     target_priority: int
@@ -67,7 +68,7 @@ class Item:
 
     @property
     def shown_cid(self) -> str:
-        return self.cid or (self.subject if self.family in {"a", "p", "r", "h"} else "")
+        return self.cid or (self.subject if self.family in {"a", "p", "r", "h", "n"} else "")
 
     def key(self, sort: Sort) -> tuple[Any, ...]:
         if sort == "oldest":
@@ -252,6 +253,28 @@ def items(ctx: AppContext) -> list[Item]:
         add(Item(2, 1, from_iso(r["updated_at"]) + RETRY_TTL, _priority(ctx, str(r["upstream"])),
                  str(r["updated_at"]), "f", str(failed["id"]),
                  f"⚠️ Submit failed · {middle_cut(str(r['upstream']), 30)} · {error}", cid=str(r["id"])))  # fmt: skip
+    out.extend(_reruns(ctx))
+    return out
+
+
+def _reruns(ctx: AppContext) -> list[Item]:
+    """ADR-0024 family ``n`` (gate 0, class 4): FAILED items the terminal FYI offers 🌐 Rerun with network for,
+    within the 7-day window; Open runs the same ``net_rerun`` action. Blocked by the owner's switches: a suffix."""
+    out: list[Item] = []
+    mode = ctx.control.egress_mode(ctx.config.egress.mode_default)
+    setting = ctx.control.implement_network()
+    cutoff = to_iso(ctx.clock.now() - implement_network.RERUN_WINDOW)
+    for r in ctx.conn.execute("SELECT * FROM contributions WHERE state = 'FAILED' AND updated_at >= ? AND"
+                              " (state_reason = 'needs_network' OR rerun_hint = 1) ORDER BY updated_at",
+                              (cutoff,)).fetchall():  # fmt: skip
+        if implement_network.item_guard(ctx, r) is not None or implement_network.repo_strict(ctx, str(r["upstream"])):
+            continue
+        blocked = " · needs sandbox_open" if mode != "sandbox_open" else (
+            " · implement network off" if setting == "off" else "")  # fmt: skip
+        reason = middle_cut(str(r["state_reason"] or "?"), 20)
+        out.append(Item(0, 4, from_iso(r["updated_at"]) + implement_network.RERUN_WINDOW,
+                        _priority(ctx, str(r["upstream"])), str(r["updated_at"]), "n", str(r["id"]),
+                        f"🌐 Rerun? · {middle_cut(str(r['upstream']), 30)} · {reason}{blocked}"))  # fmt: skip
     return out
 
 
@@ -273,14 +296,14 @@ def view(ctx: AppContext, page: int = 1, sort: Sort = "priority") -> k.View:
     start = (page - 1) * PER_PAGE
     shown = queue[start : start + PER_PAGE]
     lines: list[k.Line] = [(k.Const("📥 "), k.Bold(k.Const("Queue")), k.Const(f" · {len(queue)} waiting"))]
-    gate2 = sum(1 for i in queue if i.gate == 2)
-    current_gate = 0
+    counts = {g: sum(1 for i in queue if i.gate == g) for g in (2, 1, 0)}
+    titles = {2: f"Gate 2 · approval cards ({counts[2]})", 1: f"Gate 1 · proposals ({counts[1]})",
+              0: f"Reruns with network ({counts[0]})"}  # fmt: skip
+    current_gate = -1
     for n, item in enumerate(shown, start + 1):
         if item.gate != current_gate:
             current_gate = item.gate
-            gate1 = len(queue) - gate2
-            title = f"Gate 2 · approval cards ({gate2})" if item.gate == 2 else f"Gate 1 · proposals ({gate1})"
-            lines.append((k.Bold(k.Const(title)),))
+            lines.append((k.Bold(k.Const(titles[item.gate])),))
         when = " · held since " if item.family == "h" else " · expires "
         # the cid one tap to copy (/approve, /logs …); the label gives up its 15 characters so an item line
         # still shows ≤ 120 characters (§14.11.13)

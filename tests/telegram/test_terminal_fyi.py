@@ -38,8 +38,8 @@ async def rig(ctx: AppContext) -> AsyncIterator[TgRig]:
 
 
 def _after_gate1(ctx: AppContext, state: State, **cols: object) -> str:
-    cid = insert_contribution(ctx, state, upstream="runatlantis/atlantis", issue_number=2607, proposal_version=1,
-                              **cols)  # fmt: skip
+    cols = {"issue_number": 2607, **cols}
+    cid = insert_contribution(ctx, state, upstream="runatlantis/atlantis", proposal_version=1, **cols)
     consumed_proposal(ctx, cid)
     return cid
 
@@ -132,6 +132,93 @@ async def test_p2_fyi_is_held_in_quiet_hours(ctx: AppContext) -> None:
                  (f"terminal:{cid}",))  # fmt: skip
     assert row is not None and tuple(row) == (2, "held", "feed")
     assert ctx.outbox.due() == []  # not sent before the quiet window ends
+
+
+# ------------------------------------------------- 🌐 Rerun with network (ADR-0024, design §4f)
+def _switches(ctx: AppContext, mode: str, setting: str) -> None:
+    default = ctx.config.egress.mode_default
+    if ctx.control.egress_mode(default) != mode:
+        ctx.control.set_egress_mode(mode, "tg:4242", default, egress=ctx.config.egress)  # type: ignore[arg-type]
+    ctx.control.set_implement_network(setting, "tg:4242", default)  # type: ignore[arg-type]
+
+
+def _fail_needs_network(ctx: AppContext, **cols: object) -> str:
+    cid = _after_gate1(ctx, S.IMPLEMENTING, **cols)
+    ctx.state_machine.transition(cid, S.IMPLEMENTING, S.FAILED, Actor.WORKER,
+                                 {"error_class": "needs_network", "summary": NEEDS_NETWORK})  # fmt: skip
+    return cid
+
+
+def _queued(ctx: AppContext, cid: str) -> tuple[dict[str, object], str]:
+    row = db.one(ctx.conn, "SELECT payload_json, status FROM tg_outbox WHERE dedupe_key = ?", (f"terminal:{cid}",))
+    assert row is not None
+    return json.loads(row["payload_json"]), str(row["status"])
+
+
+@pytest.mark.parametrize(("name", "mode", "setting", "line"), [
+    ("ready", "sandbox_open", "on_request", "Next: 🌐 Rerun with network repeats fetch and implement once with"
+                                           " network (rerun 1 of 1). Gate 2 still asks you."),
+    ("needs_mode", "open", "auto", "Next: a rerun with network needs egress mode sandbox_open (now open) and"
+                                   " implement network on_request or auto (/egress); then tap below or use /queue."),
+    ("setting_off", "sandbox_open", "off", "Next: implement network is off; set on_request or auto in /egress,"
+                                           " then tap below or use /queue."),
+])  # fmt: skip
+def test_rerun_offer_rows_classic_and_rich(ctx: AppContext, name: str, mode: str, setting: str, line: str) -> None:
+    _switches(ctx, mode, setting)
+    cid = _after_gate1(ctx, S.FAILED, state_reason="needs_network")
+    row = db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (cid,))
+    offer = terminal_fyi.rerun_offer(ctx, row)
+    assert offer is not None and offer.line == line and offer.button
+    view = terminal_fyi.terminal_view(cid, "kestra-io/kestra#21375", S.IMPLEMENTING, S.FAILED, "needs_network",
+                                      NEEDS_NETWORK, {"error_class": "needs_network"}, offer)  # fmt: skip
+    _goldens(f"terminal_fyi_rerun_{name}", view, cid)
+    assert view.keyboard_labels() == [["🌐 Rerun with network"]]
+    [[button]] = view.rows
+    assert (button.purpose, button.arg, button.ttl) == ("net_rerun", {"cid": cid}, timedelta(hours=24))
+
+
+def test_strict_repo_gets_the_strict_line_and_no_button(ctx: AppContext) -> None:
+    _switches(ctx, "sandbox_open", "auto")
+    ctx.conn.execute("INSERT INTO discovered_targets (repo, source, status, first_seen, updated_at, egress_strict)"
+                     " VALUES ('acme/strict-tool', 'owner', 'kept', 't', 't', 1)")  # fmt: skip
+    cid = insert_contribution(ctx, S.FAILED, upstream="acme/strict-tool", issue_number=5, proposal_version=1,
+                              state_reason="needs_network")  # fmt: skip
+    consumed_proposal(ctx, cid)
+    offer = terminal_fyi.rerun_offer(ctx, db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (cid,)))
+    assert offer is not None and not offer.button
+    view = terminal_fyi.terminal_view(cid, "acme/strict-tool#5", S.IMPLEMENTING, S.FAILED, "needs_network",
+                                      NEEDS_NETWORK, {"error_class": "needs_network"}, offer)  # fmt: skip
+    _goldens("terminal_fyi_rerun_strict", view, cid)
+    shown = classic.render(view).text
+    assert "this repo is egress: strict, so its coder never gets network. Logs: /logs" in shown and view.rows == []
+
+
+@pytest.mark.parametrize("cols", [{"network_reruns": 1}, {"pr_number": 7}])
+def test_bound_used_or_a_pr_keeps_the_part1_line(ctx: AppContext, cols: dict[str, object]) -> None:
+    _switches(ctx, "sandbox_open", "on_request")
+    cid = _after_gate1(ctx, S.FAILED, state_reason="needs_network", **cols)
+    assert terminal_fyi.rerun_offer(ctx, db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (cid,))) is None
+
+
+def test_window_passed_keeps_the_part1_line(ctx: AppContext) -> None:
+    cid = _after_gate1(ctx, S.FAILED, state_reason="needs_network",
+                       updated_at=to_iso(ctx.clock.now() - timedelta(days=8)))  # fmt: skip
+    assert terminal_fyi.rerun_offer(ctx, db.one(ctx.conn, "SELECT * FROM contributions WHERE id = ?", (cid,))) is None
+
+
+async def test_a_card_with_the_button_is_never_held(ctx: AppContext) -> None:
+    """§14.13.3: a row with buttons is never held in quiet hours (holdable=False)."""
+    notifier = Notifier(ctx)
+    ctx.outbox.hold_policy = notifier.decide
+    notifier.prefs.set("quiet_until", to_iso(ctx.clock.now() + timedelta(hours=1)))
+    _switches(ctx, "sandbox_open", "on_request")
+    cid = _fail_needs_network(ctx)
+    payload, status = _queued(ctx, cid)
+    assert status != "held" and "🌐 Rerun with network" in json.dumps(payload, ensure_ascii=False)
+    gap = _after_gate1(ctx, S.VALIDATION_FAILED, issue_number=2608)
+    ctx.state_machine.transition(gap, S.VALIDATION_FAILED, S.FAILED, Actor.WORKER,
+                                 {"error_class": "implement_attempts", "sandbox_gap": True})  # fmt: skip
+    assert "Rerun with network" in json.dumps(_queued(ctx, gap)[0], ensure_ascii=False)  # rerun_hint set
 
 
 async def test_delivered_through_the_rig(rig: TgRig) -> None:

@@ -8,6 +8,7 @@ answers of §14.18.4.3. Without a cid it shows the queue.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from typing import Literal
@@ -67,7 +68,7 @@ async def approve_cmd(ctx: CommandContext, args: list[str]) -> Reply:
 
 class OpenArg(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    family: Literal["a", "p", "s", "r", "h", "f"]
+    family: Literal["a", "p", "s", "r", "h", "f", "n"]
     subject: str = Field(min_length=1, max_length=64)
 
 
@@ -96,6 +97,10 @@ async def queue_open(tap: Tap) -> str:
         return resend_hold(tap.app, a.subject)
     if a.family == "f":
         return retry_failed(tap.app, a.subject, tap.actor)
+    if a.family == "n":  # ADR-0024: the same action as the terminal FYI's 🌐 Rerun with network
+        from ossbot.gatekeeper.telegram.commands import network_rerun  # noqa: PLC0415 - it imports review modules
+
+        return await network_rerun.net_rerun(dataclasses.replace(tap, arg=network_rerun.CidArg(cid=a.subject)))
     if a.family == "p":
         try:
             tap.app.reissue_proposal(a.subject, tap.actor, keep_expiry=True)

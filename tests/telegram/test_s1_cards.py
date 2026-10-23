@@ -180,6 +180,76 @@ async def rig(ctx: AppContext) -> AsyncIterator[TgRig]:
         yield r
 
 
+# ------------------------------------------- gate-2 provenance line (ADR-0024, design §4f, C-D19, C-D20)
+NET_LINE = "🌐 The coder had network in this round"
+
+
+def _transition(ctx: AppContext, cid: str, from_: str, to: str) -> None:
+    with db.transaction(ctx.conn):
+        ctx.audit.append("gatekeeper", "transition", {"from": from_, "to": to}, cid=cid)
+
+
+def _decided(ctx: AppContext, cid: str, egress: str, reason: str) -> None:
+    with db.transaction(ctx.conn):
+        ctx.audit.append("sandbox", "implement_egress_decided", {"run_id": "r", "egress": egress, "reason": reason},
+                         cid=cid)  # fmt: skip
+
+
+def test_provenance_line_sits_under_the_size_line() -> None:
+    out = cards.render(view(network_reasons=("auto", "rerun")))
+    lines = out.card.split("\n")
+    size = next(i for i, line in enumerate(lines) if line.startswith("Size ✅"))
+    assert lines[size + 1] == f"{NET_LINE} (auto, rerun)"
+    assert NET_LINE not in cards.render(view()).card  # absent otherwise: existing cards unchanged
+    assert NET_LINE in cards.render(view(kind="push_update", pr_number=12, rev=2, network_reasons=("auto",))).card
+
+
+def _round(ctx: AppContext) -> str:
+    cid, _ = packaged_contribution(ctx)
+    _transition(ctx, cid, "FAILED", "PROPOSAL_APPROVED")
+    return cid
+
+
+def test_provenance_web_only_round(ctx: AppContext) -> None:
+    cid = _round(ctx)
+    _decided(ctx, cid, "web", "rerun")
+    assert cards.network_provenance(ctx.conn, cid) == ("rerun",)
+
+
+def test_provenance_web_then_none_still_shows_it(ctx: AppContext) -> None:
+    cid = _round(ctx)
+    _decided(ctx, cid, "web", "rerun")
+    _decided(ctx, cid, "none", "setting_off")
+    _decided(ctx, cid, "web", "auto")
+    assert cards.network_provenance(ctx.conn, cid) == ("auto", "rerun")  # sorted, de-duplicated
+
+
+def test_provenance_none_only_is_absent(ctx: AppContext) -> None:
+    cid = _round(ctx)
+    _decided(ctx, cid, "none", "not_requested")
+    assert cards.network_provenance(ctx.conn, cid) == ()
+
+
+def test_provenance_web_before_the_round_start_is_absent(ctx: AppContext) -> None:
+    cid, _ = packaged_contribution(ctx)
+    _decided(ctx, cid, "web", "auto")
+    _transition(ctx, cid, "IMPLEMENTED", "PLANNED")  # a new round (e.g. a REVISE re-plan or a rerun)
+    _decided(ctx, cid, "none", "not_requested")
+    assert cards.network_provenance(ctx.conn, cid) == ()
+    _transition(ctx, cid, "WATCHING", "IMPLEMENTING")  # a fix round on a live PR is a round start too
+    assert cards.network_provenance(ctx.conn, cid) == ()
+
+
+def test_provenance_changes_requested_continues_the_round(ctx: AppContext) -> None:
+    """C-D20: a web rev, then Request changes, then a none rev: the line is still shown on the second rev."""
+    cid = _round(ctx)
+    _decided(ctx, cid, "web", "rerun")
+    _transition(ctx, cid, "AWAITING_APPROVAL", "CHANGES_REQUESTED")
+    _transition(ctx, cid, "CHANGES_REQUESTED", "IMPLEMENTING")
+    _decided(ctx, cid, "none", "not_requested")
+    assert cards.network_provenance(ctx.conn, cid) == ("rerun",)
+
+
 async def test_a_withheld_card_invalidates_its_approval(rig: TgRig) -> None:
     ctx = rig.ctx
     cid, action = packaged_contribution(ctx)

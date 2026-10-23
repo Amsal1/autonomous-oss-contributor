@@ -103,6 +103,7 @@ class CardView:
     asked_total: int = 0
     vetting: dict[str, Any] = field(default_factory=dict)  # vetting_json: the repo_policy line (open_pr)
     signature: Signature | None = None  # the packaged commit's SSH signature (ADR-0006 addendum)
+    network_reasons: tuple[str, ...] = ()  # ADR-0024: why a coder run of this round had network (audit-derived)
 
 
 @dataclass(frozen=True)
@@ -250,6 +251,9 @@ def card_view_kit(view: CardView, *, body_part_count: int = 0) -> k.View:
         blocks.append(k.Block((k.Lines(tuple(_facts(view))),), required=False, priority=5, name="facts"))
         size = size_lines(view.size_report, coder_reason=str(view.review.get("size_reason") or "") or None)
         blocks.append(k.Block((k.Lines(size.lines),), name="size"))
+        if view.network_reasons:  # ADR-0024: the gatekeeper's own audit says the coder had network
+            line = k.line(f"🌐 The coder had network in this round ({', '.join(view.network_reasons)})")
+            blocks.append(k.Block((k.Lines((line,)),), name="network"))
         review = _review_claim(view)
         if review is not None:
             blocks.append(review)
@@ -421,8 +425,31 @@ def view_for_action(conn: sqlite3.Connection, action_id: str, dry_run: bool,
         asked_total=asked_total,
         vetting=_json(contrib["vetting_json"]) if "vetting_json" in keys else {},
         signature=signature_of(payload),
+        network_reasons=network_provenance(conn, str(contrib["id"])),
         **common,
     )
+
+
+def network_provenance(conn: sqlite3.Connection, cid: str) -> tuple[str, ...]:
+    """ADR-0024 (design §4f, C-D19, C-D20): the sorted reasons (``auto``, ``rerun``) of every web decision of a
+    coder run in the current round, from the gatekeeper's own audit (``audit_events`` by ``(cid, seq)``). Round
+    start = the newest transition into PROPOSAL_APPROVED or PLANNED, or WATCHING -> IMPLEMENTING; a gate-2
+    Request changes (CHANGES_REQUESTED) continues the round. Informational only: never part of the binding."""
+    start = 0
+    for seq, data in conn.execute("SELECT seq, data_json FROM audit_events WHERE cid = ? AND event = 'transition'"
+                                  " ORDER BY seq DESC", (cid,)):  # fmt: skip
+        doc = json.loads(data or "{}")
+        to, from_ = doc.get("to"), doc.get("from")
+        if to in {"PROPOSAL_APPROVED", "PLANNED"} or (from_ == "WATCHING" and to == "IMPLEMENTING"):
+            start = int(seq)
+            break
+    reasons: set[str] = set()
+    for (data,) in conn.execute("SELECT data_json FROM audit_events WHERE cid = ? AND seq > ? AND event ="
+                                " 'implement_egress_decided' ORDER BY seq", (cid, start)):  # fmt: skip
+        doc = json.loads(data or "{}")
+        if doc.get("egress") == "web" and doc.get("reason") in {"auto", "rerun"}:
+            reasons.add(str(doc["reason"]))
+    return tuple(sorted(reasons))
 
 
 def _repo_policy_block(view: CardView) -> k.Block | None:

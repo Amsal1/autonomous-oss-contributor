@@ -14,7 +14,7 @@ from ossbot.common.schemas import State
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.review import queue
-from tests.conftest import insert_action, insert_contribution, packaged_contribution
+from tests.conftest import consumed_proposal, insert_action, insert_contribution, packaged_contribution
 from tests.fakes.holds import hold_request
 from tests.telegram.reviewkit import labels, newest_approval, publish, sent_with, status, text, toast, token
 from tests.telegram.tgharness import TgRig, make_rig
@@ -289,3 +289,70 @@ async def test_an_item_no_longer_eligible_answers_why(rig: TgRig) -> None:
     await rig.tap(token(rig, mid, "📥 Open 1"), message=mid)
     assert toast(rig) == "Nothing to re-send (state IMPLEMENTING)"
     assert int(ctx.conn.execute("SELECT COUNT(*) FROM approvals").fetchone()[0]) == before
+
+
+# ------------------------------------------------------------- reruns with network (ADR-0024, family n)
+def _switch(ctx: AppContext, mode: str, setting: str) -> None:
+    default = ctx.config.egress.mode_default
+    if ctx.control.egress_mode(default) != mode:
+        ctx.control.set_egress_mode(mode, "tg:4242", default, egress=ctx.config.egress)  # type: ignore[arg-type]
+    ctx.control.set_implement_network(setting, "tg:4242", default)  # type: ignore[arg-type]
+
+
+def _failed(ctx: AppContext, **cols: object) -> str:
+    cols.setdefault("state_reason", "needs_network")
+    cid = insert_contribution(ctx, State.FAILED, upstream="runatlantis/atlantis", proposal_version=1, **cols)
+    consumed_proposal(ctx, cid)
+    return cid
+
+
+@pytest.mark.parametrize(("mode", "setting", "suffix"), [
+    ("sandbox_open", "on_request", ""),
+    ("open", "auto", " · needs sandbox_open"),
+    ("sandbox_open", "off", " · implement network off"),
+])  # fmt: skip
+def test_rerun_family_listed_after_gate_1(ctx: AppContext, mode: str, setting: str, suffix: str) -> None:
+    _switch(ctx, mode, setting)
+    cid = _failed(ctx)
+    _proposal(ctx, hours=24)
+    items = queue.ordered(ctx)
+    assert [i.family for i in items] == ["p", "n"]
+    rerun = items[-1]
+    assert (rerun.gate, rerun.class_rank, rerun.subject, rerun.shown_cid) == (0, 4, cid, cid)
+    assert rerun.label == f"🌐 Rerun? · runatlantis/atlantis · needs_network{suffix}"
+    shown = str(queue.view(ctx).blocks)
+    assert "Gate 1 · proposals (1)" in shown and "Reruns with network (1)" in shown
+
+
+@pytest.mark.parametrize("case", ["strict", "bound_used", "window_passed", "not_eligible", "pr"])
+def test_rerun_family_not_listed(ctx: AppContext, case: str) -> None:
+    _switch(ctx, "sandbox_open", "on_request")
+    if case == "strict":
+        ctx.conn.execute("INSERT INTO discovered_targets (repo, source, status, first_seen, updated_at,"
+                         " egress_strict) VALUES ('acme/strict-tool', 'owner', 'kept', 't', 't', 1)")  # fmt: skip
+        cid = insert_contribution(ctx, State.FAILED, upstream="acme/strict-tool", proposal_version=1,
+                                  state_reason="needs_network")  # fmt: skip
+        consumed_proposal(ctx, cid)
+    elif case == "bound_used":
+        _failed(ctx, network_reruns=1)
+    elif case == "window_passed":
+        _failed(ctx, updated_at=to_iso(ctx.clock.now() - timedelta(days=8)))
+    elif case == "not_eligible":
+        _failed(ctx, state_reason="output_invalid")
+    else:
+        _failed(ctx, pr_number=7)
+    assert [i for i in queue.items(ctx) if i.family == "n"] == []
+
+
+async def test_open_rerun_runs_the_same_action(rig: TgRig) -> None:
+    ctx = rig.ctx
+    _switch(ctx, "sandbox_open", "on_request")
+    cid = _failed(ctx)
+    await rig.say("/queue")
+    mid = sent_with(rig, "Queue")
+    await rig.tap(token(rig, mid, "📥 Open 1"), message=mid)
+    await rig.flush()
+    confirm = sent_with(rig, "Rerun with network?")
+    assert labels(rig, confirm) == ["🌐 Rerun now", "↩️ Cancel"]
+    await rig.tap(token(rig, confirm, "🌐 Rerun now"), message=confirm)
+    assert db.one(ctx.conn, "SELECT state FROM contributions WHERE id = ?", (cid,))[0] == "PROPOSAL_APPROVED"

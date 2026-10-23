@@ -1,0 +1,57 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "❌ ",
+    {
+     "text": "Failed",
+     "type": "bold"
+    },
+    " · ",
+    "acme/strict-tool#5",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Stage: implementing",
+    " · reason: ",
+    "needs_network"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "blocks": [
+    {
+     "text": [
+      "🤖 ",
+      {
+       "text": "Why:",
+       "type": "bold"
+      },
+      " ",
+      "The change adds dependencies the sandbox could not fetch, even after one re-fetch: com.google.guava:guava:33.3.1-jre."
+     ],
+     "type": "paragraph"
+    }
+   ],
+   "type": "blockquote"
+  },
+  {
+   "text": [
+    "Next: this repo is egress: strict, so its coder never gets network. Logs: /logs ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

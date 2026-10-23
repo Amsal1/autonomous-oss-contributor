@@ -437,8 +437,9 @@ def test_needs_network_after_gate_1_is_one_gatekeeper_fyi(sc: StageContext, ctx:
                        " left-pad@1.3.0.")  # fmt: skip
     shown = _terminal(ctx, cid)
     assert len(shown) == 1 and "left-pad@1.3.0" in shown[0]
-    assert "Next: the sandbox could not build or test this repo offline" in shown[0]
-    assert "No further work on this item" not in shown[0]
+    # ADR-0024: a rerun-able failure; egress mode open (the default), so the line names what it needs
+    assert "Next: a rerun with network needs egress mode sandbox_open (now open)" in shown[0]
+    assert "🌐 Rerun with network" in shown[0] and "No further work on this item" not in shown[0]
 
 
 def test_sandbox_gaps_only_go_on_to_validate(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
@@ -592,7 +593,7 @@ def test_validation_loop_end_is_tagged_with_the_sandbox_gap(
     sentence = "Sandbox gaps the coder reported: no JDK 25 toolchain offline for :app."
     assert (sentence in evidence["summary"]) is noted and len(evidence["summary"]) <= implement.SUMMARY_MAX
     shown = _terminal(ctx, cid)[0]
-    assert ("Next: the sandbox could not build or test this repo offline" in shown) is noted
+    assert ("Next: a rerun with network needs egress mode sandbox_open" in shown) is noted  # ADR-0024 offer
     assert ("No further work on this item" in shown) is not noted
 
 
