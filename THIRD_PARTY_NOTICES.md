@@ -25,7 +25,7 @@ These are installed or downloaded by provisioning at the pinned versions in `con
 |---|---|---|---|
 | Hermes Agent | v0.22.2 | MIT (Copyright (c) 2025 Nous Research) | https://github.com/NousResearch/hermes-agent |
 | github-mcp-server | 2.0.2 | MIT (Copyright (c) 2025 GitHub) | https://github.com/github/github-mcp-server |
-| Kiro CLI (`kiro-cli`) | 2.32.0 | proprietary; used under the Kiro / AWS terms of the user's own account | https://kiro.dev |
+| Kiro CLI (`kiro-cli`) | 2.33.1 | proprietary; used under the Kiro / AWS terms of the user's own account | https://kiro.dev |
 | uv | 0.13.1 | Apache-2.0 OR MIT | https://github.com/astral-sh/uv |
 | gitleaks | 8.30.1 | MIT | https://github.com/gitleaks/gitleaks |
 | PSScriptAnalyzer | 1.25.0 | MIT | https://github.com/PowerShell/PSScriptAnalyzer |

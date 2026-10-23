@@ -1,5 +1,5 @@
-"""Baked Kiro settings (DESIGN §10.1 M1, §15.3): the nine cli.json keys (N8 ``toolSearch.enabled``
-since FEAT-006 item 30) and the DENY_SYS rules."""
+"""Baked Kiro settings (DESIGN §10.1 M1, §15.3): the ten cli.json keys (N8 ``toolSearch.enabled``
+since FEAT-006 item 30, ``memory.mode`` since kiro-cli 2.33.1) and the DENY_SYS rules."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from ossbot.sandboxd.probes import SETTINGS_REQUIRED, agent_configs_hash, settin
 
 ROOT = Path(__file__).resolve().parents[3]
 SETTINGS = ROOT / "sandbox" / "kiro" / "settings"
-NINE = {
+TEN: dict[str, bool | str] = {
     "telemetry.enabled": False,
     "app.disableAutoupdates": True,
     "chat.enableKnowledge": False,
@@ -23,18 +23,27 @@ NINE = {
     "chat.enableWorkflows": False,
     "chat.enableCheckpoint": False,
     "toolSearch.enabled": False,  # §23 item 5 N8: no Tool Search bridge (ADR-0005 addendum, FEAT-006)
+    # kiro-cli 2.33.1 (ADR-0011 addendum, D2): no Kiro-side memories; the exact spelling matters, the
+    # CLI accepts a bogus value silently
+    "memory.mode": "disabled",
 }
 DENY_SYS = ["/proc/**", "/sys/**", "/dev/**", "/run/**", "/etc/**", "/home/agent/.kiro/**", "/io/output/**"]
 # scout/reviewer also never read the read-token file kiro.sh writes for ossbot-github-mcp (GHMCP-2)
 DENY_SYS_MCP = [*DENY_SYS[:6], "/home/agent/.ossbot/**", DENY_SYS[6]]
 
 
-def test_cli_json_has_exactly_the_nine_keys() -> None:
-    assert json.loads((SETTINGS / "cli.json").read_text(encoding="utf-8")) == NINE
+def test_cli_json_has_exactly_the_ten_keys() -> None:
+    doc = json.loads((SETTINGS / "cli.json").read_text(encoding="utf-8"))
+    assert doc == TEN
+    assert {k: type(v) for k, v in doc.items()} == {k: type(v) for k, v in TEN.items()}
 
 
 def test_settings_probe_checks_a_subset_of_the_baked_values() -> None:
-    assert all(NINE[k] is v for k, v in SETTINGS_REQUIRED.items())
+    assert all(TEN[k] is v if isinstance(v, bool) else TEN[k] == v for k, v in SETTINGS_REQUIRED.items())
+    # telemetry, update checks and memory are always asserted live
+    assert SETTINGS_REQUIRED["telemetry.enabled"] is False
+    assert SETTINGS_REQUIRED["app.disableAutoupdates"] is True
+    assert SETTINGS_REQUIRED["memory.mode"] == "disabled"
 
 
 def test_permissions_deny_sys_on_every_file_tool() -> None:
@@ -152,17 +161,19 @@ def test_chat_agent_has_only_the_web_tools() -> None:
         assert f"capability: {cap}" in perms
 
 
-def test_settings_list_parser_reads_the_live_2_32_format() -> None:
-    """kiro-cli 2.32 prints ``key = value (global)`` (recorded live by the FEAT-006 probe run)."""
-    from ossbot.sandboxd.probes import SETTINGS_REQUIRED, parse_settings
+def test_settings_list_parser_reads_the_live_format() -> None:
+    """kiro-cli 2.32/2.33.1 print ``key = value (global)``, strings quoted (recorded live: FEAT-006
+    probe run; 2.33.1 ``settings list`` after ``settings memory.mode disabled``, 2026-10-23)."""
+    from ossbot.sandboxd.probes import SETTINGS_REQUIRED, parse_settings, settings_value_ok
 
     live = (
         "telemetry.enabled = false (global)\napp.disableAutoupdates = true (global)\n"
         "chat.enableKnowledge = false (global)\nchat.enableCodeIntelligence = false (global)\n"
         "chat.enableDelegate = false (global)\nchat.enableMainAgentSubagentTool = false (global)\n"
         "chat.enableWorkflows = false (global)\nchat.enableCheckpoint = false (global)\n"
-        "toolSearch.enabled = false (global)\n"
+        'toolSearch.enabled = false (global)\nmemory.mode = "disabled" (global)\n'
     )
     values = parse_settings(live)
-    assert all(values.get(k) is v for k, v in SETTINGS_REQUIRED.items())
+    assert values["memory.mode"] == "disabled"
+    assert all(settings_value_ok(values.get(k), v) for k, v in SETTINGS_REQUIRED.items())
     assert parse_settings("telemetry.enabled = true (global)")["telemetry.enabled"] is True

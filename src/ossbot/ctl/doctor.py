@@ -62,6 +62,7 @@ EXPECTED_GROUPS: dict[str, set[str]] = {
 KIRO_SETTINGS_WANT = {
     "chat.enableKnowledge": "false", "chat.enableCodeIntelligence": "false", "chat.enableDelegate": "false",
     "chat.enableWorkflows": "false", "telemetry.enabled": "false", "app.disableAutoupdates": "true",
+    "memory.mode": "disabled",  # kiro-cli 2.33.1 prints it quoted: memory.mode = "disabled" (global)
 }  # fmt: skip
 
 

@@ -307,23 +307,31 @@ def test_settings_probe() -> None:
         b"telemetry.enabled = false\napp.disableAutoupdates = true\nchat.enableKnowledge = false\n"
         b"chat.enableCodeIntelligence = false\nchat.enableDelegate = false\nchat.enableWorkflows = false\n"
         b"toolSearch.enabled = false\n"
+        b'memory.mode = "disabled" (global)\n'
     )
     assert eval_settings(ProbeEvidence(files={"settings.txt": text}), SCANNER)
     assert not eval_settings(
         ProbeEvidence(files={"settings.txt": text.replace(b"Knowledge = false", b"Knowledge = true")}), SCANNER
     )
-    as_json = json.dumps(
-        {
-            "telemetry.enabled": False,
-            "app.disableAutoupdates": True,
-            "chat.enableKnowledge": False,
-            "chat.enableCodeIntelligence": False,
-            "chat.enableDelegate": False,
-            "chat.enableWorkflows": False,
-            "toolSearch.enabled": False,
-        }
-    ).encode()
-    assert eval_settings(ProbeEvidence(files={"settings.txt": as_json}), SCANNER)
+    # kiro-cli 2.33.1 memory.mode (ADR-0011 addendum, D2): missing or any other value fails
+    no_memory = text.replace(b'memory.mode = "disabled" (global)\n', b"")
+    assert not eval_settings(ProbeEvidence(files={"settings.txt": no_memory}), SCANNER)
+    for other in (b"read_write", b"read_only", b"disable", b"Disabled", b"false"):
+        bad = text.replace(b'"disabled"', b'"' + other + b'"')
+        assert not eval_settings(ProbeEvidence(files={"settings.txt": bad}), SCANNER), other
+    doc: dict[str, bool | str] = {
+        "telemetry.enabled": False,
+        "app.disableAutoupdates": True,
+        "chat.enableKnowledge": False,
+        "chat.enableCodeIntelligence": False,
+        "chat.enableDelegate": False,
+        "chat.enableWorkflows": False,
+        "toolSearch.enabled": False,
+        "memory.mode": "disabled",
+    }
+    assert eval_settings(ProbeEvidence(files={"settings.txt": json.dumps(doc).encode()}), SCANNER)
+    as_int = json.dumps({**doc, "app.disableAutoupdates": 1}).encode()
+    assert not eval_settings(ProbeEvidence(files={"settings.txt": as_int}), SCANNER)
     assert not eval_settings(ProbeEvidence(files={}), SCANNER)
 
 
@@ -346,6 +354,7 @@ def settings_ok(rt: FakeRuntime, c: FakeContainer) -> int:
         "chat.enableDelegate = false",
         "chat.enableWorkflows = false",
         "toolSearch.enabled = false",
+        'memory.mode = "disabled" (global)',
     ]
     if c.spec.env and dict(c.spec.env).get("OSSBOT_PROBE") == "settings":
         (out / "settings.txt").write_text("\n".join(lines))

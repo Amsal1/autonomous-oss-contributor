@@ -7,5 +7,6 @@
   "chat.enableMainAgentSubagentTool": false,
   "chat.enableWorkflows": false,
   "chat.enableCheckpoint": false,
-  "toolSearch.enabled": false
+  "toolSearch.enabled": false,
+  "memory.mode": "disabled"
 }

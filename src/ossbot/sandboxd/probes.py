@@ -47,7 +47,7 @@ FAIL: Verdict = "fail"
 INCONCLUSIVE: Verdict = "inconclusive"  # the model refused or made no tool call: proves nothing
 MODEL_PROBES = frozenset({"research_deny", "symlink", "coder_surface"})  # verdicts that depend on the model
 INCONCLUSIVE_RETRIES = 3
-SETTINGS_REQUIRED: dict[str, bool] = {
+SETTINGS_REQUIRED: dict[str, bool | str] = {
     "chat.enableKnowledge": False,
     "chat.enableCodeIntelligence": False,
     "chat.enableDelegate": False,
@@ -55,6 +55,8 @@ SETTINGS_REQUIRED: dict[str, bool] = {
     "telemetry.enabled": False,
     "toolSearch.enabled": False,  # §23 item 5 N8 (FEAT-006 item 30)
     "app.disableAutoupdates": True,
+    # kiro-cli 2.33.1: no Kiro-side memories (cloud sync is server-flagged); ADR-0011 addendum, decision D2
+    "memory.mode": "disabled",
 }
 KSK_RE = re.compile(rb"ksk_")
 
@@ -466,7 +468,14 @@ def eval_settings(ev: ProbeEvidence, scanner: KeyScanner) -> bool:
     if ev.exit_code != 0:
         return False
     values = parse_settings(ev.files.get("settings.txt", b"").decode("utf-8", "replace"))
-    return all(values.get(k) is v for k, v in SETTINGS_REQUIRED.items())
+    return all(settings_value_ok(values.get(k), v) for k, v in SETTINGS_REQUIRED.items())
+
+
+def settings_value_ok(got: object, want: bool | str) -> bool:
+    """Booleans by identity (``1`` is not ``true``), strings by exact equality."""
+    if isinstance(want, bool):
+        return got is want
+    return isinstance(got, str) and got == want
 
 
 def eval_workspace(ev: ProbeEvidence, scanner: KeyScanner) -> bool:

@@ -207,7 +207,7 @@ def test_repo_lock_images_are_recorded_by_the_images_step() -> None:
     pins = load_image_pins(Path(__file__).resolve().parents[3] / "config" / "versions.lock.yaml")
     assert set(pins.digests) == {"sandbox-full", "sandbox-llm", "proxy"}
     assert pins.agent_configs_sha256 is not None and pins.settings_sha256 is not None
-    assert pins.kiro_cli_version == "2.32.0"
+    assert pins.kiro_cli_version == "2.33.1"
 
 
 def test_empty_allowlist_refuses_every_create(tmp_path: Path) -> None:

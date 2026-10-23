@@ -5,9 +5,9 @@
 #     --build-arg KIRO_CLI_URL=<lock> --build-arg KIRO_CLI_SHA256=<lock> .
 FROM ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
 
-ARG KIRO_CLI_VERSION=2.32.0
-ARG KIRO_CLI_URL=https://desktop-release.q.us-east-1.amazonaws.com/2.32.0/kirocli-x86_64-linux.tar.gz
-ARG KIRO_CLI_SHA256=05989f9bfe465b304e8d1b2dba50aec2b84fcc1deaa4c0773af3f539d6e0d312
+ARG KIRO_CLI_VERSION=2.33.1
+ARG KIRO_CLI_URL=https://desktop-release.q.us-east-1.amazonaws.com/2.33.1/kirocli-x86_64-linux.tar.gz
+ARG KIRO_CLI_SHA256=5993158abeb1a3086a591d5c7dd77e3db3c889a3c0d8b41418bc6a1af79400fb
 
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \

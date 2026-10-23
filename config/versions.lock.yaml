@@ -48,11 +48,11 @@ docker:
   source: "download.docker.com/linux/ubuntu/dists/noble/stable/binary-amd64/Packages (compose plugin major = 5); key fingerprint per docs.docker.com/engine/install/ubuntu"
 
 kiro_cli:
-  version: "2.32.0"
+  version: "2.33.1"
   manifest: "https://desktop-release.q.us-east-1.amazonaws.com/latest/manifest.json"
-  headless_tar_gz_url: "https://desktop-release.q.us-east-1.amazonaws.com/2.32.0/kirocli-x86_64-linux.tar.gz"
-  headless_tar_gz_sha256: "05989f9bfe465b304e8d1b2dba50aec2b84fcc1deaa4c0773af3f539d6e0d312"
-  source: "manifest latest = 2.32.0 re-fetched 2026-10-17 (CLI 3.0 not released yet)"
+  headless_tar_gz_url: "https://desktop-release.q.us-east-1.amazonaws.com/2.33.1/kirocli-x86_64-linux.tar.gz"
+  headless_tar_gz_sha256: "5993158abeb1a3086a591d5c7dd77e3db3c889a3c0d8b41418bc6a1af79400fb"
+  source: "manifest latest = 2.33.1 fetched 2026-10-23 (variant headless, tarGz, x86_64); size 154084043; downloaded sha256 equals the manifest (Get-FileHash, sha256sum -c); re-checked against the manifest before commit; ADR-0011 addendum kiro-cli 2.33.1"
 
 hermes:
   tag: "v0.22.2"
@@ -98,7 +98,7 @@ images:
     digest: "sha256:58adde12384c2b45dbb68cbcd7683b926b7ff4458a00f99585e26a625718cfb1"
   sandbox_llm:
     digest: "sha256:d121c69391bad77b21f0595c1679a067df3ad0e784ec4de5d408c42dec93def9"
-    kiro_cli_version: "2.32.0"
+    kiro_cli_version: "2.33.1"
     agent_configs_sha256: "961f128efe51c1e9ffd43f3c234559c2a11a55e2c81d73f74af6e408c8fc29ff"
     settings_sha256: "d5704ef956978ee321cf864f22e6406bd945086192c7e39a2f36e16c8a46e5a2"
   proxy:
