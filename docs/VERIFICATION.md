@@ -1056,6 +1056,20 @@ Commits c1d3092 (proxy rotate guard), bf0dc1e (package in-place staging, DESIGN 
 
 Not run in this step (close-out): the full hermetic suite, `REDEPLOY` (sandbox-full rebuild, digest pin, new `/opt/ossbot/bin/ossbot-proxy-rotate`), `doctor --probes`, `ROOT bash tests/system/test_proxy_log_bytes.sh` (V11b), `ROOTDEV pytest -m e2e_docker tests/e2e/test_e2e_docker.py -k package`, gitleaks and `ossctl lint personal`.
 
+Close-out (2026-10-23, at 234f7ef plus the digest pin):
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports`; shellcheck on the three changed scripts | all clean; 605 files formatted; 274 files no issues; 16 contracts kept |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 4885 passed (first run: 1 failure from a gitignored local agent note under `.agents/` naming the Telegram polling reset call; note reworded, no code change) |
+| Secrets, personal values | `ROOT gitleaks git --redact --config .gitleaks.toml .`; `DEV ossctl lint personal` | 343 commits, no leaks; 0 hits |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | exit 0; sandbox-full `sha256:58adde12…` and sandbox-llm `sha256:d121c693…` rebuilt and pinned; `/opt/ossbot/bin/ossbot-proxy-rotate` installed; services restarted |
+| Probes | `ROOT /opt/ossbot/app/.venv/bin/ossctl doctor --probes` | PASS 50; all five safety probes passed for tuple 5957d0556a8a |
+| V11b and V11 live | `ROOT bash tests/system/test_proxy_log_bytes.sh` | all checks passed (absent container: exit 0, inode and size kept, no rotated file) |
+| Docker e2e package | `ROOTDEV pytest -m e2e_docker tests/e2e/test_e2e_docker.py -k package --timeout=1800 -q` | 1 passed (sparse 3 GiB ignored `node_modules` packaged fine) |
+| Doctor, status | `ROOT ossctl doctor`; `ROOT ossctl status` | PASS 49, no WARN; lifecycle `up`, state `running`, dry-run unchanged |
+| Rotate unit | `ROOT systemctl start ossbot-proxy-rotate.service`; `systemctl --failed` | exit 0, rotated; no failed units |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
