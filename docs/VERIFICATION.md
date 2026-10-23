@@ -1043,6 +1043,19 @@ On 85ae34b (code) and dfdfb7c (ADR measured values). Details: `.ossbot-local/pos
 | V-B | `ROOT ossctl doctor` (full) | 15:39Z WARN core 593/5000 left (pre-fix loop), search 26/30; 15:41Z after the reset all PASS (49): core 4998/5000, search 30/30 |
 | Live cycle | `journalctl -u ossbot-runner` | 15:38:59Z `discover_done` (scheduler cycle, core floor hit at 623 left): 1 target read, 4 candidates, 3 created, 1 linked PR; 0 runner 403s in the next 29 min |
 
+## Post-v1 package exit 11 and proxy rotate (2026-10-23)
+
+Commits c1d3092 (proxy rotate guard), bf0dc1e (package in-place staging, DESIGN §9.11, ADR-0006 addendum), 35442cc (package failure summary). Plan `.ossbot-local/postv1/plan-package-exit11-proxyrotate.md`; TRACEABILITY `PX-1`, `PK-1`, `PK-2`. Hermetic only: no redeploy, no image rebuild, no live stage; c_D1CYR0EKGR and every other contribution untouched (no retry, resume, approve or re-run); dry-run untouched; no GitHub write, no Telegram message. Details: `.ossbot-local/postv1/impl-notes-package-exit11-proxyrotate.md` (not tracked).
+
+| Check | Command | Result |
+|---|---|---|
+| Lint | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | all checks passed; 605 files formatted; no issues in 274 files; 16 contracts kept, 0 broken |
+| shellcheck | `shellcheck scripts/bin/ossbot-proxy-rotate sandbox/entrypoints/package.sh tests/system/test_proxy_log_bytes.sh` (as ossadmin) | clean |
+| Targeted | `DEV pytest tests/unit/entrypoints tests/unit/test_systemd_units.py tests/unit/runner tests/unit/gatekeeper/test_package_verify.py tests/unit/gatekeeper/test_package_signing.py tests/unit/gatekeeper/test_gitops_args.py tests/unit/gatekeeper/test_claim_live.py --timeout=120 -q` | 585 passed |
+| Hermetic e2e (real package.sh) | `DEV pytest -m e2e tests/e2e -n auto --timeout=120 -q` | 21 passed |
+
+Not run in this step (close-out): the full hermetic suite, `REDEPLOY` (sandbox-full rebuild, digest pin, new `/opt/ossbot/bin/ossbot-proxy-rotate`), `doctor --probes`, `ROOT bash tests/system/test_proxy_log_bytes.sh` (V11b), `ROOTDEV pytest -m e2e_docker tests/e2e/test_e2e_docker.py -k package`, gitleaks and `ossctl lint personal`.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
