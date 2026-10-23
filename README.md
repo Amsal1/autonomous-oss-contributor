@@ -194,7 +194,7 @@ and `request` never touch an approval or the ceiling. The command table below is
 | `/down` | Down (workers): stop the workers, keep the gatekeeper up | stop |
 | `/drain` | Drain: no new work, running work may finish (immediate) | stop |
 | `/dryrun` | /dryrun on (immediate) or /dryrun off (asks for confirmation) | go |
-| `/egress` | Egress mode allowlist / research / open / sandbox_open (asks for confirmation) | config |
+| `/egress` | Egress mode and implement network (asks for confirmation) | config |
 | `/filters` | Autonomous discovery filters and open discovery (5 pages; /work ignores them) | tune |
 | `/fix` | Fix your open PR with notes: /fix <cid\|PR url> <notes> | request |
 | `/help` | List commands | read |
@@ -253,6 +253,34 @@ every mode. Every fetch/validate job is metered from the proxy log: a job over 6
 in Control shows the numbers, and **▶️ Resume…** (two taps) or `sudo ossctl egress release <cid>` lets
 it run again. `ossctl egress holds` lists open holds, `sudo ossctl egress jobs` the per-job numbers.
 HTTPS content is not visible to the proxy, only hosts, ports and byte counts (ADR-0023).
+
+**Implement network.** The coder's commands run in `agent-exec`, a container without any credential and,
+by default, without a network: builds work from the caches fetch prepared. The setting
+`implement_network` lets that container use the public web through the proxy as well, under the same
+floors and per-job limits as fetch and validate:
+
+| Value | The coder's executor gets the web |
+|---|---|
+| `off` (default, also after a DB reset) | never |
+| `on_request` | only for a 🌐 Rerun with network you confirm |
+| `auto` | every implement run of a non-strict repo, fix rounds on your open PRs included |
+
+It works only while the egress mode is `sandbox_open` (otherwise it behaves as `off`), never for an
+`egress: strict` repo, and never for the container that holds the Kiro key. Change it in `/egress`
+(the `impl:` row, or `/egress implement <value>`, then a confirm tap) or with
+`ossctl egress implement-network <value>` (TTY confirm). Every change is audited and announced;
+open approvals stay valid. `/status`, `/egress` and `ossctl egress status` show it, marked `(inactive)`
+outside `sandbox_open`. A breach of the limits holds only that contribution, as above (ADR-0024).
+
+**🌐 Rerun with network.** 🌐 is offered for `needs_network` and for validation-loop failures where the
+coder reported sandbox gaps; other failures are rerun with /work. The failure FYI then ends with a
+`Next:` line and a **🌐 Rerun with network** button, and the item is listed in `/queue`. The button
+opens a confirm card; **🌐 Rerun now** runs fetch and implement again for that one item with the coder's
+executor on the web (the plan is reused), then validate, review and package as usual. One rerun per item
+by default (`policy.limits.network_reruns_max`, at most 3), within 7 days of the failure. It is refused
+for strict repos, outside `sandbox_open` (the card says why), with the setting `off`, while paused or
+killed, while the item is held, or once it has a PR (use `/fix` there). Gate 2 is unchanged: nothing is
+pushed before you approve the preview, which says "🌐 The coder had network in this round".
 
 The **Hermes capability tier** decides which Hermes toolsets are on:
 

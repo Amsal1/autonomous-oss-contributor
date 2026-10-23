@@ -1100,6 +1100,20 @@ Commits bf545f3 (sandbox: JVM proxy and offline mode, Gradle warm-up, Maven, JDK
 | Deferred sandbox tests | `ROOTDEV pytest --collect-only -q tests/sandbox/test_jvm_offline.py tests/sandbox/test_profiles.py` | 16 collected; the runs (gradle-multi and maven-multi fixtures, V-G3, the offline agent-exec Gradle/Maven/pipefail cases) need the rebuilt sandbox-full and run in the close-out |
 | R1.9 cfn-lint (classification) | `ROOTDEV pytest tests/sandbox/test_cfn_lint_on_demand.py` (once, deployed stack); `ROOT ossctl egress jobs --cid c_SMOKETEST6`; the proxy access log | failed again: `cfn-version` exit 2 after 49 s. No meter summary (the sandbox JobService runs no meter: `[]`). Squid: every `files.pythonhosted.org` and, in this run, `pypi.org` CONNECT to `151.101.0.223` is `TCP_TUNNEL/200` with 39 bytes from upstream and a 10 000 ms duration, repeated by uv's retries; earlier runs reached `pypi.org` through `151.101.64.223` in full (≈128 KB). Not a render bug (no `TCP_DENIED`), not uv's 30 s read timeout: a TLS handshake that stalls on one Fastly route. No one-line fix: **follow-up F1c** (route/MTU of the proxy's path to that address); the test now prints uv's message for the close-out's confirming run |
 
+## Post-v1 sandbox-network Part 2 (2026-10-23, ADR-0024)
+
+Commits 931d49e (setting, decision, ADR-0024), fcc236d (sandboxd networked agent-exec, Docker filter), 0c31b2d (the H-only rerun edge), 377a992 (runner coder egress, rerun note reset, plan reuse), 2a6c42c (`/egress` picker, `/status` line), d240e6a (rerun button, confirm handlers, `/queue` family n, gate-2 provenance line), 49397b1 (hermetic e2e) and the Part 2 docs commit. The command log is `part2-verify.md` in `.ossbot-local/postv1/sandbox-network/` (not tracked). No redeploy (the close-out does it once); no contribution touched; dry-run, the egress mode and `implement_network` unchanged on the live system; no GitHub write.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `DEV ruff check src tests`; `DEV ruff format --check src tests`; `DEV mypy`; `DEV lint-imports` | clean; 634 files formatted; 282 files no issues; 18 contracts kept (incl. "Only Telegram handlers reach ossbot.gatekeeper.network_rerun"), 0 broken |
+| Shell | `shellcheck -x sandbox/entrypoints/exec.sh` | clean |
+| Carried criteria C-D17, C-D18 | `DEV pytest` `test_state_machine.py::test_rescope_clears_network_grant` (IMPLEMENTED, VALIDATED, REVIEW_PASSED), `test_implement_network.py::test_grant_version_mismatch_is_no_grant`, `::test_rescope_then_new_gate1_on_request_is_not_requested`, `tests/unit/sandboxd/test_db.py` | all passed |
+| e2e | `DEV pytest -m e2e tests/e2e/test_e2e_network_rerun.py` | 4 passed: gate-2 `open_pr` card with the provenance line, zero fake-GitHub writes, dry-run on; second failure without a button; `egress_mode` refusal; rescope drops the grant (coder `none`) |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" --numprocesses=auto --timeout=120 -q` | 5468 passed |
+| Hygiene | `DEV ossctl docs commands` then `--check`; `DEV ossctl lint personal`; `tests/unit/test_i5_wording.py` | README command table current; 0 hits; 12 passed |
+| Deferred (close-out) | `ROOTDEV pytest tests/sandbox/test_profiles.py` (networked agent-exec curl matrix against the live mode), `ROOTDEV pytest -m "sandbox or e2e_docker"`, `ossctl egress status` (`implement_network: off`), `ossctl doctor --probes` | need the rebuilt images and the deployed copy |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
