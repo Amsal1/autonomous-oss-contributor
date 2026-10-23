@@ -1114,6 +1114,20 @@ Commits 931d49e (setting, decision, ADR-0024), fcc236d (sandboxd networked agent
 | Hygiene | `DEV ossctl docs commands` then `--check`; `DEV ossctl lint personal`; `tests/unit/test_i5_wording.py` | README command table current; 0 hits; 12 passed |
 | Deferred (close-out) | `ROOTDEV pytest tests/sandbox/test_profiles.py` (networked agent-exec curl matrix against the live mode), `ROOTDEV pytest -m "sandbox or e2e_docker"`, `ossctl egress status` (`implement_network: off`), `ossctl doctor --probes` | need the rebuilt images and the deployed copy |
 
+## Post-v1 sandbox-network close-out (2026-10-24)
+
+Commits db7421f (review P1-1: the first coder run's sandbox gaps survive the re-fetch resume), aeb63a5 (superseded apt pins: poppler-utils 24.02.0-1ubuntu9.11, squid 6.14-0ubuntu0.24.04.5, Launchpad 2026-10-24), 76c0db9 (rebuilt digests). The command log is `.ossbot-local/postv1/verify-sandbox-network.md` (not tracked). Dry-run, the egress mode (`sandbox_open`) and `implement_network` (`off`, the fresh default) unchanged; no contribution touched; no GitHub write.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint, shell, hermetic | lint gate; `ROOT shellcheck -x` on the five changed entrypoint files; `DEV pytest -m "unit or telegram or acp or e2e" -n auto` | clean; clean; 5469 passed |
+| Hygiene | `DEV ossctl docs commands --check`; `DEV ossctl lint personal`; `ROOT gitleaks git --redact --config .gitleaks.toml .` | current; 0 hits; 364 commits, no leaks |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` | run 1 failed at images (poppler-utils 9.10 left the noble index); run 2 exit 0 after aeb63a5; the services were restarted by hand in enable-start order (run 1 had already deployed the app, so run 2 restarted nothing: follow-up F-SN-1, provision must remember a pending restart across a failed run) |
+| Probes, doctor, status | `ROOT ossctl doctor --probes`; `ROOT ossctl doctor`; `ROOT ossctl status` | PASS 51 (probes passed for tuple f3425a10d1f1); PASS 50, no WARN (`JVM toolchains (sandbox-full): java 21 default; JDK 17/21/25; Apache Maven 3.9.16`; `egress mode: sandbox_open (default open), implement network off`); lifecycle up, dry-run and egress mode as before |
+| Sandbox and Docker e2e | `ROOTDEV pytest -m "sandbox or e2e_docker" --timeout=2400` | 26 passed (gradle-multi offline after the refetch incl. the V-G3 negative case, maven-multi under the validate settings, offline agent-exec Gradle/Maven/pipefail, the profile matrix in `sandbox_open`, e2e_docker), 1 failed: `test_cfn_lint_on_demand.py`, F1c unchanged (pypi.org connect timeout on 151.101.0.223) |
+| System (network isolation) | `ROOT bash tests/system/test_{docker_filter,egress_per_uid,proxy_dns,no_exposure}.sh`; `test_proxy_log_bytes.sh` | all passed; proxy_log_bytes 15 PASS, 1 FAIL: the upload probe cannot be judged (uploads to 151.101.0.223 stall; squid still logs the client's sent bytes, `%>st` 66608 for a stalled upload), download V10, V11b and V11 pass. `test_egress_surface.sh` and `test_firewall_failclosed.sh` not run (they switch the egress mode or set kill) |
+| Open | | F1c (cfn-lint, pypi route); the upload half of proxy_log_bytes (same route); no live test yet of a networked agent-exec (first live use: the owner's kestra reruns, checked with `ossctl egress jobs --cid`) |
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
