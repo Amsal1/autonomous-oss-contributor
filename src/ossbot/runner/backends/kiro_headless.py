@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from ossbot.common.backends import KIRO_HEADLESS, BackendSpec
 from ossbot.common.models import Catalog, DistinctUnavailable, ModelsFile, ModelUnavailable, ResolvedModel
 from ossbot.runner import output_parse
-from ossbot.runner.backends.base import ROLE_PROFILE, Check, LlmResult, new_run_id
+from ossbot.runner.backends.base import ROLE_PROFILE, Check, JobEgress, LlmResult, new_run_id
 from ossbot.runner.errors import Interrupted, OutputInvalidFailed, StageFailed, sandbox_run
 from ossbot.runner.gk_client import Gatekeeper, GkError
 from ossbot.runner.sbx_client import Sandbox
@@ -77,7 +77,8 @@ class KiroHeadlessBackend:
         return out
 
     def _once(self, cid: str, role: str, model: ResolvedModel, text: str, files: Mapping[str, str | bytes],
-              timeout_s: int) -> tuple[output_parse.KiroOutput, str, Path | None]:  # fmt: skip
+              timeout_s: int, egress: JobEgress | None = None,
+              ) -> tuple[output_parse.KiroOutput, str, Path | None]:  # fmt: skip
         run_id = new_run_id(role)
         prompt_file = f"{role}-task.md"
         inputs = self._write_inputs(cid, run_id, {**files, prompt_file: text})
@@ -87,6 +88,8 @@ class KiroHeadlessBackend:
             "args": {"role": role, "prompt_file": prompt_file, "model": model.model, "effort": model.effort},
             "inputs": inputs, "timeout_s": timeout_s,
         }  # fmt: skip
+        if egress is not None:  # ADR-0024: a coder job states its egress (sandboxd refuses it otherwise)
+            spec["egress"] = egress
         if self.on_job is not None:
             self.on_job(cid)
         job = sandbox_run(self.sbx, spec, self.tick)
@@ -112,9 +115,10 @@ class KiroHeadlessBackend:
         timeout_s: int = 1200,
         schema_hint: str = "",
         check: Check | None = None,
+        egress: JobEgress | None = None,
     ) -> LlmResult[T]:
         """``check`` adds a deterministic rule on top of the schema; a violation gets the same
-        single repair retry as an invalid answer."""
+        single repair retry as an invalid answer. ``egress`` goes into the job spec when given (the coder)."""
         model = self.resolve(role)
         files = files or {}
 
@@ -125,13 +129,13 @@ class KiroHeadlessBackend:
                 raise output_parse.OutputInvalid(reason)
             return value
 
-        output, run_id, artifact = self._once(cid, role, model, text, files, timeout_s)
+        output, run_id, artifact = self._once(cid, role, model, text, files, timeout_s, egress)
         runs = [run_id]
         try:
             value = parse(output.text)
         except output_parse.OutputInvalid as exc:  # one repair retry, then the stage fails
             repair = text + "\n\n" + output_parse.repair_prompt(exc.reason, schema_hint)
-            output, run_id, artifact = self._once(cid, role, model, repair, files, timeout_s)
+            output, run_id, artifact = self._once(cid, role, model, repair, files, timeout_s, egress)
             runs.append(run_id)
             try:
                 value = parse(output.text)

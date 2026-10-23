@@ -95,7 +95,8 @@ class FakeSbx:
         if spec["entrypoint"] in self.refuse:
             status, code = self.refuse[spec["entrypoint"]]
             raise SbxError(status, code)
-        if (spec["profile"] in {"fetch", "validate"}) != ("egress" in spec):  # sandboxd validate_job (§12.3)
+        # sandboxd validate_job (§12.3; the coder too since ADR-0024)
+        if (spec["profile"] in {"fetch", "validate", "coder"}) != ("egress" in spec):
             raise SbxError(400, "egress_required" if "egress" not in spec else "egress_not_applicable")
         self.jobs.append(spec)
         if spec["entrypoint"] in self.interrupt:

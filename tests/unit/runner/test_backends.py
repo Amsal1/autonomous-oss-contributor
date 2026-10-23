@@ -56,6 +56,18 @@ def test_job_spec_is_byte_equal_to_the_pre_move_snapshot(
     assert result.value.feasible and result.run_ids == ["planner-0a0a0a0a0a0a"]
 
 
+@pytest.mark.parametrize("egress", ["mode", "strict"])
+def test_egress_goes_into_the_spec_when_given(sc: StageContext, sbx: FakeSbx, monkeypatch: pytest.MonkeyPatch,
+                                              egress: str) -> None:  # fmt: skip
+    """ADR-0024: the coder's job spec carries the target's egress (and the repair retry keeps it); without the
+    keyword the spec is unchanged (the snapshot test above)."""
+    monkeypatch.setattr(secrets, "token_hex", lambda n: "0a" * n)
+    sbx.kiro("coder", "no json here", fenced(PLAN))  # the first answer is invalid: one repair retry
+    backend = sc.kiro()
+    backend.invoke("c_0000000001", "coder", Plan, "task", timeout_s=900, egress=egress)  # type: ignore[arg-type]
+    assert [(j["profile"], j["egress"]) for j in sbx.jobs[-2:]] == [("coder", egress), ("coder", egress)]
+
+
 def test_kiro_conforms_to_the_interface(sc: StageContext) -> None:
     backend = sc.kiro()
     assert isinstance(backend, ModelBackend) and isinstance(backend, KiroHeadlessBackend)

@@ -13,7 +13,7 @@ import secrets
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -25,6 +25,8 @@ ROLE_PROFILE: dict[str, tuple[str, str]] = {  # role -> (sandboxd profile, repo_
     "reviewer": ("research", "snapshot"), "summarizer": ("research", "none"), "coder": ("coder", "rw"),
 }  # fmt: skip
 Check = Callable[[Any], str | None]  # deterministic check of a parsed answer: None = fine, else the reason
+# The target's egress for a job that runs repo code (the coder: ADR-0024); put in the spec when given
+JobEgress = Literal["mode", "strict"]
 
 
 def new_run_id(stage: str) -> str:
@@ -59,6 +61,7 @@ class ModelBackend(Protocol):
         timeout_s: int = 1200,
         schema_hint: str = "",
         check: Check | None = None,
+        egress: JobEgress | None = None,
     ) -> LlmResult[T]: ...
 
     def resolve(self, role: str) -> ResolvedModel: ...

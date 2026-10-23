@@ -26,6 +26,7 @@ import re
 from typing import Any
 
 from ossbot.runner import prompts
+from ossbot.runner.backends.base import JobEgress
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.llm import LlmResult, StageFailed
 from ossbot.runner.outputs import (
@@ -47,6 +48,10 @@ DEPS_MAX = 50  # fetch.json deps_changed (untrusted: written by a container runn
 DEP_PATH_RE = re.compile(r"[A-Za-z0-9._/@+-]{1,200}")
 FACTS_MAX = 4000  # the fetch facts / re-fetch result sections
 REFETCH_LINE = "The runner re-fetched dependencies once for your change; continue and run the checks again."
+NETWORK_LINE = (  # ADR-0024, carried criterion D22: conditional, the coder checks the real admission result
+    "This run should have network (check `echo $OSSBOT_EXEC_NETWORK`): the public web through a proxy, allowed by"
+    " the owner. If a download fails, record it in `sandbox_gaps` and continue."
+)
 NEEDS_NETWORK_SUMMARY = "The change adds dependencies the sandbox could not fetch, even after one re-fetch: {deps}."
 GAP_CONCERN = "Sandbox gap: "
 GAP_SHOWN = 160  # the first gap in the owner-facing summary
@@ -253,7 +258,9 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
                     *([prompts.untrusted("fetch facts", json.dumps(facts)[:FACTS_MAX])] if facts else []),
                     *feedback(sc, c)]  # fmt: skip
         task_line = instruction(c)
-        result = _coder(sc, cid, task_line, sections)
+        # ADR-0024: every coder job states its egress; anything but "mode" is strict (fail closed)
+        egress: JobEgress = "mode" if target(sc, str(c["upstream"])).egress == "mode" else "strict"
+        result = _coder(sc, cid, task_line, sections, egress)
         run_.model_actual = result.model_actual
         report = result.value
         if report.needs_network:  # §9.8: one re-fetch per stage run, then resume or carry the entries as gaps
@@ -262,7 +269,7 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
             if changed:
                 found = {"deps_changed": changed, **{k: v for k, v in fetch_facts(info).items() if k != "ecosystems"}}
                 again = [*sections, prompts.untrusted("re-fetch result", json.dumps(found)[:FACTS_MAX])]
-                result = _coder(sc, cid, f"{task_line} {REFETCH_LINE}", again)
+                result = _coder(sc, cid, f"{task_line} {REFETCH_LINE}", again, egress)
                 run_.model_actual = result.model_actual
                 report = result.value
                 if report.needs_network:  # the gatekeeper's terminal FYI carries the summary (§14.13.1)
@@ -286,10 +293,23 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
     sc.transition(cid, "IMPLEMENTING", "IMPLEMENTED", evidence)
 
 
-def _coder(sc: StageContext, cid: str, task_line: str, sections: list[str]) -> LlmResult[ImplementReport]:
+def network_line(sc: StageContext, cid: str) -> str:
+    """ADR-0024 / C-D22: the trusted network line when the gatekeeper says this coder run would get the web.
+    sandboxd decides again at admission, so the line is conditional and points at the real result. Any GkError
+    means no line (offline is the prompt's default)."""
+    try:
+        return NETWORK_LINE if sc.gk.implement_egress(cid) == "web" else ""
+    except GkError:
+        return ""
+
+
+def _coder(sc: StageContext, cid: str, task_line: str, sections: list[str],
+           egress: JobEgress) -> LlmResult[ImplementReport]:  # fmt: skip
     """One coder run (the split pair); ``timeout_s`` is explicit (C-D23: the stage timeout is far above the
-    coder profile's maximum)."""
-    text = prompts.task("coder", task_line, sections, SCHEMA_HINTS["coder"])
+    coder profile's maximum); ``egress`` is the target's (strict keeps agent-exec offline, ADR-0024)."""
+    line = network_line(sc, cid)
+    text = prompts.task("coder", f"{task_line} {line}" if line else task_line, sections, SCHEMA_HINTS["coder"])
     return sc.kiro().invoke(
-        cid, "coder", ImplementReport, text, timeout_s=CODER_TIMEOUT_S, schema_hint=SCHEMA_HINTS["coder"]
-    )
+        cid, "coder", ImplementReport, text, timeout_s=CODER_TIMEOUT_S, schema_hint=SCHEMA_HINTS["coder"],
+        egress=egress,
+    )  # fmt: skip

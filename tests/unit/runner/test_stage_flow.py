@@ -776,3 +776,115 @@ def test_package_named_failure_is_a_fixed_sentence(sc: StageContext, ctx: AppCon
     assert got["evidence"]["error_class"] == "empty_change"
     assert got["evidence"]["summary"] == package.PACKAGE_FAILURES["empty_change"]
     assert len(got["shown"]) == 1 and "found no change" in got["shown"][0]
+
+
+# ------------------------------------------------------- implement network (ADR-0024, design §4d/§4e)
+NETWORK_HINT = "This run should have network (check `echo $OSSBOT_EXEC_NETWORK`)"
+
+
+def _coder_specs(sbx: FakeSbx) -> list[dict[str, Any]]:
+    return [j for j in sbx.jobs if j["entrypoint"] == "kiro" and j["args"]["role"] == "coder"]
+
+
+def _switches(ctx: AppContext, mode: str, setting: str) -> None:
+    default = ctx.config.egress.mode_default
+    if ctx.control.egress_mode(default) != mode:
+        ctx.control.set_egress_mode(mode, "tg:4242", default, egress=ctx.config.egress)  # type: ignore[arg-type]
+    ctx.control.set_implement_network(setting, "tg:4242", default)  # type: ignore[arg-type]
+
+
+def test_coder_jobs_state_their_egress_and_stay_offline_by_default(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                                  github: FakeGitHub) -> None:  # fmt: skip
+    cid = _after_gate1(ctx, github, State.PLANNED, 95, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", CLEAN)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED"
+    [spec] = _coder_specs(sbx)
+    assert spec["egress"] == "mode" and spec["timeout_s"] == implement.CODER_TIMEOUT_S
+    assert NETWORK_HINT not in _coder_prompts(sbx)[0]
+
+
+def test_the_network_line_appears_only_when_the_gatekeeper_says_web(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub
+) -> None:
+    """C-D22: under auto + sandbox_open the coder is told, conditionally, to check the real admission result."""
+    _switches(ctx, "sandbox_open", "auto")
+    cid = _after_gate1(ctx, github, State.PLANNED, 96, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS, CLEAN)
+    sbx.handlers["fetch"] = _refetch_handler(["build.gradle"])
+    implement.run(sc, sc.gk.contribution(cid))
+    prompts_ = _coder_prompts(sbx)
+    assert len(prompts_) == 2 and all(implement.NETWORK_LINE in p for p in prompts_)  # both coder runs
+    assert "record it in `sandbox_gaps` and continue" in prompts_[0]
+    assert [s["egress"] for s in _coder_specs(sbx)] == ["mode", "mode"]
+    assert "egress" in _refetches(sbx)[0]  # the refetch keeps its own fetch egress rule
+
+
+def test_a_gatekeeper_error_gives_no_network_line(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from ossbot.runner.gk_client import GkError
+
+    _switches(ctx, "sandbox_open", "auto")
+    cid = _after_gate1(ctx, github, State.PLANNED, 97, plan_json=json.dumps(PLAN))
+
+    def down(cid_: str) -> str:
+        raise GkError(503, "gatekeeper_unreachable")
+
+    monkeypatch.setattr(sc.gk, "implement_egress", down)
+    sbx.kiro("coder", CLEAN)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and NETWORK_HINT not in _coder_prompts(sbx)[0]
+
+
+def test_strict_repo_coder_states_strict(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub,
+                                         monkeypatch: pytest.MonkeyPatch) -> None:  # fmt: skip
+    from ossbot.runner.stages import common
+
+    real = common.target
+
+    def strict(sc_: StageContext, repo: str) -> Any:
+        return dataclasses.replace(real(sc_, repo), egress="strict")
+
+    monkeypatch.setattr(implement, "target", strict)
+    cid = _after_gate1(ctx, github, State.PLANNED, 98, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", CLEAN)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert [s["egress"] for s in _coder_specs(sbx)] == ["strict"]
+
+
+def test_rerun_resets_notes_once_reuses_the_plan_and_gets_network(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                                  github: FakeGitHub) -> None:  # fmt: skip
+    """After the human edge: fetch clears the failed run's notes once (the claim note stays), plan reuses the
+    stored plan without a planner job (evidence reused: true), and the coder runs with the rerun grant."""
+    from ossbot.gatekeeper import network_rerun
+
+    _switches(ctx, "sandbox_open", "on_request")
+    cid = _after_gate1(ctx, github, State.FAILED, 99, plan_json=json.dumps(PLAN), state_reason="needs_network")
+    sc.save(cid, validation_sig="a", validation_prev_sig="a", sandbox_gap=True, sandbox_gap_text="jdk",
+            implement={"files_changed": ["x"]}, claim_requested=True)  # fmt: skip
+    network_rerun.start_rerun(ctx, cid, "tg:4242")
+    sbx.handlers["fetch"] = fetch_ok
+    fetch.run(sc, sc.gk.contribution(cid))
+    notes = sc.load(cid)
+    assert state(ctx, cid) == "FETCHED" and notes["rerun_seen"] == 1 and notes["claim_requested"] is True
+    assert (notes["validation_sig"], notes["validation_prev_sig"], notes["sandbox_gap"], notes["implement"]) == (
+        None, None, False, None)  # fmt: skip
+    sc.save(cid, validation_sig="b")
+    assert fetch.rerun_reset(sc, sc.gk.contribution(cid)) is False and sc.load(cid)["validation_sig"] == "b"
+    plan.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "PLANNED"
+    assert not [j for j in sbx.jobs if j["entrypoint"] == "kiro" and j["args"]["role"] == "planner"]
+    assert _evidence(ctx, cid, "PLANNED") == {"plan": PLAN, "reused": True}
+    sbx.kiro("coder", CLEAN)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED"
+    assert implement.NETWORK_LINE in _coder_prompts(sbx)[0] and _coder_specs(sbx)[0]["egress"] == "mode"
+
+
+def test_plan_reuse_only_once_per_rerun(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub) -> None:
+    cid = _after_gate1(ctx, github, State.FETCHED, 100, plan_json=json.dumps(PLAN))
+    sc.save(cid, rerun_seen=1, rerun_planned=1)  # this rerun already reused its plan (e.g. a rescope since)
+    assert plan.reuse_plan(sc, sc.gk.contribution(cid)) is False
+    fresh = _after_gate1(ctx, github, State.FETCHED, 101, plan_json=json.dumps(PLAN))
+    assert plan.reuse_plan(sc, sc.gk.contribution(fresh)) is False  # never rerun: the planner runs as before

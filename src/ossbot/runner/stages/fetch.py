@@ -3,7 +3,9 @@
 PROPOSAL_APPROVED -> FETCHING only after Start work (the gatekeeper guards the edge with the consumed
 approval of the current version and, behind gate 1, the claim). When a claim is required and none
 exists yet, the runner requests the ``issue_claim`` action (its own approval card; dry-run applies)
-and waits. Operator imports enter from IMPORTED with their fixed base.
+and waits. Operator imports enter from IMPORTED with their fixed base. After the human rerun-with-network
+edge (ADR-0024) the failed run's notes are cleared once (``rerun_reset``) and the fetch starts from a fresh
+clone as always.
 """
 
 from __future__ import annotations
@@ -32,8 +34,23 @@ def _claim(sc: StageContext, c: dict[str, Any]) -> None:
     raise Deferred("claim_requested")
 
 
+def rerun_reset(sc: StageContext, c: dict[str, Any]) -> bool:
+    """ADR-0024: after the human rerun-with-network edge (``network_reruns`` moved past the note ``rerun_seen``),
+    the failed run's notes go once: the validation comparison, the sandbox gap and the implement report. The claim
+    note stays (the existing claim action is reused). True when it reset."""
+    cid = str(c["id"])
+    reruns = int(c.get("network_reruns") or 0)
+    if reruns == int(sc.load(cid).get("rerun_seen") or 0):
+        return False
+    sc.save(cid, rerun_seen=reruns, validation_sig=None, validation_prev_sig=None, sandbox_gap=False,
+            sandbox_gap_text=None, implement=None)  # fmt: skip
+    return True
+
+
 def run(sc: StageContext, c: dict[str, Any]) -> None:
     cid, repo, state = str(c["id"]), str(c["upstream"]), str(c["state"])
+    if state == "PROPOSAL_APPROVED":
+        rerun_reset(sc, c)
     if state in {"PROPOSAL_APPROVED", "IMPORTED"}:
         try:
             sc.transition(cid, state, "FETCHING")

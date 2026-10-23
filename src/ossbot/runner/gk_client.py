@@ -171,6 +171,12 @@ class Gatekeeper:
     def egress_mode(self) -> str:
         return str(self._call("GET", "/v1/control/egress-mode")["mode"])
 
+    def implement_egress(self, cid: str) -> str:
+        """ADR-0024: what a coder run of ``cid`` would get now (read-only; the prompt line only). Anything
+        but a ``{"egress": "web"}`` answer is ``none``; a transport or HTTP error raises GkError."""
+        doc = self._call("GET", f"/v1/contributions/{cid}/implement-egress")
+        return "web" if isinstance(doc, dict) and doc.get("egress") == "web" else "none"
+
     def discovery_cycle(self, report: dict[str, Any]) -> None:
         """``POST /v1/discovery-cycles``: one finished or cut discovery cycle (audited; a finished one gets
         the silent Discovery FYI). It records and notifies only; it changes no state."""

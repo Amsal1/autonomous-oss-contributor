@@ -28,7 +28,8 @@ TEST_PATH_RE = re.compile(
 
 
 log = logging.getLogger(__name__)
-EGRESS_JOB_PROFILES = frozenset({"fetch", "validate"})  # repo-code jobs: sandboxd requires their egress
+# repo-code jobs: sandboxd requires their egress (coder: agent-exec's network follows implement_network, ADR-0024)
+EGRESS_JOB_PROFILES = frozenset({"fetch", "validate", "coder"})
 
 
 def note_volume(sc: StageContext, cid: str, present: bool) -> None:

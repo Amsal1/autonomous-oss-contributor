@@ -8,6 +8,9 @@ infeasible, touch forbidden paths, or exceed the hard ceiling; ``risk: high`` is
 An answer that fails the ``Plan`` schema twice but whose last fenced JSON says ``"feasible": false``
 (a real boolean, read through ``InfeasibleVerdict``) is abandoned ``plan_infeasible`` with its summary
 (``schema_salvaged: true``) instead of failing ``output_invalid``: the verdict can only stop the work.
+
+A rerun with network (ADR-0024) reuses the stored, already checked plan once per rerun: FETCHED -> PLANNING ->
+PLANNED with evidence ``{"plan": …, "reused": true}`` and no planner job (``reuse_plan``).
 """
 
 from __future__ import annotations
@@ -56,8 +59,31 @@ def check(plan: Plan, *, forbidden: list[str], max_lines: int, user: bool) -> st
     return None
 
 
+def reuse_plan(sc: StageContext, c: dict[str, Any]) -> bool:
+    """ADR-0024: a rerun with network reuses the item's stored, already checked plan (no planner job): once per
+    rerun (the note ``rerun_planned``), only when ``plan_json`` exists. True when it moved the item to PLANNED."""
+    cid = str(c["id"])
+    notes = sc.load(cid)
+    seen = int(notes.get("rerun_seen") or 0)
+    if seen <= 0 or not c.get("plan_json") or int(notes.get("rerun_planned") or 0) == seen:
+        return False
+    try:
+        plan = json.loads(str(c["plan_json"]))
+    except ValueError:
+        return False
+    if not isinstance(plan, dict):
+        return False
+    if c["state"] == "FETCHED":
+        sc.transition(cid, "FETCHED", "PLANNING")
+    sc.transition(cid, "PLANNING", "PLANNED", {"plan": plan, "reused": True})
+    sc.save(cid, rerun_planned=seen)
+    return True
+
+
 def run(sc: StageContext, c: dict[str, Any]) -> None:
     cid = str(c["id"])
+    if reuse_plan(sc, c):
+        return
     if c["state"] == "FETCHED":
         sc.transition(cid, "FETCHED", "PLANNING")
     policy = sc.config().policy
