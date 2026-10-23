@@ -26,6 +26,33 @@ from ossbot.runner.stages.common import artifact, artifact_json, job, write_inpu
 
 STAGE = "package"
 ARTIFACTS = ("change.bundle", "change.patch", "diffstat.json")
+# Owner-facing why for a failed package job (the terminal FYI's "Why" line, §14.13.1): fixed sentences keyed
+# by the job's error class (package.sh's result.json, or sandboxd's own class). No LLM text goes in here.
+PACKAGE_FAILURES: dict[str, str] = {
+    "base_missing": "The commit job could not find the round base commit in the sandbox repository.",
+    "empty_change": "The commit job found no change: the work tree equals the round base.",
+    "bad_args": "The commit job was started with invalid arguments (a runner bug).",
+    "bad_env": "The commit job image lacks its fixed git commands (an image bug).",
+    "stage_failed": "The commit job could not stage the edited work tree (git add failed).",
+    "commit_failed": "The commit job could not create the commit (git commit failed).",
+    "bundle_failed": "The commit job could not write the change bundle.",
+    "patch_failed": "The commit job could not write the change patch.",
+    "diffstat_failed": "The commit job could not write the diffstat.",
+    "package_failed": "The commit job stopped at an unexpected step; see its redacted log.",
+    "bundle_unreadable": "sandboxd could not read the change bundle the commit job wrote.",
+    "secret_in_output": "The key scan found a secret in the commit job's output; sandboxd paused the system.",
+    "timeout": "The commit job ran out of time.",
+}
+
+
+def package_failure_summary(error_class: str, run_id: str) -> str:
+    """The fixed sentence for ``error_class``, else (``exit_N`` and the rest) where the job's log is.
+    ``error_class`` and ``run_id`` are runner or sandboxd data, never model text."""
+    known = PACKAGE_FAILURES.get(error_class)
+    if known is not None:
+        return known
+    return (f"The deterministic commit job {run_id} stopped with {error_class}; its redacted log is "
+            f"/srv/ossbot/logs/runs/{run_id}.log (root).")  # fmt: skip
 
 
 def validation_summary(validation: dict[str, Any]) -> str:
@@ -99,7 +126,11 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
         inputs = write_inputs(sc, cid, STAGE, {"commit_message.txt": draft.commit_message.strip() + "\n"})
         args = {"rev": rev, "round_base": round_base, "package_ts": package_ts, "name": profile.commit_name,
                 "email": profile.commit_email}  # fmt: skip
-        done = job(sc, cid, STAGE, "package", "package", args, "rw", inputs=inputs, timeout_s=600)
+        try:
+            done = job(sc, cid, STAGE, "package", "package", args, "rw", inputs=inputs, timeout_s=600)
+        except StageFailed as exc:  # Interrupted, ContributionHeld and ProbesNotReady are not StageFailed
+            summary = package_failure_summary(exc.error_class, exc.detail)
+            raise StageFailed(exc.error_class, exc.detail, summary=summary) from exc
         outcome = artifact_json(done, "result.json")
         sums = {name: hashlib.sha256(artifact(done, name).read_bytes()).hexdigest() for name in ARTIFACTS}
     models = {**notes.get("models", {})}

@@ -20,7 +20,7 @@ from ossbot.gatekeeper.proposals import ProposalService
 from ossbot.runner import stages
 from ossbot.runner.pipeline import StageContext
 from ossbot.runner.scheduler import Scheduler
-from ossbot.runner.stages import discover, fetch, plan, review, scout, vet
+from ossbot.runner.stages import discover, fetch, package, plan, review, scout, vet
 from tests.conftest import consumed_proposal, insert_contribution
 from tests.fakes.fake_github import FakeGitHub
 from tests.unit.gatekeeper.test_proposals import sample, start
@@ -405,3 +405,43 @@ def test_needs_network_after_gate_1_is_one_gatekeeper_fyi(sc: StageContext, ctx:
     shown = _terminal(ctx, cid)
     assert len(shown) == 1 and "left-pad@1.3.0" in shown[0]
     assert "left-pad@1.3.0" in _evidence(ctx, cid, "FAILED")["summary"]
+
+
+SUMMARY = {"commit_message": "fix: handle empty spans", "pr_title": "Fix empty spans", "pr_body": "Handles it."}
+
+
+def _package_fails(sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub, number: int,
+                   error_class: str) -> tuple[str, dict[str, Any]]:  # fmt: skip
+    """REVIEW_PASSED after gate 1; the package job fails with ``error_class`` (sandboxd's class for it)."""
+    cid = _after_gate1(ctx, github, State.REVIEW_PASSED, number, base_sha="1" * 40, base_ref="main")
+    sc.save(cid, diff="diff --git a/src/a.py b/src/a.py\n+x\n")
+    sbx.kiro("summarizer", fenced(SUMMARY))
+    sbx.handlers["package"] = lambda spec, out: 11
+    sbx.error_class["package"] = error_class
+    Scheduler(sc, synchronous=True).run_one(cid)
+    run_id = next(str(j["run_id"]) for j in sbx.jobs if j["entrypoint"] == "package")
+    return cid, {"run_id": run_id, "evidence": _evidence(ctx, cid, "FAILED"), "shown": _terminal(ctx, cid)}
+
+
+def test_package_exit_without_result_names_the_job_and_its_log(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                               github: FakeGitHub) -> None:  # fmt: skip
+    """c_D1CYR0EKGR: package.sh died before result.json (rsync exit 11), so sandboxd said ``exit_11``;
+    the terminal FYI still says which job stopped and where its log is."""
+    said: list[str] = []
+    sc = dataclasses.replace(sc, notify=said.append)
+    cid, got = _package_fails(sc, ctx, sbx, github, 93, "exit_11")
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", "exit_11")
+    summary = got["evidence"]["summary"]
+    assert got["evidence"]["error_class"] == "exit_11"
+    assert got["run_id"] in summary and f"/srv/ossbot/logs/runs/{got['run_id']}.log" in summary
+    assert said == []
+    assert len(got["shown"]) == 1 and got["run_id"] in got["shown"][0] and "exit_11" in got["shown"][0]
+
+
+def test_package_named_failure_is_a_fixed_sentence(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                   github: FakeGitHub) -> None:  # fmt: skip
+    _, got = _package_fails(sc, ctx, sbx, github, 94, "empty_change")
+    assert got["evidence"]["error_class"] == "empty_change"
+    assert got["evidence"]["summary"] == package.PACKAGE_FAILURES["empty_change"]
+    assert len(got["shown"]) == 1 and "found no change" in got["shown"][0]

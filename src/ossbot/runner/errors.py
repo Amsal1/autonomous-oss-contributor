@@ -33,6 +33,7 @@ class StageFailed(RuntimeError):
     def __init__(self, error_class: str, message: str = "", *, summary: str = "") -> None:
         super().__init__(f"{error_class}: {message}" if message else error_class)
         self.error_class = error_class[:64]
+        self.detail = message[:200]
         self.summary = summary[:SUMMARY_MAX]
 
 
