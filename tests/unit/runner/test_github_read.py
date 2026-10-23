@@ -308,6 +308,17 @@ def test_search_methods_are_get_only_with_exact_params() -> None:
         assert "advanced_search" not in p and "search_type" not in p
 
 
+def test_pull_review_comments_is_one_get_with_since() -> None:
+    """The watcher's inline review comments (§9.12): ``/pulls/{n}/comments``, ``since`` only when set."""
+    gh, seen, _, _ = recording(lambda r: httpx.Response(200, json=[{"id": 1, "path": "a.py"}, "junk"]))
+    assert gh.pull_review_comments("o/r", 9, "2026-10-23T10:00:00Z") == [{"id": 1, "path": "a.py"}]
+    gh.pull_review_comments("o/r", 9)
+    assert [(r.method, r.url.path, dict(r.url.params)) for r in seen] == [
+        ("GET", "/repos/o/r/pulls/9/comments", {"per_page": "100", "since": "2026-10-23T10:00:00Z"}),
+        ("GET", "/repos/o/r/pulls/9/comments", {"per_page": "100"}),
+    ]
+
+
 def test_community_profile_and_commit_date_404_read_as_none() -> None:
     gh, _, _, _ = recording(status(404))
     assert gh.community_profile("o/r") is None and gh.default_branch_commit_at("o/r", "main") is None

@@ -371,6 +371,16 @@ after someone else pushed to the PR branch (fixes are then disabled for that PR)
 are one line; the button's reply keeps line breaks. Paste a review bot's text only if you mean all of
 it: everything in the notes counts as your instruction.
 
+**Review-bot findings.** Each inline finding a review bot (CodeRabbit and the like) leaves on your open
+PR arrives once as a `🤖 Review-bot finding` card under the PR's status card: the file and line, and
+the finding's text (shortened, secrets redacted, CodeRabbit's collapsed sections left out).
+`🔧 Fix this` asks for one confirm tap, then the gatekeeper re-reads the comment from GitHub and starts
+the same owner fix round as `/fix`, with the finding passed to the coder as untrusted data next to a
+fixed instruction ("address this review-bot finding if it is still valid"). Bot text is never followed
+as an instruction, bots never get a drafted reply or an automatic fix, and they don't count as
+maintainers on the status card. One finding per round; `🙈 Ignore` just closes the card. ossbot never
+replies to or resolves the bot's thread.
+
 **AI policy.** Vet reads CONTRIBUTING, the AI policy file, the code of conduct, the PR template, the
 README and maintainer comments, and skips only repos that explicitly ban AI-assisted contributions.
 Silent repos are allowed and the cards say `AI policy: not stated`; when a repo allows AI with

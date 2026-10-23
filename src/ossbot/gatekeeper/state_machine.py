@@ -365,9 +365,11 @@ class StateMachine:
             if row["state"] != from_.value:
                 raise TransitionError(409, "stale_from", f"current {row['state']}")
             target = resolve_target(from_, to, row["pr_number"])
+            # _apply stores reason or else error_class as state_reason: both are reserved
+            claims_owner = OWNER_FIX_REASON in (evidence.get("reason"), evidence.get("error_class"))
             if actor not in target.actors:
                 forbidden = TransitionError(403, "forbidden_transition", f"{from_.value}->{to.value} by {actor.value}")
-            elif actor is not Actor.HUMAN and evidence.get("reason") == OWNER_FIX_REASON:
+            elif actor is not Actor.HUMAN and claims_owner:
                 forbidden = TransitionError(403, "reserved_reason", f"{OWNER_FIX_REASON} is the human's")
             else:
                 redirected = target.redirected_from is not None

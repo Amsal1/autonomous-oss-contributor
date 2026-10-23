@@ -554,6 +554,10 @@ def test_worker_cannot_use_the_owner_reason(ctx: AppContext) -> None:
     with pytest.raises(TransitionError) as info:  # any edge, any non-human actor
         ctx.state_machine.transition(other, S.IMPLEMENTING, S.IMPLEMENTED, Actor.WORKER, OWNER_FIX)
     assert info.value.code == "reserved_reason"
+    with pytest.raises(TransitionError) as info:  # state_reason falls back to error_class: reserved there too
+        ctx.state_machine.transition(other, S.IMPLEMENTING, S.IMPLEMENTED, Actor.WORKER,
+                                     {"error_class": "owner_fix_round"})  # fmt: skip
+    assert info.value.code == "reserved_reason"
 
 
 def test_stop_watching_human_only(ctx: AppContext) -> None:

@@ -17,6 +17,7 @@ byte-identical and the same checks failing, so another coder run would only repe
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from ossbot.runner import prompts
@@ -36,6 +37,8 @@ NAMED_IN_FULL = 3  # failed checks named with their line; the rest as "+N more"
 STUCK_LEAD = "The last retry changed nothing and the same checks failed."
 OWNER_FIX_REASON = "owner_fix_round"  # the gatekeeper reserves it for the human WATCHING->IMPLEMENTING edge
 PLAN_INSTRUCTION = "Implement the plan with tests; leave the changes in the working tree."
+BOT_FINDING_MAX = 20_000  # a review-bot finding body (change_requests.untrusted_text)
+BOT_PATH_RE = re.compile(r"[A-Za-z0-9._/@+-]{1,200}")
 FIX_ROUND_INSTRUCTION = (
     "This is a fix round on an open pull request. Address only the feedback below (the owner's instructions and"
     " any review findings); do not redo or extend the approved plan. Verify each finding against the current code"
@@ -75,6 +78,20 @@ def instruction(c: dict[str, Any]) -> str:
     return FIX_ROUND_INSTRUCTION if c.get("pr_number") is not None else PLAN_INSTRUCTION
 
 
+def bot_finding_source(ref: object) -> str:
+    """``review-bot finding <path>:<line>`` for the ``<untrusted source=…>`` attribute; the path and line come
+    from GitHub through the gatekeeper and are re-sanitized here (a path outside the charset is ``?``)."""
+    path, line = "?", "?"
+    if isinstance(ref, dict):
+        raw = ref.get("path")
+        if isinstance(raw, str) and BOT_PATH_RE.fullmatch(raw):
+            path = raw
+        number = ref.get("line")
+        if isinstance(number, int) and not isinstance(number, bool) and number > 0:
+            line = str(number)
+    return f"review-bot finding {path}:{line}"
+
+
 def feedback(sc: StageContext, c: dict[str, Any]) -> list[str]:
     notes = sc.load(str(c["id"]))
     out: list[str] = []
@@ -85,6 +102,9 @@ def feedback(sc: StageContext, c: dict[str, Any]) -> list[str]:
         out.append(prompts.untrusted("reviewer findings", json.dumps(notes["review"].get("blocking", []))[:20_000]))
     for request in c.get("change_requests") or []:
         out.append(prompts.human(f"Change request from the owner: {request['text']}"))
+        if request.get("source") == "review_bot":  # the finding body is data, never the owner's words (I8)
+            out.append(prompts.untrusted(bot_finding_source(request.get("source_ref")),
+                                         str(request.get("untrusted_text") or "")[:BOT_FINDING_MAX]))  # fmt: skip
     if notes.get("watch_fix"):
         out.append(prompts.untrusted("maintainer feedback to address", str(notes["watch_fix"])[:20_000]))
     return out

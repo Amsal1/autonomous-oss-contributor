@@ -117,6 +117,9 @@ class DemoReader:
     async def comments_since(self, upstream: str, number: int, since: str) -> list[dict[str, Any]]:
         return []
 
+    async def review_comments(self, upstream: str, number: int) -> list[dict[str, Any]]:
+        return []
+
 
 class FakeTime:
     """``time`` for ``ossbot.common.ids``: the fake clock's epoch plus 1 ms per call (unique, ordered ids)."""

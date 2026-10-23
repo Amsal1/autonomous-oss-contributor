@@ -1,0 +1,10 @@
+🤖 <b>Review-bot finding</b> · PR <code>#5678</code> · @coderabbitai[bot] · <code>c_CID</code>
+src/⁠services/⁠webcams/⁠pinned-store.ts:120
+<blockquote>_⚠️ Potential issue_ | _🟠 Major_
+
+**Ignore storage events whose storageArea is not localStorage.**
+
+The listener also reacts to sessionStorage events; the fixture logs [REDACTED].</blockquote>
+Untrusted review text: the coder checks it against the current code before changing anything.
+--
+🔧 Fix this | 🙈 Ignore | 🔗 Open ↗

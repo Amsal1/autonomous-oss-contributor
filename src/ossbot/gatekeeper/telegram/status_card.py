@@ -20,6 +20,11 @@ the status row's ``tg_views.state_json``, which an edit merges rather than repla
 * ``🔧 Fix with notes`` (WATCHING, fixes not disabled, owner rounds left): a ForceReply prompt, then the
   one-tap confirm of an owner fix round (``telegram/commands/fix.py``; this module never imports
   ``owner_fix``).
+* **Bots** (``common.github_bots.is_bot``: ``user.type == "Bot"`` or a ``[bot]`` login) are not maintainers:
+  they are not counted in "Comments", their reviews don't count as approvals or change requests, and they
+  never raise a P1 (they stay in the timeline). Each top-level bot inline comment becomes one P2
+  ``🤖 Review-bot finding`` card (``bot_finding_cards``), once per comment id, at most
+  ``FINDINGS_PER_POLL`` per refresh, with ``🔧 Fix this`` / ``🙈 Ignore`` (``bot_finding_actions``).
 
 Every GitHub-authored string (titles, logins, comments, check names) is untrusted ``Text``.
 """
@@ -39,9 +44,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ossbot.common import ci_facts
 from ossbot.common.clock import from_iso, to_iso
+from ossbot.common.github_bots import is_bot
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db, outcomes
 from ossbot.gatekeeper.state_machine import Actor, TransitionError
+from ossbot.gatekeeper.telegram import bot_finding_cards
 from ossbot.gatekeeper.telegram.actions import Tap, action
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -58,6 +65,7 @@ _NEXT_POLL: dict[str, datetime] = {}
 _FAILURES: dict[str, int] = {}
 CHECKS_SHOWN = 8
 EVENTS_KEPT = 200
+FINDINGS_PER_POLL = 5  # review-bot finding cards per refresh; the rest follow on the next poll
 OPEN_STATES = (State.SUBMITTED.value, State.WATCHING.value)
 OK, PENDING, FAILED = "✅", "⏳", "❌"
 
@@ -80,6 +88,7 @@ class Facts:
     last_comment_at: str = ""
     last_maintainer_comment: str = ""
     events: list[dict[str, str]] = field(default_factory=list)  # {id, kind, who, text, at, p1}
+    findings: list[dict[str, Any]] = field(default_factory=list)  # top-level bot inline comments
 
 
 def _check_icon(run: dict[str, Any]) -> str:
@@ -110,9 +119,11 @@ async def collect(reader: Any, c: dict[str, Any], login: str) -> Facts:
         if not who or who.lower() == login.lower():
             continue
         state = str(r.get("state") or "")
-        latest[who] = state
+        bot = is_bot(r.get("user"))  # a bot review stays in the timeline, never a P1, never a maintainer
+        if not bot:
+            latest[who] = state
         facts.events.append({"id": f"review:{r.get('id')}", "kind": "review", "who": who, "text": state.lower(),
-                             "at": str(r.get("submitted_at") or ""), "p1": "1"})  # fmt: skip
+                             "at": str(r.get("submitted_at") or ""), "p1": "" if bot else "1"})  # fmt: skip
     facts.approvals = sum(1 for s in latest.values() if s == "APPROVED")
     facts.changes_by = [w for w, s in latest.items() if s == "CHANGES_REQUESTED"]
     for cm in await reader.comments_since(upstream, number, str(c.get("created_at") or "1970-01-01T00:00:00Z")):
@@ -120,12 +131,25 @@ async def collect(reader: Any, c: dict[str, Any], login: str) -> Facts:
         if not who or who.lower() == login.lower():
             continue
         body = str(cm.get("body") or "")
+        if is_bot(cm.get("user")):
+            facts.events.append({"id": f"comment:{cm.get('id')}", "kind": "comment", "who": who, "text": body[:300],
+                                 "at": str(cm.get("created_at") or ""), "p1": ""})  # fmt: skip
+            continue
         facts.maintainer_comments += 1
         facts.last_comment_at = str(cm.get("created_at") or "")
         facts.last_maintainer_comment = body
         mention = f"@{login}".lower() in body.lower() if login else False
         facts.events.append({"id": f"comment:{cm.get('id')}", "kind": "comment", "who": who, "text": body[:300],
                              "at": facts.last_comment_at, "p1": "1" if mention else ""})  # fmt: skip
+    for ic in await reader.review_comments(upstream, number):
+        cid_ = ic.get("id")
+        if not is_bot(ic.get("user")) or ic.get("in_reply_to_id") or not isinstance(cid_, int) or cid_ < 1:
+            continue  # only top-level bot findings; maintainers' inline comments stay with the watcher
+        line = ic.get("line") or ic.get("original_line")
+        facts.findings.append({"id": cid_, "who": str((ic.get("user") or {}).get("login") or "")[:40],
+                               "path": str(ic.get("path") or "")[:bot_finding_cards.PATH_MAX],
+                               "line": line if isinstance(line, int) else None,
+                               "body": str(ic.get("body") or "")[:bot_finding_cards.BODY_MAX]})  # fmt: skip
     return facts
 
 
@@ -277,6 +301,17 @@ async def refresh(ctx: AppContext, reader: Any, cid: str, *, force: bool = False
                             if ev["who"] else ()), k.Const(": "), k.Text(ev["text"], 300))  # fmt: skip
             ui_send.deliver(ctx, k.plain("fyi", line), thread="reviews", reply_to=mid, priority=1,
                             dedupe_key=f"status:{cid}:{ev['id']}")  # fmt: skip
+            queued = True
+    if facts.state == "open":  # review-bot findings: one P2 card per inline comment id, ≤ 5 per poll
+        sent = 0
+        for finding in facts.findings:
+            key = f"finding:{finding['id']}"
+            if key in seen or sent >= FINDINGS_PER_POLL:
+                continue
+            ui_send.deliver(ctx, bot_finding_cards.finding_view(dict(c), finding), thread="reviews", reply_to=mid,
+                            priority=2, silent=True, dedupe_key=f"botfinding:{cid}:{finding['id']}")  # fmt: skip
+            seen.add(key)
+            sent += 1
             queued = True
     state["seen"] = sorted(seen)[-EVENTS_KEPT:]
     state["events"] = [{k_: e[k_] for k_ in ("kind", "who", "text", "at")} for e in facts.events][-50:]

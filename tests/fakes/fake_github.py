@@ -280,6 +280,11 @@ class FakeGitHub:
         if m6 and method == "GET":
             store = self.reviews if m6.group(2) == "reviews" else self.review_comments
             return httpx.Response(200, json=store.get((repo, int(m6.group(1))), []))
+        m9 = re.fullmatch(r"/pulls/comments/(\d+)", rest)
+        if m9 and method == "GET":  # one inline review comment (the gatekeeper's Fix-this re-fetch)
+            found = next((dict(cm) for (r, _), cms in self.review_comments.items() if r == repo for cm in cms
+                          if cm.get("id") == int(m9.group(1))), None)  # fmt: skip
+            return httpx.Response(200, json=found) if found else httpx.Response(404, json={"message": "Not Found"})
         if rest == "/actions/permissions" and method == "GET":
             return httpx.Response(200, json={"enabled": self.actions_enabled.get(repo, True)})
         if rest == "/git/refs" and method == "POST":

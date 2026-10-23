@@ -166,6 +166,15 @@ class GitHubReader:
     async def reviews(self, upstream: str, number: int) -> list[dict[str, Any]]:
         return await self._list(f"/repos/{upstream}/pulls/{number}/reviews")
 
+    async def review_comments(self, upstream: str, number: int) -> list[dict[str, Any]]:
+        """Inline review comments of a PR (one page of 100; the status card's review-bot findings)."""
+        return await self._list(f"/repos/{upstream}/pulls/{number}/comments")
+
+    async def review_comment(self, upstream: str, comment_id: int) -> dict[str, Any] | None:
+        """One inline review comment (``🔧 Fix this`` re-fetches it); None on a 404."""
+        doc = await self.json_or_none(f"/repos/{upstream}/pulls/comments/{int(comment_id)}")
+        return doc if isinstance(doc, dict) else None
+
     async def check_runs(self, upstream: str, sha: str) -> list[dict[str, Any]]:
         doc = await self.json_or_none(f"/repos/{upstream}/commits/{sha}/check-runs", {"per_page": "100"})
         runs = doc.get("check_runs") if isinstance(doc, dict) else None

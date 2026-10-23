@@ -29,6 +29,17 @@ REDACTED_FOR_REQUESTER = (
 )  # fmt: skip
 
 
+def _source_ref(raw: str | None) -> dict[str, Any] | None:
+    """A change request's ``source_ref`` JSON (review_bot: comment_id, path, line, author), or None."""
+    if not raw:
+        return None
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
 class ContributionRefused(RuntimeError):
     def __init__(self, status: int, code: str) -> None:
         self.status = status
@@ -276,14 +287,17 @@ class ContributionService:
             for key in REDACTED_FOR_REQUESTER:
                 doc.pop(key, None)
         else:  # the owner's open change requests feed the next implement round (§9.8, trusted text)
+            # ``source='review_bot'``: ``text`` is the fixed owner instruction, ``untrusted_text`` the bot's
+            # finding (data for <untrusted>, never <human_instruction>; ADR-0003 addendum 2026-10-23)
             doc["change_requests"] = [
-                {"id": r["id"], "text": r["text"], "created_at": r["created_at"]}
+                {"id": r["id"], "text": r["text"], "created_at": r["created_at"], "source": r["source"],
+                 "source_ref": _source_ref(r["source_ref"]), "untrusted_text": r["untrusted_text"]}
                 for r in self.conn.execute(
-                    "SELECT id, text, created_at FROM change_requests WHERE cid = ? AND consumed_at IS NULL"
-                    " ORDER BY created_at",
+                    "SELECT id, text, created_at, source, source_ref, untrusted_text FROM change_requests"
+                    " WHERE cid = ? AND consumed_at IS NULL ORDER BY created_at",
                     (cid,),
                 )
-            ]
+            ]  # fmt: skip
         return doc
 
     def list(self, state: str | None, limit: int, *, active: bool = False, offset: int = 0) -> list[dict[str, Any]]:

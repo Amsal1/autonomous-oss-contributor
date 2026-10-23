@@ -297,6 +297,13 @@ class GitHubRead:
     def pull_reviews(self, repo: str, number: int) -> list[dict[str, Any]]:
         return self._list(f"/repos/{repo}/pulls/{number}/reviews", {"per_page": 100})
 
+    def pull_review_comments(self, repo: str, number: int, since: str | None = None) -> list[dict[str, Any]]:
+        """Inline review comments of a PR (``since`` filters on ``updated_at``; the watcher, §9.12)."""
+        params: dict[str, Any] = {"per_page": 100}
+        if since:
+            params["since"] = since
+        return self._list(f"/repos/{repo}/pulls/{number}/comments", params)
+
     def check_runs(self, repo: str, sha: str) -> list[dict[str, Any]]:
         doc = self._get(f"/repos/{repo}/commits/{sha}/check-runs", {"per_page": 100})
         runs = doc.get("check_runs") if isinstance(doc, dict) else None

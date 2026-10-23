@@ -1,0 +1,46 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🤖 ",
+    {
+     "text": "Review-bot finding",
+     "type": "bold"
+    },
+    [
+     " · PR ",
+     {
+      "text": "#5678",
+      "type": "code"
+     },
+     " · @"
+    ],
+    "coderabbitai[bot]",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "src/services/webcams/pinned-store.ts:120",
+   "type": "paragraph"
+  },
+  {
+   "blocks": [
+    {
+     "text": "_⚠️ Potential issue_ | _🟠 Major_\n\n**Ignore storage events whose storageArea is not localStorage.**\n\nThe listener also reacts to sessionStorage events; the fixture logs [REDACTED].",
+     "type": "paragraph"
+    }
+   ],
+   "type": "blockquote"
+  },
+  {
+   "text": "Untrusted review text: the coder checks it against the current code before changing anything.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}
