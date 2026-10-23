@@ -15,6 +15,9 @@ from ossbot.common.schemas import (
     EgressModeView,
     HermesTierRequest,
     HermesTierView,
+    ImplementNetwork,
+    ImplementNetworkRequest,
+    ImplementNetworkView,
     LifecycleRequestBody,
     ReasonRequest,
     UpRequest,
@@ -124,6 +127,32 @@ async def set_egress_mode(
     default = c.config.egress.mode_default
     previous = c.control.set_egress_mode(body.mode, caller.actor, default, egress=c.config.egress)  # audits, FYIs
     return EgressModeView(mode=c.control.egress_mode(default), default=default, previous=previous)
+
+
+def _implement_network_view(request: Request, previous: ImplementNetwork | None = None) -> ImplementNetworkView:
+    c = ctx(request)
+    mode = c.control.egress_mode(c.config.egress.mode_default)
+    value = c.control.implement_network()
+    return ImplementNetworkView(value=value, active=value != "off" and mode == "sandbox_open", egress_mode=mode,
+                                previous=previous)  # fmt: skip
+
+
+@router.get("/control/implement-network")
+async def get_implement_network(
+    request: Request, caller: Annotated[Caller, Depends(require())]
+) -> ImplementNetworkView:
+    """ADR-0024: the owner's network setting for the coder's executor and whether it is active."""
+    return _implement_network_view(request)
+
+
+@router.post("/control/implement-network")
+async def set_implement_network(
+    request: Request, body: ImplementNetworkRequest, caller: Annotated[Caller, Depends(require(OP))]
+) -> ImplementNetworkView:
+    """ADR-0024: operator only (ossctl asks for the TTY confirm first); audits and FYIs; invalidates nothing."""
+    c = ctx(request)
+    previous = c.control.set_implement_network(body.value, caller.actor, c.config.egress.mode_default)
+    return _implement_network_view(request, previous)
 
 
 @router.get("/control/hermes-tier")

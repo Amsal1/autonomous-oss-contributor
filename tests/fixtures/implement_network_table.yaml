@@ -1,0 +1,30 @@
+# Design §4b decision table (ADR-0024): the network of agent-exec for one coder job.
+# (i) no grant, (i') grant active (network_grant = 1 and network_grant_version = proposal_version),
+# (ii) the result of the Rerun-with-network tap for an item that passes the item guards: web (edge + grant)
+# or the first failing guard code in order strict, egress_mode, setting_off.
+# Shared by tests/unit/gatekeeper/test_implement_network.py, test_state_machine.py, test_network_rerun.py.
+rows:
+  - {setting: off, mode: allowlist, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: off, mode: allowlist, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: off, mode: research, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: off, mode: research, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: off, mode: open, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: off, mode: open, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: off, mode: sandbox_open, repo: normal, no_grant: none, grant: none, tap: setting_off}
+  - {setting: off, mode: sandbox_open, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: on_request, mode: allowlist, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: on_request, mode: allowlist, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: on_request, mode: research, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: on_request, mode: research, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: on_request, mode: open, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: on_request, mode: open, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: on_request, mode: sandbox_open, repo: normal, no_grant: none, grant: web, tap: web}
+  - {setting: on_request, mode: sandbox_open, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: auto, mode: allowlist, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: auto, mode: allowlist, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: auto, mode: research, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: auto, mode: research, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: auto, mode: open, repo: normal, no_grant: none, grant: none, tap: egress_mode}
+  - {setting: auto, mode: open, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: auto, mode: sandbox_open, repo: normal, no_grant: web, grant: web, tap: web}
+  - {setting: auto, mode: sandbox_open, repo: strict, no_grant: none, grant: none, tap: strict}

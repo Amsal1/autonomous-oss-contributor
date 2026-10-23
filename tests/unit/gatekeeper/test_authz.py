@@ -40,6 +40,11 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     # §15.5 Hermes capability tier (Telegram /hermes tier is FEAT-009; applying it is FEAT-007)
     ("GET", "/v1/control/hermes-tier"): ANY,
     ("POST", "/v1/control/hermes-tier"): frozenset({O}),
+    # ADR-0024 implement network: the setting is a go (operator only); the per-run decision is sandboxd's
+    ("GET", "/v1/control/implement-network"): ANY,
+    ("POST", "/v1/control/implement-network"): frozenset({O}),
+    ("GET", "/v1/contributions/{cid}/implement-egress"): frozenset({W, S}),
+    ("POST", "/v1/contributions/{cid}/implement-egress"): frozenset({S}),
     # CR-001 lifecycle (operator only: ossctl up|down|status as root/ossadmin)
     ("GET", "/v1/control/lifecycle"): frozenset({O}),
     ("POST", "/v1/control/drain"): frozenset({O}),
@@ -137,6 +142,21 @@ def route_table(ctx: AppContext) -> dict[tuple[str, str], frozenset[Role]]:
 
 def test_route_table_matches_design(ctx: AppContext) -> None:
     assert route_table(ctx) == EXPECTED
+
+
+def test_only_control_writes_implement_network() -> None:
+    """ADR-0024 / I9: the one SQL writer of ``control_state.implement_network`` is ``gatekeeper/control.py``."""
+    import ast
+
+    src = Path(__file__).resolve().parents[3] / "src" / "ossbot"
+    writers = []
+    for path in src.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+                sql = " ".join(node.value.split()).upper()
+                if "UPDATE CONTROL_STATE" in sql and "IMPLEMENT_NETWORK" in sql:
+                    writers.append(path.relative_to(src).as_posix())
+    assert writers == ["gatekeeper/control.py"]
 
 
 def test_there_is_no_approve_route(ctx: AppContext) -> None:

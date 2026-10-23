@@ -78,6 +78,8 @@ class Limits(Strict):
     max_implement_attempts: NonNegInt = 2
     max_review_rounds: NonNegInt = 2
     max_change_rounds: NonNegInt = 5
+    # ADR-0024: human "Rerun with network" taps per contribution (the H-only edge FAILED -> PROPOSAL_APPROVED).
+    network_reruns_max: Annotated[int, Field(ge=0, le=3)] = 1
 
 
 class DiffPolicy(Strict):

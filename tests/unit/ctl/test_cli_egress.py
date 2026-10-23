@@ -31,8 +31,39 @@ def test_status_renders_a_sandbox_open_view(monkeypatch: pytest.MonkeyPatch) -> 
     sent = _api(monkeypatch, (200, {"mode": "sandbox_open", "default": "open", "previous": None}))
     result = CliRunner().invoke(cli.app, ["egress", "status"])
     assert result.exit_code == 0, result.output
-    assert sent == [("GET", "/v1/control/egress-mode", None)]
+    assert sent == [("GET", "/v1/control/egress-mode", None), ("GET", "/v1/control/implement-network", None)]
     assert "sandbox_open" in result.output and "open" in result.output
+
+
+def test_status_shows_the_implement_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    answers = {"/v1/control/egress-mode": {"mode": "open", "default": "open", "previous": None},
+               "/v1/control/implement-network": {"value": "auto", "active": False, "egress_mode": "open",
+                                                 "previous": None}}  # fmt: skip
+
+    def api(method: str, path: str, body: dict[str, Any] | None = None, timeout: float = 30.0) -> tuple[int, Any]:
+        return 200, answers[path]
+
+    monkeypatch.setattr(cli, "api", api)
+    result = CliRunner().invoke(cli.app, ["egress", "status"])
+    assert result.exit_code == 0, result.output
+    assert '"implement_network": "auto"' in result.output and '"implement_network_active": false' in result.output
+
+
+def test_implement_network_needs_a_valid_value_and_the_tty_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
+    view = {"value": "on_request", "active": False, "egress_mode": "open", "previous": "off"}
+    sent = _api(monkeypatch, (200, view))
+    bad = CliRunner().invoke(cli.app, ["egress", "implement-network", "on"])
+    assert bad.exit_code == 2 and "off|on_request|auto" in bad.output and sent == []
+    refused = CliRunner().invoke(cli.app, ["egress", "implement-network", "on_request"])  # no TTY
+    assert refused.exit_code == 2 and "interactive TTY confirm" in refused.output and sent == []
+    words: list[str] = []
+    monkeypatch.setattr(cli, "_confirm", words.append)
+    ok = CliRunner().invoke(cli.app, ["egress", "implement-network", "on_request"])
+    assert ok.exit_code == 0, ok.output
+    assert words == ["IMPLEMENT NETWORK ON_REQUEST"]
+    assert sent == [("POST", "/v1/control/implement-network", {"value": "on_request"})]
+    _api(monkeypatch, (403, {"error": "forbidden"}))
+    assert CliRunner().invoke(cli.app, ["egress", "implement-network", "auto"]).exit_code == 1
 
 
 def test_mode_sandbox_open_needs_the_tty_confirm(monkeypatch: pytest.MonkeyPatch) -> None:

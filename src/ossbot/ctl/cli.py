@@ -37,6 +37,7 @@ from ossbot.common.control_flags import (
     write_flag,
 )
 from ossbot.common.paths import Paths
+from ossbot.common.schemas import IMPLEMENT_NETWORK_VALUES
 from ossbot.common.snapshot import read_current
 from ossbot.common.uds import uds_client
 
@@ -437,10 +438,29 @@ def egress_mode(mode: Annotated[str, typer.Argument(help="allowlist | research |
 
 @egress_app.command("status")
 def egress_status() -> None:
-    """The active egress mode and the snapshot default (``egress.mode_default``)."""
+    """The active egress mode, the snapshot default (``egress.mode_default``) and the implement network."""
     code, data = api("GET", "/v1/control/egress-mode")
     if code != 200:
         _fail(f"gatekeeper answered {code}: {data}")
+    icode, idata = api("GET", "/v1/control/implement-network")
+    if icode == 200 and isinstance(data, dict) and isinstance(idata, dict):
+        data = {**data, "implement_network": idata.get("value"), "implement_network_active": idata.get("active")}
+    _show(data)
+
+
+@egress_app.command("implement-network")
+def egress_implement_network(
+    value: Annotated[str, typer.Argument(help="off | on_request | auto")],
+) -> None:
+    """Set the coder's executor network (TTY confirm; ADR-0024). on_request: only a 🌐 Rerun with network
+    you confirm gets the public web; auto: every implement run of a non-strict repo. Effective only in egress
+    mode sandbox_open; strict repos and the Kiro key container never get it. Invalidates no approval."""
+    if value not in IMPLEMENT_NETWORK_VALUES:
+        _fail(f"usage: ossctl egress implement-network {'|'.join(IMPLEMENT_NETWORK_VALUES)}", 2)
+    _confirm(f"IMPLEMENT NETWORK {value.upper()}")
+    code, data = api("POST", "/v1/control/implement-network", {"value": value})
+    if code != 200:
+        _fail(f"implement network change refused ({code}): {data}")
     _show(data)
 
 

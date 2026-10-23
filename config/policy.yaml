@@ -27,6 +27,7 @@ limits:
   max_implement_attempts: 2          # extra implement attempts after a validation failure (§9.1)
   max_review_rounds: 2
   max_change_rounds: 5
+  network_reruns_max: 1              # human "Rerun with network" taps per contribution, 0-3 (ADR-0024)
 diff:                              # hard safety ceiling (CR-004 Amendment B): runaway-agent guard, config file only
   max_files: 80                    # every changed path counts, excluded globs included
   max_changed_lines: 3000          # non-test lines (size.exclude_globs excluded)

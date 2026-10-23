@@ -10,6 +10,8 @@ from fastapi.responses import JSONResponse
 
 from ossbot.common.schemas import (
     ContributionCreate,
+    ImplementEgressDecide,
+    ImplementEgressView,
     ImportRequest,
     PackageRequest,
     PackageTsRequest,
@@ -18,6 +20,7 @@ from ossbot.common.schemas import (
     TransitionRequest,
     TransitionResponse,
 )
+from ossbot.gatekeeper import implement_network
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 from ossbot.gatekeeper.imports import Importer, ImportInvalid
@@ -143,6 +146,30 @@ async def package(
     except PackageRefused as exc:
         return JSONResponse(status_code=exc.status, content={"error": exc.code, "detail": exc.detail})
     return JSONResponse(status_code=result.status, content=result.body)
+
+
+@router.get("/contributions/{cid}/implement-egress")
+async def get_implement_egress(
+    request: Request, cid: str, caller: Annotated[Caller, Depends(require(Role.WORKER, Role.SANDBOX))]
+) -> ImplementEgressView:
+    """ADR-0024: what a coder run of this cid would get now (read-only; the runner's prompt line)."""
+    _check_cid(cid)
+    egress, reason = implement_network.decide(ctx(request), cid)
+    return ImplementEgressView(egress=egress, reason=reason)
+
+
+@router.post("/contributions/{cid}/implement-egress")
+async def decide_implement_egress(
+    request: Request,
+    cid: str,
+    body: ImplementEgressDecide,
+    caller: Annotated[Caller, Depends(require(Role.SANDBOX))],
+) -> ImplementEgressView:
+    """ADR-0024: sandboxd's per-run decision at coder admission, audited ``implement_egress_decided``.
+    sandboxd networks agent-exec only if its own mode read is sandbox_open and this says web."""
+    _check_cid(cid)
+    egress, reason = implement_network.decide_and_audit(ctx(request), cid, body.run_id, caller.actor)
+    return ImplementEgressView(egress=egress, reason=reason)
 
 
 @router.post("/contributions/{cid}/package-ts")

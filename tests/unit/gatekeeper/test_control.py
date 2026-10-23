@@ -25,7 +25,13 @@ from ossbot.gatekeeper.control import ModeChanged
 from ossbot.gatekeeper.state_machine import ALLOWED, BLOCKED_WHILE_STOPPED, Actor, TransitionError
 from tests.conftest import UID_OPERATOR, UID_REQUESTER, UID_SANDBOX, UID_WORKER, packaged_contribution
 from tests.unit.gatekeeper.api_helpers import client
-from tests.unit.gatekeeper.decision_helpers import install_sources, skill_card, status_of
+from tests.unit.gatekeeper.decision_helpers import (
+    install_sources,
+    proposal_card,
+    proposed_contribution,
+    skill_card,
+    status_of,
+)
 from tests.unit.gatekeeper.test_authz import outbox_texts
 from tests.unit.gatekeeper.test_state_machine import guard_columns, make
 
@@ -250,3 +256,54 @@ def test_dry_run_default_on_and_resume_does_not_change_it(ctx: AppContext) -> No
     ctx.control.reconcile()
     view = ctx.control.view()
     assert view.state == "running" and view.dry_run is True
+
+
+# ------------------------------------------------------------- implement network (ADR-0024)
+def test_implement_network_defaults_off_and_unknown_reads_off(ctx: AppContext) -> None:
+    assert ctx.control.implement_network() == "off"
+    assert ctx.control.lifecycle_status(egress_default="open", tier_default="locked")["implement_network"] == "off"
+    # a value outside the three (impossible through the CHECK; simulated on a copy of the row) reads off
+    ctx.conn.execute("PRAGMA ignore_check_constraints = ON")
+    ctx.conn.execute("UPDATE control_state SET implement_network = 'everything' WHERE id = 1")
+    ctx.conn.execute("PRAGMA ignore_check_constraints = OFF")
+    assert ctx.control.implement_network() == "off"
+
+
+def test_set_implement_network_audits_fyis_and_noop(ctx: AppContext) -> None:
+    default = ctx.config.egress.mode_default
+    assert ctx.control.set_implement_network("on_request", "tg:4242", default) == "off"
+    assert ctx.control.implement_network() == "on_request"
+    assert _audits(ctx, "implement_network_changed") == [{"from": "off", "to": "on_request", "egress_mode": "open"}]
+    texts = outbox_texts(ctx)
+    assert any("Implement network off → on_request by tg:4242 (inactive until egress mode sandbox_open)" in t
+               for t in texts)  # fmt: skip
+    assert ctx.control.set_implement_network("on_request", "tg:4242", default) == "on_request"  # no-op
+    assert len(_audits(ctx, "implement_network_changed")) == 1
+    ctx.control.set_egress_mode("sandbox_open", "tg:4242", default, egress=ctx.config.egress)
+    ctx.control.set_implement_network("auto", "uid:1000/operator", default)
+    assert _audits(ctx, "implement_network_changed")[-1] == {"from": "on_request", "to": "auto",
+                                                             "egress_mode": "sandbox_open"}  # fmt: skip
+    assert any("Implement network on_request → auto by uid:1000/operator (active)" in t for t in outbox_texts(ctx))
+    with pytest.raises(ValueError):
+        ctx.control.set_implement_network("on", "tg:4242", default)  # type: ignore[arg-type]
+
+
+def test_implement_network_toggle_invalidates_nothing(ctx: AppContext) -> None:
+    """R2.3: gate-1, gate-2 and skill approvals, holds, prefs and the egress mode are untouched."""
+    install_sources(ctx)
+    skill_card(ctx)
+    proposal_card(ctx, proposed_contribution(ctx))
+    cid, action = packaged_contribution(ctx)
+    ctx.create_approval(action, "system")
+    ctx.conn.execute(
+        "INSERT INTO contribution_holds (id, cid, reason, detail_json, held_by, held_at)"
+        " VALUES ('h_1', ?, 'egress_anomaly', '{}', 'sandbox', 't')",
+        (cid,),
+    )
+    ctx.conn.commit()
+    before = _rows(ctx)
+    default = ctx.config.egress.mode_default
+    for value in ("on_request", "auto", "off"):
+        ctx.control.set_implement_network(value, "tg:4242", default)  # type: ignore[arg-type]
+        assert _rows(ctx) == before
+    assert ctx.control.egress_mode(default) == "open" and ctx.control.view().dry_run is True

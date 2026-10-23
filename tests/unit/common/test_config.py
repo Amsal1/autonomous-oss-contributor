@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from ossbot.common.config import (
     DEFAULT_OPEN_TOPICS,
@@ -194,6 +195,18 @@ def test_owner_fix_rounds_max() -> None:
     assert Limits().owner_fix_rounds_max == 5
     policy = parse_yaml_model(PolicyConfig, "policy.yaml", load("policy.yaml"))
     assert policy.limits.owner_fix_rounds_max == 5 and policy.limits.watch_rounds_max == 3
+
+
+def test_network_reruns_max() -> None:
+    """ADR-0024: default 1, range 0-3, in the policy file too; 4 is refused."""
+    assert Limits().network_reruns_max == 1
+    policy = parse_yaml_model(PolicyConfig, "policy.yaml", load("policy.yaml"))
+    assert policy.limits.network_reruns_max == 1
+    for value in (0, 3):
+        assert Limits(network_reruns_max=value).network_reruns_max == value
+    for bad in (-1, 4):
+        with pytest.raises(ValidationError):
+            Limits(network_reruns_max=bad)
 
 
 def test_targets_seed_resolves_defaults() -> None:

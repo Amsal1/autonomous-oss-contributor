@@ -7,6 +7,8 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
+import pytest
+
 from ossbot.gatekeeper import db
 
 DECISION_TABLES = {"proposal_approvals", "skill_approvals", "tg_views", "tg_thread_seq"}
@@ -15,7 +17,7 @@ CR004_TABLES = {"runner_requests"}
 HERMES_TABLES = {"skill_reviews", "chat_turns", "chat_sessions"}  # 0004_hermes.sql (FEAT-007)
 UX_TABLES = {"tg_topics", "pending_input", "review_comments", "ux_prefs"}  # 0005_telegram_ux.sql (FEAT-009)
 UX_OUTBOX_COLUMNS = {"priority", "thread_key", "coalesce_key", "merged_into"}
-LATEST = 8
+LATEST = 9
 M2_TABLES = {"digest_runs", "reminders", "review_mirror", "telegraph_pages"}  # 0006_telegram_m2.sql (FEAT-010)
 OPEN_TABLES = {"discovered_targets", "contribution_holds"}  # 0007_open_discovery.sql (post-v1)
 MIGRATIONS = ((1, "0001_init.sql"), (2, "0002_decisions.sql"), (3, "0003_cr004.sql"), (4, "0004_hermes.sql"),
@@ -248,3 +250,49 @@ def test_open_discovery_checks(tmp_path: Path) -> None:
         raise AssertionError(f"contribution_holds accepted {args}")  # pragma: no cover
     conn.execute("UPDATE contribution_holds SET released_at = 't2', released_by = 'op' WHERE id = 'h1'")
     conn.execute(hold, ("h4", "c_0000000001", "egress_anomaly"))  # a new hold after the release
+
+
+def _at_version_8(path: Path) -> sqlite3.Connection:
+    conn = _at_version_7(path)
+    sql = (resources.files("ossbot.gatekeeper.migrations") / "0008_owner_fix.sql").read_text(encoding="utf-8")
+    conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = 8;\nCOMMIT;")
+    return conn
+
+
+def test_from_version_8_adds_implement_network(tmp_path: Path) -> None:
+    """0009 (ADR-0024): the setting is 'off' on upgrade, the rerun columns default to no grant, the
+    audit index exists and audit_events stays append-only (C-D17, C-D19)."""
+    conn = _at_version_8(tmp_path / "h.db")
+    conn.execute(
+        "INSERT INTO control_state (id, state, dry_run, config_hash, reason, changed_by, changed_at)"
+        " VALUES (1, 'running', 1, 'h', 'initialized', 'system', 't')"
+    )
+    conn.execute(
+        "INSERT INTO contributions (id, upstream, issue_number, source, state, created_at, updated_at)"
+        " VALUES ('c_0000000001', 'o/r', 5, 'discover', 'FAILED', 't', 't')"
+    )
+    conn.execute(
+        "INSERT INTO audit_events (ts, actor, event, cid, data_json, prev_hash, row_hash)"
+        " VALUES ('t', 'system', 'x', 'c_0000000001', '{}', 'p', 'h')"
+    )
+    assert db.migrate(conn) == LATEST
+    assert conn.execute("SELECT implement_network FROM control_state").fetchone()[0] == "off"
+    row = conn.execute(
+        "SELECT network_reruns, network_grant, network_grant_version, rerun_hint FROM contributions"
+    ).fetchone()
+    assert tuple(row) == (0, 0, None, 0)
+    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "audit_events_cid_seq" in indexes
+    bad = (
+        "UPDATE control_state SET implement_network = 'on' WHERE id = 1",
+        "UPDATE contributions SET network_grant = 2",
+        "UPDATE contributions SET rerun_hint = 2",
+        "UPDATE audit_events SET actor = 'x'",
+        "DELETE FROM audit_events",
+    )
+    for sql in bad:
+        # the CHECKs raise IntegrityError; the append-only triggers RAISE(ABORT, 'append-only')
+        with pytest.raises(sqlite3.DatabaseError, match=r"CHECK|append-only"):
+            conn.execute(sql)
+    for value in ("on_request", "auto", "off"):
+        conn.execute("UPDATE control_state SET implement_network = ? WHERE id = 1", (value,))

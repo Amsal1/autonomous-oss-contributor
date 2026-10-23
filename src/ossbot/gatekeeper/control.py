@@ -39,7 +39,7 @@ from ossbot.common.control_flags import (
     write_flag,
 )
 from ossbot.common.paths import Paths
-from ossbot.common.schemas import TERMINAL_STATES, ControlView
+from ossbot.common.schemas import IMPLEMENT_NETWORK_VALUES, TERMINAL_STATES, ControlView, ImplementNetwork
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalService, Invalidated
 from ossbot.gatekeeper.audit import AuditLog
@@ -279,6 +279,7 @@ class ControlService:
             "awaiting_approval": count("SELECT COUNT(*) FROM approvals WHERE status IN ('pending','armed')"),
             "outbox_pending": count("SELECT COUNT(*) FROM tg_outbox WHERE status = 'pending'"),
             "egress_mode": self.egress_mode(egress_default),
+            "implement_network": self.implement_network(),
             "hermes_tier": self.hermes_tier(tier_default),
         }
 
@@ -336,6 +337,47 @@ class ControlService:
         self.notify(
             f"🌐 Egress mode {previous} → {mode} by {actor} (fetch/validate {egress.repo_code_change(previous, mode)})"
         )
+        return previous
+
+    # ------------------------------------------------- implement network (ADR-0024)
+    def implement_network(self) -> ImplementNetwork:
+        """The owner's setting for the coder's executor. A missing row or any unknown value is ``off``
+        (fail closed); the column defaults to ``off`` on a fresh DB, after a reset and on upgrade."""
+        try:
+            row = db.read_control_row(self.conn)
+        except sqlite3.Error:
+            return "off"
+        if row is None:
+            return "off"
+        try:
+            value = row["implement_network"]
+        except IndexError:  # a DB older than migration 0009
+            return "off"
+        return value if value in IMPLEMENT_NETWORK_VALUES else "off"
+
+    def set_implement_network(self, value: ImplementNetwork, actor: str, default: EgressMode) -> ImplementNetwork:
+        """Human-confirmed (Telegram /egress confirm, ossctl TTY confirm through the operator route): one
+        transaction (the row, audit ``implement_network_changed``), then the FYI. Returns the previous value.
+        A no-op set returns early without audit. Invalidates nothing (design §4c): approvals bind content,
+        the config snapshot and dry-run, and this changes none of them; holds, prefs and the egress mode
+        are untouched."""
+        if value not in IMPLEMENT_NETWORK_VALUES:
+            raise ValueError(f"implement_network: unknown value {value!r}")
+        mode = self.egress_mode(default)
+        with db.transaction(self.conn):
+            previous = self.implement_network()
+            if previous == value:
+                return previous
+            self.conn.execute(
+                "UPDATE control_state SET implement_network = ?, changed_by = ?, changed_at = ? WHERE id = 1",
+                (value, actor, to_iso(self.clock.now())),
+            )
+            self.audit.append(actor, "implement_network_changed", {"from": previous, "to": value, "egress_mode": mode})
+        if value == "off":
+            state = "the coder's executor never gets a network"
+        else:
+            state = "active" if mode == "sandbox_open" else "inactive until egress mode sandbox_open"
+        self.notify(f"🌐 Implement network {previous} → {value} by {actor} ({state})")
         return previous
 
     # ------------------------------------------------------ Hermes tier (§15.5, PLAN 23a)

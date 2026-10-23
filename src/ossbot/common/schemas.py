@@ -165,6 +165,24 @@ class EgressModeView(ApiModel):
     previous: Literal["allowlist", "research", "open", "sandbox_open"] | None = None
 
 
+# ADR-0024: the owner's network setting for the coder's executor (agent-exec); widening order off < on_request < auto.
+ImplementNetwork = Literal["off", "on_request", "auto"]
+IMPLEMENT_NETWORK_VALUES: tuple[ImplementNetwork, ...] = ("off", "on_request", "auto")
+
+
+class ImplementNetworkRequest(ApiModel):
+    """``POST /v1/control/implement-network`` (operator: ossctl TTY confirm; Telegram calls the service)."""
+
+    value: ImplementNetwork
+
+
+class ImplementNetworkView(ApiModel):
+    value: ImplementNetwork
+    active: bool  # value != off and the egress mode is sandbox_open
+    egress_mode: Literal["allowlist", "research", "open", "sandbox_open"]
+    previous: ImplementNetwork | None = None
+
+
 class HermesTierRequest(ApiModel):
     """§15.5: ossctl hermes tier <tier> (TTY-confirmed); Telegram /hermes tier is FEAT-009."""
 
@@ -649,7 +667,7 @@ class HoldRequest(ApiModel):
 
     reason: Literal["egress_anomaly"]
     run_id: Annotated[str, Field(pattern=HOLD_RUN_ID_RE)]
-    stage: Literal["fetch", "validate"]
+    stage: Literal["fetch", "validate", "implement"]  # implement: a networked coder run (ADR-0024)
     egress: Literal["mode", "strict"]
     egress_mode: EgressMode
     hosts: Annotated[int, Field(ge=0, le=1_000_000)]
@@ -672,3 +690,21 @@ class HoldView(ApiModel):
     held_at: str
     released_by: str | None = None
     released_at: str | None = None
+
+
+# ------------------------------------------------- implement egress decision (ADR-0024, design §4e)
+ImplementEgress = Literal["web", "none"]
+ImplementEgressReason = Literal[
+    "unknown_cid", "not_implementing", "setting_off", "egress_mode", "strict", "auto", "rerun", "not_requested"
+]
+
+
+class ImplementEgressDecide(ApiModel):
+    """``POST /v1/contributions/{cid}/implement-egress`` (sandbox): sandboxd asks for one coder run."""
+
+    run_id: Annotated[str, Field(pattern=HOLD_RUN_ID_RE)]
+
+
+class ImplementEgressView(ApiModel):
+    egress: ImplementEgress
+    reason: ImplementEgressReason

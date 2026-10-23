@@ -701,11 +701,17 @@ def check_egress_mode() -> Result:
         with uds_client(Paths.default().gatekeeper_sock, timeout=httpx.Timeout(5.0)) as client:
             resp = client.get("/v1/control/egress-mode")
             data = resp.json() if resp.status_code == 200 else {}
+            impl = client.get("/v1/control/implement-network")
+            impl_data = impl.json() if impl.status_code == 200 else {}
     except (httpx.HTTPError, OSError, ValueError) as exc:
         return Result(FAIL, "egress mode", str(exc), "systemctl status ossbot-gatekeeper")
     if not data:
         return Result(FAIL, "egress mode", f"HTTP {resp.status_code}")
-    return Result(PASS, "egress mode", f"{data.get('mode')} (default {data.get('default')})")
+    detail = f"{data.get('mode')} (default {data.get('default')})"
+    if isinstance(impl_data, dict) and impl_data.get("value"):  # ADR-0024
+        active = "" if impl_data.get("value") == "off" or impl_data.get("active") else " (inactive)"
+        detail += f", implement network {impl_data.get('value')}{active}"
+    return Result(PASS, "egress mode", detail)
 
 
 def check_squid_verifiable() -> Result:
