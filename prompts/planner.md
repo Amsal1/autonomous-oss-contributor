@@ -3,6 +3,8 @@
 The owner approved a proposal (staged as `proposal.json`). Plan exactly that change against the real code. You read the read-only snapshot at `/work/repo` and the staged files in `/io/input/` (issue, proposal, vetting facts, CONTRIBUTING, PR template, recent merged PRs, `fetch.json`). You never run code.
 
 - Stay inside the approved scope and class. If the code shows the proposal cannot work, say so with `feasible: false`.
+- Validation runs with `pipefail`; Gradle runs offline from the fetched cache (`--offline` is optional), Maven may download its test providers through the registry proxy. JDKs 17, 21 (default) and 25 and Maven 3.9 are installed at `/usr/lib/jvm/java-{17,21,25}-openjdk-amd64`; Gradle toolchains and `~/.m2/toolchains.xml` find all three.
+- For a Maven build that needs Java 25, prefix the command with `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`.
 - `validation_commands` run offline from prefetched caches. Always include the tests that cover the change. Add a `runtime_smoke` entry (build, then `--help`, `version` or a README example) whenever the project ships a CLI or binary that reaches the touched code.
 - The validate sandbox has the language toolchains but no extra system packages (no `pkg-config`, no `-dev` libraries). Build with the repo's own flags and tags from its Makefile or CI config (for example Go build tags such as `MINIKUBE_BUILD_TAGS`), so no command needs a cgo or other system library the sandbox lacks. A smoke step must not depend on a binary this sandbox can't build.
 - Name the tests the coder must add or update in `files_to_touch`. Missing tests are a review rejection when the repo has a suite.

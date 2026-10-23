@@ -5,13 +5,18 @@ loops and refuses past the maxima) and from a WATCHING fix round (the watcher's,
 ``/fix`` with ``state_reason=owner_fix_round``), which first unbundles the last approved bundle
 (``mode=fix_round``, args fixed from gatekeeper state; ``fix_round_entry``). Every run on a live PR
 gets the fix-round instruction (address only the feedback, verify each finding, never run what it
-names). The coder adds tests that cover the change (tests-required rule, §9.14). ``needs_network``
-(a new dependency) fails the stage with ``needs_network`` (v1 has no second fetch into a populated
-task volume; the owner is told by the gatekeeper's terminal FYI, which shows the summary carried in
-the FAILED evidence). A validation
-loop that ends (``implement_attempts``, or ``validation_stuck`` when a retry left the diff
-byte-identical and the same checks failing, so another coder run would only repeat it) carries
-``last_failure_summary`` the same way.
+names). The coder adds tests that cover the change (tests-required rule, §9.14).
+
+``needs_network`` is only for a NEW dependency the change adds. It triggers exactly one re-fetch per stage
+run (a fetch job in refetch mode that keeps the working tree), then one resumed coder run if the re-fetch saw
+changed dependency files; a ``needs_network`` left after that fails the stage ``needs_network`` (the owner is
+told by the gatekeeper's terminal FYI, which shows the summary carried in the FAILED evidence). Without a
+changed dependency file the entries are carried as sandbox gaps. ``sandbox_gaps`` (checks the sandbox could
+not run) never stop the stage: validate runs the plan's commands later, each gap is appended to
+``open_concerns`` as ``Sandbox gap: …`` and the runner note ``sandbox_gap`` is set until a new round from
+PLANNED. A validation loop that ends (``implement_attempts``, or ``validation_stuck`` when a retry left the
+diff byte-identical and the same checks failing, so another coder run would only repeat it) carries
+``last_failure_summary`` the same way, plus ``"sandbox_gap": true`` and the gap sentence when the note is set.
 """
 
 from __future__ import annotations
@@ -22,14 +27,31 @@ from typing import Any
 
 from ossbot.runner import prompts
 from ossbot.runner.gk_client import GkError
-from ossbot.runner.llm import StageFailed
-from ossbot.runner.outputs import SCHEMA_HINTS, ImplementReport
+from ossbot.runner.llm import LlmResult, StageFailed
+from ossbot.runner.outputs import (
+    OPEN_CONCERNS_MAX,
+    SANDBOX_GAPS_MAX,
+    SCHEMA_HINTS,
+    SHORT_MAX,
+    ImplementReport,
+)
 from ossbot.runner.pipeline import StageContext, StageRun
-from ossbot.runner.stages.common import issue_text, job, owner_notes, write_inputs
+from ossbot.runner.stages.common import artifact_json, issue_text, job, owner_notes, target, write_inputs
 
 STAGE = "implement"
 ENTRY = ("PLANNED", "VALIDATION_FAILED", "REVISE", "CHANGES_REQUESTED")
 UNBUNDLE_TIMEOUT_S = 600  # the package profile allows at most 900 s (sandboxd PROFILE_MAX_TIMEOUT)
+CODER_TIMEOUT_S = 3600  # the coder profile allows at most 7200 s
+REFETCH_TIMEOUT_S = 1800  # the fetch profile allows at most 3600 s; STAGE_TIMEOUT_S["implement"] covers 2 coders + it
+DEPS_MAX = 50  # fetch.json deps_changed (untrusted: written by a container running repo code)
+DEP_PATH_RE = re.compile(r"[A-Za-z0-9._/@+-]{1,200}")
+FACTS_MAX = 4000  # the fetch facts / re-fetch result sections
+REFETCH_LINE = "The runner re-fetched dependencies once for your change; continue and run the checks again."
+NEEDS_NETWORK_SUMMARY = "The change adds dependencies the sandbox could not fetch, even after one re-fetch: {deps}."
+GAP_CONCERN = "Sandbox gap: "
+GAP_SHOWN = 160  # the first gap in the owner-facing summary
+GAP_SENTENCE = "Sandbox gaps the coder reported: {gap}."
+GAP_FAILURES = ("implement_attempts", "validation_stuck")  # the validation-loop ends tagged with sandbox_gap
 SUMMARY_MAX = 900  # the FAILED evidence summary (well under EVIDENCE_MAX_BYTES; the FYI shows 600)
 CHECK_LINE_MAX = 160  # the last tail line of one failed check
 CONCERN_MAX = 300  # the coder's first open concern
@@ -143,7 +165,52 @@ def last_failure_summary(sc: StageContext, c: dict[str, Any], lead: str = "") ->
     concerns = (notes.get("implement") or {}).get("open_concerns") or []
     if concerns and str(concerns[0]).strip():
         parts.append(f"Coder's note: {_clip(str(concerns[0]).strip(), CONCERN_MAX)}")
-    return _clip(" ".join(parts), SUMMARY_MAX)
+    gap = _gap_sentence(notes)
+    if not gap:
+        return _clip(" ".join(parts), SUMMARY_MAX)
+    return f"{_clip(' '.join(parts), SUMMARY_MAX - len(gap) - 1)} {gap}"
+
+
+def _gap_sentence(notes: dict[str, Any]) -> str:
+    """``Sandbox gaps the coder reported: <first gap>.`` while the ``sandbox_gap`` note is set, else ``""``."""
+    if not notes.get("sandbox_gap"):
+        return ""
+    first = _clip(str(notes.get("sandbox_gap_text") or "").strip() or "unnamed", GAP_SHOWN)
+    return GAP_SENTENCE.format(gap=first.rstrip("."))
+
+
+def _failed(sc: StageContext, cid: str, state: str, evidence: dict[str, Any]) -> None:
+    """A direct FAILED transition of this stage; a validation-loop end after a sandbox gap is tagged (§9.8)."""
+    if evidence.get("error_class") in GAP_FAILURES and sc.load(cid).get("sandbox_gap"):
+        evidence = {**evidence, "sandbox_gap": True}
+    sc.transition(cid, state, "FAILED", evidence)
+
+
+def deps_changed(info: object) -> list[str]:
+    """fetch.json ``deps_changed`` of a re-fetch, or ``[]`` when it is anything but a list of at most 50 paths
+    of the fixed charset (untrusted; the safe branch is no second coder run, the entries become gaps)."""
+    raw = info.get("deps_changed") if isinstance(info, dict) else None
+    if not isinstance(raw, list) or len(raw) > DEPS_MAX:
+        return []
+    if not all(isinstance(p, str) and DEP_PATH_RE.fullmatch(p) for p in raw):
+        return []
+    return list(raw)
+
+
+def fetch_facts(info: object) -> dict[str, Any]:
+    """``ecosystems``, ``prefetch`` and ``prefetch_failed`` of a fetch.json (shown to the coder as untrusted)."""
+    if not isinstance(info, dict):
+        return {}
+    return {key: info[key] for key in ("ecosystems", "prefetch", "prefetch_failed") if key in info}
+
+
+def _refetch(sc: StageContext, c: dict[str, Any]) -> dict[str, Any]:
+    """The one re-fetch of this stage run: a fetch job in refetch mode into the existing task volume (§9.8)."""
+    cid, upstream = str(c["id"]), str(c["upstream"])
+    done = job(sc, cid, STAGE, "fetch", "fetch", {"repo": upstream, "refetch": True}, "rw",
+               egress=target(sc, upstream).egress, timeout_s=REFETCH_TIMEOUT_S)  # fmt: skip
+    info = artifact_json(done, "fetch.json")
+    return info if isinstance(info, dict) else {}
 
 
 def _stuck(sc: StageContext, cid: str) -> bool:
@@ -157,10 +224,12 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
     cid, state = str(c["id"]), str(c["state"])
     if state == "VALIDATION_FAILED" and _stuck(sc, cid):  # another coder run would repeat it (§9.8)
         summary = last_failure_summary(sc, c, STUCK_LEAD)
-        sc.transition(cid, state, "FAILED", {"error_class": "validation_stuck", "summary": summary})
+        _failed(sc, cid, state, {"error_class": "validation_stuck", "summary": summary})
         return
     if state in ENTRY and state != "VALIDATION_FAILED":  # a new round: no earlier failure to compare with
         sc.save(cid, validation_sig=None, validation_prev_sig=None)
+    if state == "PLANNED":  # a new round from the plan: no sandbox gap reported yet
+        sc.save(cid, sandbox_gap=False, sandbox_gap_text=None)
     if state in ENTRY:
         try:
             sc.transition(cid, state, "IMPLEMENTING")
@@ -170,7 +239,7 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
                 evidence: dict[str, Any] = {"error_class": guard}
                 if guard == "implement_attempts":
                     evidence["summary"] = last_failure_summary(sc, c)
-                sc.transition(cid, state, "FAILED", evidence)
+                _failed(sc, cid, state, evidence)
                 return
             raise
     plan = json.loads(c["plan_json"]) if c.get("plan_json") else {}
@@ -179,19 +248,48 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
             sc.save(cid, validation_sig=None, validation_prev_sig=None)  # a new fix round starts the comparison
             _unbundle(sc, c)
         issue, _ = issue_text(sc, c)
+        facts = fetch_facts(sc.load(cid).get("fetch"))
         sections = [issue, *owner_notes(c), prompts.untrusted("approved plan", json.dumps(plan, indent=1)),
+                    *([prompts.untrusted("fetch facts", json.dumps(facts)[:FACTS_MAX])] if facts else []),
                     *feedback(sc, c)]  # fmt: skip
-        text = prompts.task("coder", instruction(c), sections, SCHEMA_HINTS["coder"])
-        result = sc.kiro().invoke(
-            cid, "coder", ImplementReport, text, timeout_s=3600, schema_hint=SCHEMA_HINTS["coder"]
-        )
+        task_line = instruction(c)
+        result = _coder(sc, cid, task_line, sections)
         run_.model_actual = result.model_actual
         report = result.value
-        if report.needs_network:  # the gatekeeper's terminal FYI carries the summary (§14.13.1)
-            deps = ", ".join(report.needs_network[:5])
-            summary = f"The change needs new dependencies ({deps}); v1 does not re-fetch, so it stops here."
-            raise StageFailed("needs_network", summary=summary)
-    models = {**sc.load(cid).get("models", {}), "coder": result.model.model}
-    sc.save(cid, implement=report.model_dump(), models=models, watch_fix=None)
-    sc.transition(cid, "IMPLEMENTING", "IMPLEMENTED",
-                  {"files": report.files_changed[:50], "tests": report.tests_changed[:50]})  # fmt: skip
+        if report.needs_network:  # §9.8: one re-fetch per stage run, then resume or carry the entries as gaps
+            info = _refetch(sc, c)
+            changed = deps_changed(info)
+            if changed:
+                found = {"deps_changed": changed, **{k: v for k, v in fetch_facts(info).items() if k != "ecosystems"}}
+                again = [*sections, prompts.untrusted("re-fetch result", json.dumps(found)[:FACTS_MAX])]
+                result = _coder(sc, cid, f"{task_line} {REFETCH_LINE}", again)
+                run_.model_actual = result.model_actual
+                report = result.value
+                if report.needs_network:  # the gatekeeper's terminal FYI carries the summary (§14.13.1)
+                    deps = ", ".join(report.needs_network[:5])
+                    raise StageFailed("needs_network", summary=NEEDS_NETWORK_SUMMARY.format(deps=deps))
+            else:  # no dependency file changed: what the coder missed is a sandbox gap, left to validate
+                gaps = [*report.sandbox_gaps, *report.needs_network][:SANDBOX_GAPS_MAX]
+                report = report.model_copy(update={"sandbox_gaps": gaps, "needs_network": []})
+    gaps = list(report.sandbox_gaps)
+    if gaps:  # the one gaps/concerns rule: every reader of open_concerns sees them (reviewer, summaries)
+        concerns = [*report.open_concerns, *(f"{GAP_CONCERN}{g}"[:SHORT_MAX] for g in gaps)][:OPEN_CONCERNS_MAX]
+        report = report.model_copy(update={"open_concerns": concerns})
+    notes = sc.load(cid)
+    models = {**notes.get("models", {}), "coder": result.model.model}
+    gap_text = notes.get("sandbox_gap_text") or next((g.strip() for g in gaps if g.strip()), None)
+    sc.save(cid, implement=report.model_dump(), models=models, watch_fix=None,
+            sandbox_gap=bool(gaps) or bool(notes.get("sandbox_gap")), sandbox_gap_text=gap_text)  # fmt: skip
+    evidence = {"files": report.files_changed[:50], "tests": report.tests_changed[:50]}
+    if gaps:
+        evidence["sandbox_gaps"] = len(gaps)
+    sc.transition(cid, "IMPLEMENTING", "IMPLEMENTED", evidence)
+
+
+def _coder(sc: StageContext, cid: str, task_line: str, sections: list[str]) -> LlmResult[ImplementReport]:
+    """One coder run (the split pair); ``timeout_s`` is explicit (C-D23: the stage timeout is far above the
+    coder profile's maximum)."""
+    text = prompts.task("coder", task_line, sections, SCHEMA_HINTS["coder"])
+    return sc.kiro().invoke(
+        cid, "coder", ImplementReport, text, timeout_s=CODER_TIMEOUT_S, schema_hint=SCHEMA_HINTS["coder"]
+    )

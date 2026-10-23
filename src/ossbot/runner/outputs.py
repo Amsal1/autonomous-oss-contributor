@@ -25,6 +25,10 @@ PLAN_SMOKE_MAX = 5
 COMMAND_CMD_MAX = 1000
 COMMAND_NAME_PATTERN = r"^[A-Za-z0-9_.-]{1,40}$"
 VERDICT_SUMMARY_MAX = 20_000  # the salvage model's own bound (the stage cuts to SUMMARY_MAX)
+OPEN_CONCERNS_MAX = 20
+SANDBOX_GAPS_MAX = 10
+NEEDS_NETWORK_CHARS = "A-Za-z0-9@/._:=<>~^ -"
+NEEDS_NETWORK_PATTERN = rf"^[{NEEDS_NETWORK_CHARS}]{{1,200}}$"
 
 Short = Annotated[str, Field(max_length=SHORT_MAX)]
 Line = Annotated[str, Field(max_length=LINE_MAX)]
@@ -95,8 +99,11 @@ class ImplementReport(Out):
     tests_changed: Annotated[list[Line], Field(max_length=200)] = Field(default_factory=list)
     rationale: Annotated[str, Field(max_length=4000)] = ""
     commands_run: Annotated[list[CommandRun], Field(max_length=50)] = Field(default_factory=list)
-    open_concerns: Annotated[list[Short], Field(max_length=20)] = Field(default_factory=list)
-    needs_network: Annotated[list[Annotated[str, Field(pattern=r"^[A-Za-z0-9@/._:=<>~^ -]{1,200}$")]],
+    open_concerns: Annotated[list[Short], Field(max_length=OPEN_CONCERNS_MAX)] = Field(default_factory=list)
+    # §9.8: checks the coder could not run because the sandbox lacks something (a cache, a toolchain, a JDK);
+    # carried to validate, never terminal. needs_network is only for a NEW dependency the change adds.
+    sandbox_gaps: Annotated[list[Short], Field(max_length=SANDBOX_GAPS_MAX)] = Field(default_factory=list)
+    needs_network: Annotated[list[Annotated[str, Field(pattern=NEEDS_NETWORK_PATTERN)]],
                              Field(max_length=20)] = Field(default_factory=list)  # fmt: skip
     needs_research: Annotated[list[Short], Field(max_length=10)] = Field(default_factory=list)
 
@@ -149,7 +156,13 @@ SCHEMA_HINTS: dict[str, str] = {
         f' "citations": ["<= {PLAN_CITATIONS_MAX} items, each <= {SHORT_MAX} chars"], ...}}'
         " With feasible: false, say why in summary."
     ),
-    "coder": '{"files_changed": [...], "tests_changed": [...], "rationale": "...", ...}',
+    "coder": (
+        '{"files_changed": [...], "tests_changed": [...], "rationale": "...", "commands_run": [{"cmd": "...",'
+        ' "exit_code": 0, "summary": "..."}], "open_concerns": [...],'
+        f' "sandbox_gaps": ["<= {SANDBOX_GAPS_MAX}, one line each"],'
+        ' "needs_network": ["only NEW dependencies your change adds: name or coordinate, <= 200 chars of'
+        ' A-Za-z0-9@/._:=<>~^ space -"], "needs_research": [...]}'
+    ),
     "reviewer": '{"verdict": "pass|revise|reject", "blocking": [...], "tests_present": true, ...}',
     "summarizer": '{"commit_message": "...", "pr_title": "...", "pr_body": "..."}',
 }

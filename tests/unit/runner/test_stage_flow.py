@@ -392,19 +392,217 @@ def test_review_reject_after_gate_1_is_one_gatekeeper_fyi(sc: StageContext, ctx:
     assert "wrong approach; breaks the API" in _evidence(ctx, cid, "ABANDONED")["summary"]
 
 
+def _refetch_handler(deps: Any, *, code: int = 0, base_ref: str | None = "main") -> Any:
+    """fetch.sh in refetch mode (DESIGN §9.8): ``deps_changed`` as given (untrusted, may be malformed)."""
+
+    def handler(spec: dict[str, Any], out: Path) -> int:
+        assert spec["args"].get("refetch") is True and spec["repo_mode"] == "rw"
+        doc = {"base_sha": "1" * 40, "base_ref": base_ref, "ecosystems": ["gradle"], "refetch": True,
+               "prefetch": {"gradle": 1}, "prefetch_failed": ["gradle"], "deps_changed": deps}  # fmt: skip
+        (out / "fetch.json").write_text(json.dumps(doc))
+        return code
+
+    return handler
+
+
+def _refetches(sbx: FakeSbx) -> list[dict[str, Any]]:
+    return [j for j in sbx.jobs if j["entrypoint"] == "fetch" and j["args"].get("refetch")]
+
+
+def _coder_prompts(sbx: FakeSbx) -> list[str]:
+    jobs = [j for j in sbx.jobs if j["entrypoint"] == "kiro" and j["args"]["role"] == "coder"]
+    return [Path(j["inputs"][j["args"]["prompt_file"]]).read_text(encoding="utf-8") for j in jobs]
+
+
+NEEDS = fenced({"files_changed": ["build.gradle"], "needs_network": ["com.google.guava:guava:33.3.1-jre"]})
+CLEAN = fenced({"files_changed": ["build.gradle"], "tests_changed": ["src/test/AppTest.java"]})
+
+
 def test_needs_network_after_gate_1_is_one_gatekeeper_fyi(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
                                                           github: FakeGitHub) -> None:  # fmt: skip
+    """(d) the change adds a dependency, the re-fetch saw the changed build file, and the resumed coder run
+    still needs it: FAILED needs_network with the §3.6 summary and the Next: line; one re-fetch only (e)."""
     said: list[str] = []
     sc = dataclasses.replace(sc, notify=said.append)
     cid = _after_gate1(ctx, github, State.PLANNED, 92, plan_json=json.dumps(PLAN))
     sbx.kiro("coder", fenced({"files_changed": ["src/a.py"], "needs_network": ["left-pad@1.3.0"]}))
+    sbx.handlers["fetch"] = _refetch_handler(["package.json"])
     Scheduler(sc, synchronous=True).run_one(cid)
     row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
     assert row is not None and tuple(row) == ("FAILED", "needs_network")
     assert said == []
+    assert len(_refetches(sbx)) == 1 and _coder_jobs(sbx) == 2
+    summary = _evidence(ctx, cid, "FAILED")["summary"]
+    assert summary == ("The change adds dependencies the sandbox could not fetch, even after one re-fetch:"
+                       " left-pad@1.3.0.")  # fmt: skip
     shown = _terminal(ctx, cid)
     assert len(shown) == 1 and "left-pad@1.3.0" in shown[0]
-    assert "left-pad@1.3.0" in _evidence(ctx, cid, "FAILED")["summary"]
+    assert "Next: the sandbox could not build or test this repo offline" in shown[0]
+    assert "No further work on this item" not in shown[0]
+
+
+def test_sandbox_gaps_only_go_on_to_validate(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                             github: FakeGitHub) -> None:  # fmt: skip
+    """(a) a report with only sandbox gaps is IMPLEMENTED: the saved report keeps them, open_concerns ends with
+    one ``Sandbox gap:`` line per gap (capped at 20), the note is set; no re-fetch."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 93, plan_json=json.dumps(PLAN))
+    sc.save(cid, fetch={"ecosystems": ["gradle"], "prefetch": {"gradle": 1}, "prefetch_failed": ["gradle"]})
+    concerns = [f"concern {i}" for i in range(18)]
+    gaps = [f"gap {i}: no JDK 25 toolchain offline" for i in range(5)]
+    sbx.kiro("coder", fenced({"files_changed": ["a.java"], "open_concerns": concerns, "sandbox_gaps": gaps}))
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _refetches(sbx) == []
+    saved = sc.load(cid)["implement"]
+    assert saved["sandbox_gaps"] == gaps
+    assert saved["open_concerns"] == [*concerns, f"Sandbox gap: {gaps[0]}", f"Sandbox gap: {gaps[1]}"]
+    assert sc.load(cid)["sandbox_gap"] is True and sc.load(cid)["sandbox_gap_text"] == gaps[0]
+    assert _evidence(ctx, cid, "IMPLEMENTED")["sandbox_gaps"] == 5
+    prompt = _coder_prompts(sbx)[0]
+    assert 'source="fetch facts"' in prompt or "fetch facts" in prompt
+    assert '"prefetch_failed": ["gradle"]' in prompt
+
+
+def test_fix_round_refetch_on_a_detached_head_continues(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                        github: FakeGitHub) -> None:  # fmt: skip
+    """(a') an owner fix round (unbundle leaves a detached HEAD): the refetch answers base_ref null, the flow
+    resumes the coder; C-D23: every implement-stage job states its timeout within its profile's maximum."""
+    from ossbot.sandboxd.profiles import PROFILE_MAX_TIMEOUT
+
+    cid = _after_gate1(ctx, github, State.IMPLEMENTING, 94, plan_json=json.dumps(PLAN), pr_number=7,
+                       head_sha="2" * 40, artifact_rev=1, state_reason="owner_fix_round")  # fmt: skip
+    sc.save(cid, fetch={"base_sha": "1" * 40, "base_ref": "main", "ecosystems": ["go"]})
+    sbx.kiro("coder", NEEDS, CLEAN)
+    sbx.handlers["fetch"] = _refetch_handler(["go.mod", "go.sum"], base_ref=None)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED"
+    assert [j["entrypoint"] for j in sbx.jobs] == ["unbundle", "kiro", "fetch", "kiro"]
+    assert sc.load(cid)["fetch"]["base_ref"] == "main"  # the runner never reads base_ref from a refetch
+    (refetch,) = _refetches(sbx)
+    assert refetch["args"] == {"repo": "langfuse/langfuse", "refetch": True} and refetch["egress"] == "mode"
+    assert refetch["timeout_s"] == implement.REFETCH_TIMEOUT_S == 1800 <= PROFILE_MAX_TIMEOUT["fetch"]
+    for spec in sbx.jobs:
+        assert spec["timeout_s"] <= PROFILE_MAX_TIMEOUT[spec["profile"]], spec
+
+
+def test_every_implement_job_passes_its_timeout_explicitly() -> None:
+    """C-D23: STAGE_TIMEOUT_S["implement"] (9000 s) is above every profile maximum, so no implement-stage job
+    may fall back to it (common.job's default)."""
+    import ast
+    import inspect
+
+    from ossbot.runner.pipeline import STAGE_TIMEOUT_S
+    from ossbot.sandboxd.profiles import PROFILE_MAX_TIMEOUT
+
+    assert STAGE_TIMEOUT_S["implement"] == 9000 > max(PROFILE_MAX_TIMEOUT.values())
+    tree = ast.parse(inspect.getsource(implement))
+    calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)]
+    jobs = [n for n in calls if isinstance(n.func, ast.Name) and n.func.id == "job"]
+    invokes = [n for n in calls if isinstance(n.func, ast.Attribute) and n.func.attr == "invoke"]
+    assert len(jobs) == 2 and len(invokes) == 1  # unbundle, refetch; the coder
+    for call in [*jobs, *invokes]:
+        assert "timeout_s" in {kw.arg for kw in call.keywords}, ast.unparse(call)
+    assert PROFILE_MAX_TIMEOUT["coder"] >= implement.CODER_TIMEOUT_S
+    assert PROFILE_MAX_TIMEOUT["package"] >= implement.UNBUNDLE_TIMEOUT_S
+
+
+def test_needs_network_without_changed_dependency_files_becomes_gaps(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub
+) -> None:
+    """(b) the re-fetch saw no changed dependency file: no second coder run, the entries are gaps, IMPLEMENTED;
+    (e) a second stage run (after a failed validation) may re-fetch once more."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 95, plan_json=json.dumps(PLAN), base_sha="1" * 40)
+    sbx.kiro("coder", NEEDS)
+    sbx.handlers["fetch"] = _refetch_handler([])
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _coder_jobs(sbx) == 1 and len(_refetches(sbx)) == 1
+    saved = sc.load(cid)["implement"]
+    assert saved["needs_network"] == [] and saved["sandbox_gaps"] == ["com.google.guava:guava:33.3.1-jre"]
+    assert saved["open_concerns"] == ["Sandbox gap: com.google.guava:guava:33.3.1-jre"]
+    sbx.handlers["validate"] = _validations(("diff --git a/x b/x\n+x\n", FAILING))
+    validate.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "VALIDATION_FAILED"
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _coder_jobs(sbx) == 2 and len(_refetches(sbx)) == 2
+
+
+def test_changed_dependency_files_resume_the_coder(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                   github: FakeGitHub) -> None:  # fmt: skip
+    """(c) the re-fetch saw the coder's go.mod change: the resumed coder run gets the re-fetch section and the
+    line, answers clean, IMPLEMENTED."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 96, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS, CLEAN)
+    sbx.handlers["fetch"] = _refetch_handler(["go.mod"])
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _coder_jobs(sbx) == 2
+    first, second = _coder_prompts(sbx)
+    assert implement.REFETCH_LINE not in first and "re-fetch result" not in first
+    assert implement.REFETCH_LINE in second and "re-fetch result" in second and '"deps_changed": ["go.mod"]' in second
+    assert sc.load(cid)["implement"]["tests_changed"] == ["src/test/AppTest.java"]
+    assert sc.load(cid)["sandbox_gap"] is False
+
+
+@pytest.mark.parametrize("deps", ["go.mod", [f"m{i}/go.mod" for i in range(51)], ["web app/package.json"],
+                                  [1, 2], None, {"go.mod": 1}])  # fmt: skip
+def test_malformed_deps_changed_counts_as_empty(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                github: FakeGitHub, deps: Any) -> None:  # fmt: skip
+    """(f) deps_changed is written by a container running repo code: anything but a list of at most 50 paths
+    of the fixed charset is the safe branch (no second coder run, the entries become gaps)."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 97, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS, CLEAN)
+    sbx.handlers["fetch"] = _refetch_handler(deps)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _coder_jobs(sbx) == 1
+    assert sc.load(cid)["implement"]["sandbox_gaps"] == ["com.google.guava:guava:33.3.1-jre"]
+
+
+def test_refetch_job_failure_fails_with_its_class(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                  github: FakeGitHub) -> None:  # fmt: skip
+    """(h) a failed refetch job fails the stage with sandboxd's error class (fetch.sh's result.json)."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 98, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS)
+    sbx.handlers["fetch"] = _refetch_handler([], code=3)
+    sbx.error_class["fetch"] = "refetch_no_repo"
+    Scheduler(sc, synchronous=True).run_one(cid)
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", "refetch_no_repo")
+    assert "sandbox_gap" not in _evidence(ctx, cid, "FAILED")
+    assert "No further work on this item" in _terminal(ctx, cid)[0]
+
+
+@pytest.mark.parametrize("noted", [True, False], ids=["gap-noted", "no-gap"])
+@pytest.mark.parametrize("end", ["implement_attempts", "validation_stuck"])
+def test_validation_loop_end_is_tagged_with_the_sandbox_gap(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub, end: str, noted: bool
+) -> None:
+    """(g) the FAILED evidence has ``sandbox_gap: true`` iff the note is set, and the summary the gap sentence;
+    the FYI then ends with the Next: line."""
+    attempts = 2 if end == "implement_attempts" else 0
+    cid = _after_gate1(ctx, github, State.VALIDATION_FAILED, 99, plan_json=json.dumps(PLAN),
+                       implement_attempts=attempts)  # fmt: skip
+    sc.save(cid, validation={"commands": FAILING[1:]}, implement={"open_concerns": [CONCERN]})
+    if end == "validation_stuck":
+        sc.save(cid, validation_sig="c" * 64, validation_prev_sig="c" * 64)
+    if noted:
+        sc.save(cid, sandbox_gap=True, sandbox_gap_text="no JDK 25 toolchain offline for :app")
+    Scheduler(sc, synchronous=True).run_one(cid)
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", end)
+    evidence = _evidence(ctx, cid, "FAILED")
+    assert evidence.get("sandbox_gap") is (True if noted else None)
+    sentence = "Sandbox gaps the coder reported: no JDK 25 toolchain offline for :app."
+    assert (sentence in evidence["summary"]) is noted and len(evidence["summary"]) <= implement.SUMMARY_MAX
+    shown = _terminal(ctx, cid)[0]
+    assert ("Next: the sandbox could not build or test this repo offline" in shown) is noted
+    assert ("No further work on this item" in shown) is not noted
+
+
+def test_a_new_round_from_planned_clears_the_gap_note(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                      github: FakeGitHub) -> None:  # fmt: skip
+    cid = _after_gate1(ctx, github, State.PLANNED, 100, plan_json=json.dumps(PLAN))
+    sc.save(cid, sandbox_gap=True, sandbox_gap_text="old")
+    sbx.kiro("coder", CLEAN)
+    implement.run(sc, sc.gk.contribution(cid))
+    assert sc.load(cid)["sandbox_gap"] is False and sc.load(cid)["sandbox_gap_text"] is None
 
 
 # ------------------------------------------------- validation loops that end (c_D1CZXFNWTX, §9.8, §9.9)

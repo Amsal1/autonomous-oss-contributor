@@ -69,6 +69,47 @@ def test_failed_without_summary_classic_and_rich() -> None:
     assert f"<code>{cid}</code>" in shown and "❌" in shown and "Why:" not in shown
 
 
+NEEDS_NETWORK = ("The change adds dependencies the sandbox could not fetch, even after one re-fetch:"
+                 " com.google.guava:guava:33.3.1-jre.")  # fmt: skip
+GAP_SUMMARY = ("All 3 implement attempts failed validation. Last attempt: gradle-test exited 1 (Could not resolve"
+               " all files for configuration ':app:testRuntimeClasspath'). Sandbox gaps the coder reported: no JDK"
+               " 25 toolchain offline for :app.")  # fmt: skip
+NEXT = "Next: the sandbox could not build or test this repo offline. Logs: /logs "
+
+
+def test_needs_network_ends_with_the_next_step_classic_and_rich() -> None:
+    """sandbox-network Part 1 (R1.7, §3.6): the cause and a Next: line instead of "No further work"."""
+    cid = "c_D1D18SPWQ5"
+    view = terminal_fyi.terminal_view(cid, "kestra-io/kestra#21375", S.IMPLEMENTING, S.FAILED, "needs_network",
+                                      NEEDS_NETWORK, {"error_class": "needs_network"})  # fmt: skip
+    _goldens("terminal_fyi_needs_network", view, cid)
+    shown = classic.render(view).text
+    assert NEXT in shown and "after the sandbox is fixed" in shown and "No further work" not in shown
+    assert view.rows == []  # Part 1 has no button
+
+
+def test_gap_tagged_implement_attempts_ends_with_the_next_step_classic_and_rich() -> None:
+    cid = "c_D1D18TQJ75"
+    view = terminal_fyi.terminal_view(cid, "kestra-io/kestra#21592", S.VALIDATION_FAILED, S.FAILED,
+                                      "implement_attempts", GAP_SUMMARY,
+                                      {"error_class": "implement_attempts", "sandbox_gap": True})  # fmt: skip
+    _goldens("terminal_fyi_sandbox_gap", view, cid)
+    shown = classic.render(view).text
+    assert NEXT in shown and "No further work" not in shown and view.rows == []
+
+
+@pytest.mark.parametrize(("reason", "evidence"), [
+    ("implement_attempts", {"error_class": "implement_attempts"}),  # no gap reported
+    ("implement_attempts", {"sandbox_gap": "true"}),  # only a real boolean counts
+    ("output_invalid", {"sandbox_gap": True}),  # not a validation-loop end
+    ("plan_infeasible", None),
+])  # fmt: skip
+def test_other_failures_keep_no_further_work(reason: str, evidence: dict[str, object] | None) -> None:
+    view = terminal_fyi.terminal_view("c_D1CB6PG35G", "a/b#1", S.VALIDATION_FAILED, S.FAILED, reason, "x", evidence)
+    shown = classic.render(view).text
+    assert "No further work on this item. Logs: /logs" in shown and "Next:" not in shown
+
+
 def test_untrusted_summary_is_redacted_escaped_and_cut() -> None:
     cid = "c_D1B6RE1ZRS"
     summary = f"leaked {GHP} <b>bold</b> " + "x" * 900

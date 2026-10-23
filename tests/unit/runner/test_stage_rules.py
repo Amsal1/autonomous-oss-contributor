@@ -317,3 +317,13 @@ def test_squid_log_parser() -> None:
     entries = squidlog.parse(lines)
     assert [(e.host, e.denied) for e in entries] == [("docs.python.org", False), ("evil.example", True)]
     assert squidlog.hosts_by_client(entries)["10.213.64.2"]["docs.python.org"] == 1
+
+
+def test_validate_defaults_cover_gradle_and_maven() -> None:
+    """Operator imports have no plan: the per-ecosystem defaults (sandbox-network Part 1, design §3.3)."""
+    from ossbot.runner.stages import validate
+
+    cmds = {c["name"]: c["cmd"] for c in validate.commands({}, ["gradle", "maven"], "HEAD")}
+    assert cmds["gradle-test"] == "bash ./gradlew --no-daemon test"
+    assert cmds["mvn-test"] == "if [ -f ./mvnw ]; then bash ./mvnw -B -ntp test; else mvn -B -ntp test; fi"
+    assert "--offline" not in cmds["gradle-test"] and "GRADLE_OPTS" not in " ".join(cmds.values())

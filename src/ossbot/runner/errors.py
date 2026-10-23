@@ -28,13 +28,15 @@ SUMMARY_MAX = 1000  # an owner-facing summary in terminal evidence (far below EV
 class StageFailed(RuntimeError):
     """A stage cannot finish; ``error_class`` goes to the transition evidence and the stage run. ``summary``
     (optional, ≤ ``SUMMARY_MAX``) is the owner-facing why: the FAILED evidence carries it to the gatekeeper's
-    terminal FYI (DESIGN §14.13.1)."""
+    terminal FYI (DESIGN §14.13.1). ``sandbox_gap`` marks a failure after the coder reported checks it could
+    not run in the sandbox (§9.8); the evidence then carries ``"sandbox_gap": true`` for the FYI's next step."""
 
-    def __init__(self, error_class: str, message: str = "", *, summary: str = "") -> None:
+    def __init__(self, error_class: str, message: str = "", *, summary: str = "", sandbox_gap: bool = False) -> None:
         super().__init__(f"{error_class}: {message}" if message else error_class)
         self.error_class = error_class[:64]
         self.detail = message[:200]
         self.summary = summary[:SUMMARY_MAX]
+        self.sandbox_gap = sandbox_gap
 
 
 class OutputInvalidFailed(StageFailed):

@@ -42,7 +42,7 @@ _NOTES_LOCK = threading.Lock()
 HEARTBEAT_S = 15.0
 SLEEP_GAP_S = 300.0
 STAGE_TIMEOUT_S: dict[str, int] = {
-    "discover": 600, "vet": 900, "scout": 1200, "fetch": 1800, "plan": 1200, "implement": 3600,
+    "discover": 600, "vet": 900, "scout": 1200, "fetch": 1800, "plan": 1200, "implement": 9000,
     "validate": 2700, "review": 1200, "package": 600, "watch": 900, "catalog": 300, "import": 1800,
 }  # fmt: skip
 assert set(STAGE_TIMEOUT_S) == set(STAGE_ENTRYPOINTS), "every runner stage has a timeout"

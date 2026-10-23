@@ -27,6 +27,9 @@ DEFAULTS: dict[str, list[tuple[str, str]]] = {
     "terraform": [("tofu-validate", "tofu validate")],
     "helm": [("helm-lint", "helm lint .")],
     "rust": [("cargo-test", "cargo test --offline")],
+    # Gradle runs offline through validate's init script; Maven online through the proxy (surefire providers).
+    "gradle": [("gradle-test", "bash ./gradlew --no-daemon test")],
+    "maven": [("mvn-test", "if [ -f ./mvnw ]; then bash ./mvnw -B -ntp test; else mvn -B -ntp test; fi")],
 }
 
 
