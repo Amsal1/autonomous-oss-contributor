@@ -9,6 +9,7 @@
 #   hostile          a hostile job on the task volume: /work/input and /work/output symlinks, a FIFO
 #                    and a symlinked directory in /work/repo (M3, H1 checks of the next jobs)
 #   execd            agent-llm side of the coder pair: requests to execd, answers in execd.json
+#   execd_run        the same, with the run requests of /io/input/execd-run.json (sandbox tests)
 # OSSBOT_WORK / OSSBOT_IO only relocate the fixed paths for tests. OSSBOT_PROBE_PEER (smoke) is an
 # address on another task network that must be unreachable.
 set -euo pipefail
@@ -66,6 +67,33 @@ for r in reqs:
     f.write((json.dumps(r) + "\n").encode())
     f.flush()
     out[str(r["id"])] = json.loads(f.readline())
+with open(f"{io}/output/execd.json", "w") as fh:
+    json.dump(out, fh, sort_keys=True)
+PY
+    ;;
+  execd_run)
+    # Sandbox tests only (tests/sandbox/test_profiles.py, key-free): the run requests listed in
+    # /io/input/execd-run.json ([{"id", "cmd", "timeout_s"}], at most 10) to agent-exec's execd.
+    mkdir -p "$IO/output"
+    IO="$IO" python3 -I - <<'PY'
+import json, os, socket, time
+io = os.environ["IO"]
+with open(f"{io}/input/execd-run.json") as fh:
+    runs = json.load(fh)[:10]
+out = {}
+for _ in range(60):
+    if os.path.exists("/run/exec/exec.sock"):
+        break
+    time.sleep(0.5)
+s = socket.socket(socket.AF_UNIX)
+s.settimeout(1300)
+s.connect("/run/exec/exec.sock")
+f = s.makefile("rwb")
+for r in runs:
+    req = {"id": int(r["id"]), "op": "run", "args": {"cmd": str(r["cmd"]), "timeout_s": int(r.get("timeout_s", 600))}}
+    f.write((json.dumps(req) + "\n").encode())
+    f.flush()
+    out[str(req["id"])] = json.loads(f.readline())
 with open(f"{io}/output/execd.json", "w") as fh:
     json.dump(out, fh, sort_keys=True)
 PY

@@ -218,6 +218,62 @@ def test_fetch_clones(sandbox: Sandbox) -> None:
     assert "README" in f["repo_top"] and ".git" in f["repo_top"]
 
 
+EXEC_GRADLE_CID = "c_SMOKETEST9"
+EXEC_MAVEN_CID = "c_SMOKETESTG"
+
+
+def execd_runs(sandbox: Sandbox, cid: str, runs: list[dict[str, Any]]) -> dict[str, Any]:
+    """The offline agent-exec of the coder pair (``--network none``, env -i + ``fixed_env()``) runs ``runs``
+    through execd (probe mode ``execd_run`` on the key-free agent-llm side); the answers by id."""
+    src = sandbox.root / "inputs" / cid / "execd-run.json"
+    src.parent.mkdir(parents=True, exist_ok=True)
+    src.write_text(json.dumps(runs), encoding="utf-8")
+    out = sandbox.run(sandbox.plan(cid, "coder", repo_mode="rw", env={"OSSBOT_PROBE": "execd_run"},
+                                   inputs={"execd-run.json": src}, timeout=2700))  # fmt: skip
+    assert out.exit_code == 0, out.logs[-3000:]
+    replies: dict[str, Any] = json.loads(out.files["execd.json"])
+    return replies
+
+
+def test_offline_agent_exec_builds_gradle_after_the_refetch(sandbox: Sandbox) -> None:
+    """sandbox-network Part 1 (SN-1, SN-2): the env -i + fixed_env() path that failed for kestra
+    (GRADLE_OPTS=--offline) builds a multi-project Gradle repo offline; pipefail reports a failed pipe."""
+    from tests.sandbox.test_jvm_offline import prepare
+
+    try:
+        prepare(sandbox, EXEC_GRADLE_CID, "gradle-multi")
+        replies = execd_runs(sandbox, EXEC_GRADLE_CID, [
+            {"id": 1, "cmd": "bash ./gradlew --no-daemon --offline :app:test", "timeout_s": 1200},
+            {"id": 2, "cmd": "false | cat", "timeout_s": 30},
+            {"id": 3, "cmd": "bash ./gradlew --no-daemon :lib:compileJava", "timeout_s": 600},
+        ])  # fmt: skip
+        assert replies["1"]["ok"] is True and replies["1"]["result"]["exit_code"] == 0, replies["1"]
+        assert replies["2"]["result"]["exit_code"] == 1  # pipefail
+        assert replies["3"]["result"]["exit_code"] == 0, replies["3"]  # offline by itself (the init script)
+    finally:
+        sandbox.cleanup(EXEC_GRADLE_CID)
+
+
+def test_offline_agent_exec_runs_maven_tests_after_validate(sandbox: Sandbox) -> None:
+    """SN-4: after a validate filled /work/cache/m2 (surefire's providers resolve only when tests run),
+    ``mvn -o test`` in the offline agent-exec passes through ~/.m2/settings.xml (offline, local repository)."""
+    from tests.sandbox.test_jvm_offline import prepare, validate
+
+    try:
+        prepare(sandbox, EXEC_MAVEN_CID, "maven-multi")
+        _, done = validate(sandbox, EXEC_MAVEN_CID, [{"name": "mvn-test", "cmd": "mvn -B -ntp test",
+                                                      "timeout_s": 1200}])  # fmt: skip
+        assert done["mvn-test"]["exit_code"] == 0, done["mvn-test"]
+        replies = execd_runs(sandbox, EXEC_MAVEN_CID, [
+            {"id": 1, "cmd": "mvn -B -ntp -o test", "timeout_s": 1200},
+            {"id": 2, "cmd": "mvn -B -ntp test", "timeout_s": 1200},
+        ])  # fmt: skip
+        assert replies["1"]["result"]["exit_code"] == 0, replies["1"]
+        assert replies["2"]["result"]["exit_code"] == 0, replies["2"]  # offline through settings.xml alone
+    finally:
+        sandbox.cleanup(EXEC_MAVEN_CID)
+
+
 def live_probes() -> dict[str, Any]:
     """``GET /v1/probes/status`` of the live sandboxd (root may read it, like ``ossctl doctor``),
     checked to be for the images and agent configs this suite runs against."""

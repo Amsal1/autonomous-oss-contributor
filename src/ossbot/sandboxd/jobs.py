@@ -183,6 +183,8 @@ def _env_for(job: ValidatedJob, trust_mode: TrustMode) -> dict[str, str]:
         env = {"OSSBOT_ARG_REPO": a.repo, "OSSBOT_ARG_CLONE_DEPTH": str(a.clone_depth)}
         if not a.prefetch:  # scout clone (CR-004 §9.5a); absent = the default, so Phase 1 argv is unchanged
             env["OSSBOT_ARG_PREFETCH"] = "0"
+        if a.refetch:  # DESIGN §9.8 re-fetch; absent otherwise, so every other fetch argv is unchanged
+            env["OSSBOT_ARG_REFETCH"] = "1"
         if a.base_ref is not None:
             env["OSSBOT_ARG_BASE_REF"] = a.base_ref
         if a.base_sha is not None:
@@ -295,12 +297,13 @@ class JobService:
         else:
             dest = self.settings.artifacts_dir / spec.cid / "runs" / spec.run_id
         template = "coder" if spec.profile == "coder" else spec.profile
+        refetch = isinstance(job.args, FetchArgs) and job.args.refetch  # §9.8: into the existing task volume
         return Plan(
             run_id=spec.run_id, cid=spec.cid, template=template, entrypoint=spec.entrypoint,
             repo_mode=spec.repo_mode, env=_env_for(job, trust_mode),
             inputs={k: Path(v) for k, v in spec.inputs.items()}, timeout_s=spec.timeout_s, cpus=spec.cpus,
             memory_mb=spec.memory_mb, dest=dest,
-            create_task_volume=spec.entrypoint == "fetch", release_network=spec.cid == CATALOG_CID,
+            create_task_volume=spec.entrypoint == "fetch" and not refetch, release_network=spec.cid == CATALOG_CID,
             egress=spec.egress,
         )  # fmt: skip
 

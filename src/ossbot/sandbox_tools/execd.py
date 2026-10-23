@@ -62,8 +62,12 @@ def fixed_env(work: str = "/work") -> dict[str, str]:
         "UV_CACHE_DIR": f"{cache}/uv",
         "PIP_NO_INDEX": "1",
         "PIP_CACHE_DIR": f"{cache}/pip",
-        "GRADLE_OPTS": "--offline",
+        # Gradle runs offline through $GRADLE_USER_HOME/init.d/ossbot-offline.init.gradle and Maven through
+        # ~/.m2/settings.xml, both written by exec.sh (lib/jvm_env.sh offline); GRADLE_OPTS stays unset.
         "GRADLE_USER_HOME": f"{cache}/gradle",
+        "JAVA_HOME": "/usr/lib/jvm/java-21-openjdk-amd64",
+        "MAVEN_USER_HOME": f"{work}/.home/.m2",
+        "MAVEN_OPTS": f"-Duser.home={work}/.home",
         "MISE_DATA_DIR": f"{cache}/mise",
         "CHECKPOINT_DISABLE": "1",
         "TMPDIR": "/tmp",  # noqa: S108 - container tmpfs
@@ -242,7 +246,7 @@ class Executor:
         if not _under(cwd, self.repo) or not os.path.isdir(cwd):
             raise ToolError("EPATH", "cwd must be a directory under /work/repo")
         proc = subprocess.Popen(
-            ["/bin/bash", "-lc", cmd], cwd=cwd, env=dict(self.env), stdin=subprocess.DEVNULL,
+            ["/bin/bash", "-o", "pipefail", "-lc", cmd], cwd=cwd, env=dict(self.env), stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
         )  # fmt: skip
         outputs: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}

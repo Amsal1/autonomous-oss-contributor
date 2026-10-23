@@ -77,6 +77,35 @@ def test_fetch_lifecycle(sbx: Sbx) -> None:
     assert "ossbot-task-c_01abcdefgh" in rt.volumes
 
 
+# ------------------------------------------------------------------ sandbox-network Part 1 (DESIGN §9.8)
+@pytest.mark.parametrize("bad", [{"base_ref": "main"}, {"base_ref": "main", "base_sha": "a" * 40},
+                                 {"prefetch": False, "clone_depth": 1}, {"clone_depth": 50}])  # fmt: skip
+def test_refetch_args_take_no_base_and_need_the_prefetch(bad: dict[str, Any]) -> None:
+    from pydantic import ValidationError
+
+    from ossbot.sandboxd.profiles import FetchArgs
+
+    assert FetchArgs.model_validate({"repo": "owner/repo", "refetch": True}).refetch is True
+    with pytest.raises(ValidationError):
+        FetchArgs.model_validate({"repo": "owner/repo", "refetch": True, **bad})
+
+
+def test_refetch_env_only_when_set_and_no_new_task_volume(sbx: Sbx) -> None:
+    normal = sbx.jobs.admit(_fetch(sbx))
+    assert "OSSBOT_ARG_REFETCH" not in normal.env and normal.create_task_volume is True
+    assert normal.env == {"OSSBOT_ARG_REPO": "owner/repo", "OSSBOT_ARG_CLONE_DEPTH": "200"}  # unchanged argv
+    again = sbx.jobs.admit(_fetch(sbx, run_id="r9", args={"repo": "owner/repo", "refetch": True}))
+    assert again.env == {"OSSBOT_ARG_REPO": "owner/repo", "OSSBOT_ARG_CLONE_DEPTH": "200", "OSSBOT_ARG_REFETCH": "1"}
+    assert again.create_task_volume is False  # keeps the implement stage's working tree
+
+
+def test_refetch_job_creates_no_task_volume(sbx: Sbx) -> None:
+    assert sbx.jobs.submit(_fetch(sbx))["state"] == "succeeded"
+    view = sbx.jobs.submit(_fetch(sbx, run_id="r2", args={"repo": "owner/repo", "refetch": True}))
+    assert view["state"] == "succeeded", view
+    assert _names(sbx.runtime, "create_volume").count("ossbot-task-c_01abcdefgh") == 1  # the fetch's only
+
+
 @pytest.mark.parametrize("profile", ["fetch", "validate"])
 def test_repo_code_job_without_egress_is_refused(sbx: Sbx, profile: str) -> None:
     """Open-discovery design §12.3: fail closed, the egress decision is required, never defaulted."""

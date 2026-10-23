@@ -432,6 +432,41 @@ def check_kiro_cli(quick: bool) -> list[Result]:
     return results
 
 
+JDK_HOMES = ("java-17-openjdk-amd64", "java-21-openjdk-amd64", "java-25-openjdk-amd64")
+TOOLCHAINS_SCRIPT = "java -version 2>&1 | head -1; ls -1 /usr/lib/jvm; mvn -v | head -1"
+
+
+def toolchains_verdict(output: str, maven_version: str | None) -> tuple[bool, str]:
+    """sandbox-full's JVM tools (DESIGN §10.1): default java 21, JDK 17/21/25 present, the pinned Maven."""
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    default_21 = bool(lines) and re.search(r'version "21\.', lines[0]) is not None
+    missing = [h for h in JDK_HOMES if h not in lines]
+    maven_ok = maven_version is not None and f"Apache Maven {maven_version}" in output
+    ok = default_21 and not missing and maven_ok
+    if ok:
+        return True, f"java 21 default; JDK 17/21/25; Apache Maven {maven_version}"
+    return False, output.strip()[:200] or "no output"
+
+
+def check_sandbox_toolchains(quick: bool) -> Result:
+    """sandbox-network Part 1: JDK 17, 21 (the default) and 25 and Maven in the pinned sandbox-full image."""
+    pins = load_image_pins(LOCK_COPY)
+    ref = pins.ref("sandbox-full")
+    if ref is None:
+        return Result(WARN, "JVM toolchains (sandbox-full)", "image not pinned", "provision step images")
+    try:
+        maven = _lock_scalar("maven", "version")
+    except OSError:
+        maven = None
+    if quick:
+        return Result(PASS, "JVM toolchains (sandbox-full)",
+                      f"pinned (JDK 17/21/25, Maven {maven}; verified at build)")  # fmt: skip
+    proc = _run([DOCKER, "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp",  # noqa: S108
+                 "--entrypoint", "/bin/sh", ref, "-c", TOOLCHAINS_SCRIPT], timeout=60)  # fmt: skip
+    ok, detail = toolchains_verdict(proc.stdout if proc.returncode == 0 else proc.stdout + proc.stderr, maven)
+    return Result(PASS if ok and proc.returncode == 0 else FAIL, "JVM toolchains (sandbox-full)", detail)
+
+
 def _catalog_rows() -> list[dict[str, Any]] | None:
     try:
         with uds_client(Paths.default().gatekeeper_sock, timeout=httpx.Timeout(10.0)) as client:
@@ -1002,6 +1037,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps += [
         check_images,
         lambda: check_kiro_cli(quick),
+        lambda: check_sandbox_toolchains(quick),
         lambda: check_sandbox_kiro(probes),
         lambda: check_hermes(probes),
     ]

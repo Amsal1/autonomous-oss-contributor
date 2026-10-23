@@ -42,7 +42,7 @@ def test_cfn_lint_runs_in_a_strict_validate_job(sandbox: Sandbox) -> None:
         assert out.exit_code == 0, out.logs[-2000:]
         commands = {c["name"]: c for c in json.loads(out.files["validation.json"])["commands"]}
         version = commands["cfn-version"]
-        assert version["exit_code"] == 0 and "1.58.0" in version["tail"], version
+        assert version["exit_code"] == 0 and "1.58.0" in version["tail"], version["tail"][-1500:]  # uv's message
         assert commands["cfn-template"]["exit_code"] == 0, commands["cfn-template"]
     finally:
         sandbox.cleanup(CID)

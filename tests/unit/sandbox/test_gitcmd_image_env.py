@@ -3,6 +3,7 @@ and every Dockerfile pin equals config/versions.lock.yaml."""
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -93,6 +94,49 @@ def test_tools_and_entrypoints_baked_where_needed() -> None:
     for entry in ("kiro", "list_models", "probe"):
         assert f"sandbox/entrypoints/{entry}.sh" in llm, entry
     assert "execd.py" not in llm and "build-essential" not in llm
+
+
+# sha256 of sandbox/images/full-base/Dockerfile at 12856539 (everything up to and including the code-job
+# venv RUN): the JDK 25 / Maven layers are appended after it, so no toolchain layer above is rebuilt.
+BASE_PREFIX_SHA256 = "a54408030d4da1b5dcef83d9efddc343c14a3ccba20cf8b4d15e4263843b383d"
+VENV_RUN_END = " && find /opt/ossbot/code-py -perm /go+w -exec chmod go-w {} +\n"
+
+
+def test_jdk25_and_maven_pins_equal_lock() -> None:
+    full = _dockerfile("full-base")
+    assert _arg(full, "OPENJDK25_VERSION") == LOCK["openjdk_25"]["apt_version"]
+    assert _arg(full, "MAVEN_VERSION") == LOCK["maven"]["version"]
+    assert _arg(full, "MAVEN_SHA512") == LOCK["maven"]["sha512"]
+    assert LOCK["maven"]["url"].endswith(f"/{LOCK['maven']['version']}/binaries/apache-maven-"
+                                         f"{LOCK['maven']['version']}-bin.tar.gz")  # fmt: skip
+    assert "assertion-backed" in LOCK["openjdk_25"]["default_java"]
+    assert re.search(r"^ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64$", full, re.MULTILINE)
+    assert "grep -q 'version \"21\\.'" in full and "update-alternatives --set" in full
+    assert 'echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c -' in full
+
+
+def test_new_base_layers_come_after_the_code_job_venv() -> None:
+    """Only the new layers rebuild: the earlier text is the byte-identical baseline prefix, and no new ARG
+    (a RUN after an ARG uses it implicitly and misses the cache) is declared above the venv RUN."""
+    raw = (IMAGES / "full-base" / "Dockerfile").read_bytes()
+    text = raw.decode("utf-8")
+    end = text.index(VENV_RUN_END) + len(VENV_RUN_END)
+    assert hashlib.sha256(raw[: len(text[:end].encode("utf-8"))]).hexdigest() == BASE_PREFIX_SHA256
+    prefix, rest = text[:end], text[end:]
+    for name in ("OPENJDK25_VERSION", "MAVEN_VERSION", "MAVEN_SHA512"):
+        assert f"ARG {name}=" not in prefix and f"ARG {name}=" in rest
+    assert "openjdk-25-jdk-headless" in rest and "openjdk-25" not in prefix
+    assert "/usr/local/bin/mvn" in rest
+
+
+def test_thin_top_bakes_the_jvm_library_and_the_gradle_init_scripts() -> None:
+    top = _dockerfile("full")
+    assert "sandbox/entrypoints/lib/jvm_env.sh /opt/ossbot/entrypoints/lib/" in top
+    assert re.search(r"sandbox/gradle/ossbot-prefetch\.init\.gradle sandbox/gradle/ossbot-offline\.init\.gradle"
+                     r" \\\n\s+/opt/ossbot/gradle/", top)  # fmt: skip
+    assert "install -d -o 0 -g 0 -m 0755 /opt/ossbot/gradle" in top
+    ignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert "!sandbox/gradle/" in ignore  # the build context carries them
 
 
 def test_every_entrypoint_exists_and_matches_the_shared_constant() -> None:

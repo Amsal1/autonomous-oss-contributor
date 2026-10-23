@@ -90,6 +90,28 @@ poppler_utils:
   apt_version: "24.02.0-1ubuntu9.10"
   source: "apt-cache policy poppler-utils in the pinned ubuntu:24.04 base, FEAT-007 item 37"
 
+openjdk_25:
+  # Ubuntu noble-updates/security (universe) package in ossbot/sandbox-full-base next to JDK 17 and 21
+  # (sandbox-network Part 1, owner decision 2026-10-23). JDK 21 stays the default java/javac.
+  apt_version: "25.0.4.1+1-1~24.04.4"
+  default_java: "assertion-backed (update-alternatives --set + java -version check at build)"
+  source: "Launchpad API getPublishedBinaries openjdk-25-jdk-headless noble amd64 (pockets Updates and Security, published 2026-09-21), https://api.launchpad.net/1.0/ubuntu/+archive/primary, re-checked 2026-10-23; same check: openjdk-21-jdk-headless 21.0.12.1+1-1~24.04.4, openjdk-17-jdk-headless 17.0.20.1+1-1~24.04 (main)"
+
+maven:
+  # Apache Maven in ossbot/sandbox-full-base (/opt/maven, /usr/local/bin/mvn); noble ships 3.8.7 (too old).
+  version: "3.9.16"
+  url: "https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz"
+  sha512: "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6"
+  dependency_plugin: "3.11.0"
+  source: "read-only GETs 2026-10-23: the .sha512 at archive.apache.org equals the one at repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/; maven-dependency-plugin maven-metadata.xml latest = release = 3.11.0"
+
+gradle_fixture:
+  # tests/fixtures/sandbox/gradle-multi (sandbox-network Part 1): its wrapper and distributionSha256Sum.
+  version: "9.8.2"
+  distribution_sha256: "21bd5da2de49b642904077f38c0efdc7778e92b3ed0889392dca61b97e389607"
+  wrapper_jar_sha256: "3b8a25775a69158b5ad2b1d17a80a88dc7b40a352a73eb27d06c612a7ce68e98"
+  source: "https://services.gradle.org/versions/current (9.8.2, checksum and wrapperChecksum) and the .sha256 files under services.gradle.org/distributions/, read 2026-10-23; the committed wrapper jar is raw.githubusercontent.com/gradle/gradle/v9.8.2/gradle/wrapper/gradle-wrapper.jar, whose sha256 equals wrapperChecksum"
+
 images:
   # Written by the provision 'images' step (FEAT-004) after each build; the root-owned copy at
   # /etc/ossbot/versions.lock.yaml is what the Docker filter and sandboxd read. 'pending' = not

@@ -223,3 +223,21 @@ def test_socket_server_mode_and_log(ex: Executor, tmp_path: Path) -> None:
         time.sleep(0.05)
     entry = json.loads(log.read_text().splitlines()[0])
     assert len(entry["request"]["args"]["content"]) < 5000  # file contents truncated to 4 KB in the log
+
+
+# ------------------------------------------------------------------ sandbox-network Part 1 (R1.2, R1.8)
+def test_fixed_env_has_the_jvm_homes_and_no_gradle_opts() -> None:
+    """GRADLE_OPTS=--offline is not a JVM option and killed every ./gradlew (kestra): offline mode comes from
+    the init script exec.sh writes; Maven finds its settings through user.home."""
+    env = execd.fixed_env("/work")
+    assert "GRADLE_OPTS" not in env and "JAVA_TOOL_OPTIONS" not in env
+    assert not [k for k, v in env.items() if v.startswith("--")]
+    assert env["JAVA_HOME"] == "/usr/lib/jvm/java-21-openjdk-amd64"
+    assert env["MAVEN_USER_HOME"] == "/work/.home/.m2" and env["MAVEN_OPTS"] == "-Duser.home=/work/.home"
+    assert env["GRADLE_USER_HOME"] == "/work/cache/gradle"
+
+
+@pytest.mark.parametrize(("cmd", "code"), [("false | cat", 1), ("true | cat", 0), ("exit 3 | cat", 3)])
+def test_run_has_pipefail(ex: Executor, cmd: str, code: int) -> None:
+    result, _ = ex.run({"cmd": cmd, "timeout_s": 10})
+    assert result["exit_code"] == code

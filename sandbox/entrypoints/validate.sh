@@ -2,7 +2,8 @@
 # Validate job (DESIGN §9.9; sandbox-full, profile validate, registries via the proxy, no secrets,
 # task volume rw). Runs the runner-composed plan /io/input/<OSSBOT_ARG_PLAN_FILE>:
 #   {"commands": [{"name": "unit", "cmd": "go test ./pkg/...", "timeout_s": 1200}, ...]}
-# Each command: bash -lc in /work/repo, offline env, its own timeout (<= 1200 s), output to
+# Each command: bash -o pipefail -lc in /work/repo, offline env (Maven: online through the proxy, V-M6),
+# its own timeout (<= 1200 s), output to
 # /io/output/logs/<name>.log. Writes /io/output/validation.json and result.json.
 set -euo pipefail
 
@@ -25,10 +26,15 @@ COUNT="$(jq -e '.commands | length' "$PLAN")" || fail bad_plan "plan is not {com
 [[ "$COUNT" -le 50 ]] || fail bad_plan "more than 50 commands"
 
 export HOME="$WORK/.home" LANG=C.UTF-8 GOFLAGS=-mod=mod GOPROXY=off npm_config_offline=true UV_OFFLINE=1 \
-  PIP_NO_INDEX=1 GRADLE_OPTS=--offline GOMODCACHE="$WORK/cache/go/mod" GOCACHE="$WORK/cache/go/build" \
+  PIP_NO_INDEX=1 GOMODCACHE="$WORK/cache/go/mod" GOCACHE="$WORK/cache/go/build" \
   npm_config_cache="$WORK/cache/npm" UV_CACHE_DIR="$WORK/cache/uv" GRADLE_USER_HOME="$WORK/cache/gradle" \
   MISE_DATA_DIR="$WORK/cache/mise" CHECKPOINT_DISABLE=1 VIRTUAL_ENV="$WORK/venv"
 export PATH="$WORK/venv/bin:/opt/mise/shims:$PATH"
+# JVM tools (lib/jvm_env.sh): Gradle offline through its init script, Maven online through the proxy (its
+# surefire providers resolve only when tests run, V-M6), the JDK homes; GRADLE_OPTS stays unset.
+# shellcheck source=sandbox/entrypoints/lib/jvm_env.sh disable=SC1091
+source "$(dirname -- "$0")/lib/jvm_env.sh"
+ossbot_jvm_setup validate
 cd "$WORK/repo"
 
 RESULTS="$OUT/validation.ndjson"
@@ -42,7 +48,7 @@ for ((i = 0; i < COUNT; i++)); do
   [[ ${#cmd} -le 8192 && -n "$cmd" ]] || fail bad_plan "cmd"
   start=$SECONDS
   code=0
-  timeout --kill-after=10 "$limit" bash -lc "$cmd" >"$OUT/logs/$name.log" 2>&1 </dev/null || code=$?
+  timeout --kill-after=10 "$limit" bash -o pipefail -lc "$cmd" >"$OUT/logs/$name.log" 2>&1 </dev/null || code=$?
   jq -cn --arg name "$name" --argjson code "$code" --argjson secs "$((SECONDS - start))" \
     --arg tail "$(tail -c 4000 "$OUT/logs/$name.log")" \
     '{name: $name, exit_code: $code, duration_s: $secs, timed_out: ($code == 124), tail: $tail}' >>"$RESULTS"

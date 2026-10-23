@@ -1,0 +1,4 @@
+// ossbot sandbox fixture (tests/sandbox/test_jvm_offline.py): a Gradle 9.8.2 multi-project build whose
+// projects need JDK 17 (:lib) and JDK 25 (:app) toolchains, built offline after fetch's warm-up.
+rootProject.name = 'ossbot-gradle-multi'
+include 'lib', 'app'

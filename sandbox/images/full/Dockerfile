@@ -13,7 +13,8 @@ FROM ${BASE}
 RUN groupadd -g 10001 agent \
  && useradd -u 10001 -g 10001 -d /home/agent -s /bin/bash -M agent \
  && install -d -o 10001 -g 10001 -m 0700 /work /work/repo /io/output /run/exec /snap /home/agent \
- && install -d -o 0 -g 0 -m 0755 /io/input /in /opt/ossbot/bin /opt/ossbot/entrypoints /opt/ossbot/fixtures
+ && install -d -o 0 -g 0 -m 0755 /io/input /in /opt/ossbot/bin /opt/ossbot/entrypoints /opt/ossbot/fixtures \
+ && install -d -o 0 -g 0 -m 0755 /opt/ossbot/gradle
 
 COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/numstat2json.py /opt/ossbot/bin/numstat2json
 COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/execd.py /opt/ossbot/bin/ossbot-execd
@@ -23,6 +24,10 @@ COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/fetch.sh sandbox/entrypoints/e
      sandbox/entrypoints/run_code.sh /opt/ossbot/entrypoints/
 # Helpers the entrypoints call (not job entrypoints themselves: SANDBOX_JOB_ENTRYPOINTS stays as it is).
 COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/lib/repo_tree.sh /opt/ossbot/entrypoints/lib/
+COPY --chown=0:0 --chmod=0644 sandbox/entrypoints/lib/jvm_env.sh /opt/ossbot/entrypoints/lib/
+# Gradle init scripts (DESIGN §9.6 warm-up, §9.8/§9.9 offline mode), read by lib/jvm_env.sh and fetch.sh.
+COPY --chown=0:0 --chmod=0644 sandbox/gradle/ossbot-prefetch.init.gradle sandbox/gradle/ossbot-offline.init.gradle \
+     /opt/ossbot/gradle/
 
 # Safety-probe fixture as a tar so its symlinks survive (DESIGN §10.1, §10.9).
 COPY --chown=0:0 sandbox/fixtures/ /tmp/fixtures/

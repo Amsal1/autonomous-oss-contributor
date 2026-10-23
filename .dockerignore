@@ -3,6 +3,7 @@
 *
 !sandbox/entrypoints/
 !sandbox/fixtures/
+!sandbox/gradle/
 !sandbox/images/full/code-requirements.txt
 !sandbox/kiro/
 !sandbox/probes/

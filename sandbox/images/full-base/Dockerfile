@@ -72,3 +72,31 @@ RUN --mount=type=cache,target=/root/.cache/uv \
  && /opt/ossbot/code-py/bin/python -c "import PIL, numpy, pandas" \
  && rm /tmp/code-requirements.txt \
  && find /opt/ossbot/code-py -perm /go+w -exec chmod go-w {} +
+
+# Everything below is appended after the code-job venv (sandbox-network Part 1, ADR-0005 addendum
+# 2026-10-23): its ARGs are declared here, not at the top, because a RUN after an ARG uses it as an
+# implicit env var and would miss the cache of every toolchain layer above (Dockerfile reference,
+# "Impact on build caching"). Pins: config/versions.lock.yaml openjdk_25 and maven.
+ARG OPENJDK25_VERSION=25.0.4.1+1-1~24.04.4
+ARG MAVEN_VERSION=3.9.16
+ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+# JDK 25 next to 17 and 21 (owner decision 2026-10-23); 21 stays the default java (asserted here,
+# whatever priority the packages give their alternatives).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends "openjdk-25-jdk-headless=${OPENJDK25_VERSION}" \
+ && rm -rf /var/lib/apt/lists/* \
+ && for tool in /usr/lib/jvm/java-21-openjdk-amd64/bin/*; do \
+      name="$(basename "$tool")"; \
+      if update-alternatives --query "$name" >/dev/null 2>&1; then update-alternatives --set "$name" "$tool"; fi; \
+    done \
+ && java -version 2>&1 | grep -q 'version "21\.' \
+ && javac -version 2>&1 | grep -q '^javac 21\.' \
+ && test -x /usr/lib/jvm/java-25-openjdk-amd64/bin/javac -a -x /usr/lib/jvm/java-17-openjdk-amd64/bin/javac
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+# Apache Maven (F1), pinned and sha512-verified (noble ships 3.8.7, too old for many enforcer rules).
+RUN curl -fsSL -o /tmp/maven.tar.gz \
+      "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz" \
+ && echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c - \
+ && mkdir -p /opt/maven && tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1 --no-same-owner \
+ && rm /tmp/maven.tar.gz && ln -s /opt/maven/bin/mvn /usr/local/bin/mvn \
+ && mvn -v | grep -q "Apache Maven ${MAVEN_VERSION}"

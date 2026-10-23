@@ -1,0 +1,5 @@
+// ossbot: Gradle offline mode for validate and the offline agent-exec (DESIGN §9.8, §9.9; ADR-0005
+// addendum 2026-10-23). Copied to $GRADLE_USER_HOME/init.d/ at every job start by
+// sandbox/entrypoints/lib/jvm_env.sh (and removed in fetch). Gradle has no offline property; this is
+// the init-script form of --offline. The live check is tests/sandbox/test_jvm_offline.py (V-G3).
+gradle.startParameter.offline = true

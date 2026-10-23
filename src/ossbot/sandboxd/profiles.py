@@ -138,6 +138,7 @@ TRUST_TOOLS: dict[str, str] = {
     "coder": "@ossbot-exec/read_file,@ossbot-exec/write_file,@ossbot-exec/list_dir,@ossbot-exec/run",
 }
 # agent-llm runs only kiro-cli + the MCP relay: fixed small limits independent of the JobSpec.
+DEFAULT_CLONE_DEPTH = 200  # fetch.sh's OSSBOT_ARG_CLONE_DEPTH default
 AGENT_LLM_CPUS = 2.0
 AGENT_LLM_MEMORY_MB = 1024
 
@@ -150,10 +151,13 @@ class FetchArgs(Strict):
     repo: Annotated[str, Field(pattern=REPO_RE)]
     base_ref: Annotated[str, Field(pattern=BASE_REF_RE)] | None = None
     base_sha: Annotated[str, Field(pattern=SHA1_RE)] | None = None
-    clone_depth: Annotated[int, Field(ge=1, le=10000)] = 200
+    clone_depth: Annotated[int, Field(ge=1, le=10000)] = DEFAULT_CLONE_DEPTH
     # CR-004 scout: a shallow clone without dependency prefetch (no repo code runs), replaced by
     # the real fetch after Start work (fetch.sh removes the scout clone first).
     prefetch: bool = True
+    # DESIGN §9.8: the implement stage's one re-fetch into the existing task volume (fetch.sh keeps the
+    # working tree, no clone); with the prefetch, without a base, at the default depth.
+    refetch: bool = False
 
     @model_validator(mode="after")
     def _sha_needs_ref(self) -> FetchArgs:
@@ -161,6 +165,9 @@ class FetchArgs(Strict):
             raise ValueError("base_sha requires base_ref")
         if not self.prefetch and (self.clone_depth != 1 or self.base_ref is not None):
             raise ValueError("the scout clone (prefetch false) is depth 1 of the default branch")
+        if self.refetch and (not self.prefetch or self.base_ref is not None or self.base_sha is not None
+                             or self.clone_depth != DEFAULT_CLONE_DEPTH):  # fmt: skip
+            raise ValueError("a refetch has the prefetch, no base and the default clone_depth")
         return self
 
 

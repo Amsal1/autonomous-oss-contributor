@@ -1,0 +1,45 @@
+plugins {
+    id 'java'
+}
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(25)
+    }
+}
+
+dependencies {
+    implementation project(':lib')
+    implementation 'org.apache.commons:commons-lang3:3.17.0'
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+    testLogging {
+        events 'passed'
+    }
+}
+
+// -PossbotProbeExtra: a configuration fetch's warm-up never saw (it does not exist without the flag), so
+// resolving it offline must fail with "offline mode" (the V-G3 live check of the init-script mechanism).
+if (project.hasProperty('ossbotProbeExtra')) {
+    configurations {
+        probeExtra
+    }
+    dependencies {
+        probeExtra 'com.google.guava:guava:33.3.1-jre'
+    }
+    tasks.register('resolveProbeExtra') {
+        def extra = configurations.probeExtra
+        doLast {
+            println extra.resolve()
+        }
+    }
+}

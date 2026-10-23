@@ -2,7 +2,8 @@
 # Fetch job (DESIGN §9.6; sandbox-full, profile fetch: github_read + package registries via the
 # proxy, no secrets, fresh task volume at /work). Parameters from sandboxd's fixed env:
 # OSSBOT_ARG_REPO (owner/name), OSSBOT_ARG_BASE_REF (optional; default branch otherwise),
-# OSSBOT_ARG_BASE_SHA (optional, import M3: requires BASE_REF), OSSBOT_ARG_CLONE_DEPTH.
+# OSSBOT_ARG_BASE_SHA (optional, import M3: requires BASE_REF), OSSBOT_ARG_CLONE_DEPTH,
+# OSSBOT_ARG_REFETCH (optional, 1 = the implement stage's one re-fetch, DESIGN §9.8).
 # Writes /io/output/fetch.json and result.json {"ok", "error_class", "head_sha"}.
 set -euo pipefail
 
@@ -20,6 +21,11 @@ DEPTH="${OSSBOT_ARG_CLONE_DEPTH:-200}"
 # (SCOUT_MAX_MB, error_class snapshot_too_large) and marked; the runner destroys the task volume
 # when the scout stage ends, and the real fetch after Start work starts from a fresh clone.
 PREFETCH_ON="${OSSBOT_ARG_PREFETCH:-1}"
+# OSSBOT_ARG_REFETCH=1: the implement stage's one re-fetch after the coder asked for a new dependency
+# (DESIGN §9.8). It keeps the working tree (no rm, no clone; any checkout, also the detached HEAD of fix
+# rounds and imports), runs the same detection and prefetch, and lists the dependency files the coder
+# changed in fetch.json deps_changed. It runs LLM-edited repo code in the fetch profile, as validate does.
+REFETCH="${OSSBOT_ARG_REFETCH:-0}"
 SCOUT_MARK="$WORK/.scout-clone"
 SCOUT_MAX_MB=2048  # same cap as the research snapshot (snapshot.sh); ossbot.runner.stages.scout.SCOUT_MAX_MB
 
@@ -38,10 +44,19 @@ mkdir -p "$OUT"
 [[ -z "$BASE_SHA" || -n "$BASE_REF" ]] || fail bad_args "BASE_SHA requires BASE_REF"
 [[ "$DEPTH" =~ ^[1-9][0-9]{0,4}$ ]] || fail bad_args "OSSBOT_ARG_CLONE_DEPTH"
 [[ "$PREFETCH_ON" =~ ^[01]$ ]] || fail bad_args "OSSBOT_ARG_PREFETCH"
-# Every fetch starts from a fresh clone: a scout clone is not the build clone, a re-queued
-# fetch finds a partial clone, and a new version after a rescope finds the old build tree.
+[[ "$REFETCH" =~ ^[01]$ ]] || fail bad_args "OSSBOT_ARG_REFETCH"
+[[ "$REFETCH" == 0 || ("$PREFETCH_ON" == 1 && -z "$BASE_REF" && -z "$BASE_SHA") ]] ||
+  fail bad_args "OSSBOT_ARG_REFETCH takes no base and needs the prefetch"
+# shellcheck source=sandbox/entrypoints/lib/jvm_env.sh disable=SC1091
+source "$(dirname -- "$0")/lib/jvm_env.sh"
 cd "$WORK"  # the container may start inside /work/repo: never delete the working directory
-rm -rf "$REPO" "$SCOUT_MARK"
+if [[ "$REFETCH" == 1 ]]; then
+  [[ -d "$REPO/.git" && ! -L "$REPO/.git" ]] || fail refetch_no_repo "no working tree to re-fetch for"
+else
+  # Every fetch starts from a fresh clone: a scout clone is not the build clone, a re-queued
+  # fetch finds a partial clone, and a new version after a rescope finds the old build tree.
+  rm -rf "$REPO" "$SCOUT_MARK"
+fi
 
 mkdir -p "$REPO" "$WORK/cache" "$WORK/venv" "$WORK/.home"
 export HOME="$WORK/.home" GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_TERMINAL_PROMPT=0
@@ -50,37 +65,62 @@ unset GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_ASKPASS SSH_ASKPASS
 G=(git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c protocol.allow=never -c protocol.https.allow=always
    -c submodule.recurse=false -c credential.helper=)  # no system/global config: no LFS filter is defined
 
-BRANCH=()
-[[ -n "$BASE_REF" ]] && BRANCH=(--branch "$BASE_REF")
-"${G[@]}" clone -q --single-branch "${BRANCH[@]}" --depth "$DEPTH" --no-tags --no-recurse-submodules \
-  "https://github.com/$SLUG.git" "$REPO" || fail clone_failed "git clone failed"
-cd "$REPO"
-"${G[@]}" config core.hooksPath /dev/null  # defence in depth; package and gatekeeper never trust it
-if [[ "$PREFETCH_ON" == 0 ]]; then
-  SIZE_MB="$(du -s --block-size=1M "$REPO" | cut -f1)"
-  if (( SIZE_MB > SCOUT_MAX_MB )); then
-    cd /
-    rm -rf "$REPO"
-    fail snapshot_too_large "scout clone is ${SIZE_MB} MB > ${SCOUT_MAX_MB} MB"
+DEPS_CHANGED=()
+if [[ "$REFETCH" == 0 ]]; then
+  BRANCH=()
+  [[ -n "$BASE_REF" ]] && BRANCH=(--branch "$BASE_REF")
+  "${G[@]}" clone -q --single-branch "${BRANCH[@]}" --depth "$DEPTH" --no-tags --no-recurse-submodules \
+    "https://github.com/$SLUG.git" "$REPO" || fail clone_failed "git clone failed"
+  cd "$REPO"
+  "${G[@]}" config core.hooksPath /dev/null  # defence in depth; package and gatekeeper never trust it
+  if [[ "$PREFETCH_ON" == 0 ]]; then
+    SIZE_MB="$(du -s --block-size=1M "$REPO" | cut -f1)"
+    if (( SIZE_MB > SCOUT_MAX_MB )); then
+      cd /
+      rm -rf "$REPO"
+      fail snapshot_too_large "scout clone is ${SIZE_MB} MB > ${SCOUT_MAX_MB} MB"
+    fi
   fi
-fi
-[[ -n "$BASE_REF" ]] || BASE_REF="$("${G[@]}" symbolic-ref --short HEAD)"
-if [[ -n "$BASE_SHA" ]]; then
-  if ! "${G[@]}" cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
-    "${G[@]}" fetch -q --depth 1 --no-tags origin "$BASE_SHA" || fail base_missing "base_sha not fetchable"
+  [[ -n "$BASE_REF" ]] || BASE_REF="$("${G[@]}" symbolic-ref --short HEAD)"
+  if [[ -n "$BASE_SHA" ]]; then
+    if ! "${G[@]}" cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+      "${G[@]}" fetch -q --depth 1 --no-tags origin "$BASE_SHA" || fail base_missing "base_sha not fetchable"
+    fi
+    "${G[@]}" checkout -q --detach "$BASE_SHA"
   fi
-  "${G[@]}" checkout -q --detach "$BASE_SHA"
+  HEAD_SHA="$("${G[@]}" rev-parse HEAD)"
+  [[ -z "$BASE_SHA" || "$HEAD_SHA" == "$BASE_SHA" ]] || fail base_mismatch "checked out $HEAD_SHA"
+  # The scout's repository tree (git ls-files only, nothing from the repo runs; §9.5a rule 6). Non-fatal.
+  bash "$(dirname -- "$0")/lib/repo_tree.sh" "$REPO" "$OUT/repo-tree.txt" || rm -f -- "$OUT/repo-tree.txt"
+else
+  cd "$REPO"
+  HEAD_SHA="$("${G[@]}" rev-parse HEAD)" || fail refetch_no_repo "no HEAD to re-fetch for"
+  # A detached HEAD (fix rounds, imports) has no branch: base_ref is null, never a set -e exit.
+  BASE_REF="$("${G[@]}" symbolic-ref -q --short HEAD || true)"
+  # The dependency files the coder changed (fixed basenames; untracked ones too). Untrusted for the runner.
+  while IFS= read -r -d '' entry; do
+    xy="${entry:0:2}"
+    path="${entry:3}"
+    if [[ "$xy" == *[RC]* ]]; then IFS= read -r -d '' _ || true; fi  # -z: a rename's source path follows
+    case "${path##*/}" in
+      package.json | package-lock.json | pnpm-lock.yaml | yarn.lock | go.mod | go.sum | build.gradle | \
+        build.gradle.kts | settings.gradle | settings.gradle.kts | gradle.properties | libs.versions.toml | \
+        gradle.lockfile | pom.xml | pyproject.toml | uv.lock | poetry.lock | requirements*.txt | Cargo.toml | \
+        Cargo.lock | Gemfile | Gemfile.lock | Chart.yaml | Chart.lock)
+        DEPS_CHANGED+=("$path")
+        ;;
+    esac
+  done < <("${G[@]}" status --porcelain=v1 -z --untracked-files=all)
 fi
-HEAD_SHA="$("${G[@]}" rev-parse HEAD)"
-[[ -z "$BASE_SHA" || "$HEAD_SHA" == "$BASE_SHA" ]] || fail base_mismatch "checked out $HEAD_SHA"
-# The scout's repository tree (git ls-files only, nothing from the repo runs; §9.5a rule 6). Non-fatal.
-bash "$(dirname -- "$0")/lib/repo_tree.sh" "$REPO" "$OUT/repo-tree.txt" || rm -f -- "$OUT/repo-tree.txt"
 
 # Ecosystem detection and best-effort dependency prefetch (failures are recorded, not fatal).
 export GOMODCACHE="$WORK/cache/go/mod" GOCACHE="$WORK/cache/go/build" GOTOOLCHAIN=auto GOFLAGS=-mod=mod \
   npm_config_cache="$WORK/cache/npm" UV_CACHE_DIR="$WORK/cache/uv" PIP_CACHE_DIR="$WORK/cache/pip" \
   GRADLE_USER_HOME="$WORK/cache/gradle" MISE_DATA_DIR="$WORK/cache/mise" CHECKPOINT_DISABLE=1 \
   UV_PROJECT_ENVIRONMENT="$WORK/venv"
+# The JVM tools ignore HTTPS_PROXY: lib/jvm_env.sh writes it into gradle.properties and settings.xml
+# (online mode: no offline init script). Never in scout mode, which runs nothing from the repo.
+[[ "$PREFETCH_ON" == 1 ]] && ossbot_jvm_setup online
 ECOS=()
 PREFETCH=()
 prefetch() { # prefetch <name> <cmd...>
@@ -109,9 +149,21 @@ if [[ -f pyproject.toml || -n "$(find . -maxdepth 1 -name 'requirements*.txt' -p
     prefetch pip uv pip install --python "$WORK/venv/bin/python" -e ".[test,dev]"
   fi
 fi
-if [[ -f build.gradle || -f build.gradle.kts ]]; then
+# Gradle: the whole build once (every resolvable configuration of every project, the plugins and the
+# wrapper distribution, sandbox/gradle/ossbot-prefetch.init.gradle). `bash` survives a lost exec bit.
+if [[ -f build.gradle || -f build.gradle.kts || -f settings.gradle || -f settings.gradle.kts ]]; then
   ECOS+=(gradle)
-  [[ -x ./gradlew ]] && prefetch gradle ./gradlew --no-daemon dependencies
+  [[ -f ./gradlew ]] && prefetch gradle bash ./gradlew --no-daemon --no-configuration-cache -I /opt/ossbot/gradle/ossbot-prefetch.init.gradle ossbotPrefetch
+fi
+# Maven: the repo's wrapper, else the image's mvn; go-offline (plugins and dependencies) and test-compile
+# (the compiler plugin, annotation processors, the reactor). Surefire's providers resolve only when tests
+# run (V-M6): validate runs Maven online through the proxy and fills /work/cache/m2.
+if [[ -f pom.xml ]]; then
+  ECOS+=(maven)
+  MVN=(mvn)
+  [[ -f ./mvnw ]] && MVN=(bash ./mvnw)
+  prefetch maven "${MVN[@]}" -B -ntp org.apache.maven.plugins:maven-dependency-plugin:3.11.0:go-offline
+  prefetch maven-compile "${MVN[@]}" -B -ntp test-compile
 fi
 if has '*.tf'; then ECOS+=(terraform); prefetch tofu tofu init -backend=false -input=false; fi
 if has Chart.yaml; then
@@ -131,11 +183,19 @@ TEST_RE='(^|/)(tests?|specs?|__tests__|testing)/|(^|/)test_[^/]*\.py$|_test\.[A-
 TEST_FILES="$("${G[@]}" ls-files -z | tr '\0' '\n' | grep -Ec "$TEST_RE" || true)"
 [[ "$TEST_FILES" =~ ^[0-9]+$ ]] || TEST_FILES=0
 
+# prefetch_failed: the dependency prefetches that exited non-zero (helm, tofu, mise, venv: informational).
+DEPS_JSON="$(jq -cn '$ARGS.positional' --args "${DEPS_CHANGED[@]}")"
 jq -n --arg base_sha "$HEAD_SHA" --arg base_ref "$BASE_REF" --argjson test_files "$TEST_FILES" \
   --arg ecos "${ECOS[*]:-}" --arg prefetch "${PREFETCH[*]:-}" --arg agent "${AGENT_CONFIG[*]:-}" \
-  '{base_sha: $base_sha, base_ref: $base_ref, test_files: $test_files, has_test_suite: ($test_files > 0),
-    ecosystems: ($ecos | split(" ") | map(select(. != ""))),
-    prefetch: ($prefetch | split(" ") | map(select(. != "") | split("=") | {(.[0]): (.[1] | tonumber)}) | add // {}),
-    agent_config: ($agent | split(" ") | map(select(. != "")))}' >"$OUT/fetch.json"
+  --arg refetch "$REFETCH" --argjson deps "$DEPS_JSON" \
+  '($prefetch | split(" ") | map(select(. != "") | split("=") | {(.[0]): (.[1] | tonumber)}) | add // {}) as $pf
+   | {base_sha: $base_sha, base_ref: $base_ref, test_files: $test_files, has_test_suite: ($test_files > 0),
+      ecosystems: ($ecos | split(" ") | map(select(. != ""))),
+      prefetch: $pf,
+      prefetch_failed: ($pf | to_entries | map(select(.value != 0 and (.key | IN("gradle", "maven",
+        "maven-compile", "go", "npm", "pnpm", "yarn", "uv", "pip", "cargo"))) | .key)),
+      agent_config: ($agent | split(" ") | map(select(. != "")))}
+   + (if $refetch == "1" then {refetch: true, deps_changed: $deps,
+        base_ref: (if $base_ref == "" then null else $base_ref end)} else {} end)' >"$OUT/fetch.json"
 [[ "$PREFETCH_ON" == 1 ]] || : >"$SCOUT_MARK"
 result true null "$HEAD_SHA"

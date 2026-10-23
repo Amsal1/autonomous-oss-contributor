@@ -1,0 +1,16 @@
+// ossbot fetch warm-up (DESIGN §9.6): resolve every resolvable configuration of every project once.
+// Baked to /opt/ossbot/gradle/ by sandbox/images/full/Dockerfile; fetch.sh runs
+//   bash ./gradlew --no-daemon --no-configuration-cache -I /opt/ossbot/gradle/ossbot-prefetch.init.gradle ossbotPrefetch
+// Settings plugins, buildscript classpaths, buildSrc and the wrapper distribution resolve while Gradle
+// configures; a configuration that fails to resolve is logged and the rest continue.
+allprojects { p ->
+    p.tasks.register("ossbotPrefetch") {
+        def confs = p.configurations          // captured at configuration time
+        doLast {
+            confs.findAll { it.canBeResolved }.each { c ->
+                try { c.resolve() }
+                catch (Exception e) { logger.warn("ossbot-prefetch: ${p.path}:${c.name}: ${e.class.simpleName}") }
+            }
+        }
+    }
+}
