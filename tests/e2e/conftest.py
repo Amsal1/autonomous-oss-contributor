@@ -128,6 +128,12 @@ class SandboxdGatekeeper:
         except HoldRefused as exc:
             raise HoldError(exc.status, exc.code) from exc
 
+    def implement_egress(self, cid: str, run_id: str) -> str:
+        """``POST /v1/contributions/{cid}/implement-egress`` as the sandbox role (ADR-0024): the audited decision."""
+        from ossbot.gatekeeper.implement_network import decide_and_audit
+
+        return decide_and_audit(self.ctx, cid, run_id, "uid:2002/sandbox")[0]
+
 
 class StubProbes:
     """``POST /v1/probes/run``: the five probes "pass" for the current tuple (the probe jobs
@@ -166,6 +172,8 @@ class E2E:
     scheduler: Scheduler | None = None
     pusher: Any = None
     upstreams: dict[str, Path] = field(default_factory=dict)  # repo -> local upstream (default: the world's)
+    refetch_deps: list[str] = field(default_factory=list)  # fetch.json deps_changed of a refetch (§9.8)
+    exec_networks: list[str] = field(default_factory=list)  # agent-exec's network per coder run (ADR-0024)
 
     # ------------------------------------------------------------------ canned answers
     def answer(self, role: str, *texts: str | dict[str, Any]) -> None:
@@ -301,8 +309,14 @@ def handlers(h: E2E) -> dict[str, Callable[[FakeRuntime, FakeContainer], int]]:
     def fetch(rt: FakeRuntime, c: FakeContainer) -> int:
         env, work, out = _env(c), _vol(rt, c, "/work"), _vol(rt, c, "/io/output")
         scout = env.get("OSSBOT_ARG_PREFETCH") == "0"
-        h.log.append("fetch:scout" if scout else "fetch:build")
         repo = work / "repo"
+        if env.get("OSSBOT_ARG_REFETCH") == "1":  # §9.8: the working tree stays, only the caches are refreshed
+            h.log.append("fetch:refetch")
+            head = tgit(repo, "rev-parse", "HEAD")
+            (out / "fetch.json").write_text(json.dumps({"base_sha": head, "deps_changed": list(h.refetch_deps)}))
+            _result(out, head=head)
+            return 0
+        h.log.append("fetch:scout" if scout else "fetch:build")
         if repo.exists():
             shutil.rmtree(repo)
         tgit(work, "clone", "-q", str(h.upstreams.get(env["OSSBOT_ARG_REPO"], h.world.upstream)), str(repo))
@@ -343,6 +357,7 @@ def handlers(h: E2E) -> dict[str, Callable[[FakeRuntime, FakeContainer], int]]:
         if role == "coder" and proc.returncode == 0:  # the coder's MCP write_file calls, done by agent-exec
             exec_c = rt.find(f"ossbot-{c.spec.run_id}-exec")
             assert exec_c is not None
+            h.exec_networks.append(exec_c.spec.network)
             h.world.write(_vol(rt, exec_c, "/work") / "repo", h.edits)
         _result(out, proc.returncode == 0, None if proc.returncode == 0 else f"kiro_exit_{proc.returncode}")
         return proc.returncode
@@ -429,7 +444,7 @@ def build_e2e(gctx: AppContext, world: GitWorld, tmp_path: Path, *, repo: str = 
         store=store, runtime=runtime, pins=lambda: PINS, catalog=CatalogCache(SandboxdGatekeeper(gctx).catalog,
         gctx.clock), gatekeeper=SandboxdGatekeeper(gctx), scanner=KeyScanner([KEY]), clock=gctx.clock,
         settings=settings, trust_mode=lambda: "ids", networks=Networks(runtime, SubnetAllocator(store, gctx.clock)),
-        background=False,
+        background=False, exec_egress_mode=lambda: gctx.control.egress_mode(gctx.config.egress.mode_default),
     )  # fmt: skip
     probes = StubProbes(jobs)
     sbx_app = create_sandboxd(jobs, probes, frozenset({RUNNER_UID}))  # type: ignore[arg-type]
