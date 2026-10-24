@@ -8,10 +8,12 @@ the same kill/pause parametrization.
 from __future__ import annotations
 
 import dataclasses
+import ipaddress
+import re
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, RootModel, field_validator, model_validator
 
 from ossbot.common.config import MODEL_ID_RE, REPO_RE, Effort, EgressAnomaly, Language, ResolvedTarget, Topic
 from ossbot.common.control_flags import EgressMode
@@ -661,7 +663,7 @@ HOLD_TOP_HOSTS_MAX = 10
 HoldBreach = Literal["hosts", "upload", "download"]
 
 
-class HoldRequest(ApiModel):
+class AnomalyHoldRequest(ApiModel):
     """``POST /v1/contributions/{cid}/hold`` (sandbox, worker; a stop request, I9): the egress meter's
     numbers for the job it stopped. Values come from the squid log, bounded, and only rendered escaped."""
 
@@ -679,17 +681,126 @@ class HoldRequest(ApiModel):
     breached: Annotated[list[HoldBreach], Field(min_length=1, max_length=3)]
 
 
+# ADR-0025 (build-env design §4.5, §5.2): a floor reach attempt holds in every mode. The class is the card text;
+# the target is a host name or an IP literal, the destination an IP literal or "-". For the owner's public
+# address sandboxd sends "public-address" and "-" (the value never leaves sandboxd).
+FloorClass = Literal["dst", "name", "code", "literal", "host", "proxy", "pub"]
+FLOOR_TARGET_MAX = 253
+PUBLIC_ADDRESS_TARGET = "public-address"
+
+
+def _ip_literal(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+    except ValueError:
+        return False
+    return True
+
+
+class FloorInfo(ApiModel):
+    cls: FloorClass = Field(alias="class")
+    target: Annotated[str, Field(min_length=1, max_length=FLOOR_TARGET_MAX)]
+    dst: Annotated[str, Field(min_length=1, max_length=45)]
+
+    @field_validator("target")
+    @classmethod
+    def _target(cls, value: str) -> str:
+        if value == PUBLIC_ADDRESS_TARGET or _ip_literal(value) or re.fullmatch(HOLD_HOST_RE, value):
+            return value
+        raise ValueError("target must be a host name, an IP literal or public-address")
+
+    @field_validator("dst")
+    @classmethod
+    def _dst(cls, value: str) -> str:
+        if value == "-" or _ip_literal(value):
+            return value
+        raise ValueError("dst must be an IP literal or -")
+
+
+class FloorHoldRequest(ApiModel):
+    """The hold of a floor reach attempt (``reason: egress_floor``): the job's counters, any volume breaches seen
+    so far (0-3) and the first floor hit."""
+
+    reason: Literal["egress_floor"]
+    run_id: Annotated[str, Field(pattern=HOLD_RUN_ID_RE)]
+    stage: Literal["fetch", "validate", "implement"]
+    egress: Literal["mode", "strict"]
+    egress_mode: EgressMode
+    hosts: Annotated[int, Field(ge=0, le=1_000_000)]
+    up_bytes: Annotated[int, Field(ge=0, le=10**13)]
+    down_bytes: Annotated[int, Field(ge=0, le=10**13)]
+    denied: Annotated[int, Field(ge=0, le=10**7)]
+    top_hosts: Annotated[list[Annotated[str, Field(pattern=HOLD_HOST_RE)]], Field(max_length=HOLD_TOP_HOSTS_MAX)]
+    limits: EgressAnomaly
+    breached: Annotated[list[HoldBreach], Field(min_length=0, max_length=3)]
+    floor: FloorInfo
+
+
+HoldReason = Literal["egress_anomaly", "egress_floor"]
+HoldBody = Annotated[AnomalyHoldRequest | FloorHoldRequest, Field(discriminator="reason")]
+
+
+class HoldRequest(RootModel[HoldBody]):
+    """The discriminated hold body (``reason``): a body without a known reason is a 422. Attribute reads go to
+    the parsed body (``req.reason``, ``req.run_id`` ...), so the callers of the egress-anomaly model keep working."""
+
+    def __getattr__(self, item: str) -> Any:
+        if item == "root" or item.startswith("__"):
+            raise AttributeError(item)
+        return getattr(self.root, item)
+
+
 class HoldView(ApiModel):
     """One ``contribution_holds`` row (open while ``released_at`` is None)."""
 
     id: str
     cid: str
-    reason: Literal["egress_anomaly"]
+    reason: HoldReason
     detail: HoldRequest
     held_by: str
     held_at: str
     released_by: str | None = None
     released_at: str | None = None
+
+
+# --------------------------------------------- egress notes (build-env design §5.2, ADR-0025)
+EGRESS_NOTE_MAX = 120
+EgressNoteKind = Literal["volume", "floor_note"]
+
+
+class EgressNoteRequest(ApiModel):
+    """``POST /v1/contributions/{cid}/egress-notes`` (sandbox): a web job of ``sandbox_full`` went over a volume
+    limit (``volume``: the job ran on), or a job saw floor notes (``floor_note``: loopback names, the HashiCorp
+    beacon, a repo-code-denied name in a base pool). Data for the digest; never a hold, a transition or a card."""
+
+    run_id: Annotated[str, Field(pattern=HOLD_RUN_ID_RE)]
+    stage: Literal["fetch", "validate", "implement"]
+    kind: EgressNoteKind
+    egress_mode: EgressMode
+    hosts: Annotated[int, Field(ge=0, le=1_000_000)]
+    up_bytes: Annotated[int, Field(ge=0, le=2**63)]
+    down_bytes: Annotated[int, Field(ge=0, le=2**63)]
+    breached: Annotated[list[HoldBreach], Field(max_length=3)]
+    limits: EgressAnomaly
+    top_hosts: Annotated[list[Annotated[str, Field(pattern=HOLD_HOST_RE)]], Field(max_length=HOLD_TOP_HOSTS_MAX)]
+    notes: Annotated[list[Annotated[str, Field(min_length=1, max_length=EGRESS_NOTE_MAX)]], Field(max_length=20)]
+
+    @field_validator("breached")
+    @classmethod
+    def _unique(cls, value: list[str]) -> list[str]:
+        if len(set(value)) != len(value):
+            raise ValueError("breached repeats an entry")
+        return value
+
+
+class EgressNoteView(ApiModel):
+    id: int
+    cid: str
+    run_id: str
+    stage: str | None
+    kind: EgressNoteKind
+    summary: EgressNoteRequest
+    created_at: str
 
 
 # ------------------------------------------------- implement egress decision (ADR-0024, design §4e)

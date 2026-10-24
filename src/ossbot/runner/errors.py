@@ -21,6 +21,9 @@ PROBE_GATE = "safety_probe_missing"  # sandboxd's 423 for a Kiro job before the 
 # open-discovery design §13.2/§13.3: the egress meter stopped the job / a hold isn't recorded yet / is open
 EGRESS_ANOMALY = "egress_anomaly"
 EGRESS_ANOMALY_PENDING = "egress_anomaly_pending"
+# ADR-0025: a floor reach attempt stopped the job (held like an anomaly); the public-address floor is unknown
+EGRESS_FLOOR = "egress_floor"
+PUBLIC_FLOOR_UNKNOWN = "public_floor_unknown"
 CONTRIBUTION_HELD = "contribution_held"
 SUMMARY_MAX = 1000  # an owner-facing summary in terminal evidence (far below EVIDENCE_MAX_BYTES, 64 KiB)
 
@@ -74,9 +77,18 @@ class CapReached(Deferred):
 
 
 class ContributionHeld(Deferred):
-    """The contribution is held for an egress anomaly (open-discovery design §13.2, §13.3): the gatekeeper's
-    423 ``contribution_held``, sandboxd's 423 ``egress_anomaly_pending`` or a job stopped by the meter
-    (``egress_anomaly``). Not a stage failure: the run is cancelled until the owner resumes the hold."""
+    """The contribution is held for an egress anomaly or a floor reach attempt (open-discovery design §13.2,
+    §13.3; ADR-0025): the gatekeeper's 423 ``contribution_held``, sandboxd's 423 ``egress_anomaly_pending`` or a
+    job stopped by the meter (``egress_anomaly``, ``egress_floor``). Not a stage failure: the run is cancelled
+    until the owner resumes the hold."""
+
+
+class PublicFloorUnknown(Deferred):
+    """ADR-0025 (build-env design §4.7): sandboxd refused (503 ``public_floor_unknown``) or stopped (job error
+    ``public_floor_unknown``) a job whose repo code would get the public web while the public-address floor is
+    unknown. Not a failure and not an interrupt: the scheduler retries the stage after ``RETRY_S``."""
+
+    RETRY_S = 300
 
 
 class JobRunner(Protocol):
@@ -96,6 +108,8 @@ def sandbox_run(sbx: JobRunner, spec: dict[str, Any], tick: Callable[[], None] |
             raise ProbesNotReady(PROBE_GATE) from exc
         if exc.status == 423 and exc.code == EGRESS_ANOMALY_PENDING:  # the hold isn't recorded yet (fail closed)
             raise ContributionHeld(f"sandboxd {exc.status} {exc.code}") from exc
+        if exc.status == 503 and exc.code == PUBLIC_FLOOR_UNKNOWN:  # ADR-0025: before the generic 503 branch
+            raise PublicFloorUnknown(f"sandboxd {exc.status} {exc.code}") from exc
         if exc.status in {423, 503}:  # paused/killed/draining/down, or sandboxd restarting
             raise Interrupted(f"sandboxd {exc.status} {exc.code}") from exc
         raise
@@ -103,4 +117,8 @@ def sandbox_run(sbx: JobRunner, spec: dict[str, Any], tick: Callable[[], None] |
         raise Interrupted(f"sandbox job {spec.get('run_id')} interrupted")
     if done.get("state") == "failed" and done.get("error_class") == EGRESS_ANOMALY:
         raise ContributionHeld(f"sandbox job {spec.get('run_id')} stopped: egress anomaly")
+    if done.get("state") == "failed" and done.get("error_class") == EGRESS_FLOOR:
+        raise ContributionHeld(f"sandbox job {spec.get('run_id')} stopped: floor reach attempt")
+    if done.get("state") == "failed" and done.get("error_class") == PUBLIC_FLOOR_UNKNOWN:
+        raise PublicFloorUnknown(f"sandbox job {spec.get('run_id')} stopped: public floor unknown")
     return done

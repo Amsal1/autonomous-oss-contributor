@@ -29,12 +29,13 @@ from ossbot.common.control_flags import DEFAULT_DRAIN_TIMEOUT_S, EgressMode, rea
 from ossbot.common.images import DEFAULT_LOCK_COPY, load_image_pins
 from ossbot.common.logging import setup_logging
 from ossbot.common.paths import Paths
+from ossbot.common.public_floor import FLOOR_DIR
 from ossbot.common.redact import Redactor
 from ossbot.common.snapshot import read_current
 from ossbot.common.uds import uds_client
 from ossbot.sandboxd.app import PeerCredProtocol, create_app
 from ossbot.sandboxd.db import DEFAULT_DB, Store
-from ossbot.sandboxd.egress_meter import EgressMeter
+from ossbot.sandboxd.egress_meter import EgressMeter, floors_from_squid_conf
 from ossbot.sandboxd.jobs import HoldError, JobService, ProbeRunner, Settings
 from ossbot.sandboxd.keyscan import KeyScanner
 from ossbot.sandboxd.killwatch import KillWatch
@@ -48,6 +49,8 @@ log = logging.getLogger("ossbot.sandboxd")
 SOCKET = Path("/run/ossbot/sandboxd.sock")
 SOCKET_GROUP = "osssbx"
 PROXY_ACCESS_LOG = Path("/srv/ossbot/logs/proxy/access.log")
+FLOOR_LOG = Path("/srv/ossbot/logs/floor/floor.log")  # ossbot-floorlog (root:ossbox 0640, ADR-0025)
+SQUID_CONF = Path("/etc/ossbot/proxy/squid.conf")  # the live floors the meter classifies against
 IMPLEMENT_EGRESS_TIMEOUT_S = 5.0
 
 
@@ -113,6 +116,23 @@ class GatekeeperClient:
         if egress not in {"web", "none"}:
             raise ValueError("malformed implement-egress answer")
         return str(egress)
+
+    def notify(self, text: str, priority: str = "P1") -> None:
+        """``POST /v1/notify`` (role sandbox, the worker branch: 10/h; ADR-0025): the floor detector, an
+        unattributed proxy floor drop and the public-address check. A message, never a go action."""
+        with self._client() as c:
+            c.post("/v1/notify", json={"text": text[:500], "priority": priority}).raise_for_status()
+
+    def egress_note(self, cid: str, body: dict[str, Any]) -> None:
+        """``POST /v1/contributions/{cid}/egress-notes`` (role sandbox; ADR-0025). Raises ``HoldError`` like
+        ``hold`` (``None`` = transport error; the caller retries those and 5xx, drops a 4xx)."""
+        try:
+            with self._client() as c:
+                resp = c.post(f"/v1/contributions/{cid}/egress-notes", json=body)
+        except httpx.HTTPError as exc:
+            raise HoldError(None, "transport") from exc
+        if resp.status_code >= 300:
+            raise HoldError(resp.status_code, "error")
 
 
 def anomaly_limits(root: Path) -> EgressAnomaly:
@@ -207,7 +227,11 @@ def main() -> int:
     store = Store(DEFAULT_DB)
     runtime = DockerCliRuntime()
     gatekeeper = GatekeeperClient(paths.gatekeeper_sock)
-    meter = EgressMeter(PROXY_ACCESS_LOG, paths.logs_dir / "runs", lambda: anomaly_limits(paths.snapshot_root))
+    meter = EgressMeter(
+        PROXY_ACCESS_LOG, paths.logs_dir / "runs", lambda: anomaly_limits(paths.snapshot_root),
+        floor_log=FLOOR_LOG, floors=lambda: floors_from_squid_conf(SQUID_CONF), public_floor_dir=FLOOR_DIR,
+        current_mode=lambda: egress_mode_now(paths, "allowlist"), notify=gatekeeper.notify,
+    )  # fmt: skip
     jobs = JobService(
         store=store, runtime=runtime, pins=lambda: load_image_pins(DEFAULT_LOCK_COPY),
         catalog=CatalogCache(gatekeeper.catalog, clock), gatekeeper=gatekeeper,
@@ -223,6 +247,9 @@ def main() -> int:
     )  # fmt: skip
     jobs.recover()  # CR-001 crash safety: whatever a killed/crashed predecessor left behind
     meter.on_breach = jobs.flag_anomaly
+    meter.on_floor = jobs.flag_floor  # ADR-0025: a floor reach attempt holds only that contribution
+    meter.on_note = jobs.post_note
+    meter.on_unknown = jobs.stop_unknown
     meter.retry = jobs.retry_pending_holds
     meter.start()  # open-discovery §13.2: per-job egress meter of fetch/validate jobs
     watch = KillWatch(jobs, paths.control_dir)

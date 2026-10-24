@@ -93,9 +93,11 @@ def test_refetch_args_take_no_base_and_need_the_prefetch(bad: dict[str, Any]) ->
 def test_refetch_env_only_when_set_and_no_new_task_volume(sbx: Sbx) -> None:
     normal = sbx.jobs.admit(_fetch(sbx))
     assert "OSSBOT_ARG_REFETCH" not in normal.env and normal.create_task_volume is True
-    assert normal.env == {"OSSBOT_ARG_REPO": "owner/repo", "OSSBOT_ARG_CLONE_DEPTH": "200"}  # unchanged argv
+    # unchanged argv; ADR-0025 adds OSSBOT_NET (the job's network: base in allowlist)
+    assert normal.env == {"OSSBOT_ARG_REPO": "owner/repo", "OSSBOT_ARG_CLONE_DEPTH": "200", "OSSBOT_NET": "base"}
     again = sbx.jobs.admit(_fetch(sbx, run_id="r9", args={"repo": "owner/repo", "refetch": True}))
-    assert again.env == {"OSSBOT_ARG_REPO": "owner/repo", "OSSBOT_ARG_CLONE_DEPTH": "200", "OSSBOT_ARG_REFETCH": "1"}
+    assert again.env == {"OSSBOT_ARG_REPO": "owner/repo", "OSSBOT_ARG_CLONE_DEPTH": "200", "OSSBOT_ARG_REFETCH": "1",
+                         "OSSBOT_NET": "base"}  # fmt: skip
     assert again.create_task_volume is False  # keeps the implement stage's working tree
 
 

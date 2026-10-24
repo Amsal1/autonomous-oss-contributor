@@ -53,6 +53,7 @@ from ossbot.runner.errors import (
     Deferred,
     Interrupted,
     ProbesNotReady,
+    PublicFloorUnknown,
     StageFailed,
 )
 from ossbot.runner.github_read import GitHubRateLimited
@@ -500,6 +501,14 @@ class Scheduler:
                      extra={"event": "stage_delayed", "cid": cid})  # fmt: skip
         except ContributionHeld as exc:  # not a failure: the owner resumes the hold (open-discovery §13.3)
             log.warning("stage held for %s: %s", cid, exc, extra={"event": "stage_held", "cid": cid})
+        except PublicFloorUnknown as exc:  # ADR-0025: repo code's web waits for the public floor, retried later
+            until = self.now() + timedelta(seconds=PublicFloorUnknown.RETRY_S)
+            try:
+                self.delayed[cid] = (str(sc.gk.contribution(cid)["state"]), until)
+            except GkError:
+                self.delayed[cid] = (str(c.get("state")), until)
+            log.info("stage deferred for %s until %s: %s", cid, until, exc,
+                     extra={"event": "stage_delayed", "cid": cid})  # fmt: skip
         except (Interrupted, Deferred) as exc:
             log.info("stage stopped for %s: %s", cid, exc, extra={"event": "stage_stopped", "cid": cid})
         except StageFailed as exc:

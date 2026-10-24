@@ -83,7 +83,10 @@ def create_app(jobs: JobService, probes: ProbeRunner, allowed_uids: frozenset[in
     @app.get("/v1/health")
     def health(uid: Caller) -> dict[str, Any]:
         running = jobs.running()
-        return {"ok": True, "running": len(running), "running_run_ids": running}
+        body: dict[str, Any] = {"ok": True, "running": len(running), "running_run_ids": running}
+        if jobs.meter is not None:  # ADR-0025: floor detector and public floor (a count, never the values)
+            body.update(jobs.meter.health())
+        return body
 
     @app.post("/v1/drain")
     def drain(body: DrainBody, uid: Caller) -> dict[str, Any]:

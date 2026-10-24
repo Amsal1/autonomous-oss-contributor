@@ -91,6 +91,23 @@ def test_held_rows_are_not_dispatched_until_released(sc: StageContext, ctx: AppC
     assert runs(ctx, held) == [("scout", "succeeded")]
 
 
+@pytest.mark.parametrize("how", ["job_error", "sandboxd_refused"])
+def test_an_unknown_public_floor_defers_the_stage(sc: StageContext, ctx: AppContext, sbx: FakeSbx, how: str) -> None:
+    """ADR-0025 (build-env design §4.7): never a failure or an interrupt; retried after RETRY_S, not next tick."""
+    cid = insert_contribution(ctx, State.VETTED)
+    if how == "job_error":
+        sbx.handlers["fetch"] = lambda spec, out: 1
+        sbx.error_class["fetch"] = "public_floor_unknown"
+    else:
+        sbx.refuse["fetch"] = (503, "public_floor_unknown")
+    scheduler = ready(sc, ctx)
+    scheduler.tick()
+    assert state(ctx, cid) == "SCOUTING"  # not FAILED
+    assert runs(ctx, cid) == [("scout", "cancelled")]
+    assert cid in scheduler.delayed  # deferred: the next tick does not retry it at once
+    assert cid not in scheduler.tick().started
+
+
 @pytest.mark.parametrize("how", ["job_error", "sandboxd_pending"])
 def test_an_egress_anomaly_is_not_a_stage_failure(sc: StageContext, ctx: AppContext, sbx: FakeSbx, how: str) -> None:
     cid = insert_contribution(ctx, State.VETTED)

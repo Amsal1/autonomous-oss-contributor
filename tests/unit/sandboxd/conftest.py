@@ -11,6 +11,7 @@ import pytest
 
 from ossbot.common.clock import FakeClock
 from ossbot.common.images import ImagePins
+from ossbot.common.public_floor import FloorStatus
 from ossbot.sandboxd.db import Store
 from ossbot.sandboxd.jobs import HoldError, JobService, Settings
 from ossbot.sandboxd.keyscan import KeyScanner
@@ -28,6 +29,8 @@ PINS = ImagePins(
     agent_configs_sha256="c" * 64,
     settings_sha256="d" * 64,
 )
+KNOWN = FloorStatus(True, None, 1, 1, True)  # the public-address floor is known (ADR-0025)
+UNKNOWN = FloorStatus(False, 100.0, 0, 1, True)
 
 
 @dataclass
@@ -45,6 +48,10 @@ class FakeGatekeeper:
     # ADR-0024: the per-run implement-egress decision ("web", "none", junk, or an exception to raise)
     egress_answer: Any = "none"
     egress_calls: list[tuple[str, str]] = field(default_factory=list)
+    # ADR-0025: notices and egress notes (queued note answers like hold_answers)
+    notices: list[tuple[str, str]] = field(default_factory=list)
+    notes: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    note_answers: list[BaseException | None] = field(default_factory=list)
 
     def implement_egress(self, cid: str, run_id: str) -> str:
         self.egress_calls.append((cid, run_id))
@@ -65,6 +72,15 @@ class FakeGatekeeper:
     def pause(self, reason: str) -> None:
         self.paused.append(reason)
 
+    def notify(self, text: str, priority: str = "P1") -> None:
+        self.notices.append((text, priority))
+
+    def egress_note(self, cid: str, body: dict[str, Any]) -> None:
+        self.notes.append((cid, body))
+        answer = self.note_answers.pop(0) if self.note_answers else None
+        if answer is not None:
+            raise answer
+
     def contribution_state(self, cid: str) -> str | None:
         return self.states.get(cid)
 
@@ -84,6 +100,7 @@ class Sbx:
     root: Path
     trust: list[TrustMode]
     mode: list[str] = field(default_factory=lambda: ["allowlist"])  # sandboxd's live egress-mode read
+    floor: list[FloorStatus] = field(default_factory=lambda: [KNOWN])  # the public-address floor read
 
     def runner_input(self, name: str, data: bytes) -> str:
         path = self.root / "srv" / "runner" / name
@@ -111,6 +128,7 @@ def sbx(tmp_path: Path) -> Iterator[Sbx]:
     )
     trust: list[TrustMode] = ["ids"]
     mode = ["allowlist"]
+    floor = [KNOWN]
     jobs = JobService(
         store=store,
         runtime=runtime,
@@ -124,8 +142,10 @@ def sbx(tmp_path: Path) -> Iterator[Sbx]:
         networks=Networks(runtime, SubnetAllocator(store, clock)),
         background=False,
         exec_egress_mode=lambda: mode[0],
+        public_floor=lambda: floor[0],
     )
-    yield Sbx(jobs, runtime, gatekeeper, clock, settings, tmp_path, trust, mode)
+    jobs.note_sleep = lambda s: None
+    yield Sbx(jobs, runtime, gatekeeper, clock, settings, tmp_path, trust, mode, floor)
     store.close()
 
 

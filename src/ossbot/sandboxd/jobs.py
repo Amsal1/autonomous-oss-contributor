@@ -21,10 +21,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
 
+from pydantic import ValidationError
+
 from ossbot.common.clock import Clock, to_iso
 from ossbot.common.control_flags import CODE_WEB_MODES, Blocked, NotUp, read_flags, require_running, require_up
 from ossbot.common.images import ImagePins
-from ossbot.common.schemas import HOLD_HOST_RE, HOLD_TOP_HOSTS_MAX, TERMINAL_STATES, HoldRequest
+from ossbot.common.public_floor import FloorStatus, read_state
+from ossbot.common.schemas import (
+    HOLD_HOST_RE,
+    HOLD_TOP_HOSTS_MAX,
+    TERMINAL_STATES,
+    EgressNoteRequest,
+    FloorHoldRequest,
+    FloorInfo,
+    HoldRequest,
+)
 from ossbot.sandboxd.argv import Volumes, job_spec, probe_spec, stagein_spec
 from ossbot.sandboxd.db import Store
 from ossbot.sandboxd.egress_meter import EgressMeter
@@ -95,16 +106,55 @@ PRE_START_STATES = frozenset({"DISCOVERED", "VETTING", "VETTED", "SCOUTING", "PR
 # open-discovery design §13.2: the meter stopped the job / a hold for the cid isn't recorded yet
 EGRESS_ANOMALY = "egress_anomaly"
 EGRESS_ANOMALY_PENDING = "egress_anomaly_pending"
+# ADR-0025 (build-env design §4.7, §5.1): a floor reach attempt stopped the job; the public-address floor is
+# unknown (a web job is refused at admission with 503 or stopped; the runner defers it, never a failure)
+EGRESS_FLOOR = "egress_floor"
+PUBLIC_FLOOR_UNKNOWN = "public_floor_unknown"
+NOTE_BACKOFF_S = (5.0, 15.0, 45.0)
+
+
+def _hosts(doc: dict[str, Any]) -> list[str]:
+    return [h if re.fullmatch(HOLD_HOST_RE, h) else "?" for h in doc.get("top_hosts", [])][:HOLD_TOP_HOSTS_MAX]
 
 
 def hold_body(doc: dict[str, Any]) -> dict[str, Any]:
     """The gatekeeper's ``HoldRequest`` from a meter summary; any host the schema can't carry becomes ``?``."""
-    hosts = [h if re.fullmatch(HOLD_HOST_RE, h) else "?" for h in doc.get("top_hosts", [])][:HOLD_TOP_HOSTS_MAX]
     return HoldRequest.model_validate({
         "reason": "egress_anomaly", "run_id": doc["run_id"], "stage": doc["stage"], "egress": doc["egress"],
         "egress_mode": doc["egress_mode"], "hosts": doc["hosts"], "up_bytes": doc["up_bytes"],
-        "down_bytes": doc["down_bytes"], "denied": doc["denied"], "top_hosts": hosts, "limits": doc["limits"],
+        "down_bytes": doc["down_bytes"], "denied": doc["denied"], "top_hosts": _hosts(doc), "limits": doc["limits"],
         "breached": doc["breached"],
+    }).model_dump(mode="json")  # fmt: skip
+
+
+def floor_hold_body(doc: dict[str, Any]) -> dict[str, Any]:
+    """The ``egress_floor`` hold of a meter summary with its first floor hit (the meter already replaced any
+    public-floor value by ``public-address``/``-``)."""
+    floor = dict(doc["floor"])
+    try:  # a target or destination the schema can't carry becomes "?" / "-" (the hold must still be recorded)
+        FloorInfo.model_validate({"class": floor["class"], "target": floor["target"], "dst": "-"})
+    except ValidationError:
+        floor["target"] = "?"
+    try:
+        FloorInfo.model_validate({"class": floor["class"], "target": "?", "dst": floor["dst"]})
+    except ValidationError:
+        floor["dst"] = "-"
+    return FloorHoldRequest.model_validate({
+        "reason": EGRESS_FLOOR, "run_id": doc["run_id"], "stage": doc["stage"], "egress": doc["egress"],
+        "egress_mode": doc["egress_mode"], "hosts": doc["hosts"], "up_bytes": doc["up_bytes"],
+        "down_bytes": doc["down_bytes"], "denied": doc["denied"], "top_hosts": _hosts(doc), "limits": doc["limits"],
+        "breached": doc.get("breached", [])[:3],
+        "floor": {"class": floor["class"], "target": floor["target"], "dst": floor["dst"]},
+    }).model_dump(mode="json", by_alias=True)  # fmt: skip
+
+
+def note_body(doc: dict[str, Any]) -> dict[str, Any]:
+    """The gatekeeper's ``EgressNoteRequest`` of a meter summary (``kind`` volume or floor_note)."""
+    return EgressNoteRequest.model_validate({
+        "run_id": doc["run_id"], "stage": doc["stage"], "kind": doc.get("kind", "volume"),
+        "egress_mode": doc["egress_mode"], "hosts": doc["hosts"], "up_bytes": doc["up_bytes"],
+        "down_bytes": doc["down_bytes"], "breached": doc.get("breached", [])[:3], "limits": doc["limits"],
+        "top_hosts": _hosts(doc), "notes": [n[:120] for n in doc.get("notes", [])][:20],
     }).model_dump(mode="json")  # fmt: skip
 
 
@@ -136,6 +186,8 @@ class Gatekeeper(Protocol):
                      verdict: str | None = None, attempts: int = 1) -> None: ...  # fmt: skip
     def hold(self, cid: str, body: dict[str, Any]) -> None: ...  # raises HoldError (open-discovery §13.3)
     def implement_egress(self, cid: str, run_id: str) -> str: ...  # ADR-0024: "web" | "none"; may raise
+    def notify(self, text: str, priority: str = "P1") -> None: ...  # ADR-0025 notices (a stop-side message)
+    def egress_note(self, cid: str, body: dict[str, Any]) -> None: ...  # raises HoldError (ADR-0025 notes)
 
 
 @dataclass(frozen=True)
@@ -169,6 +221,9 @@ class Plan:
     # ADR-0024: agent-exec of a coder run. Only admit() sets "web" (the safety probes build coder Plans
     # directly and so always stay on "none" without asking the gatekeeper).
     exec_network: ExecNetwork = "none"
+    # ADR-0025: fetch/validate of a mode-egress repo in a code-web mode get base + web_public ("web"), every
+    # other metered job its base list ("base"); the meter's guard policy and the public-floor gate key on it.
+    net: str = "base"
 
 
 @dataclass
@@ -238,12 +293,18 @@ class JobService:
         meter: EgressMeter | None = None,
         egress_mode: Callable[[], str] = lambda: "open",
         exec_egress_mode: Callable[[], str] = lambda: "allowlist",
+        public_floor: Callable[[], FloorStatus] = read_state,
     ) -> None:
         self.meter = meter  # open-discovery §13.2: fetch/validate jobs are metered (None: not metered)
         self.egress_mode = egress_mode
         # ADR-0024: the live mode for the agent-exec network decision; an unreadable snapshot is allowlist
         self.exec_egress_mode = exec_egress_mode
+        # ADR-0025 (build-env design §4.7): web jobs only while the public-address floor is known (fail closed)
+        self.public_floor = public_floor
+        self.note_sleep: Callable[[float], None] = time.sleep
         self._anomaly: dict[str, dict[str, Any]] = {}  # run_id -> the meter summary that stopped it
+        self._floor: dict[str, dict[str, Any]] = {}  # run_id -> the meter summary of its floor hit
+        self._unknown: set[str] = set()  # web jobs stopped while the public floor was unknown
         self.store = store
         self.runtime = runtime
         self.pins = pins
@@ -308,15 +369,40 @@ class JobService:
         template = "coder" if spec.profile == "coder" else spec.profile
         refetch = isinstance(job.args, FetchArgs) and job.args.refetch  # §9.8: into the existing task volume
         exec_network: ExecNetwork = self._exec_network(spec) if spec.profile == "coder" else "none"
+        net = self._job_net(spec)
+        if (net == "web" or exec_network == "web") and not self._public_floor_known():
+            log.info("public floor unknown: %s job %s deferred", spec.profile, spec.run_id,
+                     extra={"event": PUBLIC_FLOOR_UNKNOWN, "cid": spec.cid, "run_id": spec.run_id})  # fmt: skip
+            raise ApiError(503, PUBLIC_FLOOR_UNKNOWN, "the public-address floor is unknown; repo code's web waits")
+        env = _env_for(job, trust_mode)
+        if spec.profile in EGRESS_PROFILES:
+            env["OSSBOT_NET"] = net  # ADR-0025: what the job's network is (the entrypoints may key on it)
         return Plan(
             run_id=spec.run_id, cid=spec.cid, template=template, entrypoint=spec.entrypoint,
-            repo_mode=spec.repo_mode, env=_env_for(job, trust_mode),
+            repo_mode=spec.repo_mode, env=env,
             inputs={k: Path(v) for k, v in spec.inputs.items()}, timeout_s=spec.timeout_s, cpus=spec.cpus,
             memory_mb=spec.memory_mb, dest=dest,
             create_task_volume=spec.entrypoint == "fetch" and not refetch, release_network=spec.cid == CATALOG_CID,
             egress=spec.egress, exec_network=exec_network,
             exec_env={"OSSBOT_EXEC_NETWORK": "web"} if exec_network == "web" else {},
+            net="web" if exec_network == "web" else net,
         )  # fmt: skip
+
+    def _job_net(self, spec: JobSpec) -> str:
+        """``web`` for a fetch/validate job of a mode-egress repo while this process reads a code-web mode (fail
+        closed: an unreadable mode is allowlist), else ``base``. The coder's agent-exec has its own decision."""
+        if spec.profile not in EGRESS_PROFILES or spec.egress != "mode":
+            return "base"
+        try:
+            return "web" if self.exec_egress_mode() in CODE_WEB_MODES else "base"
+        except Exception:  # noqa: BLE001 - an unreadable mode never widens anything
+            return "base"
+
+    def _public_floor_known(self) -> bool:
+        try:
+            return self.public_floor().known
+        except Exception:  # noqa: BLE001 - unreadable: unknown (fail closed)
+            return False
 
     def _exec_network(self, spec: JobSpec) -> ExecNetwork:
         """ADR-0024, two independent checks, fail closed: ``strict`` never asks; otherwise ``web`` only if this
@@ -382,6 +468,11 @@ class JobService:
             state, outcome.error_class, outcome.exit_code = "failed", INTERRUPTED, None
         if self._anomaly.pop(plan.run_id, None) is not None:  # §13.2: stopped by the egress meter
             state, outcome.error_class = "failed", EGRESS_ANOMALY
+        if self._floor.pop(plan.run_id, None) is not None:  # ADR-0025: a floor reach attempt (wins over volume)
+            state, outcome.error_class = "failed", EGRESS_FLOOR
+        elif plan.run_id in self._unknown:  # the public floor became unknown while it ran: deferred
+            self._unknown.discard(plan.run_id)
+            state, outcome.error_class = "failed", PUBLIC_FLOOR_UNKNOWN
         with self.store.tx() as conn:
             conn.execute(
                 "UPDATE jobs SET state = ?, exit_code = ?, error_class = ?, artifact_dir = ?, finished_at = ?"
@@ -547,6 +638,7 @@ class JobService:
             mode = "open"
         self.meter.register(plan.run_id, plan.cid, plan.template, subnet, self.clock.now().timestamp(),
                             plan.egress, mode)  # fmt: skip
+        self.meter.set_net(plan.run_id, plan.net)  # ADR-0025: the guard policy keys on the job's network
         return True
 
     def _meter_exec_start(self, plan: Plan) -> bool:
@@ -560,6 +652,7 @@ class JobService:
         except Exception:  # noqa: BLE001 - the mode is a label of the summary only
             mode = "open"
         self.meter.register(plan.run_id, plan.cid, "implement", subnet, self.clock.now().timestamp(), "mode", mode)
+        self.meter.set_net(plan.run_id, "web")
         return True
 
     # ------------------------------------------------------------- egress anomaly (§13.2)
@@ -579,6 +672,73 @@ class JobService:
             self._pending(str(doc["cid"]), run_id, {"summary": doc}, f"local:{type(exc).__name__}")
             return
         self.request_hold(str(doc["cid"]), run_id, body)
+
+    def _kill_run(self, run_id: str) -> None:
+        with self._lock:
+            names = list(self._containers.get(run_id, []))
+        for name in names:  # both containers of a coder run; a finished job has none left
+            self._quiet(self.runtime.kill, name)
+
+    def flag_floor(self, run_id: str, doc: dict[str, Any]) -> None:
+        """ADR-0025: a floor reach attempt. Like ``flag_anomaly`` (stop, outcome ``egress_floor``, staging
+        discarded, the fail-closed pending row) with a ``FloorHoldRequest``; a late line (the job already finished)
+        has nothing to kill and asks for the hold the same way."""
+        with self._lock:
+            if run_id in self._floor:
+                return
+            self._floor[run_id] = doc
+        self._kill_run(run_id)
+        try:
+            body = floor_hold_body(doc)
+        except (KeyError, ValueError) as exc:  # a bug, not the gatekeeper's answer: still fail closed
+            self._pending(str(doc["cid"]), run_id, {"summary": doc}, f"local:{type(exc).__name__}")
+            return
+        self.request_hold(str(doc["cid"]), run_id, body)
+
+    def stop_unknown(self, run_id: str, doc: dict[str, Any]) -> None:
+        """ADR-0025: the public-address floor became unknown while this web job ran: stop it (outcome
+        ``public_floor_unknown``, no hold, no note; the runner defers the stage)."""
+        with self._lock:
+            if run_id in self._unknown:
+                return
+            self._unknown.add(run_id)
+        self._kill_run(run_id)
+
+    def post_note(self, run_id: str, doc: dict[str, Any]) -> None:
+        """ADR-0025: a volume note (``sandbox_full`` web job) or a floor note. Sent off the meter thread (a
+        background thread unless ``background`` is off); retried after 5, 15 and 45 s on 5xx or transport errors,
+        a 4xx is dropped. A note never stops a job and never blocks admission."""
+        cid = str(doc["cid"])
+        extra = {"event": "egress_note_dropped", "cid": cid, "run_id": run_id}
+        try:
+            body = note_body(doc)
+        except (KeyError, ValueError) as exc:
+            log.warning("egress note of %s not built (%s); dropped", run_id, type(exc).__name__, extra=extra)
+            return
+        if self.background:
+            threading.Thread(target=self._send_note, args=(cid, run_id, body), daemon=True,
+                             name=f"note-{run_id}").start()  # fmt: skip
+        else:
+            self._send_note(cid, run_id, body)
+
+    def _send_note(self, cid: str, run_id: str, body: dict[str, Any]) -> bool:
+        extra = {"event": "egress_note_dropped", "cid": cid, "run_id": run_id}
+        for backoff in (0.0, *NOTE_BACKOFF_S):
+            if backoff:
+                self.note_sleep(backoff)
+            try:
+                self.gatekeeper.egress_note(cid, body)
+                return True
+            except HoldError as exc:
+                if exc.status is not None and exc.status < 500:
+                    log.warning("the gatekeeper refused the egress note of %s (%s %s); dropped", run_id,
+                                exc.status, exc.code, extra=extra)  # fmt: skip
+                    return False
+            except Exception:  # a note is best effort (logged below when every try failed)
+                log.debug("egress note of %s not sent yet", run_id, exc_info=True)
+        log.warning("egress note of %s not recorded after %d retries; dropped", run_id, len(NOTE_BACKOFF_S),
+                    extra=extra)  # fmt: skip
+        return False
 
     def request_hold(self, cid: str, run_id: str, body: dict[str, Any]) -> bool:
         """True once the gatekeeper recorded it. M3: 5xx and transport errors stay pending and are retried
@@ -691,6 +851,10 @@ class JobService:
         if plan.run_id in self._anomaly:  # §13.2: nothing a job over its egress limits produced is kept
             shutil.rmtree(staging, ignore_errors=True)
             outcome.error_class = EGRESS_ANOMALY
+            return outcome
+        if plan.run_id in self._floor or plan.run_id in self._unknown:  # ADR-0025: stopped mid-way, nothing kept
+            shutil.rmtree(staging, ignore_errors=True)
+            outcome.error_class = EGRESS_FLOOR if plan.run_id in self._floor else PUBLIC_FLOOR_UNKNOWN
             return outcome
         if plan.run_id in self._cancelled:
             outcome.error_class = "cancelled"
