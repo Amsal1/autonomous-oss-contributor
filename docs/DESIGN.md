@@ -1597,7 +1597,10 @@ POST /v1/models/catalog                 worker         {models: [{model_id, name
                                                         ids absent from the list keep their row but stale last_seen, and GET then
                                                         omits them unless forced (the "latest catalog" of 16.1); returns {new_ids})
 POST /v1/discovery-requests             requester, operator {url}
-POST /v1/notify {text}                  worker, requester (10/h)
+POST /v1/notify {text}                  worker, requester, sandbox (10/h; sandbox: the worker branch for its notices, 13.6)
+POST /v1/contributions/{id}/egress-notes sandbox       {EgressNoteRequest} (ADR-0025: a sandbox_full volume or floor note, §13.6)
+GET  /v1/egress/notes?cid=&since=&limit= worker, operator -> the stored egress notes (read-only)
+POST /v1/egress/health {floor_detector} sandbox        (sandboxd's detector state each heartbeat, data only, for /status)
 GET  /v1/models  · PUT /v1/models/{role} {model, effort, force}   operator
 POST /v1/models/refresh                 operator       (ossctl models refresh: held for the runner's next tick, 16.3)
 POST /v1/models/refresh/claim           worker         -> {requested} (consumes the pending refresh request)
