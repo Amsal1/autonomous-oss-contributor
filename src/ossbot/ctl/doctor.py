@@ -810,12 +810,25 @@ def check_public_floor(read: Callable[[], Any] | None = None) -> Result:
                   "systemctl status ossbot-pubip.timer; journalctl -u ossbot-pubip")  # fmt: skip
 
 
-def check_floorlog() -> Result:
-    """ADR-0025: the kernel floor-log reader runs (the drops block without it; the alerts need it)."""
+def _sandboxd_detector() -> str:
+    try:
+        with uds_client(SANDBOXD_SOCK, timeout=httpx.Timeout(5.0)) as client:
+            resp = client.get("/v1/health")
+            doc = resp.json() if resp.status_code == 200 else {}
+    except (httpx.HTTPError, OSError, ValueError):
+        return "unknown (sandboxd not reachable)"
+    return str(doc.get("floor_detector") or "unknown") if isinstance(doc, dict) else "unknown"
+
+
+def check_floorlog(detector: Callable[[], str] = _sandboxd_detector) -> Result:
+    """ADR-0025: the kernel floor-log reader runs (the drops block without it; the alerts need it) and sandboxd's
+    meter sees its heartbeat (``floor_detector``, build-env design §9.3)."""
     out = _run(["/usr/bin/systemctl", "is-active", FLOORLOG_UNIT])
     state = out.stdout.strip() or out.stderr.strip()[-80:] or "unknown"
-    return Result(PASS if state == "active" else FAIL, "floor log reader", f"{FLOORLOG_UNIT} {state}",
-                  f"systemctl restart {FLOORLOG_UNIT}")  # fmt: skip
+    seen = detector()
+    status = PASS if state == "active" and seen == "ok" else FAIL if state != "active" else WARN
+    return Result(status, "floor log reader", f"{FLOORLOG_UNIT} {state}; floor detector {seen}",
+                  f"systemctl restart {FLOORLOG_UNIT}; journalctl -u ossbot-sandboxd")  # fmt: skip
 
 
 def check_host_floor(live: Callable[[], Iterable[str]] | None = None) -> Result:

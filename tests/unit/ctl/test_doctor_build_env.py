@@ -85,7 +85,10 @@ def test_floorlog_unit_state(monkeypatch: pytest.MonkeyPatch, out: str, status: 
         return subprocess.CompletedProcess(argv, 0 if status == doctor.PASS else 3, out, "")
 
     monkeypatch.setattr(doctor, "_run", run)
-    assert doctor.check_floorlog().status == status
+    result = doctor.check_floorlog(lambda: "ok")
+    assert result.status == status and "floor detector ok" in result.detail
+    if status == doctor.PASS:  # the unit runs, but sandboxd's meter misses its heartbeat
+        assert doctor.check_floorlog(lambda: "down").status == doctor.WARN
 
 
 def test_the_driver_runs_the_new_checks() -> None:
