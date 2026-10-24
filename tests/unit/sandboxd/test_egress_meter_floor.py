@@ -248,6 +248,26 @@ def test_malformed_floor_lines_are_counted(tmp_path: Path) -> None:
     assert rig.meter.health()["meter"]["floor_malformed"] == 3 and rig.runs("floor") == []
 
 
+def test_the_meter_heartbeat_reports_the_detector_to_the_gatekeeper(tmp_path: Path) -> None:
+    """build-env design §9.2: /status shows the floor detector; the meter posts it every heartbeat (data only,
+    a failed post is logged and retried at the next heartbeat)."""
+    rig = Rig(tmp_path)
+    sent: list[dict[str, object]] = []
+    rig.meter.report_health = sent.append
+    rig.meter.poll()
+    rig.meter.heartbeat()
+    rig.now[0] += 121
+    rig.meter.poll()
+    rig.meter.heartbeat()
+    assert sent == [{"floor_detector": "ok"}, {"floor_detector": "down"}]
+
+    def broken(body: dict[str, object]) -> None:
+        raise OSError("gatekeeper.sock: connection refused")
+
+    rig.meter.report_health = broken
+    rig.meter.heartbeat()  # never raises
+
+
 def test_heartbeat_older_than_120s_is_down_with_one_notice(tmp_path: Path) -> None:
     rig = Rig(tmp_path)
     rig.meter.poll()

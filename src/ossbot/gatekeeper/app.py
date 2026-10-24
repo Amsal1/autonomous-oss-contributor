@@ -48,7 +48,7 @@ from ossbot.gatekeeper.authz import PEER_SCOPE_KEY, Forbidden, Peer
 from ossbot.gatekeeper.config_snapshot import ReloadConflict
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.contributions import ContributionRefused
-from ossbot.gatekeeper.control import ControlConflict
+from ossbot.gatekeeper.control import ControlConflict, EgressModeRefused
 from ossbot.gatekeeper.discovered_targets import DiscoveredRefused
 from ossbot.gatekeeper.discovery_prefs import PrefsRefused
 from ossbot.gatekeeper.holds import HoldRefused
@@ -121,6 +121,7 @@ def _install_handlers(app: FastAPI) -> None:
     async def _model(request: Request, exc: ModelSetError) -> JSONResponse:
         return _error(400, "model_invalid", str(exc))
 
+    @app.exception_handler(EgressModeRefused)
     @app.exception_handler(ProposalRefused)
     @app.exception_handler(PrefsRefused)
     @app.exception_handler(DiscoveredRefused)

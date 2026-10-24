@@ -267,6 +267,7 @@ class EgressMeter:
         on_unknown: Callable[[str, dict[str, Any]], None] = lambda run_id, s: None,
         notify: Callable[[str], None] = lambda text: None,
         ring_max: int = RING_MAX,
+        report_health: Callable[[dict[str, Any]], None] = lambda body: None,
     ) -> None:
         self.path = path
         self.summaries_dir = summaries_dir
@@ -284,6 +285,7 @@ class EgressMeter:
         self.on_note = on_note
         self.on_unknown = on_unknown
         self.notify = notify
+        self.report_health = report_health
         self.malformed = 0
         self.counters: collections.Counter[str] = collections.Counter()
         self._jobs: dict[str, Job] = {}
@@ -611,6 +613,10 @@ class EgressMeter:
                  h["public_floor"]["known"], h["public_floor"]["entries"],
                  ", ".join(f"{k} {v}" for k, v in h["meter"].items()),
                  extra={"event": "egress_meter_heartbeat", **h["meter"]})  # fmt: skip
+        try:  # build-env §9.2: /status shows the detector; data only, a failure is retried next heartbeat
+            self.report_health({"floor_detector": "ok" if h["floor_detector"] == "ok" else "down"})
+        except Exception as exc:  # noqa: BLE001 - the gatekeeper may be restarting
+            log.debug("floor detector report not delivered (%s)", type(exc).__name__)
 
     # ------------------------------------------------------------------ thread
     def prime(self) -> None:

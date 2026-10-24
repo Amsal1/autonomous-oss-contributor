@@ -156,15 +156,28 @@ class DryRunRequest(ApiModel):
 
 
 class EgressModeRequest(ApiModel):
-    """§11.5: ossctl egress mode <m> (TTY-confirmed); Telegram /egress is FEAT-009."""
+    """§11.5: ossctl egress mode <m> (TTY-confirmed); Telegram /egress calls the service. ``raise_implement``
+    (build-env design §9.3): with ``sandbox_full`` only (else 422), also raise implement network to ``auto``."""
 
     mode: EgressMode
+    raise_implement: bool = False
 
 
 class EgressModeView(ApiModel):
     mode: EgressMode
     default: EgressMode
     previous: EgressMode | None = None
+    # build-env §9.2/§9.3: set when the request raised implement network (from -> auto), or why it couldn't
+    implement_network_previous: Literal["off", "on_request", "auto"] | None = None
+    implement_network_error: Annotated[str, Field(max_length=300)] | None = None
+
+
+class SandboxHealthReport(ApiModel):
+    """``POST /v1/egress/health`` (role sandbox, build-env design §9.2): sandboxd's floor detector, sent every
+    meter heartbeat so ``/status`` can show it (the gatekeeper never reaches sandboxd; the public floor it reads
+    from the world-readable floor ``state.json`` itself). Data only: it gates nothing."""
+
+    floor_detector: Literal["ok", "down"]
 
 
 # ADR-0024: the owner's network setting for the coder's executor (agent-exec); widening order off < on_request < auto.

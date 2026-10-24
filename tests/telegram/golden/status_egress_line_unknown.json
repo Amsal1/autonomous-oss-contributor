@@ -1,0 +1,85 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🟢 ",
+    {
+     "text": "ossbot",
+     "type": "bold"
+    },
+    " · UP · ",
+    {
+     "text": "🧪 DRY RUN",
+     "type": "bold"
+    }
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "🌐 Egress sandbox_full · implement network auto (inactive, public floor unknown) · floor detector down · public floor unknown since 11:58 UTC, repo-code web paused",
+   "type": "paragraph"
+  },
+  {
+   "text": "Hermes: self_improve · Rich views: auto · Auto size ≤ s",
+   "type": "paragraph"
+  },
+  {
+   "text": "Running: nothing",
+   "type": "paragraph"
+  },
+  {
+   "text": "Approvals: 0 pending · 0 proposal",
+   "type": "paragraph"
+  },
+  {
+   "text": "Queue: 0 vetted · 0 watching · 0 proposed",
+   "type": "paragraph"
+  },
+  {
+   "text": "Today: PRs 0/2 · comments 0/10 · claims 0/2",
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Telegram: last poll ",
+    "-",
+    " · 0 reconnect(s)"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Models: chat claude-sonnet-5.5 · coder claude-opus-5.5 · vision claude-sonnet-5.5",
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Config ",
+    {
+     "text": "f94618037290",
+     "type": "code"
+    },
+    " · audit ",
+    {
+     "text": "3761bfe8fe7a",
+     "type": "code"
+    },
+    " · anchor ",
+    "none yet"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "Updated ",
+    {
+     "date_time_format": "r",
+     "text": "12:00",
+     "type": "date_time",
+     "unix_time": 1792238400
+    }
+   ],
+   "type": "footer"
+  }
+ ],
+ "skip_entity_detection": true
+}

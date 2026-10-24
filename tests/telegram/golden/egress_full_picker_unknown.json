@@ -1,0 +1,28 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🌐 ",
+    {
+     "text": "Egress mode",
+     "type": "bold"
+    },
+    " · now open"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Applies to research, Hermes, agent LLM and catalog traffic; sandbox_open and sandbox_full also give repo code (fetch, validate, the coder's executor) the public web; strict repos keep the allowlist.",
+   "type": "paragraph"
+  },
+  {
+   "text": "Public floor: unknown since 11:58 UTC, repo-code web paused",
+   "type": "paragraph"
+  },
+  {
+   "text": "Implement network: off · the coder's executor gets web_public only when you allow it",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

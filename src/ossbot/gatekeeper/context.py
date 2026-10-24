@@ -7,7 +7,7 @@ import os
 import sqlite3
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from ossbot.common import probe_result
@@ -15,7 +15,7 @@ from ossbot.common.clock import Clock, SystemClock
 from ossbot.common.config import ConfigBundle, Limits, ProfileConfig
 from ossbot.common.control_flags import HermesTier, read_hermes_tier
 from ossbot.common.paths import Paths
-from ossbot.common.schemas import HoldView, State
+from ossbot.common.schemas import HoldView, SandboxHealthReport, State
 from ossbot.gatekeeper import auto_reissue, db, implement_network, policy, proposals, secret_scan, signing
 from ossbot.gatekeeper.anchors import AnchorClient
 from ossbot.gatekeeper.anomaly import AnomalyHandler, Signal
@@ -94,6 +94,8 @@ class AppContext:
     # the gatekeeper's read-only GitHub client (GETs only), set by main: /v1/work repo checks
     github_reader: Any = None
     telegraph: Any = None  # the opt-in Telegraph service (§14.12.8), set by main
+    # build-env design §9.2 (egress_status.py): sandboxd's last floor-detector report and when it came
+    sandbox_health: tuple[SandboxHealthReport, datetime] | None = None
 
     @property
     def config(self) -> ConfigBundle:

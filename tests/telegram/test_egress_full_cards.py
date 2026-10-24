@@ -1,24 +1,35 @@
 """ADR-0025 cards (build-env design §5.2): the floor hold card per class (classic and rich goldens; the public
 address is never shown, untrusted targets redacted and escaped, [▶️ Resume…] [📜 Logs]) and the digest's
-"🌐 Egress notes" block (absent without notes)."""
+"🌐 Egress notes" block (absent without notes).
+
+Owner controls (build-env design §9.2, AC 10): the five-mode ``/egress`` picker, the ``sandbox_full`` confirm
+panel (every implement-network value, both public-floor states), the open↔full panels and the ``/status``
+egress line (public floor ok and unknown); classic and rich goldens."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from dataclasses import replace
 
 import pytest
 
 from ossbot.common.clock import FakeClock
-from ossbot.common.schemas import EgressNoteRequest, HoldRequest, State
+from ossbot.common.public_floor import FloorEntry, PublicFloorState
+from ossbot.common.schemas import EgressNoteRequest, HoldRequest, SandboxHealthReport, State
+from ossbot.gatekeeper import egress_status
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.egress_notes import EgressNotes
 from ossbot.gatekeeper.telegram import digest, hold_cards
+from ossbot.gatekeeper.telegram.commands import admin
+from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.ui import blocks, classic, rich
 from ossbot.gatekeeper.telegram.ui import kit as k
 from tests.conftest import insert_contribution
 from tests.fakes.holds import floor_request, note_body
 from tests.telegram import golden
+from tests.telegram.reviewkit import labels, latest, sent_with, text, token
+from tests.telegram.tgharness import TgRig, make_rig
 
 SANDBOX = "uid:2002/sandbox"
 GHP = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
@@ -117,3 +128,173 @@ def test_digest_without_notes_has_no_block(ctx: AppContext, clock: FakeClock) ->
     assert "egress_notes" not in [b.name for b in digest.view(ctx, period, stats, {}).blocks]
     del stats["egress_notes"]  # an older stats_json row renders without it
     assert "egress_notes" not in [b.name for b in digest.view(ctx, period, stats, {}).blocks]
+
+
+# ------------------------------------------- owner controls (build-env design §9.2, AC 10)
+ACTOR = "tg:4242"
+PANEL = [
+    "Repo code (fetch, validate and the coder's executor) gets the full public web on ports 80 and 443, also for"
+    " tools that ignore proxies. Other ports, UDP and URLs with a bare IP address stay closed.",
+    "Volume and host limits no longer hold a contribution; you get a quiet note in the daily digest.",
+    "Always blocked, and any attempt holds that contribution and alerts you: your Windows host, your LAN and other"
+    " private ranges, your router's and this laptop's public address, cloud metadata, the distro's own services,"
+    " Telegram, Kiro and GitHub upload hosts.",
+    "Strict repos and the Kiro key containers are unchanged. Gate 2 is unchanged. Approvals stay valid.",
+]
+
+
+@pytest.fixture
+async def rig(ctx: AppContext) -> AsyncIterator[TgRig]:
+    async for r in make_rig(ctx):
+        yield r
+
+
+def _floor(ctx: AppContext, known: bool) -> None:
+    """A public-floor state.json in the test tree: known (answered now) or unknown since 100 s ago."""
+    now = ctx.clock.now().timestamp()
+    last = now if known else now - 400
+    state = PublicFloorState(known=known, last_v4_success=last, generation=3,
+                             v4=[FloorEntry(ip="9.9.9.9", first_seen=last, last_seen=last)])  # fmt: skip
+    ctx.paths.floor_dir.mkdir(parents=True, exist_ok=True)
+    (ctx.paths.floor_dir / "state.json").write_text(state.to_json(), encoding="utf-8")
+
+
+def _mode(ctx: AppContext) -> str:
+    return ctx.control.egress_mode(ctx.config.egress.mode_default)
+
+
+def _switch(ctx: AppContext, mode: str) -> None:
+    egress = ctx.config.egress
+    ctx.control.set_egress_mode(mode, ACTOR, egress.mode_default, egress=egress)  # type: ignore[arg-type]
+
+
+def _golden_view(name: str, view: k.View) -> str:
+    keyboard = "\n".join(" | ".join(row) for row in view.keyboard_labels())
+    body = classic.render(view).text
+    golden.check(f"{name}.html", body + "\n--\n" + keyboard + "\n")
+    doc = blocks.dump(rich.render(replace(view, rich=True)))
+    golden.check(f"{name}.json", json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
+    assert "9.9.9.9" not in body and "9.9.9.9" not in json.dumps(doc)  # the address is never shown
+    return body
+
+
+@pytest.mark.parametrize("known", [True, False], ids=["floor_known", "floor_unknown"])
+def test_picker_offers_five_modes(ctx: AppContext, known: bool) -> None:
+    _floor(ctx, known)
+    view = admin.egress_picker(ctx)
+    body = _golden_view(f"egress_full_picker_{'known' if known else 'unknown'}", view)
+    assert [lbl.split()[0] for row in view.keyboard_labels() for lbl in row][:5] == list(admin.TELEGRAM_EGRESS_MODES)
+    assert ("Public floor: ok" if known else "Public floor: unknown since") in body
+
+
+@pytest.mark.parametrize("impl", ["off", "on_request", "auto"])
+@pytest.mark.parametrize("known", [True, False], ids=["floor_known", "floor_unknown"])
+def test_full_confirm_panel(ctx: AppContext, impl: str, known: bool) -> None:
+    _floor(ctx, known)
+    ctx.control.set_implement_network(impl, ACTOR, ctx.config.egress.mode_default)  # type: ignore[arg-type]
+    view = admin.egress_confirm_view(ctx, "sandbox_full")
+    body = _golden_view(f"egress_full_confirm_{impl}_{'known' if known else 'unknown'}", view)
+    assert body.splitlines()[0] == "🌐 Egress mode open → sandbox_full. Root re-renders the proxy."
+    for line in PANEL:
+        assert line in body
+    raise_line = f"Implement network {impl} → auto (the coder's executor gets the web too)."
+    assert (raise_line in body) is (impl != "auto")
+    state = "known" if known else "not known yet"
+    assert (f"Your public address is checked every minute (now: {state}); while it can't be checked, repo code's"
+            " web pauses and its jobs wait.") in body  # fmt: skip
+    confirm, _cancel = view.rows[0]
+    assert (confirm.label, confirm.style, confirm.single_use) == ("✅ Switch to sandbox_full", "danger", True)
+
+
+def test_open_to_full_and_back_panels(ctx: AppContext) -> None:
+    _floor(ctx, True)
+    _switch(ctx, "sandbox_open")
+    body = _golden_view("egress_full_confirm_from_sandbox_open", admin.egress_confirm_view(ctx, "sandbox_full"))
+    assert "Fetch and validate keep the public web; volume limits hold → are notes." in body
+    _switch(ctx, "sandbox_full")
+    view = admin.egress_confirm_view(ctx, "sandbox_open")
+    body = _golden_view("egress_full_to_sandbox_open", view)
+    assert "Fetch and validate keep the public web; volume limits notes → hold again." in body
+    assert view.rows[0][0].style == "primary"  # narrowing
+
+
+@pytest.mark.parametrize("known", [True, False], ids=["floor_known", "floor_unknown"])
+def test_status_egress_line(ctx: AppContext, known: bool) -> None:
+    _floor(ctx, known)
+    _switch(ctx, "sandbox_full")
+    ctx.control.set_implement_network("auto", ACTOR, ctx.config.egress.mode_default)
+    if known:
+        egress_status.record(ctx, SandboxHealthReport(floor_detector="ok"))
+    view = ui_of(ctx).dashboard.view(None, kind="status")
+    body = classic.render(view).text
+    line = next(ln for ln in body.splitlines() if ln.startswith("🌐 Egress"))
+    golden.check(f"status_egress_line_{'known' if known else 'unknown'}.html", line + "\n")
+    doc = blocks.dump(rich.render(replace(view, rich=True)))
+    golden.check(f"status_egress_line_{'known' if known else 'unknown'}.json",
+                 json.dumps(doc, ensure_ascii=False, indent=1, sort_keys=True) + "\n")  # fmt: skip
+    assert line in classic.render(view).text and "Egress sandbox_full" in json.dumps(doc, ensure_ascii=False)
+    if known:
+        assert line == ("🌐 Egress sandbox_full · implement network auto (active) · floor detector ok · public"
+                        " floor ok")  # fmt: skip
+    else:
+        since = egress_status.since_text(egress_status.public_floor(ctx))
+        assert line == ("🌐 Egress sandbox_full · implement network auto (inactive, public floor unknown) · floor"
+                        f" detector down · public floor unknown since {since} UTC, repo-code web paused")  # fmt: skip
+
+
+def test_a_stale_detector_report_reads_down(ctx: AppContext) -> None:
+    egress_status.record(ctx, SandboxHealthReport(floor_detector="ok"))
+    assert egress_status.floor_detector(ctx) == "ok"
+    ctx.clock.advance(seconds=egress_status.HEALTH_MAX_AGE_S + 1)  # type: ignore[attr-defined]
+    assert egress_status.floor_detector(ctx) == "down"
+
+
+async def test_confirm_switches_and_raises_implement_network(rig: TgRig) -> None:
+    ctx = rig.ctx
+    _floor(ctx, True)
+    await rig.say("/egress sandbox_full")
+    mid = sent_with(rig, "Egress mode open → sandbox_full")
+    assert _mode(ctx) == "open" and ctx.control.implement_network() == "off"  # nothing before the confirm
+    assert rig.buttons(latest(rig, mid))[0][0]["style"] == "danger"
+    await rig.tap(token(rig, mid, "✅ Switch to sandbox_full"), message=mid)
+    assert _mode(ctx) == "sandbox_full" and ctx.control.implement_network() == "auto"
+    events = [r[0] for r in ctx.conn.execute(
+        "SELECT event FROM audit_events WHERE event IN ('egress_mode_changed', 'implement_network_changed')"
+        " ORDER BY seq")]  # fmt: skip
+    assert events == ["egress_mode_changed", "implement_network_changed"]
+    fyis = [json.loads(r[0]).get("text", "") for r in ctx.conn.execute("SELECT payload_json FROM tg_outbox")]
+    assert any("Egress mode open → sandbox_full by" in t and "implement network off → auto" in t for t in fyis)
+
+
+async def test_picker_tap_opens_the_full_panel(rig: TgRig) -> None:
+    await rig.say("/egress")
+    mid = sent_with(rig, "Egress mode")
+    assert "sandbox_full" in labels(rig, mid)
+    await rig.tap(token(rig, mid, "sandbox_full"), message=mid)
+    assert "Volume and host limits no longer hold a contribution" in text(rig, mid)
+
+
+async def test_partial_failure_reply(ctx: AppContext, monkeypatch: pytest.MonkeyPatch) -> None:
+    from ossbot.gatekeeper.telegram.commands.registry import CommandContext
+
+    def broken(*args: object) -> str:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(ctx.control, "_write_implement_network", broken)
+    reply = await admin.egress_confirmed(CommandContext(app=ctx, tg_user_id=4242), "sandbox_full")
+    assert reply.text.startswith("🌐 Egress mode switched; implement network unchanged (off): RuntimeError: database")
+    assert _mode(ctx) == "sandbox_full"
+
+
+async def test_full_not_in_snapshot_is_refused(ctx: AppContext) -> None:
+    from dataclasses import replace as dc_replace
+
+    from ossbot.gatekeeper.telegram.commands.registry import CommandContext
+
+    egress = ctx.config.egress
+    old = egress.model_copy(update={"modes": {m: g for m, g in egress.modes.items() if m != "sandbox_full"}})
+    snap = ctx.snapshots.current
+    ctx.snapshots._current = dc_replace(snap, bundle=dc_replace(snap.bundle, egress=old))
+    reply = await admin.egress_confirmed(CommandContext(app=ctx, tg_user_id=4242), "sandbox_full")
+    assert reply.text.startswith("Not switched: the running config snapshot has no modes.sandbox_full")
+    assert _mode(ctx) == "open"

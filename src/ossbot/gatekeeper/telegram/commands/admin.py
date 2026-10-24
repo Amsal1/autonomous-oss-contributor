@@ -19,10 +19,11 @@ from ossbot.common.clock import to_iso
 from ossbot.common.config import ConfigError, resolve_target
 from ossbot.common.control_flags import CODE_WEB_MODES, EGRESS_MODES, HERMES_TIERS, HermesTier
 from ossbot.common.schemas import IMPLEMENT_NETWORK_VALUES, PrefsUpdate
-from ossbot.gatekeeper import db
+from ossbot.gatekeeper import db, egress_status
 from ossbot.gatekeeper.chat.hermes_surface import allowed_toolsets
 from ossbot.gatekeeper.config_snapshot import ReloadConflict
 from ossbot.gatekeeper.context import AppContext
+from ossbot.gatekeeper.control import EgressModeRefused, ImplementRaiseFailed
 from ossbot.gatekeeper.discovery_prefs import PrefsRefused
 from ossbot.gatekeeper.models_admin import ModelSetError
 from ossbot.gatekeeper.telegram.actions import Tap, action
@@ -45,30 +46,32 @@ DIFF_MAX = 2500
 # ----------------------------------------------------------------------------------- /egress
 class ModeArg(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    mode: Literal["allowlist", "research", "open", "sandbox_open"]
+    mode: Literal["allowlist", "research", "open", "sandbox_open", "sandbox_full"]
 
 
-# The modes /egress offers. sandbox_full (ADR-0025) gets its own confirm panel and the implement-network
-# raise with the owner controls (build-env plan task 21); until then Telegram offers the four modes it has
-# panels for (ossctl's TTY confirm already accepts all five).
-TELEGRAM_EGRESS_MODES = tuple(m for m in EGRESS_MODES if m != "sandbox_full")
+# The modes /egress offers: all five (sandbox_full with its own confirm panel and the implement-network raise,
+# build-env design §9.2).
+TELEGRAM_EGRESS_MODES = EGRESS_MODES
+FULL = "sandbox_full"
+REFUSED_TEXT = {
+    "mode_not_in_snapshot": "the running config snapshot has no modes.sandbox_full (edit config/egress.yaml, then"
+                            " /reload)",
+    "raise_implement_needs_sandbox_full": "only sandbox_full raises implement network",
+}  # fmt: skip
 
 
 def _egress_now(app: AppContext) -> str:
     return app.control.egress_mode(app.config.egress.mode_default)
 
 
-def implement_network_state(value: str, mode: str) -> str:
-    """``on_request (active)``, ``auto (inactive)``, ``off`` (ADR-0024/0025: effective only in sandbox_open and
-    sandbox_full)."""
-    if value == "off":
-        return "off"
-    return f"{value} ({'active' if mode in CODE_WEB_MODES else 'inactive'})"
+implement_network_state = egress_status.implement_network_state
+public_floor_text = egress_status.public_floor_text
 
 
 def egress_picker(app: AppContext) -> k.View:
     cur = _egress_now(app)
     impl = app.control.implement_network()
+    known = egress_status.public_floor(app).known
     opts = [
         k.button(m + (" ✅" if m == cur else ""), "egress_pick", {"mode": m}, single_use=True)
         for m in TELEGRAM_EGRESS_MODES
@@ -76,10 +79,12 @@ def egress_picker(app: AppContext) -> k.View:
     impl_opts = [k.button(f"impl: {v}" + (" ✅" if v == impl else ""), "implnet_pick", {"value": v}, single_use=True)
                  for v in IMPLEMENT_NETWORK_VALUES]  # fmt: skip
     return k.plain("picker", (k.Const("🌐 "), k.Bold(k.Const("Egress mode")), k.Const(f" · now {cur}")),
-                   k.line("Applies to research, Hermes, agent LLM and catalog traffic; only sandbox_open also"
-                          " gives fetch and validate web_public (strict repos keep the allowlist)."),
-                   k.line(f"Implement network: {implement_network_state(impl, cur)} · the coder's executor gets"
-                          " web_public only when you allow it"),
+                   k.line("Applies to research, Hermes, agent LLM and catalog traffic; sandbox_open and sandbox_full"
+                          " also give repo code (fetch, validate, the coder's executor) the public web; strict repos"
+                          " keep the allowlist."),
+                   k.line(f"Public floor: {public_floor_text(app)}"),
+                   k.line(f"Implement network: {implement_network_state(impl, cur, known)} · the coder's executor"
+                          " gets web_public only when you allow it"),
                    rows=[*picker_rows(opts), *picker_rows(impl_opts)])  # fmt: skip
 
 
@@ -95,14 +100,48 @@ def egress_changes(app: AppContext, cur: str, new: str) -> list[str]:
     return out
 
 
+OPEN_FULL = {  # build-env design §9.2: the volume-guard policy is the only difference between the two web modes
+    ("sandbox_open", FULL): "Fetch and validate keep the public web; volume limits hold → are notes.",
+    (FULL, "sandbox_open"): "Fetch and validate keep the public web; volume limits notes → hold again.",
+}
+
+
+def full_confirm_view(app: AppContext) -> k.View:
+    """The ``sandbox_full`` confirm panel, the text of build-env design §9.2 (``danger``)."""
+    cur, impl = _egress_now(app), app.control.implement_network()
+    known = egress_status.public_floor(app).known
+    lines = [k.line(f"🌐 Egress mode {cur} → sandbox_full. Root re-renders the proxy.")]
+    if (cur, FULL) in OPEN_FULL:
+        lines.append(k.line(OPEN_FULL[(cur, FULL)]))
+    lines.append(k.line("Repo code (fetch, validate and the coder's executor) gets the full public web on ports 80"
+                        " and 443, also for tools that ignore proxies. Other ports, UDP and URLs with a bare IP"
+                        " address stay closed."))  # fmt: skip
+    if impl != "auto":
+        lines.append(k.line(f"Implement network {impl} → auto (the coder's executor gets the web too)."))
+    lines += [
+        k.line("Volume and host limits no longer hold a contribution; you get a quiet note in the daily digest."),
+        k.line("Always blocked, and any attempt holds that contribution and alerts you: your Windows host, your LAN"
+               " and other private ranges, your router's and this laptop's public address, cloud metadata, the"
+               " distro's own services, Telegram, Kiro and GitHub upload hosts."),
+        k.line(f"Your public address is checked every minute (now: {'known' if known else 'not known yet'}); while"
+               " it can't be checked, repo code's web pauses and its jobs wait."),
+        k.line("Strict repos and the Kiro key containers are unchanged. Gate 2 is unchanged. Approvals stay valid."),
+    ]  # fmt: skip
+    return confirm_panel(lines, confirm_button("✅ Switch to sandbox_full", "egress_confirm", FULL, style="danger"))
+
+
 def egress_confirm_view(app: AppContext, mode: str) -> k.View:
+    if mode == FULL:
+        return full_confirm_view(app)
     cur = _egress_now(app)
     widens = EGRESS_MODES.index(mode) > EGRESS_MODES.index(cur)
     egress = app.config.egress
     lines = [k.line(f"🌐 Egress mode {cur} → {mode}. Root re-renders the proxy.")]
     lines += [k.line(f"• {c}") for c in egress_changes(app, cur, mode)[:8]] or [k.line("No category changes.")]
     code = egress.repo_code_change(cur, mode)
-    if code == "+web_public":
+    if (cur, mode) in OPEN_FULL:
+        lines.append(k.line(OPEN_FULL[(cur, mode)]))
+    elif code == "+web_public":
         a = egress.anomaly
         lines.append(k.line(f"Repo code (fetch/validate) gets web_public, guarded by the per-job anomaly limits"
                             f" (≤ {a.max_hosts} hosts, ↑ {a.max_upload_mb} MB, ↓ {a.max_download_mb} MB);"
@@ -132,7 +171,7 @@ def implnet_confirm_view(app: AppContext, value: str) -> k.View:
     what = IMPLNET_WHAT[value]
     if value == "auto":
         active = mode in CODE_WEB_MODES
-        what += " (now: sandbox_open, so active)." if active else f" (now: {mode}, so inactive until you switch)."
+        what += f" (now: {mode}, so active)." if active else f" (now: {mode}, so inactive until you switch)."
     lines = [k.line(f"🌐 Implement network {cur} → {value}."), k.line(what)]
     if value != "off":
         a = app.config.egress.anomaly
@@ -191,9 +230,20 @@ async def egress_pick(tap: Tap) -> str:
 async def egress_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
     if arg not in TELEGRAM_EGRESS_MODES:
         return Reply("This button is no longer valid.")
-    egress = ctx.app.config.egress
-    previous = ctx.app.control.set_egress_mode(arg, ctx.actor, egress.mode_default, egress=egress)
-    return Reply(f"🌐 {b('Egress mode')} {esc(previous)} → {b(arg)}. Root applies it to the proxy now.")
+    app = ctx.app
+    egress = app.config.egress
+    impl = app.control.implement_network()
+    try:  # build-env §9.2: sandbox_full also raises implement network to auto (its own transaction and audit)
+        previous = app.control.set_egress_mode(arg, ctx.actor, egress.mode_default, egress=egress,
+                                               raise_implement=arg == FULL)  # fmt: skip
+    except EgressModeRefused as exc:
+        return Reply(f"Not switched: {esc(REFUSED_TEXT.get(exc.code, exc.code))}.")
+    except ImplementRaiseFailed as exc:
+        return Reply(f"🌐 Egress mode switched; implement network unchanged ({esc(exc.implement_previous)}):"
+                     f" {esc(exc.error)}")  # fmt: skip
+    raised = arg == FULL and impl != "auto"
+    tail = f"; implement network {esc(impl)} → {b('auto')}" if raised else ""
+    return Reply(f"🌐 {b('Egress mode')} {esc(previous)} → {b(arg)}{tail}. Root applies it to the proxy now.")
 
 
 # ----------------------------------------------------------------------------------- /hermes

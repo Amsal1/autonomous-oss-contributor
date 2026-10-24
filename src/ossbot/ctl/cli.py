@@ -201,8 +201,11 @@ def status() -> None:
         try:
             health = _sandboxd("GET", "/v1/health")
             data["sandbox_running_jobs"] = health.get("running")
+            data["floor_detector"] = health.get("floor_detector")  # build-env design §9.3
         except (httpx.HTTPError, OSError, ValueError):
             data["sandbox_running_jobs"] = None  # not root, or sandboxd stopped
+            data["floor_detector"] = None
+        data["public_floor"] = public_floor.read_state().as_dict()  # known, since, a count; never an address
     _show(data)
 
 
@@ -435,17 +438,38 @@ def egress_mode(
     breaches are notes; floor attempts hold in every mode. Runner and gatekeeper egress never change."""
     if mode not in EGRESS_MODES:
         _fail(f"usage: ossctl egress mode {'|'.join(EGRESS_MODES)}", 2)
+    if mode == "sandbox_full":  # build-env design §9.3: what the switch does, then the TTY word
+        typer.echo("sandbox_full: repo code (fetch, validate, the coder's executor) gets the full public web on"
+                   " ports 80/443, also for proxy-unaware tools; implement network is raised to auto; volume limits"
+                   " become notes; floor attempts hold in every mode; strict repos, the Kiro key containers and"
+                   " gate 2 are unchanged.")  # fmt: skip
     _confirm(f"EGRESS {mode.upper()}")
-    code, data = api("POST", "/v1/control/egress-mode", {"mode": mode})
+    body: dict[str, Any] = {"mode": mode, **({"raise_implement": True} if mode == "sandbox_full" else {})}
+    code, data = api("POST", "/v1/control/egress-mode", body)
     if code != 200:
         _fail(f"egress mode change refused ({code}): {data}")
+    if isinstance(data, dict) and data.get("implement_network_error"):
+        typer.echo(f"Egress mode switched; implement network unchanged: {data['implement_network_error']}", err=True)
     _show(data)
 
 
+def _floor_fields() -> dict[str, Any]:
+    """``floor_detector`` (sandboxd's meter; None when sandboxd isn't reachable as this user) and
+    ``public_floor`` (known, since, entry count; never an address), build-env design §9.3."""
+    _, health = _sandboxd_status("GET", "/v1/health")
+    detector = health.get("floor_detector") if isinstance(health, dict) else None
+    return {"floor_detector": detector, "public_floor": public_floor.read_state().as_dict()}
+
+
 @egress_app.command("status")
-def egress_status() -> None:
-    """The active egress mode, the snapshot default (``egress.mode_default``), the implement network and the
-    public-address floor (ADR-0025: known, since, the entry count; never an address)."""
+def egress_status(
+    show_public: Annotated[bool, typer.Option("--show-public", help="root, TTY only: print the addresses")] = False,
+) -> None:
+    """The active egress mode, the snapshot default (``egress.mode_default``), the implement network, the floor
+    detector and the public-address floor (ADR-0025: known, since, the entry count; ``--show-public`` as root on
+    a terminal also prints the addresses, for the owner only)."""
+    if show_public and (os.geteuid() != 0 or not (sys.stdin.isatty() and sys.stdout.isatty())):
+        _fail("--show-public runs as root on a terminal only (sudo ossctl egress status --show-public)", 2)
     code, data = api("GET", "/v1/control/egress-mode")
     if code != 200:
         _fail(f"gatekeeper answered {code}: {data}")
@@ -453,7 +477,28 @@ def egress_status() -> None:
     if icode == 200 and isinstance(data, dict) and isinstance(idata, dict):
         data = {**data, "implement_network": idata.get("value"), "implement_network_active": idata.get("active")}
     if isinstance(data, dict):
-        data = {**data, "public_floor": public_floor.read_state().as_dict()}
+        data = {**data, **_floor_fields()}
+        if show_public:
+            try:
+                data["public_floor_addresses"] = public_floor.read_public()
+            except (OSError, ValueError) as exc:
+                data["public_floor_addresses"] = f"unreadable ({type(exc).__name__})"
+    _show(data)
+
+
+@egress_app.command("notes")
+def egress_notes(
+    cid: Annotated[str | None, typer.Option(help="only this contribution (c_...)")] = None,
+    limit: Annotated[int, typer.Option(min=1, max=200, help="at most this many, newest first")] = 50,
+) -> None:
+    """Egress notes (read-only; ADR-0025): volume notes of sandbox_full web jobs and floor notes (loopback names,
+    the HashiCorp checkpoint beacon). Nothing was held for them; the daily digest counts them."""
+    if cid is not None and re.fullmatch(CID_ARG_RE, cid) is None:
+        _fail("usage: ossctl egress notes [--cid c_XXXXXXXXXX]", 2)
+    query = f"?limit={limit}" + (f"&cid={cid}" if cid else "")
+    code, data = api("GET", f"/v1/egress/notes{query}")
+    if code != 200:
+        _fail(f"gatekeeper answered {code}: {data}")
     _show(data)
 
 

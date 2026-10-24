@@ -34,8 +34,10 @@ async def test_picker_then_confirm_switches_the_mode(rig: TgRig) -> None:
     target = "allowlist" if start != "allowlist" else "research"
     await rig.say("/egress")
     mid = sent_with(rig, "Egress mode")
-    assert [lbl.split()[0] for lbl in labels(rig, mid)][:4] == ["allowlist", "research", "open", "sandbox_open"]
-    assert "only sandbox_open also gives fetch and validate web_public" in text(rig, mid)
+    assert [lbl.split()[0] for lbl in labels(rig, mid)][:5] == ["allowlist", "research", "open", "sandbox_open",
+                                                                "sandbox_full"]  # fmt: skip
+    assert ("sandbox_open and sandbox_full also give repo code (fetch, validate, the coder's executor) the public"
+            " web; strict repos keep the allowlist.") in text(rig, mid)  # fmt: skip
     assert f"{start} ✅" in labels(rig, mid)
     await rig.tap(token(rig, mid, target), message=mid)
     body = text(rig, mid)

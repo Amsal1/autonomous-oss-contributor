@@ -22,10 +22,9 @@ from typing import TYPE_CHECKING, Any
 
 from ossbot.common import models as model_cfg
 from ossbot.common.clock import from_iso, to_iso
-from ossbot.common.control_flags import CODE_WEB_MODES
 from ossbot.common.hashing import sha256_text
 from ossbot.common.ids import new_token
-from ossbot.gatekeeper import db, ratelimit
+from ossbot.gatekeeper import db, egress_status, ratelimit
 from ossbot.gatekeeper.anchors import last_anchor_time
 from ossbot.gatekeeper.outbox import OutboxRow, SendError
 from ossbot.gatekeeper.telegram.prefs import UxPrefs
@@ -96,14 +95,10 @@ class Dashboard:
         now = ctx.clock.now()
         prefs = UxPrefs(conn, ctx.clock)
         control = ctx.control.view()
-        egress = ctx.control.egress_mode(ctx.config.egress.mode_default)
         tier = ctx.control.hermes_tier(ctx.config.policy.hermes.capability_tier_default)
         rich_pref = prefs.get("rich_views", ctx.config.telegram.rich_views_default)
         size = ctx.discovery_prefs.effective(None).autonomous_max_class
-        impl = ctx.control.implement_network()  # ADR-0024/0025: effective only in sandbox_open/sandbox_full
-        inactive = " (inactive)" if impl != "off" and egress not in CODE_WEB_MODES else ""
-        facts = (f"Egress: {egress} · Impl. network: {impl}{inactive} · Hermes: {tier} · Rich views: {rich_pref}"
-                 f" · Auto size ≤ {size}")  # fmt: skip
+        facts = f"Hermes: {tier} · Rich views: {rich_pref} · Auto size ≤ {size}"
         out: list[k.Line] = []
         if control.state != "running":  # why it is paused or killed, and since when (old /status line)
             reason: list[k.Span] = [k.Const("Reason: "), k.Text(control.reason or "-", 200)]
@@ -111,6 +106,8 @@ class Dashboard:
             if since is not None:
                 reason += [k.Const(" · since "), k.Time(_unix(since), since.strftime("%d %b %H:%M"))]
             out.append(tuple(reason))
+        # build-env design §9.2: mode, implement network (active or not), floor detector, public floor
+        out.append(k.line(egress_status.status_line(ctx)))
         out.append(k.line(facts))
         running = conn.execute(
             "SELECT cid, stage, started_at FROM stage_runs WHERE status = 'running' ORDER BY started_at"

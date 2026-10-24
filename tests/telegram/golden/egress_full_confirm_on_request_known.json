@@ -1,0 +1,33 @@
+{
+ "blocks": [
+  {
+   "text": "🌐 Egress mode open → sandbox_full. Root re-renders the proxy.",
+   "type": "paragraph"
+  },
+  {
+   "text": "Repo code (fetch, validate and the coder's executor) gets the full public web on ports 80 and 443, also for tools that ignore proxies. Other ports, UDP and URLs with a bare IP address stay closed.",
+   "type": "paragraph"
+  },
+  {
+   "text": "Implement network on_request → auto (the coder's executor gets the web too).",
+   "type": "paragraph"
+  },
+  {
+   "text": "Volume and host limits no longer hold a contribution; you get a quiet note in the daily digest.",
+   "type": "paragraph"
+  },
+  {
+   "text": "Always blocked, and any attempt holds that contribution and alerts you: your Windows host, your LAN and other private ranges, your router's and this laptop's public address, cloud metadata, the distro's own services, Telegram, Kiro and GitHub upload hosts.",
+   "type": "paragraph"
+  },
+  {
+   "text": "Your public address is checked every minute (now: known); while it can't be checked, repo code's web pauses and its jobs wait.",
+   "type": "paragraph"
+  },
+  {
+   "text": "Strict repos and the Kiro key containers are unchanged. Gate 2 is unchanged. Approvals stay valid.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

@@ -747,6 +747,89 @@ def check_egress_mode() -> Result:
     return Result(PASS, "egress mode", detail)
 
 
+# ---------------------------------------------------------- build-env floors (design §4.1, §4.4, §4.7, N5)
+RESOLVER_PROBE_NAMES = ("example.com", "github.com")
+FAKE_IP_HINT = (
+    "a Windows VPN/TUN client in fake-IP DNS mode answers 198.18.0.0/15 (or a private address): turn"
+    " its fake-IP mode off or exclude WSL, else repo code can't reach those hosts (they are floors)"
+)
+FLOORLOG_UNIT = "ossbot-floorlog.service"
+
+
+def _getaddrinfo(name: str) -> list[str]:
+    return sorted({str(info[4][0]) for info in socket.getaddrinfo(name, 443, proto=socket.IPPROTO_TCP)})
+
+
+def floor_answers(answers: dict[str, list[str]]) -> list[str]:
+    """``name -> address`` pairs whose address is inside a floor range (REQUIRED_DENIED_CIDRS, both families)."""
+    import ipaddress  # noqa: PLC0415
+
+    from ossbot.common.egress_log import REQUIRED_DENIED_CIDRS  # noqa: PLC0415
+
+    nets = [ipaddress.ip_network(c) for c in REQUIRED_DENIED_CIDRS]
+    out = []
+    for name, addrs in answers.items():
+        for raw in addrs:
+            try:
+                ip = ipaddress.ip_address(raw.split("%", 1)[0])
+            except ValueError:
+                continue
+            if any(ip.version == n.version and ip in n for n in nets):
+                out.append(f"{name} -> {ip}")
+    return out
+
+
+def check_resolver_floor(resolve: Callable[[str], list[str]] = _getaddrinfo) -> Result:
+    """N5: as root, ``example.com`` and ``github.com`` through the host resolver (the ``/etc/resolv.conf``
+    nameservers squid uses); a floor-range answer (fake-IP VPN DNS) means those hosts are unreachable."""
+    name = "resolver_returns_floor_addresses"
+    if not _is_root():
+        return Result(SKIP, name, "needs root", "sudo ossctl doctor")
+    answers: dict[str, list[str]] = {}
+    for host in RESOLVER_PROBE_NAMES:
+        try:
+            answers[host] = resolve(host)
+        except OSError as exc:
+            return Result(WARN, name, f"lookup of {host} failed ({type(exc).__name__})",
+                          "check /etc/resolv.conf and the WSL DNS")  # fmt: skip
+    hits = floor_answers(answers)
+    if hits:
+        return Result(WARN, name, f"resolver_returns_floor_addresses: {'; '.join(hits[:6])}", FAKE_IP_HINT)
+    return Result(PASS, name, "example.com and github.com resolve outside the floors")
+
+
+def check_public_floor(read: Callable[[], Any] | None = None) -> Result:
+    """§4.7: the public-address floor is known (else repo code's web is paused: WARNING ``public_floor_unknown``)."""
+    from ossbot.common import public_floor  # noqa: PLC0415
+
+    status = (read or public_floor.read_state)()
+    if status.known:
+        return Result(PASS, "public floor", f"known, {status.entries} entr{'y' if status.entries == 1 else 'ies'}")
+    since = "" if status.since is None else f" since {datetime.fromtimestamp(status.since, UTC):%H:%M} UTC"
+    return Result(WARN, "public floor", f"public_floor_unknown{since}: repo code's web is paused",
+                  "systemctl status ossbot-pubip.timer; journalctl -u ossbot-pubip")  # fmt: skip
+
+
+def check_floorlog() -> Result:
+    """ADR-0025: the kernel floor-log reader runs (the drops block without it; the alerts need it)."""
+    out = _run(["/usr/bin/systemctl", "is-active", FLOORLOG_UNIT])
+    state = out.stdout.strip() or out.stderr.strip()[-80:] or "unknown"
+    return Result(PASS if state == "active" else FAIL, "floor log reader", f"{FLOORLOG_UNIT} {state}",
+                  f"systemctl restart {FLOORLOG_UNIT}")  # fmt: skip
+
+
+def check_host_floor(live: Callable[[], Iterable[str]] | None = None) -> Result:
+    """§4.1: host addresses outside the static floor ranges (bridged/mirrored WSL): floored as /32s, WARNING
+    ``host_floor_outside_static`` because a change of them is a firewall drift (soft kill, then re-render)."""
+    from ossbot.ctl.render import host_floor_cidrs  # noqa: PLC0415
+
+    extra = list((live or host_floor_cidrs)())
+    if extra:
+        hint = "expected in WSL bridged/mirrored mode; NAT mode keeps every host address in a static range"
+        return Result(WARN, "host floor", f"host_floor_outside_static: {', '.join(extra[:6])}", hint)
+    return Result(PASS, "host floor", "every host address is inside a static floor range")
+
+
 def check_squid_verifiable() -> Result:
     """The drift check skips a live squid.conf whose snapshot the installed schema rejects (after a
     deploy, until the gatekeeper and proxy restart); say so instead of passing silently."""
@@ -1085,6 +1168,7 @@ def run(quick: bool = False, probes: bool = False) -> list[Result]:
         steps.append(check_proxy_dns)
     steps += [
         check_firewall, check_squid_verifiable, check_gatekeeper, check_egress_mode, check_hermes_tier,
+        check_public_floor, check_floorlog, check_host_floor, check_resolver_floor,
         lambda: check_github(quick),
         lambda: check_github_rate_limit(quick),
         lambda: check_commit_signing(quick),

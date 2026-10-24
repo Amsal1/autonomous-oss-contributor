@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from ossbot.common.clock import Clock, to_iso
-from ossbot.common.config import EgressConfig
+from ossbot.common.config import OPTIONAL_MODES, EgressConfig
 from ossbot.common.control_flags import (
     CODE_WEB_MODES,
     EGRESS_MODE_FILE,
@@ -62,6 +62,24 @@ class ControlConflict(RuntimeError):
 
 class ModeChanged(RuntimeError):
     """control_checkpoint(): dry_run differs from the submission snapshot (R4-N2)."""
+
+
+class EgressModeRefused(Exception):
+    """An egress-mode switch refused before anything was written (build-env design §9.3): 409
+    ``mode_not_in_snapshot``, 422 ``raise_implement_needs_sandbox_full``."""
+
+    def __init__(self, status: int, code: str, detail: str = "") -> None:
+        super().__init__(code)
+        self.status, self.code, self.detail = status, code, detail
+
+
+class ImplementRaiseFailed(RuntimeError):
+    """The egress mode was switched (flag, audit, FYI), but raising implement network to ``auto`` failed; the
+    mode stays (design §9.2). The caller tells the human: "Egress mode switched; implement network unchanged"."""
+
+    def __init__(self, previous_mode: EgressMode, implement_previous: ImplementNetwork, error: str) -> None:
+        super().__init__(error)
+        self.previous_mode, self.implement_previous, self.error = previous_mode, implement_previous, error
 
 
 @dataclass(frozen=True)
@@ -321,13 +339,25 @@ class ControlService:
         """The active mode: the flag, else the snapshot's ``mode_default``; unparseable = allowlist."""
         return read_egress_mode(self.paths.control_dir, default)
 
-    def set_egress_mode(self, mode: EgressMode, actor: str, default: EgressMode, *, egress: EgressConfig) -> EgressMode:
+    def set_egress_mode(
+        self, mode: EgressMode, actor: str, default: EgressMode, *, egress: EgressConfig, raise_implement: bool = False
+    ) -> EgressMode:
         """Human-confirmed (ossctl TTY, Telegram /egress): write the flag, audit, FYI.
 
         Root applies it (ossbot-egress.path -> ossbot-egress-apply re-renders squid and restarts the
         proxy). Returns the previous mode. Only sandbox_open/sandbox_full change what fetch/validate reach
         (web_public; strict repos never), and the FYI says so. A switch invalidates nothing: approvals
-        don't bind the egress mode, and holds, prefs and discovered targets are untouched (design §12.2)."""
+        don't bind the egress mode, and holds, prefs and discovered targets are untouched (design §12.2).
+
+        build-env design §9.2/§9.3: ``sandbox_full`` needs ``modes.sandbox_full`` in the snapshot (409
+        ``mode_not_in_snapshot`` otherwise). ``raise_implement`` (only with ``sandbox_full``, else 422) then
+        raises implement network to ``auto`` when it is lower, in its own transaction with its own audit, and one
+        FYI names both. If that second step fails the mode stays (the main intent) and ``ImplementRaiseFailed``
+        tells the caller. Leaving ``sandbox_full`` never changes implement network."""
+        if raise_implement and mode != "sandbox_full":
+            raise EgressModeRefused(422, "raise_implement_needs_sandbox_full")
+        if mode in OPTIONAL_MODES and mode not in egress.modes:
+            raise EgressModeRefused(409, "mode_not_in_snapshot", f"the config snapshot has no modes.{mode}")
         with db.transaction(self.conn):
             previous = self.egress_mode(default)
             write_flag(
@@ -335,10 +365,24 @@ class ControlService:
                 {"mode": mode, "actor": actor, "ts": to_iso(self.clock.now())},
             )
             self.audit.append(actor, "egress_mode_changed", {"from": previous, "to": mode})
+        impl = self.implement_network()
+        if raise_implement and IMPLEMENT_NETWORK_VALUES.index(impl) < IMPLEMENT_NETWORK_VALUES.index("auto"):
+            try:
+                self._write_implement_network("auto", actor, mode)
+            except Exception as exc:
+                log.error("egress mode %s set, but implement network could not be raised from %s: %s", mode, impl,
+                          type(exc).__name__, extra={"event": "implement_network_raise_failed"})  # fmt: skip
+                self._egress_fyi(previous, mode, actor, egress)
+                raise ImplementRaiseFailed(previous, impl, f"{type(exc).__name__}: {exc}"[:300]) from exc
+            self.notify(f"🌐 Egress mode {previous} → {mode} by {actor}; implement network {impl} → auto")
+            return previous
+        self._egress_fyi(previous, mode, actor, egress)
+        return previous
+
+    def _egress_fyi(self, previous: str, mode: str, actor: str, egress: EgressConfig) -> None:
         self.notify(
             f"🌐 Egress mode {previous} → {mode} by {actor} (fetch/validate {egress.repo_code_change(previous, mode)})"
         )
-        return previous
 
     # ------------------------------------------------- implement network (ADR-0024)
     def implement_network(self) -> ImplementNetwork:
@@ -365,6 +409,19 @@ class ControlService:
         if value not in IMPLEMENT_NETWORK_VALUES:
             raise ValueError(f"implement_network: unknown value {value!r}")
         mode = self.egress_mode(default)
+        previous = self._write_implement_network(value, actor, mode)
+        if previous == value:
+            return previous
+        if value == "off":
+            state = "the coder's executor never gets a network"
+        else:
+            state = "active" if mode in CODE_WEB_MODES else "inactive until egress mode sandbox_open"
+        self.notify(f"🌐 Implement network {previous} → {value} by {actor} ({state})")
+        return previous
+
+    def _write_implement_network(self, value: ImplementNetwork, actor: str, mode: str) -> ImplementNetwork:
+        """One transaction: the row and the audit ``implement_network_changed``; a no-op writes nothing.
+        Returns the previous value (no FYI: the callers send their own)."""
         with db.transaction(self.conn):
             previous = self.implement_network()
             if previous == value:
@@ -374,11 +431,6 @@ class ControlService:
                 (value, actor, to_iso(self.clock.now())),
             )
             self.audit.append(actor, "implement_network_changed", {"from": previous, "to": value, "egress_mode": mode})
-        if value == "off":
-            state = "the coder's executor never gets a network"
-        else:
-            state = "active" if mode in CODE_WEB_MODES else "inactive until egress mode sandbox_open"
-        self.notify(f"🌐 Implement network {previous} → {value} by {actor} ({state})")
         return previous
 
     # ------------------------------------------------------ Hermes tier (§15.5, PLAN 23a)

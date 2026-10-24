@@ -12,11 +12,15 @@
    "type": "paragraph"
   },
   {
-   "text": "Applies to research, Hermes, agent LLM and catalog traffic; only sandbox_open also gives fetch and validate web_public (strict repos keep the allowlist).",
+   "text": "Applies to research, Hermes, agent LLM and catalog traffic; sandbox_open and sandbox_full also give repo code (fetch, validate, the coder's executor) the public web; strict repos keep the allowlist.",
    "type": "paragraph"
   },
   {
-   "text": "Implement network: on_request (active) · the coder's executor gets web_public only when you allow it",
+   "text": "Public floor: unknown, repo-code web paused",
+   "type": "paragraph"
+  },
+  {
+   "text": "Implement network: on_request (inactive, public floor unknown) · the coder's executor gets web_public only when you allow it",
    "type": "paragraph"
   }
  ],

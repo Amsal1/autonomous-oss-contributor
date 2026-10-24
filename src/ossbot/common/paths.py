@@ -130,3 +130,8 @@ class Paths:
     @property
     def secrets_dir(self) -> Path:
         return self.etc / "secrets"
+
+    # the public-address floor (build-env design §4.7; root:root 0755, files 0644; common/public_floor.FLOOR_DIR)
+    @property
+    def floor_dir(self) -> Path:
+        return self.etc / "proxy" / "floor"

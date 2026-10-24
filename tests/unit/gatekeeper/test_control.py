@@ -205,7 +205,8 @@ async def test_egress_mode_api_is_operator_only(ctx: AppContext) -> None:
         assert (await c.post("/v1/control/egress-mode", json={"mode": "fetch"})).status_code == 400
         resp = await c.post("/v1/control/egress-mode", json={"mode": "research"})
     assert resp.status_code == 200
-    assert resp.json() == {"mode": "research", "default": "open", "previous": "open"}
+    assert resp.json() == {"mode": "research", "default": "open", "previous": "open",
+                           "implement_network_previous": None, "implement_network_error": None}  # fmt: skip
     assert _audits(ctx, "egress_mode_changed")[-1] == {"from": "open", "to": "research"}
 
 

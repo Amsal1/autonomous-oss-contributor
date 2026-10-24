@@ -26,6 +26,7 @@ from ossbot.common.schemas import (
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 from ossbot.gatekeeper.chat.hermes_surface import allowed_toolsets
+from ossbot.gatekeeper.control import ImplementRaiseFailed
 
 router = APIRouter(prefix="/v1")
 OP, WK, SB, RQ = Role.OPERATOR, Role.WORKER, Role.SANDBOX, Role.REQUESTER
@@ -123,11 +124,21 @@ async def get_egress_mode(request: Request, caller: Annotated[Caller, Depends(re
 async def set_egress_mode(
     request: Request, body: EgressModeRequest, caller: Annotated[Caller, Depends(require(OP))]
 ) -> EgressModeView:
-    """§11.5: ossctl asks for the TTY confirm first; root re-renders squid from the flag."""
+    """§11.5: ossctl asks for the TTY confirm first; root re-renders squid from the flag. build-env §9.3:
+    ``raise_implement`` only with ``sandbox_full`` (422), ``sandbox_full`` only when the snapshot has it (409
+    ``mode_not_in_snapshot``); a failed raise still answers 200 with the mode switched and the error."""
     c = ctx(request)
     default = c.config.egress.mode_default
-    previous = c.control.set_egress_mode(body.mode, caller.actor, default, egress=c.config.egress)  # audits, FYIs
-    return EgressModeView(mode=c.control.egress_mode(default), default=default, previous=previous)
+    impl_before = c.control.implement_network()
+    try:
+        previous = c.control.set_egress_mode(body.mode, caller.actor, default, egress=c.config.egress,
+                                             raise_implement=body.raise_implement)  # audits, FYIs  # fmt: skip
+    except ImplementRaiseFailed as exc:
+        return EgressModeView(mode=c.control.egress_mode(default), default=default, previous=exc.previous_mode,
+                              implement_network_error=exc.error)  # fmt: skip
+    raised = body.raise_implement and c.control.implement_network() != impl_before
+    return EgressModeView(mode=c.control.egress_mode(default), default=default, previous=previous,
+                          implement_network_previous=impl_before if raised else None)  # fmt: skip
 
 
 def _implement_network_view(request: Request, previous: ImplementNetwork | None = None) -> ImplementNetworkView:

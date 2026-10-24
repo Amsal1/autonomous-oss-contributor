@@ -116,6 +116,8 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     # build-env design §5.2 (ADR-0025): sandboxd records egress notes (data, no transition); read-only list
     ("POST", "/v1/contributions/{cid}/egress-notes"): frozenset({S}),
     ("GET", "/v1/egress/notes"): frozenset({W, O}),
+    # build-env design §9.2: sandboxd's floor-detector report for /status (data only, gates nothing)
+    ("POST", "/v1/egress/health"): frozenset({S}),
 }
 UIDS = {O: UID_OPERATOR, W: UID_WORKER, S: UID_SANDBOX, R: UID_REQUESTER}
 

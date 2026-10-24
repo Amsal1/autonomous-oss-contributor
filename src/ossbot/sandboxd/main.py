@@ -52,6 +52,7 @@ PROXY_ACCESS_LOG = Path("/srv/ossbot/logs/proxy/access.log")
 FLOOR_LOG = Path("/srv/ossbot/logs/floor/floor.log")  # ossbot-floorlog (root:ossbox 0640, ADR-0025)
 SQUID_CONF = Path("/etc/ossbot/proxy/squid.conf")  # the live floors the meter classifies against
 IMPLEMENT_EGRESS_TIMEOUT_S = 5.0
+HEALTH_REPORT_TIMEOUT_S = 2.0  # the floor-detector report for /status (build-env design §9.2)
 
 
 class GatekeeperClient:
@@ -122,6 +123,12 @@ class GatekeeperClient:
         unattributed proxy floor drop and the public-address check. A message, never a go action."""
         with self._client() as c:
             c.post("/v1/notify", json={"text": text[:500], "priority": priority}).raise_for_status()
+
+    def egress_health(self, body: dict[str, Any]) -> None:
+        """``POST /v1/egress/health`` (role sandbox; build-env design §9.2): the floor detector for /status. It runs
+        on the meter's thread, so the timeout is short: a slow gatekeeper never delays the floor checks long."""
+        with uds_client(self.sock, timeout=httpx.Timeout(HEALTH_REPORT_TIMEOUT_S)) as c:
+            c.post("/v1/egress/health", json=body).raise_for_status()
 
     def egress_note(self, cid: str, body: dict[str, Any]) -> None:
         """``POST /v1/contributions/{cid}/egress-notes`` (role sandbox; ADR-0025). Raises ``HoldError`` like
@@ -231,6 +238,7 @@ def main() -> int:
         PROXY_ACCESS_LOG, paths.logs_dir / "runs", lambda: anomaly_limits(paths.snapshot_root),
         floor_log=FLOOR_LOG, floors=lambda: floors_from_squid_conf(SQUID_CONF), public_floor_dir=FLOOR_DIR,
         current_mode=lambda: egress_mode_now(paths, "allowlist"), notify=gatekeeper.notify,
+        report_health=gatekeeper.egress_health,
     )  # fmt: skip
     jobs = JobService(
         store=store, runtime=runtime, pins=lambda: load_image_pins(DEFAULT_LOCK_COPY),

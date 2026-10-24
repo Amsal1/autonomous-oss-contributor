@@ -92,6 +92,72 @@ def test_mode_sandbox_open_needs_the_tty_confirm(monkeypatch: pytest.MonkeyPatch
     assert sent == [("POST", "/v1/control/egress-mode", {"mode": "sandbox_open"})]
 
 
+def test_mode_sandbox_full_raises_implement_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """build-env design §9.3: TTY word EGRESS SANDBOX_FULL, the body asks for the implement-network raise."""
+    view = {"mode": "sandbox_full", "default": "open", "previous": "open", "implement_network_previous": "off",
+            "implement_network_error": None}  # fmt: skip
+    sent = _api(monkeypatch, (200, view))
+    refused = CliRunner().invoke(cli.app, ["egress", "mode", "sandbox_full"])
+    assert refused.exit_code == 2 and sent == []
+    words: list[str] = []
+    monkeypatch.setattr(cli, "_confirm", words.append)
+    ok = CliRunner().invoke(cli.app, ["egress", "mode", "sandbox_full"])
+    assert ok.exit_code == 0, ok.output
+    assert words == ["EGRESS SANDBOX_FULL"] and "implement network is raised to auto" in ok.output
+    assert sent == [("POST", "/v1/control/egress-mode", {"mode": "sandbox_full", "raise_implement": True})]
+
+
+def test_mode_sandbox_full_reports_a_failed_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    view = {"mode": "sandbox_full", "default": "open", "previous": "open", "implement_network_previous": None,
+            "implement_network_error": "RuntimeError: database is locked"}  # fmt: skip
+    _api(monkeypatch, (200, view))
+    monkeypatch.setattr(cli, "_confirm", lambda word: None)
+    ok = CliRunner().invoke(cli.app, ["egress", "mode", "sandbox_full"])
+    assert ok.exit_code == 0
+    assert "Egress mode switched; implement network unchanged: RuntimeError: database is locked" in ok.output
+    _api(monkeypatch, (409, {"error": "mode_not_in_snapshot"}))
+    refused = CliRunner().invoke(cli.app, ["egress", "mode", "sandbox_full"])
+    assert refused.exit_code == 1 and "mode_not_in_snapshot" in refused.output
+
+
+@pytest.mark.parametrize(("health", "shown"), [((200, {"floor_detector": "ok"}), "ok"), ((0, "unreachable"), None)])
+def test_status_shows_the_floor_detector(monkeypatch: pytest.MonkeyPatch, health: tuple[int, Any],
+                                         shown: str | None) -> None:  # fmt: skip
+    _api(monkeypatch, (200, {"mode": "sandbox_full", "default": "open", "previous": None}))
+    _sbx(monkeypatch, {("GET", "/v1/health"): health})
+    result = CliRunner().invoke(cli.app, ["egress", "status"])
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["floor_detector"] == shown
+
+
+def test_show_public_is_root_and_tty_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _api(monkeypatch, (200, {"mode": "open", "default": "open", "previous": None}))
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    refused = CliRunner().invoke(cli.app, ["egress", "status", "--show-public"])
+    assert refused.exit_code == 2 and "root on a terminal only" in refused.output and sent == []
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    no_tty = CliRunner().invoke(cli.app, ["egress", "status", "--show-public"])  # CliRunner: not a TTY
+    assert no_tty.exit_code == 2 and sent == []
+
+
+def test_status_without_show_public_never_prints_addresses(monkeypatch: pytest.MonkeyPatch) -> None:
+    _api(monkeypatch, (200, {"mode": "open", "default": "open", "previous": None}))
+    _sbx(monkeypatch, {})
+    monkeypatch.setattr(cli.public_floor, "read_public", lambda: ["9.9.9.9/32"])
+    result = CliRunner().invoke(cli.app, ["egress", "status"])
+    assert result.exit_code == 0 and "9.9.9.9" not in result.output
+
+
+def test_notes_lists_the_gatekeepers_notes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = _api(monkeypatch, (200, [{"cid": CID, "kind": "volume"}]))
+    every = CliRunner().invoke(cli.app, ["egress", "notes"])
+    assert every.exit_code == 0 and json.loads(every.output)[0]["kind"] == "volume"
+    one = CliRunner().invoke(cli.app, ["egress", "notes", "--cid", CID, "--limit", "5"])
+    assert one.exit_code == 0
+    assert sent == [("GET", "/v1/egress/notes?limit=50", None), ("GET", f"/v1/egress/notes?limit=5&cid={CID}", None)]
+    assert CliRunner().invoke(cli.app, ["egress", "notes", "--cid", "nope"]).exit_code == 2
+
+
 def test_unknown_mode_lists_all_five(monkeypatch: pytest.MonkeyPatch) -> None:
     sent = _api(monkeypatch, (200, {}))
     monkeypatch.setattr(cli, "_confirm", lambda word: None)
