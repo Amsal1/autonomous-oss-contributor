@@ -92,8 +92,9 @@ Component details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 - **The kill switch is checked at every stage, job and outbound action** and survives reboots
   (`/kill`, `ossctl kill`, `scripts\kill.ps1`).
 - **Repo code runs only in credential-free sandboxes** with a hostname egress allowlist (the public web
-  only in the opt-in egress mode `sandbox_open`, metered per job); the container that holds the Kiro
-  key never runs repo code (split coder).
+  only in the opt-in egress modes `sandbox_open` and `sandbox_full`, metered per job, behind floors that
+  block your host, LAN and the distro's services in every mode); the container that holds the Kiro key
+  never runs repo code (split coder).
 - **A hard size ceiling** (`config/policy.yaml` `diff.max_files: 80`, `max_changed_lines: 3000`,
   `max_test_lines: 3000`) refuses runaway diffs. It cannot be raised from Telegram.
 - **No exposure.** No webhook, tunnel, Mini App or inbound port; Telegram uses long polling.
@@ -239,9 +240,24 @@ package and GitHub allowlists, and gatekeeper and runner egress is identical in 
 | `research` | plus the public web | Kiro endpoints only | package and GitHub allowlists |
 | `open` (default) | plus the public web | plus the public web (web search for unknowns) | package and GitHub allowlists |
 | `sandbox_open` | plus the public web | plus the public web | plus the public web, metered per job |
+| `sandbox_full` | plus the public web | plus the public web | plus the public web, also for proxy-unaware tools; volume limits are quiet notes |
 
 Switch with `/egress <mode>` or `ossctl egress mode <mode>` (confirm required, audited). An unreadable
 mode flag falls back to `allowlist`.
+
+**Full build network (`sandbox_full`, ADR-0025).** `/egress sandbox_full` (or the picker button, then
+the two-tap confirm; `ossctl egress mode sandbox_full` with the TTY word `EGRESS SANDBOX_FULL`) gives
+repo code (fetch, validate and the coder's executor) the public web on ports 80 and 443, also for tools
+that ignore proxies (a JVM, git, curl in a build script, toolchain installers), and raises implement
+network to `auto`. Builds then install the toolchains and dependencies they need instead of failing on
+the network; `needs_network` only ends an item while the coder's executor is offline. Volume and host
+limits no longer hold a contribution (you get a quiet note in the daily digest; `ossctl egress notes`).
+The floors stay: your Windows host, your LAN and other private ranges, your router's and this laptop's
+public address, cloud metadata, the distro's own services, Telegram, Kiro and GitHub upload hosts are
+blocked in every mode, and any attempt holds that contribution and alerts you. While the public address
+can't be checked, repo code's web pauses and its jobs wait. Strict repos, the Kiro key containers and
+gate 2 are unchanged; approvals stay valid. `/status` shows the mode, implement network, the floor
+detector and the public floor.
 
 **Egress for repo code (`sandbox_open`).** Open discovery finds repos whose builds fetch from hosts no
 egress category lists. `/egress sandbox_open` lets their fetch and validate jobs reach the public web;
@@ -265,12 +281,12 @@ floors and per-job limits as fetch and validate:
 | `on_request` | only for a 🌐 Rerun with network you confirm |
 | `auto` | every implement run of a non-strict repo, fix rounds on your open PRs included |
 
-It works only while the egress mode is `sandbox_open` (otherwise it behaves as `off`), never for an
+It works only while the egress mode is `sandbox_open` or `sandbox_full` (otherwise it behaves as `off`), never for an
 `egress: strict` repo, and never for the container that holds the Kiro key. Change it in `/egress`
 (the `impl:` row, or `/egress implement <value>`, then a confirm tap) or with
 `ossctl egress implement-network <value>` (TTY confirm). Every change is audited and announced;
 open approvals stay valid. `/status`, `/egress` and `ossctl egress status` show it, marked `(inactive)`
-outside `sandbox_open`. A breach of the limits holds only that contribution, as above (ADR-0024).
+outside `sandbox_open`/`sandbox_full` and while the public address is unknown. A breach of the limits holds only that contribution, as above (ADR-0024).
 
 **🌐 Rerun with network.** 🌐 is offered for `needs_network` and for validation-loop failures where the
 coder reported sandbox gaps; other failures are rerun with /work. The failure FYI then ends with a
