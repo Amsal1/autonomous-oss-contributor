@@ -291,3 +291,31 @@ Evidence after the redeploy (24446ff): `ossbot-firewall --check` exit 0; the thr
 in 14 s (a strict validate job, `pool_strict`, the base allowlist path; 205 s timeout before);
 `tests/system/test_proxy_log_bytes.sh` all 17 checks passed, the upload included (1 048 576 bytes sent, curl exit
 0, `%>st` 1 051 870). Details in `docs/VERIFICATION.md` "Post-v1 build-env FEAT-001 (F1c)".
+
+**ADR-0025 floors (build-env FEAT-002, 2026-10-24).** I5 is amended by ADR-0025 (mode `sandbox_full`, netshim,
+the floors as the safety line). Facts this ADR's layers rest on, checked live after the deploy:
+- **V-D1** Docker 29.9.1's embedded resolver (`127.0.0.11`, from `--dns 127.0.0.1`) answers container names and
+  forwards every other query to `127.0.0.1:53` in the container's own netns, also on `--internal` networks: in
+  every networked repo-code shape of `tests/system/test_floor_reach.sh`, `getent hosts example.com` answers from
+  netshim's `127.70.0.0/16` (L-2), and no query leaves the container (the WSL resolver gets no answer from a
+  sandbox).
+- **V-D2** Docker sets `net.ipv4.ip_unprivileged_port_start=0` in every container netns, so netshim binds
+  `:53`, `:80` and `:443` as uid 10001 with `--cap-drop ALL`; `ping_group_range` lets uid 10001 open ICMP datagram
+  sockets (the floor test's echoes get no reply), while raw and packet sockets stay `EPERM`.
+- **V-S1** squid 6.14 `annotate_transaction` with `%{ossbot_floor}note` logs the mark of the deny line that
+  matched (`dst`, `dst_loop`, `name`, `quiet`, `literal`, `code`); the floor test finds each expected mark per
+  mode and pool.
+- **V-S4 / L-11** SIGHUP is squid's reconfigure: a rename inside the directory-bound `/etc/squid/floor/` plus
+  SIGHUP applies the new `code-web.txt` and `public.txt` (floor test step 4b on a test proxy). A single-file bind
+  would keep the old inode, hence the directory bind.
+- **L-10** squid logs `%<a` (the server address) also for a CONNECT whose upstream SYN the kernel dropped
+  (`TCP_TUNNEL/503 <address>`, observed with a name of the owner's public address on a test proxy whose
+  `public.txt` lacked it: `OSSBOT-PUBFLOOR` dropped the connect). The supplementary server-address row of the
+  meter therefore also sees such a rebinding; the kernel lines stay the authoritative signal.
+- The kernel layer behind squid: from a test proxy's netns, NEW connections to the live gateway, RFC1918, CGNAT,
+  link-local, the public address (`OSSBOT-PUBFLOOR`) and the distro-local addresses (`OSSBOT-IN`) all time out,
+  `1.1.1.1:443` connects, and `ossbot-floorlog` writes a `tx` line for each; the live proxy's `px` lines are the
+  only kernel lines that hold.
+- **L-8** a no-cache image build on `docker0` that fetches from PyPI succeeds with the new `OSSBOT-FWD` drops for
+  `10.211.0.0/24` and `10.214.0.0/16`, and neither a build nor a root-created network reaches a floor; no
+  exemption was needed.

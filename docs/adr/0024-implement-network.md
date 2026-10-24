@@ -1,5 +1,6 @@
 # ADR-0024: Owner-controlled network for the coder's executor (amends I5, extends ADR-0023)
 Status: Accepted (owner decision 2026-10-23) · Design: DESIGN.md §8.3, §9.2, §9.8, §10.4, §11.5, §13.6, §14.13.1; .ossbot-local/postv1/sandbox-network/design.md · Amends: ADR-0005 (I5), ADR-0023 · Related: ADR-0017, ADR-0003
+Amended by ADR-0025 (2026-10-24): the decision table reads "egress mode ∈ {sandbox_open, sandbox_full}" where it reads "sandbox_open"; switching to `sandbox_full` raises the setting to `auto` when lower; a networked agent-exec also starts the in-sandbox netshim, and its floor attempts hold the contribution in every mode.
 
 ## Context
 The split coder (§10.4) runs every command of the coder in `agent-exec`, a credential-free container with `--network none`, so builds work only from the caches fetch prepared. Real repos keep needing things fetch did not foresee (a JDK, a plugin, a tool downloaded at test time); the kestra items c_D1D18SPWQ5 and c_D1D18TQJ75 failed `needs_network` with finished edits. The 2026-10-23 diagnosis fixed the sandbox gaps inside the old design and advised against network for agent-exec (its section (d)). On 2026-10-23 the owner decided otherwise: he wants to open the network when needed and rerun failures, "best to allow network and let it handle itself".
