@@ -42,10 +42,10 @@ def _age(path: Path, days: float) -> None:
 def _roots(tmp_path: Path) -> gc.Roots:
     roots = gc.Roots(
         tmp=tmp_path / "tmp", artifacts=tmp_path / "artifacts", run_logs=tmp_path / "runs",
-        proxy_logs=tmp_path / "proxy", hermes_sessions=tmp_path / "hermes" / "sessions",
+        proxy_logs=tmp_path / "proxy", floor_logs=tmp_path / "floor", hermes_sessions=tmp_path / "hermes" / "sessions",
         state_file=tmp_path / "var" / "gc" / "last.json", lock=tmp_path / "versions.lock.yaml",
     )  # fmt: skip
-    for d in (roots.tmp, roots.artifacts, roots.run_logs, roots.proxy_logs, roots.hermes_sessions):
+    for d in (roots.tmp, roots.artifacts, roots.run_logs, roots.proxy_logs, roots.floor_logs, roots.hermes_sessions):
         d.mkdir(parents=True)
     roots.lock.write_text(
         f'base_images:\n  ubuntu_24_04: "{BASE}"\nimages:\n  proxy:\n    digest: "{PIN}"\n', encoding="utf-8"
@@ -219,6 +219,22 @@ def test_proxy_logs_keep_recent_rotations_and_never_the_live_file(tmp_path: Path
     assert _store(report, "proxy-logs").count == 1
     assert sorted(x.name for x in p.iterdir()) == ["access.log", "access.log.20261020T001000Z", "access.log.dir",
                                                    "cache.log", "cache.log.20260901T001000Z"]  # fmt: skip
+
+
+def test_rotated_floor_logs_go_with_the_proxy_logs(tmp_path: Path) -> None:
+    """build-env §4.4: ``ossctl gc`` removes rotated ``floor.log.<stamp>`` with the proxy-log retention, never
+    the live ``floor.log``."""
+    roots = _roots(tmp_path)
+    f = roots.floor_logs
+    for name in ("floor.log", "floor.log.20260901T001000Z", "floor.log.20261020T001000Z", "other.log"):
+        (f / name).write_text("x\n")
+        _age(f / name, 400)
+    _age(f / "floor.log.20261020T001000Z", 29)
+    assert [e.name for e in gc.select_floor_logs(f, 30, NOW)] == ["floor.log.20260901T001000Z"]
+    report = _run(roots, ["proxy-logs"])
+    store = _store(report, "proxy-logs")
+    assert store.count == 1 and "floor logs 1" in store.detail
+    assert sorted(x.name for x in f.iterdir()) == ["floor.log", "floor.log.20261020T001000Z", "other.log"]
 
 
 def test_hermes_sessions_only_regular_files_in_sessions_dir(tmp_path: Path) -> None:

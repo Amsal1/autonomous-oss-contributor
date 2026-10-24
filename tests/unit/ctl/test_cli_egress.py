@@ -79,12 +79,12 @@ def test_mode_sandbox_open_needs_the_tty_confirm(monkeypatch: pytest.MonkeyPatch
     assert sent == [("POST", "/v1/control/egress-mode", {"mode": "sandbox_open"})]
 
 
-def test_unknown_mode_lists_all_four(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unknown_mode_lists_all_five(monkeypatch: pytest.MonkeyPatch) -> None:
     sent = _api(monkeypatch, (200, {}))
     monkeypatch.setattr(cli, "_confirm", lambda word: None)
     bad = CliRunner().invoke(cli.app, ["egress", "mode", "sandbox-open"])
     assert bad.exit_code == 2 and sent == []
-    assert "allowlist|research|open|sandbox_open" in bad.output
+    assert "allowlist|research|open|sandbox_open|sandbox_full" in bad.output
 
 
 CID = "c_01ABCDEFGH"
@@ -164,13 +164,13 @@ def test_jobs_reads_the_summaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Pat
     assert [d["run_id"] for d in json.loads(one.output)] == ["r0", "r1", "r3"]
 
 
-def test_help_texts_list_the_four_modes() -> None:
-    assert EGRESS_MODES == ("allowlist", "research", "open", "sandbox_open")
+def test_help_texts_list_the_five_modes() -> None:
+    assert EGRESS_MODES == ("allowlist", "research", "open", "sandbox_open", "sandbox_full")
     env = {"COLUMNS": "200", "TERMINAL_WIDTH": "200"}
     group = CliRunner().invoke(cli.app, ["egress", "--help"], env=env)
     mode = CliRunner().invoke(cli.app, ["egress", "mode", "--help"], env=env)
     assert group.exit_code == 0 and mode.exit_code == 0
-    assert "allowlist | research | open | sandbox_open" in mode.output
+    assert "allowlist | research | open | sandbox_open | sandbox_full" in mode.output
     assert "sandbox_open also gives fetch/validate web_public" in " ".join(mode.output.split())
     top = CliRunner().invoke(cli.app, ["--help"], env=env)
-    assert "egress mode (allowlist | research | open | sandbox_open)" in top.output
+    assert "egress mode (allowlist | research | open | sandbox_open | sandbox_full)" in " ".join(top.output.split())

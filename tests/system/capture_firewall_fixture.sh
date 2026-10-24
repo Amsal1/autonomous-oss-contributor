@@ -19,9 +19,11 @@ PY=${OSSBOT_FIXTURE_PY:-/root/.venvs/ossbot/bin/python}
 [[ -x $PY ]] || PY=/opt/ossbot/app/.venv/bin/python
 SCRIPT=$(mktemp)
 TMP_OUT=$(mktemp)
+PUBLIC_FILE=
+# shellcheck disable=SC2317  # invoked indirectly, by the EXIT trap
 cleanup() {
   ip netns delete "$NETNS" >/dev/null 2>&1
-  rm -f "$SCRIPT" "$TMP_OUT"
+  rm -f "$SCRIPT" "$TMP_OUT" "$PUBLIC_FILE"
 }
 trap cleanup EXIT
 
@@ -36,7 +38,14 @@ live_ossbot() {
 }
 before=$(live_ossbot)
 
-if ! PYTHONPATH=$REPO/src "$PY" -m ossbot.ctl.render firewall --print --part all >"$SCRIPT"; then
+# ADR-0025 floors: a fixed public floor (TEST-NET-3, never the owner's address) and a fixed host /32
+# outside the static floors (TEST-NET-1), so OSSBOT-PUBFLOOR and the host rules of OSSBOT-FWD are recorded
+FIXTURE_PUBLIC=203.0.113.7/32
+FIXTURE_HOST=192.0.2.10/32
+PUBLIC_FILE=$(mktemp)
+printf '240.0.0.1/32\n%s\n' "$FIXTURE_PUBLIC" >"$PUBLIC_FILE"
+if ! PYTHONPATH=$REPO/src "$PY" -m ossbot.ctl.render firewall --print --part all \
+  --public-file "$PUBLIC_FILE" --host-cidr "$FIXTURE_HOST" >"$SCRIPT"; then
   fail "rendering the plan from $REPO/src failed"
   finish
 fi
@@ -60,6 +69,8 @@ ns=$(awk '$1 == "nameserver" {print $2; exit}' /etc/resolv.conf)
   printf '# %s (%s)\n' "$(iptables --version)" "$(dpkg-query -W -f '${Version}' iptables 2>/dev/null)"
   printf '# ns %s\n' "$ns"
   for user in "${SERVICE_USERS[@]}"; do printf '# uid %s %s\n' "$user" "$(id -u "$user")"; done
+  printf '# host %s\n' "$FIXTURE_HOST"
+  printf '# public %s\n' "$FIXTURE_PUBLIC"
   for fam in iptables ip6tables; do
     for table in filter mangle; do
       printf '## %s %s\n' "$fam" "$table"
@@ -68,6 +79,7 @@ ns=$(awk '$1 == "nameserver" {print $2; exit}' /etc/resolv.conf)
   done
 } >"$TMP_OUT" || { fail "listing the scratch netns failed"; finish; }
 
+# shellcheck disable=SC2317  # invoked indirectly, through check
 every_chain_listed() {
   local c
   while read -r c; do

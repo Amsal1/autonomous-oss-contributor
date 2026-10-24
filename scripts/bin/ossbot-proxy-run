@@ -3,7 +3,8 @@
 # DESIGN 11.2). Runs squid in the root-managed container 'ossbot-proxy' in the foreground:
 # ossbot-egress at 10.212.0.2, no published ports, ip_forward=0 and tcp_mtu_probing=1 (PLPMTUD:
 # squid originates every upstream TCP connection, F1c path-MTU black hole) in its netns, unprivileged
-# (uid 13 = proxy), read-only rootfs, the rendered conf read-only, logs to /srv/ossbot/logs/proxy.
+# (uid 13 = proxy), read-only rootfs, the rendered conf and the public-floor directory read-only, logs to
+# /srv/ossbot/logs/proxy.
 # The image is the digest pinned in /etc/ossbot/versions.lock.yaml (images.proxy.digest).
 set -euo pipefail
 
@@ -17,6 +18,10 @@ digest=$(awk '
 ' "$LOCK")
 [[ $digest =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "ossbot-proxy-run: no proxy digest pinned in $LOCK" >&2; exit 1; }
 [[ -f /etc/ossbot/proxy/squid.conf ]] || { echo "ossbot-proxy-run: squid.conf not rendered" >&2; exit 1; }
+# ADR-0025 public-address floor: squid reads public.txt and code-web.txt from this directory (the render
+# creates the sentinels); bound as a DIRECTORY so ossbot-pubip's atomic renames are visible after SIGHUP
+FLOOR=/etc/ossbot/proxy/floor
+[[ -f $FLOOR/public.txt && -f $FLOOR/code-web.txt ]] || { echo "ossbot-proxy-run: $FLOOR not rendered" >&2; exit 1; }
 
 exec /usr/bin/docker run --rm --name ossbot-proxy --pull never \
   --network ossbot-egress --ip 10.212.0.2 --sysctl net.ipv4.ip_forward=0 \
@@ -27,6 +32,7 @@ exec /usr/bin/docker run --rm --name ossbot-proxy --pull never \
   --tmpfs /var/spool/squid:rw,nosuid,nodev,noexec,mode=1777,size=64m \
   --tmpfs /tmp:rw,nosuid,nodev,noexec,mode=1777,size=64m \
   --mount type=bind,src=/etc/ossbot/proxy/squid.conf,dst=/etc/squid/squid.conf,readonly \
+  --mount "type=bind,src=$FLOOR,dst=/etc/squid/floor,readonly" \
   --mount type=bind,src=/srv/ossbot/logs/proxy,dst=/var/log/squid \
   --label ossbot.role=proxy --log-driver local \
   "ossbot/proxy@$digest"

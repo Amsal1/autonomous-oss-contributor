@@ -17,11 +17,21 @@ TCP MSS (``OSSBOT-MSS-FWD/-OUT/-IN``, F1c: a path-MTU black hole to Fastly stall
 
 Egress modes (§11.5, CR-002): ``squid`` renders base lists plus the grants of the active mode (the
 ``egress-mode`` control flag, else the snapshot's ``mode_default``). Every render first renders all
-three modes and refuses if an invariant differs (denied networks and names, IP-literal and DNS
-lines, fetch/validate and runner/gatekeeper lists), and each context is asserted on its own (fetch,
-validate, runner, gatekeeper never ``web_public``; ``allowlist`` has none; agent-llm/catalog only in
-``open``). ``--check`` (host part) also compares the live squid.conf with the render for the current
-mode (``firewall_drift:squid_mode``).
+five modes and refuses if an invariant differs (denied networks and names, IP-literal and DNS
+lines, fetch/validate and runner/gatekeeper lists, the ADR-0025 floors), and each context is asserted
+on its own (fetch, validate, runner, gatekeeper never ``web_public``; ``allowlist`` has none;
+agent-llm/catalog only in the LLM web modes; fetch/validate only in ``sandbox_open``/``sandbox_full``,
+which render identically but the label). ``--check`` (host part) also compares the live squid.conf with
+the render for the current mode (``firewall_drift:squid_mode``).
+
+Floors (build-env design §4, ADR-0025): squid's marked sandbox denies ahead of the port checks, the split
+``denied_dst``/``denied_dst_loop`` ACL with the live host addresses (``host_floor_cidrs``) and the
+public-address floor file, ``code_denied`` for repo code; in the kernel the source-split LOG + DROP
+rules of ``OSSBOT-IN``, the proxy floor of ``OSSBOT-FWD`` per floor range and host address, and
+``OSSBOT-PUBFLOOR`` from ``/etc/ossbot/proxy/floor/public.txt``. ``--apply`` holds the root-only floor
+lock exclusively for every part touching ``OSSBOT-FWD``/``OSSBOT-PUBFLOOR``, ``--check`` (with the squid
+drift check) shared with a 10 s timeout, ``render squid``'s creation of the floor files exclusively
+(carried criterion C-M1, ``ossbot.common.floor_lock``).
 
 Usage (root): ``python -I -m ossbot.ctl.render firewall --apply|--check|--print [--part P]`` and
 ``python -I -m ossbot.ctl.render squid [--out PATH] [--hermes-login] [--mode M]``.
@@ -39,7 +49,8 @@ import socket
 import subprocess
 import sys
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -57,7 +68,25 @@ from ossbot.common.config import (
     helm_hosts,
     parse_bundle,
 )
-from ossbot.common.control_flags import EGRESS_MODE_FILE, EGRESS_MODES, EgressMode, read_egress_mode
+from ossbot.common.control_flags import (
+    CODE_WEB_MODES,
+    EGRESS_MODE_FILE,
+    EGRESS_MODES,
+    LLM_WEB_MODES,
+    EgressMode,
+    read_egress_mode,
+)
+from ossbot.common.egress_log import IPV4_FLOOR_CIDRS, LOOP_CIDRS, REQUIRED_DENIED_CIDRS
+from ossbot.common.floor_lock import CHECK_TIMEOUT_S, LOCK_PATH, WRITE_TIMEOUT_S, floor_lock
+from ossbot.common.public_floor import (
+    CODE_WEB_FILE,
+    FLOOR_DIR,
+    PUBLIC_FILE,
+    code_web_text,
+    parse_public_text,
+    public_text,
+    read_public,
+)
 from ossbot.common.snapshot import read_current, read_snapshot
 
 PROXY_IP = "10.212.0.2"
@@ -93,19 +122,26 @@ DEFAULT_CONTROL_DIR = Path("/var/lib/ossbot/control")
 # Present only while `ossctl hermes login` has the IdC login window open (root-only /run, tmpfs, so a
 # reboot clears it); squid_drift reads the real window state from it, not from the conf under test.
 LOGIN_WINDOW_FLAG = Path("/run/ossbot-hermes-login-window")
-# §11.5 invariants no egress mode relaxes, asserted by the renderer on top of the data (decision B3).
-REQUIRED_DENIED_CIDRS = (
-    "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8",
-    "0.0.0.0/8", "::/128", "::1/128", "fc00::/7", "fe80::/10",
-)  # fmt: skip
+# §11.5 invariants no egress mode relaxes, asserted by the renderer on top of the data (decision B3). The
+# address floors (REQUIRED_DENIED_CIDRS, from ossbot.common.egress_log: build-env design §4.1) are UNIONED
+# with the snapshot's always_denied.cidrs, so config can only add and a snapshot older than ADR-0025 renders
+# the full floors right after the deploy.
 REQUIRED_DENIED_DOMAINS = ("uploads.github.com", "telegra.ph", "api.telegra.ph", "edit.telegra.ph")
+# ADR-0025: names no repo-code pool reaches in any mode (unioned with config code_denied, every kiro_* host and
+# the IdC login hosts); the always-denied telemetry name that is a note, when the snapshot doesn't say.
+REQUIRED_CODE_DENIED = (
+    "api.telegram.org", ".telegram.org", "t.me", ".t.me", "telegram.me", ".telegram.me", ".kiro.dev",
+)  # fmt: skip
+CODE_DENIED_KIRO_CATEGORIES = ("kiro_core", "kiro_telemetry", "kiro_download")
+DEFAULT_NOTIFY_ONLY = ("checkpoint-api.hashicorp.com",)
 # fetch + validate, and agent-exec under implement_network (ADR-0024): untrusted code, web_public only in
-# sandbox_open
+# sandbox_open and sandbox_full (ADR-0025)
 CODE_POOL_SRC = "pool_fetch"
-CODE_WEB_MODE = "sandbox_open"
 LLM_POOL_SRC = "pool_llm"
-LLM_WEB_MODES = ("open", "sandbox_open")
 TRUSTED_CALLERS = ("runner", "gatekeeper")  # identical egress in every mode
+# The public-address floor files (build-env design §4.7) as squid sees them in its directory bind.
+SQUID_PUBLIC_FILE_LINE = 'acl denied_dst dst "/etc/squid/floor/public.txt"'
+SQUID_CODE_WEB_LINE = 'acl code_web_ok src "/etc/squid/floor/code-web.txt"'
 # A mode switch writes the flag first and the root apply re-renders a moment later: a conf older
 # than a flag this young is "apply pending", not drift (the watchdog re-checks within 9 s anyway).
 MODE_APPLY_GRACE_S = 60.0
@@ -169,8 +205,9 @@ def _dst(category: str, cats: Mapping[str, list[str]]) -> str | None:
 
 
 def mode_lists(egress: EgressConfig, mode: EgressMode) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """(sandbox profile -> categories, host caller -> categories) for ``mode``: base + the mode's grants."""
-    grants: dict[str, list[str]] = {str(k): v for k, v in egress.modes.get(mode, {}).items()}
+    """(sandbox profile -> categories, host caller -> categories) for ``mode``: base + the mode's grants
+    (a snapshot without ``modes.sandbox_full`` gives it sandbox_open's grants, ADR-0025)."""
+    grants: dict[str, list[str]] = egress.mode_grants(mode)
 
     def plus(base: Sequence[str], name: str) -> list[str]:
         return [*base, *[c for c in grants.get(name, []) if c not in base]]
@@ -180,12 +217,73 @@ def mode_lists(egress: EgressConfig, mode: EgressMode) -> tuple[dict[str, list[s
     return profiles, callers
 
 
+def collapse_domains(names: Iterable[str]) -> list[str]:
+    """Lower-cased, deduplicated, sorted, and without any name a dotted entry already covers (squid's
+    dstdomain refuses ``t.me`` next to ``.t.me``: the dotted form matches the domain and every subdomain)."""
+    uniq = sorted(set(_dedupe(names)))
+    dotted = {n for n in uniq if n.startswith(".")}
+
+    def covered(name: str) -> bool:
+        bare = name.lstrip(".")
+        labels = bare.split(".")
+        parents = {"." + ".".join(labels[i:]) for i in range(1, len(labels))}
+        return (not name.startswith(".") and "." + bare in dotted) or bool(parents & dotted)
+
+    return [n for n in uniq if not covered(n)]
+
+
+def code_denied_names(bundle: ConfigBundle) -> list[str]:
+    """ADR-0025: config ``code_denied`` plus the built-ins, every kiro_* host and the IdC login hosts."""
+    egress = bundle.egress
+    kiro = [h for c in CODE_DENIED_KIRO_CATEGORIES for h in egress.categories.get(c, [])]
+    return collapse_domains([*egress.code_denied, *REQUIRED_CODE_DENIED, *kiro, *idc_login_hosts(bundle.profile)])
+
+
+def denied_cidr_union(egress: EgressConfig) -> list[str]:
+    """The snapshot's always_denied.cidrs in their order, then every missing built-in floor (config only adds)."""
+    out = [str(ipaddress.ip_network(c, strict=True)) for c in egress.always_denied.cidrs]
+    out += [c for c in (str(ipaddress.ip_network(r)) for r in REQUIRED_DENIED_CIDRS) if c not in out]
+    return list(dict.fromkeys(out))
+
+
+def _run_ip(argv: Sequence[str]) -> str:
+    proc = subprocess.run(list(argv), capture_output=True, text=True, check=False, timeout=10)
+    if proc.returncode != 0:
+        raise RenderError(f"{' '.join(argv)} failed ({proc.returncode}): {proc.stderr.strip()[:200]}")
+    return proc.stdout
+
+
+_INET_RE = re.compile(r"\binet (\d{1,3}(?:\.\d{1,3}){3})/\d{1,2}\b")
+_DEFAULT_VIA_RE = re.compile(r"^default via (\d{1,3}(?:\.\d{1,3}){3})\b", re.MULTILINE)
+
+
+def host_floor_cidrs(
+    floor_cidrs: Iterable[str] = IPV4_FLOOR_CIDRS,
+    resolv_conf: Path = Path("/etc/resolv.conf"),
+    run: Callable[[Sequence[str]], str] = _run_ip,
+) -> tuple[str, ...]:
+    """The live host addresses as /32s (build-env design §4.1, BE-2.3): every distro address (``ip -4 -o addr
+    show``), the default gateway (the Windows host in WSL NAT mode) and the resolv.conf nameservers, minus those
+    already inside a static floor range; sorted. A failing ``ip`` fails the render (fail closed)."""
+    found = set(_INET_RE.findall(run(["ip", "-4", "-o", "addr", "show"])))
+    found.update(_DEFAULT_VIA_RE.findall(run(["ip", "-4", "route", "show", "default"])))
+    found.update(nameservers(resolv_conf))
+    statics = [ipaddress.ip_network(c) for c in floor_cidrs]
+    keep = set()
+    for raw in found:
+        ip = ipaddress.IPv4Address(raw)
+        if not any(ip.version == n.version and ip in n for n in statics):
+            keep.add(ip)
+    return tuple(f"{ip}/32" for ip in sorted(keep))
+
+
 def squid_context(
     bundle: ConfigBundle,
     snapshot_hash: str,
     ns: Sequence[str],
     hermes_login: bool = False,
     mode: EgressMode | None = None,
+    host_cidrs: Sequence[str] = (),
 ) -> dict[str, Any]:
     egress = bundle.egress
     mode = mode or egress.mode_default
@@ -228,6 +326,13 @@ def squid_context(
     if bundle.telegram.telegraph.enabled and TELEGRAPH_CATEGORY in cats and "gatekeeper" in callers:
         pre_deny.append({"port": "gatekeeper", "src": "src_host", "dst": f"cat_{TELEGRAPH_CATEGORY}"})
     referenced = {r["dst"][4:] for r in [*rules, *pre_deny] if r["dst"].startswith("cat_")}
+    # never render anything but literal networks into the dst ACLs
+    denied_cidrs = denied_cidr_union(egress)
+    loop = [str(ipaddress.ip_network(c)) for c in LOOP_CIDRS]
+    hosts = [str(ipaddress.IPv4Network(h, strict=True)) for h in host_cidrs]
+    if any(ipaddress.ip_network(h).prefixlen != 32 for h in hosts):
+        raise RenderError(f"host floor entries must be /32s: {hosts}")
+    notify_only = _dedupe(egress.always_denied.notify_only or DEFAULT_NOTIFY_ONLY)
     ctx = {
         "snapshot_hash": snapshot_hash,
         "mode": mode,
@@ -238,9 +343,17 @@ def squid_context(
         "categories": {k: v for k, v in cats.items() if k in referenced},
         "denied_domains": _dedupe(egress.always_denied.domains),
         "ip_literal_patterns": list(IP_LITERAL_PATTERNS),
-        # never render anything but literal networks into the dst ACL
-        "denied_cidrs": [str(ipaddress.ip_network(c, strict=True)) for c in egress.always_denied.cidrs],
+        "denied_cidrs": denied_cidrs,
+        # ADR-0025 floors (build-env design §4.3)
+        "loop_cidrs": loop,
+        "denied_cidrs_non_loop": [c for c in denied_cidrs if c not in loop],
+        "host_cidrs": hosts,
+        "notify_only": notify_only,
+        "code_pool_src": CODE_POOL_SRC,
+        "code_pool_cidrs": [SQUID_POOLS[0][1], STRICT_POOL[1]],
+        "code_denied": code_denied_names(bundle),
         "rules": rules,
+        "sandbox_rules": [r for r in rules if r["port"] == "sandbox"],
         "pre_deny_rules": pre_deny,
     }
     assert_context_invariants(ctx)
@@ -253,15 +366,18 @@ def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
     for r in rules:
         if r["src"] == STRICT_POOL_SRC and r["dst"] == "all":
             raise RenderError("strict fetch/validate jobs (pool_strict) must never get web_public")
-        if r["src"] == CODE_POOL_SRC and r["dst"] == "all" and ctx["mode"] != CODE_WEB_MODE:
-            raise RenderError(f"fetch/validate/agent-exec get web_public only in egress mode {CODE_WEB_MODE}")
+        if r["src"] == CODE_POOL_SRC and r["dst"] == "all" and ctx["mode"] not in CODE_WEB_MODES:
+            raise RenderError(
+                f"fetch/validate/agent-exec get web_public only in egress modes {'/'.join(CODE_WEB_MODES)}"
+            )
         if r["port"] in TRUSTED_CALLERS and r["dst"] == "all":
             raise RenderError(f"host caller {r['port']} must never get web_public")
     web = {(r["port"], r["src"]) for r in rules if r["dst"] == "all"}
     if ctx["mode"] == "allowlist" and web:
         raise RenderError(f"egress mode allowlist grants web_public to {sorted(web)}")
     if ctx["mode"] not in LLM_WEB_MODES and ("sandbox", LLM_POOL_SRC) in web:
-        raise RenderError(f"egress mode {ctx['mode']} grants web_public to agent-llm/catalog (open/sandbox_open only)")
+        raise RenderError(f"egress mode {ctx['mode']} grants web_public to agent-llm/catalog"
+                          f" ({'/'.join(LLM_WEB_MODES)} only)")  # fmt: skip
     denied = {str(ipaddress.ip_network(c)) for c in ctx["denied_cidrs"]}
     missing = [c for c in REQUIRED_DENIED_CIDRS if str(ipaddress.ip_network(c)) not in denied]
     if missing:
@@ -269,6 +385,7 @@ def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
     missing_domains = [d for d in REQUIRED_DENIED_DOMAINS if d not in ctx["denied_domains"]]
     if missing_domains:
         raise RenderError(f"always_denied.domains lacks {missing_domains}")
+    _assert_floor_invariants(ctx)
     if tuple(ctx["ip_literal_patterns"]) != IP_LITERAL_PATTERNS:
         raise RenderError("IP-literal deny patterns changed")
     for r in ctx.get("pre_deny_rules", []):  # only the gatekeeper's Telegraph rule may precede the denies
@@ -278,10 +395,38 @@ def assert_context_invariants(ctx: Mapping[str, Any]) -> None:
         raise RenderError("the telegraph category is rendered only for the gatekeeper, ahead of the denies")
 
 
+def _assert_floor_invariants(ctx: Mapping[str, Any]) -> None:
+    """ADR-0025 floor invariants of one context (build-env design §4.3)."""
+    loop = {str(ipaddress.ip_network(c)) for c in ctx["loop_cidrs"]}
+    non_loop = {str(ipaddress.ip_network(c)) for c in ctx["denied_cidrs_non_loop"]}
+    hosts = {str(ipaddress.ip_network(c)) for c in ctx["host_cidrs"]}
+    denied = {str(ipaddress.ip_network(c)) for c in ctx["denied_cidrs"]}
+    if loop != {str(ipaddress.ip_network(c)) for c in LOOP_CIDRS}:
+        raise RenderError("denied_dst_loop must be exactly the loopback floors")
+    if loop & (non_loop | hosts) or (loop | non_loop | hosts) != (denied | hosts):
+        raise RenderError("denied_dst_loop and denied_dst must split denied_cidrs ∪ host_cidrs (disjoint)")
+    notify = set(ctx["notify_only"])
+    if not notify or not notify <= set(ctx["denied_domains"]) or notify & set(REQUIRED_DENIED_DOMAINS):
+        raise RenderError("notify_only must be a non-empty subset of the always-denied names, never a required one")
+    if ctx["code_pool_cidrs"] != [SQUID_POOLS[0][1], STRICT_POOL[1]]:
+        raise RenderError("code_pools must be exactly pool_fetch and pool_strict")
+    code = set(ctx["code_denied"])
+    dotted = [d for d in code if d.startswith(".")]
+
+    def covered(name: str) -> bool:
+        return name in code or "." + name.lstrip(".") in code or any(name.endswith(d) for d in dotted)
+
+    if not all(covered(n) for n in REQUIRED_CODE_DENIED):
+        raise RenderError("code_denied lacks the built-in Telegram/Kiro names")
+    if ctx["sandbox_rules"] != [r for r in ctx["rules"] if r["port"] == "sandbox"]:
+        raise RenderError("every sandbox rule needs its floor lines")
+
+
 def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
     """The parts of a context that must be identical in every egress mode (§11.5; design §12.2): the
-    strict pool, the fetch pool's base rules (sandbox_open only adds its ``all`` line), the trusted
-    callers, their categories, listeners, pools, denies and the IP-literal patterns."""
+    strict pool, the fetch pool's base rules (sandbox_open/sandbox_full only add its ``all`` line), the
+    trusted callers, their categories, listeners, pools, denies, the IP-literal patterns and the ADR-0025
+    floors (split dst ACLs, host addresses, notify_only, the repo-code pools and names)."""
     fixed = [
         r for r in ctx["rules"]
         if r["src"] == STRICT_POOL_SRC
@@ -296,6 +441,12 @@ def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
         "pools": ctx["pools"],
         "denied_domains": ctx["denied_domains"],
         "denied_cidrs": ctx["denied_cidrs"],
+        "loop_cidrs": ctx["loop_cidrs"],
+        "denied_cidrs_non_loop": ctx["denied_cidrs_non_loop"],
+        "host_cidrs": ctx["host_cidrs"],
+        "notify_only": ctx["notify_only"],
+        "code_pool_cidrs": ctx["code_pool_cidrs"],
+        "code_denied": ctx["code_denied"],
         "ip_literal_patterns": ctx["ip_literal_patterns"],
         "strict_fetch_validate_runner_gatekeeper_rules": fixed,
         "pre_deny_rules": ctx["pre_deny_rules"],
@@ -303,14 +454,73 @@ def _invariant_view(ctx: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def check_mode_invariants(bundle: ConfigBundle, ns: Sequence[str], hermes_login: bool = False) -> None:
-    """Render every egress mode and refuse if any §11.5 invariant differs between them."""
-    views = {m: _invariant_view(squid_context(bundle, "", ns, hermes_login, m)) for m in EGRESS_MODES}
+def check_mode_invariants(
+    bundle: ConfigBundle, ns: Sequence[str], hermes_login: bool = False, host_cidrs: Sequence[str] = ()
+) -> None:
+    """Render every egress mode and refuse if any §11.5 invariant differs between them; sandbox_full must be
+    sandbox_open but its label, and the llm pool must be identical in every LLM web mode (ADR-0025)."""
+    ctxs = {m: squid_context(bundle, "", ns, hermes_login, m, host_cidrs) for m in EGRESS_MODES}
+    views = {m: _invariant_view(c) for m, c in ctxs.items()}
     base = views[EGRESS_MODES[0]]
     for mode, view in views.items():
         for key, value in base.items():
             if view[key] != value:
                 raise RenderError(f"egress mode {mode} changes the invariant {key}")
+    if {**ctxs["sandbox_full"], "mode": "sandbox_open"} != ctxs["sandbox_open"]:
+        raise RenderError("egress mode sandbox_full must render exactly what sandbox_open renders (ADR-0025)")
+    llm = {m: [r for r in ctxs[m]["rules"] if r["src"] == LLM_POOL_SRC] for m in LLM_WEB_MODES}
+    if any(v != llm[LLM_WEB_MODES[0]] for v in llm.values()):
+        raise RenderError("the llm pool (key-holding agent-llm/catalog) must be identical in every LLM web mode")
+
+
+_DENY_SAFE_PORTS = "http_access deny !Safe_ports"
+
+
+def assert_rendered_order(text: str, ctx: Mapping[str, Any]) -> None:
+    """Order invariants of the rendered text (build-env design §4.3): the four marked sandbox denies and one
+    ``dst`` and one ``dst_loop`` floor line per sandbox rule precede ``deny !Safe_ports``; every line with a
+    ``dst`` ACL names a source and a category earlier on the line, or is an allow line; ``denied_dst`` has
+    exactly one more definition line (the public floor file); ``code_web_ok`` appears only on the pool_fetch
+    ``all`` allow lines."""
+    lines = text.splitlines()
+    try:
+        safe = lines.index(_DENY_SAFE_PORTS)
+    except ValueError as exc:
+        raise RenderError("rendered conf lacks deny !Safe_ports") from exc
+    head = lines[:safe]
+    marked = [
+        "http_access deny port_sandbox notify_only mark_quiet",
+        "http_access deny port_sandbox denied_domains mark_name",
+        "http_access deny port_sandbox ip_literal mark_literal",
+        "http_access deny port_sandbox code_pools code_denied mark_code",
+    ]
+    if any(m not in head for m in marked):
+        raise RenderError("the marked sandbox denies must precede deny !Safe_ports")
+    for r in ctx["sandbox_rules"]:
+        for acl, mark in (("denied_dst", "mark_dst"), ("denied_dst_loop", "mark_dst_loop")):
+            want = f"http_access deny port_sandbox {r['src']} {r['dst']} {acl} {mark}"
+            if head.count(want) != 1 or lines.count(want) != 1:
+                raise RenderError(f"sandbox rule {r} needs exactly one {acl} floor line ahead of the port checks")
+    for line in lines:
+        words = line.split()
+        if not line.startswith("http_access ") or not ({"denied_dst", "denied_dst_loop"} & set(words)):
+            continue
+        if words[1] == "allow":
+            continue
+        first = min(words.index(a) for a in ("denied_dst", "denied_dst_loop") if a in words)
+        src_ok = any(w in {"src_host", *(f"pool_{p['name']}" for p in ctx["pools"])} for w in words[:first])
+        dst_ok = any(w == "all" or w.startswith("cat_") for w in words[:first])
+        if not (src_ok and dst_ok):
+            raise RenderError(f"a dst floor line must name a source and a category first: {line}")
+    acl_lines = [ln for ln in lines if ln.startswith("acl denied_dst dst ")]
+    if len(acl_lines) != 2 or acl_lines[1] != SQUID_PUBLIC_FILE_LINE:
+        raise RenderError("denied_dst must have its inline line and exactly one public-floor file line")
+    if lines.count(SQUID_CODE_WEB_LINE) != 1:
+        raise RenderError("code_web_ok must be defined once, from the code-web file")
+    code_web_allow = f"http_access allow port_sandbox {CODE_POOL_SRC} code_web_ok all "
+    for line in lines:
+        if " code_web_ok " in f"{line} " and not line.startswith(("acl ", code_web_allow)):
+            raise RenderError(f"code_web_ok only on the pool_fetch web_public allow line: {line}")
 
 
 def render_context(ctx: Mapping[str, Any], template: str) -> str:
@@ -323,7 +533,9 @@ def render_context(ctx: Mapping[str, Any], template: str) -> str:
         undefined=jinja2.StrictUndefined,
         keep_trailing_newline=True,
     )
-    return env.from_string(template).render(**ctx)
+    text = env.from_string(template).render(**ctx)
+    assert_rendered_order(text, ctx)
+    return text
 
 
 def render_squid(
@@ -333,11 +545,12 @@ def render_squid(
     template: str,
     hermes_login: bool = False,
     mode: EgressMode | None = None,
+    host_cidrs: Sequence[str] = (),
 ) -> str:
     for server in ns:
         ipaddress.IPv4Address(server)
-    check_mode_invariants(bundle, ns, hermes_login)
-    return render_context(squid_context(bundle, snapshot_hash, ns, hermes_login, mode), template)
+    check_mode_invariants(bundle, ns, hermes_login, host_cidrs)
+    return render_context(squid_context(bundle, snapshot_hash, ns, hermes_login, mode, host_cidrs), template)
 
 
 _SNAPSHOT_LINE_RE = re.compile(r"^# Config snapshot: ([0-9a-f]{64})$", re.MULTILINE)
@@ -391,8 +604,11 @@ def squid_drift(
     control_dir: Path = DEFAULT_CONTROL_DIR,
     now: float | None = None,
     login_window_flag: Path = LOGIN_WINDOW_FLAG,
+    host_cidrs: Sequence[str] | None = None,
 ) -> list[str]:
-    """The live squid.conf must equal the render of its snapshot for the current egress mode.
+    """The live squid.conf must equal the render of its snapshot for the current egress mode and the live
+    host addresses (``host_cidrs``: None = ``host_floor_cidrs()``; a moved host address outside the static
+    floors is ``firewall_drift:host_floor_changed``, build-env design §4.1).
 
     No conf yet is not drift (the proxy refuses to start without one). The snapshot is the one the
     conf names (snapshots are kept), so a confirmed reload is not drift before the proxy restart;
@@ -431,11 +647,13 @@ def squid_drift(
                 "newer snapshot is current (restart ossbot-proxy)"]  # fmt: skip
     try:
         mode = read_egress_mode(control_dir, bundle.egress.mode_default)
+        hosts = host_cidrs if host_cidrs is not None else host_floor_cidrs(resolv_conf=resolv_conf)
         expected = render_squid(
             bundle, digest, nameservers(resolv_conf), template.read_text(encoding="utf-8"),
             hermes_login=login_window_flag.exists() and "\nacl cat_kiro_idc_login " in text, mode=mode,
+            host_cidrs=hosts,
         )  # fmt: skip
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
         return [f"{tag} cannot render the expected config: {exc}"]
     if expected == text:
         return []
@@ -446,7 +664,14 @@ def squid_drift(
         pending = False
     if pending:
         return []
+    if _inline_denied_dst(expected) != _inline_denied_dst(text):
+        # same snapshot, and the floors are identical in every mode: only the live host addresses moved
+        return [f"firewall_drift:host_floor_changed {conf} names other host floor addresses than the live ones"]
     return [f"{tag} {conf} differs from the render for egress mode {mode}"]
+
+
+def _inline_denied_dst(text: str) -> str | None:
+    return next((ln for ln in text.splitlines() if ln.startswith("acl denied_dst dst ") and '"' not in ln), None)
 
 
 # ------------------------------------------------------------------------------- firewall
@@ -478,15 +703,79 @@ MSS_CHAINS = (
 )
 
 
-def firewall_plan(ns: str, uids: Mapping[str, str] | None = None) -> dict[str, list[Chain]]:
-    """Exactly the rules of DESIGN §11.4 (``uids`` maps account names to the value to render)."""
+# Kernel floors (build-env design §4.4, ADR-0025). Every LOG rule is rate-limited per address (hashlimit) and
+# rendered in the canonical form `iptables -S` prints; the prefixes use [A-Za-z0-9_-] only, so they are printed
+# unquoted and the kernel writes `OSSBOT-FLOOR-IN=...`. ossbot-floorlog reads them: OSSBOT-FLOOR- = a sandbox
+# packet to a host address (kind in), OSSBOT-PFLOOR- = the live proxy 10.212.0.2 to a floor (px, holds the
+# running jobs), OSSBOT-TFLOOR- = another member of ossbot-egress, i.e. a root test proxy (tx, never holds).
+BUILD_NET = "10.211.0.0/24"  # docker0: provision's image builds (no repo code)
+ROOT_NETS = "10.214.0.0/16"  # Docker default-address-pools: any root-created network without a subnet
+PUBFLOOR_CHAIN = "OSSBOT-PUBFLOOR"
+_NEW = ("-m", "conntrack", "--ctstate", "NEW")
+
+
+def _hashlimit(mode: str, name: str) -> tuple[str, ...]:
+    return ("-m", "hashlimit", "--hashlimit-upto", "20/sec", "--hashlimit-burst", "40", "--hashlimit-mode", mode,
+            "--hashlimit-name", name)  # fmt: skip
+
+
+def _log(prefix: str) -> tuple[str, ...]:
+    return ("-j", "LOG", "--log-prefix", prefix)
+
+
+def floor_block(dst: str) -> tuple[tuple[str, ...], ...]:
+    """The kernel floor for one IPv4 destination network: squid's upstream connections (the live proxy logged
+    as PFLOOR, any other ossbot-egress member as TFLOOR), then the build and root-created networks (no LOG).
+    Only NEW connections: return traffic of squid's public connections is ESTABLISHED."""
+    d = str(ipaddress.IPv4Network(dst, strict=True))
+    return (
+        ("-s", f"{PROXY_IP}/32", "-d", d, *_NEW, *_hashlimit("dstip", "ossbot_floor_px"), *_log("OSSBOT-PFLOOR-")),
+        ("-s", f"{PROXY_IP}/32", "-d", d, *_NEW, "-j", "DROP"),
+        ("-s", EGRESS_NET, "-d", d, *_NEW, *_hashlimit("srcip,dstip", "ossbot_floor_tx"), *_log("OSSBOT-TFLOOR-")),
+        ("-s", EGRESS_NET, "-d", d, *_NEW, "-j", "DROP"),
+        ("-s", BUILD_NET, "-d", d, *_NEW, "-j", "DROP"),
+        ("-s", ROOT_NETS, "-d", d, *_NEW, "-j", "DROP"),
+    )
+
+
+def pubfloor_rules(public: Iterable[str]) -> tuple[tuple[str, ...], ...]:
+    """``OSSBOT-PUBFLOOR``: the floor block of every IPv4 entry of ``public.txt`` (IPv6 entries are squid-only:
+    ip6tables OSSBOT-FWD drops everything on the bridges), in file order."""
+    return tuple(r for p in public if ":" not in p for r in floor_block(p))
+
+
+def firewall_plan(
+    ns: str,
+    uids: Mapping[str, str] | None = None,
+    host_cidrs: Sequence[str] = (),
+    public: Sequence[str] = (),
+) -> dict[str, list[Chain]]:
+    """Exactly the rules of DESIGN §11.4 (``uids`` maps account names to the value to render), plus the
+    ADR-0025 kernel floors: ``host_cidrs`` the live host /32s outside the static floors (``host_floor_cidrs``),
+    ``public`` the public-address floor of ``public.txt`` (``OSSBOT-PUBFLOOR``). No mode input: the floors
+    are the same in every egress mode."""
     ipaddress.IPv4Address(ns)
     u = {name: (uids or {}).get(name, name) for name in SERVICE_USERS}
+    sandbox_log = ("-m", "pkttype", "--pkt-type", "unicast", *_hashlimit("srcip", "ossbot_floor_in"),
+                   *_log("OSSBOT-FLOOR-"))  # fmt: skip
     host_in = (
         ("-s", f"{PROXY_IP}/32", "-d", f"{ns}/32", "-p", "udp", "--dport", "53", "-j", "ACCEPT"),
         ("-s", f"{PROXY_IP}/32", "-d", f"{ns}/32", "-p", "tcp", "--dport", "53", "-j", "ACCEPT"),
+        # (a) a sandbox packet at a host address (its /28's bridge address is the only one on-link): logged
+        ("-s", TASK_NET, "-p", "tcp", "-m", "tcp", "--tcp-flags", "FIN,SYN,RST,ACK", "SYN", *sandbox_log),
+        ("-s", TASK_NET, "-p", "udp", "-m", "udp", *sandbox_log),
         ("-s", TASK_NET, "-j", "DROP"),
+        # (c) squid re-resolved into a distro-local address (INPUT, not FORWARD): split by source, logged
+        ("-s", f"{PROXY_IP}/32", *_NEW, *_hashlimit("dstip", "ossbot_floor_pin"), *_log("OSSBOT-PFLOOR-")),
+        ("-s", f"{PROXY_IP}/32", *_NEW, "-j", "DROP"),
+        ("-s", EGRESS_NET, *_NEW, *_hashlimit("srcip,dstip", "ossbot_floor_tin"), *_log("OSSBOT-TFLOOR-")),
         ("-s", EGRESS_NET, "-m", "conntrack", "--ctstate", "NEW", "-j", "DROP"),
+    )
+    hosts = [str(ipaddress.IPv4Network(h, strict=True)) for h in host_cidrs]
+    fwd = (
+        ("-j", PUBFLOOR_CHAIN),
+        *(r for d in (*IPV4_FLOOR_CIDRS, *hosts) for r in floor_block(d)),
+        ("-s", TASK_NET, "!", "-d", TASK_NET, "-j", "DROP"),
     )
 
     # DNS (port 53, any destination) is refused for every service uid before the lo ACCEPT: the WSL
@@ -530,7 +819,9 @@ def firewall_plan(ns: str, uids: Mapping[str, str] | None = None) -> dict[str, l
             *MSS_CHAINS,
         ],
         "docker": [
-            Chain("iptables", "OSSBOT-FWD", "DOCKER-USER", (("-s", TASK_NET, "!", "-d", TASK_NET, "-j", "DROP"),)),
+            # created before OSSBOT-FWD's first rule jumps to it; no parent jump of its own (§4.4 item 0)
+            Chain("iptables", PUBFLOOR_CHAIN, None, pubfloor_rules(public)),
+            Chain("iptables", "OSSBOT-FWD", "DOCKER-USER", fwd),
         ],
     }
 
@@ -705,8 +996,34 @@ def check(chains: Iterable[Chain], ns: str) -> list[str]:
         if c.name == "OSSBOT-IN" and resolver_drift(listing.stdout, ns):
             problems.append("firewall_drift:resolver_changed")
         parent_listing = parent.stdout if parent is not None and parent.returncode == 0 else ""
-        problems.extend(check_chain(c, listing.stdout, parent_listing))
+        found = check_chain(c, listing.stdout, parent_listing)
+        if found and c.family == "iptables" and c.name == PUBFLOOR_CHAIN:
+            # the live chain differs from public.txt (a partial pubip update, a hand edit): fail closed
+            problems.append("firewall_drift:public_floor OSSBOT-PUBFLOOR differs from the public floor file")
+        elif found and c.family == "iptables" and c.name == "OSSBOT-FWD" and host_floor_drift(c, listing.stdout):
+            problems.append("firewall_drift:host_floor_changed the live host addresses moved (re-apply on start)")
+        problems.extend(found)
     return problems
+
+
+def _floor_hosts(rules: Iterable[frozenset[tuple[str, str]]]) -> set[str]:
+    """The host /32s of the proxy floor in a chain: PFLOOR destinations outside the static floors."""
+    static = {str(ipaddress.ip_network(c)) for c in IPV4_FLOOR_CIDRS}
+    out = set()
+    for rule in rules:
+        d = dict(rule)
+        if d.get("--log-prefix") == "OSSBOT-PFLOOR-" and d.get("-d") and d["-d"] not in static:
+            out.add(d["-d"])
+    return out
+
+
+def host_floor_drift(chain: Chain, listing: str) -> bool:
+    """True when the live OSSBOT-FWD names other host floor addresses than the rendered (live) list."""
+    try:
+        have = parse_listing(listing, chain.name)
+    except ValueError:
+        return False
+    return _floor_hosts(have) != _floor_hosts(normalize_rule(r) for r in chain.rules)
 
 
 def resolved_ipc_problems(unit_link: Path = RESOLVED_UNIT_LINK, varlink: Path = RESOLVED_VARLINK) -> list[str]:
@@ -766,6 +1083,89 @@ def _write_atomic(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+def ensure_floor_files(floor_dir: Path = FLOOR_DIR) -> list[str]:
+    """``render squid``: the public-floor directory and its sentinel files when missing (build-env design §4.7),
+    so the proxy's ``ExecStartPre`` render always finds them and a fresh install starts *unknown* (no public web
+    for repo code). Under the exclusive floor lock (C-M1); existing files are never touched."""
+    created: list[str] = []
+    with floor_lock(exclusive=True, timeout_s=WRITE_TIMEOUT_S, path=floor_dir / LOCK_PATH.name):
+        for name, text in ((PUBLIC_FILE, public_text([])), (CODE_WEB_FILE, code_web_text(False))):
+            path = floor_dir / name
+            if not path.exists():
+                _write_atomic(path, text)
+                created.append(name)
+    return created
+
+
+def _touches_floor(chains: Iterable[Chain]) -> bool:
+    return any(c.family == "iptables" and c.name in ("OSSBOT-FWD", PUBFLOOR_CHAIN) for c in chains)
+
+
+def _firewall(args: argparse.Namespace) -> int:
+    ns = nameservers(args.resolv_conf)[0]
+    if args.print:
+        if args.public_file is not None:  # the fixture capture: given floors, never the owner's address
+            public, hosts = parse_public_text(args.public_file.read_text(encoding="utf-8")), list(args.host_cidr)
+        else:
+            public, hosts = read_public(args.floor_dir), list(host_floor_cidrs(resolv_conf=args.resolv_conf))
+        print(render_script(select(firewall_plan(ns, None, hosts, public), args.part)), end="")
+        return 0
+    uids = resolve_uids()
+    lock_path = args.floor_dir / LOCK_PATH.name
+
+    def plan() -> list[Chain]:  # read public.txt and the host addresses under the lock
+        hosts = host_floor_cidrs(resolv_conf=args.resolv_conf)
+        return select(firewall_plan(ns, uids, hosts, read_public(args.floor_dir)), args.part)
+
+    if args.apply:
+        # C-M1: every part that touches OSSBOT-FWD/OSSBOT-PUBFLOOR holds the lock exclusively, so a concurrent
+        # pubip update can't be flushed away by a refill from an older public.txt
+        exclusive = _touches_floor(select(firewall_plan(ns), args.part))
+        with floor_lock(exclusive=True, timeout_s=WRITE_TIMEOUT_S, path=lock_path) if exclusive else nullcontext():
+            chains = plan()
+            apply(chains)
+        print(f"ossbot-firewall: applied {len(chains)} chains (resolver {ns})")
+        return 0
+    with floor_lock(exclusive=False, timeout_s=CHECK_TIMEOUT_S, path=lock_path):
+        chains = plan()
+        problems = check(chains, ns)
+        if args.part in ("host", "all"):
+            problems.extend(resolved_ipc_problems())
+            problems.extend(io_uring_problems())
+            problems.extend(squid_drift(resolv_conf=args.resolv_conf))
+    for problem in problems:
+        print(f"ossbot-firewall --check: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+def _squid(args: argparse.Namespace) -> int:
+    if args.mode is not None and args.out.resolve() == DEFAULT_SQUID_OUT.resolve():
+        print(f"ossbot-render: --mode renders a test conf; refusing the live output {DEFAULT_SQUID_OUT}",
+              file=sys.stderr)  # fmt: skip
+        return 2
+    digest, files = read_current(args.snapshot_root)
+    bundle = parse_bundle(files)
+    egress: EgressMode = args.mode or read_egress_mode(args.control_dir, bundle.egress.mode_default)
+    hosts = host_floor_cidrs(resolv_conf=args.resolv_conf)
+    text = render_squid(
+        bundle, digest, nameservers(args.resolv_conf), args.template.read_text("utf-8"),
+        args.hermes_login, egress, hosts,
+    )  # fmt: skip
+    created = ensure_floor_files(args.floor_dir)
+    if created:
+        print(f"created the public-floor sentinels {', '.join(created)} in {args.floor_dir} (unknown)")
+    try:
+        same = args.out.read_text(encoding="utf-8") == text
+    except (OSError, UnicodeDecodeError):
+        same = False
+    if same:  # idempotent (provision prints `unchanged`); the running proxy is untouched
+        print(f"unchanged {args.out} (snapshot {digest}, egress mode {egress})")
+        return 0
+    _write_atomic(args.out, text)
+    print(f"rendered {args.out} from snapshot {digest} (egress mode {egress})")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="ossbot-render")
     sub = parser.add_subparsers(dest="what", required=True)
@@ -776,6 +1176,10 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--print", action="store_true")
     fw.add_argument("--part", choices=("host", "docker", "all"), default="all")
     fw.add_argument("--resolv-conf", type=Path, default=Path("/etc/resolv.conf"))
+    fw.add_argument("--floor-dir", type=Path, default=FLOOR_DIR)
+    # --print only: render with these floors instead of the live ones (capture_firewall_fixture.sh)
+    fw.add_argument("--public-file", type=Path, default=None)
+    fw.add_argument("--host-cidr", action="append", default=[])
     sq = sub.add_parser("squid")
     sq.add_argument("--out", type=Path, default=DEFAULT_SQUID_OUT)
     sq.add_argument("--snapshot-root", type=Path, default=DEFAULT_SNAPSHOT_ROOT)
@@ -783,46 +1187,16 @@ def main(argv: list[str] | None = None) -> int:
     sq.add_argument("--resolv-conf", type=Path, default=Path("/etc/resolv.conf"))
     sq.add_argument("--hermes-login", action="store_true")
     # Default: the current egress-mode flag (absent = the snapshot's mode_default, unparseable = allowlist).
+    # With --mode the output must not be the live conf (the floor-reach test renders test confs).
     sq.add_argument("--mode", choices=EGRESS_MODES, default=None)
     sq.add_argument("--control-dir", type=Path, default=DEFAULT_CONTROL_DIR)
+    sq.add_argument("--floor-dir", type=Path, default=FLOOR_DIR)
     args = parser.parse_args(argv)
+    if args.what == "firewall" and not args.print and (args.public_file is not None or args.host_cidr):
+        parser.error("--public-file/--host-cidr only with --print")
     try:
-        if args.what == "squid":
-            digest, files = read_current(args.snapshot_root)
-            bundle = parse_bundle(files)
-            egress: EgressMode = args.mode or read_egress_mode(args.control_dir, bundle.egress.mode_default)
-            text = render_squid(
-                bundle, digest, nameservers(args.resolv_conf), args.template.read_text("utf-8"),
-                args.hermes_login, egress,
-            )  # fmt: skip
-            try:
-                same = args.out.read_text(encoding="utf-8") == text
-            except (OSError, UnicodeDecodeError):
-                same = False
-            if same:  # idempotent (provision prints `unchanged`); the running proxy is untouched
-                print(f"unchanged {args.out} (snapshot {digest}, egress mode {egress})")
-                return 0
-            _write_atomic(args.out, text)
-            print(f"rendered {args.out} from snapshot {digest} (egress mode {egress})")
-            return 0
-        ns = nameservers(args.resolv_conf)[0]
-        if args.print:
-            print(render_script(select(firewall_plan(ns), args.part)), end="")
-            return 0
-        chains = select(firewall_plan(ns, resolve_uids()), args.part)
-        if args.apply:
-            apply(chains)
-            print(f"ossbot-firewall: applied {len(chains)} chains (resolver {ns})")
-            return 0
-        problems = check(chains, ns)
-        if args.part in ("host", "all"):
-            problems.extend(resolved_ipc_problems())
-            problems.extend(io_uring_problems())
-            problems.extend(squid_drift(resolv_conf=args.resolv_conf))
-        for problem in problems:
-            print(f"ossbot-firewall --check: {problem}", file=sys.stderr)
-        return 1 if problems else 0
-    except (RenderError, OSError, ValueError, subprocess.CalledProcessError) as exc:
+        return _squid(args) if args.what == "squid" else _firewall(args)
+    except (RenderError, OSError, ValueError, subprocess.CalledProcessError, subprocess.SubprocessError) as exc:
         print(f"ossbot-render: {exc}", file=sys.stderr)
         return 2
 

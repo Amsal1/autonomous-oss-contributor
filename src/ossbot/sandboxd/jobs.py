@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ossbot.common.clock import Clock, to_iso
-from ossbot.common.control_flags import Blocked, NotUp, read_flags, require_running, require_up
+from ossbot.common.control_flags import CODE_WEB_MODES, Blocked, NotUp, read_flags, require_running, require_up
 from ossbot.common.images import ImagePins
 from ossbot.common.schemas import HOLD_HOST_RE, HOLD_TOP_HOSTS_MAX, TERMINAL_STATES, HoldRequest
 from ossbot.sandboxd.argv import Volumes, job_spec, probe_spec, stagein_spec
@@ -320,12 +320,13 @@ class JobService:
 
     def _exec_network(self, spec: JobSpec) -> ExecNetwork:
         """ADR-0024, two independent checks, fail closed: ``strict`` never asks; otherwise ``web`` only if this
-        process's own read of the egress-mode flag is ``sandbox_open`` AND the gatekeeper's audited decision
-        for this cid and run says ``web``. Any error, timeout or other answer is ``none``."""
+        process's own read of the egress-mode flag is a code-web mode (``sandbox_open``/``sandbox_full``,
+        ADR-0025) AND the gatekeeper's audited decision for this cid and run says ``web``. Any error, timeout or
+        other answer is ``none``."""
         if spec.egress != "mode":
             return "none"
         try:
-            if self.exec_egress_mode() != "sandbox_open":
+            if self.exec_egress_mode() not in CODE_WEB_MODES:
                 return "none"
             answer = self.gatekeeper.implement_egress(spec.cid, spec.run_id)
         except Exception as exc:  # noqa: BLE001 - transport, 4xx, 5xx, bad JSON: no network

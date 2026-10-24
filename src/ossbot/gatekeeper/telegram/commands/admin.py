@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ossbot.common.clock import to_iso
 from ossbot.common.config import ConfigError, resolve_target
-from ossbot.common.control_flags import EGRESS_MODES, HERMES_TIERS, HermesTier
+from ossbot.common.control_flags import CODE_WEB_MODES, EGRESS_MODES, HERMES_TIERS, HermesTier
 from ossbot.common.schemas import IMPLEMENT_NETWORK_VALUES, PrefsUpdate
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.chat.hermes_surface import allowed_toolsets
@@ -48,22 +48,30 @@ class ModeArg(BaseModel):
     mode: Literal["allowlist", "research", "open", "sandbox_open"]
 
 
+# The modes /egress offers. sandbox_full (ADR-0025) gets its own confirm panel and the implement-network
+# raise with the owner controls (build-env plan task 21); until then Telegram offers the four modes it has
+# panels for (ossctl's TTY confirm already accepts all five).
+TELEGRAM_EGRESS_MODES = tuple(m for m in EGRESS_MODES if m != "sandbox_full")
+
+
 def _egress_now(app: AppContext) -> str:
     return app.control.egress_mode(app.config.egress.mode_default)
 
 
 def implement_network_state(value: str, mode: str) -> str:
-    """``on_request (active)``, ``auto (inactive)``, ``off`` (ADR-0024: effective only in sandbox_open)."""
+    """``on_request (active)``, ``auto (inactive)``, ``off`` (ADR-0024/0025: effective only in sandbox_open and
+    sandbox_full)."""
     if value == "off":
         return "off"
-    return f"{value} ({'active' if mode == 'sandbox_open' else 'inactive'})"
+    return f"{value} ({'active' if mode in CODE_WEB_MODES else 'inactive'})"
 
 
 def egress_picker(app: AppContext) -> k.View:
     cur = _egress_now(app)
     impl = app.control.implement_network()
     opts = [
-        k.button(m + (" ✅" if m == cur else ""), "egress_pick", {"mode": m}, single_use=True) for m in EGRESS_MODES
+        k.button(m + (" ✅" if m == cur else ""), "egress_pick", {"mode": m}, single_use=True)
+        for m in TELEGRAM_EGRESS_MODES
     ]
     impl_opts = [k.button(f"impl: {v}" + (" ✅" if v == impl else ""), "implnet_pick", {"value": v}, single_use=True)
                  for v in IMPLEMENT_NETWORK_VALUES]  # fmt: skip
@@ -123,7 +131,7 @@ def implnet_confirm_view(app: AppContext, value: str) -> k.View:
     widens = order.index(value) > order.index(cur)
     what = IMPLNET_WHAT[value]
     if value == "auto":
-        active = mode == "sandbox_open"
+        active = mode in CODE_WEB_MODES
         what += " (now: sandbox_open, so active)." if active else f" (now: {mode}, so inactive until you switch)."
     lines = [k.line(f"🌐 Implement network {cur} → {value}."), k.line(what)]
     if value != "off":
@@ -142,7 +150,7 @@ async def egress(ctx: CommandContext, args: list[str]) -> Reply:
     if len(args) >= 2 and args[0] == "implement" and args[1] in IMPLEMENT_NETWORK_VALUES:
         if args[1] != ctx.app.control.implement_network():
             return Reply("", view=implnet_confirm_view(ctx.app, args[1]))
-    elif args and args[0] in EGRESS_MODES and args[0] != _egress_now(ctx.app):
+    elif args and args[0] in TELEGRAM_EGRESS_MODES and args[0] != _egress_now(ctx.app):
         return Reply("", view=egress_confirm_view(ctx.app, args[0]))
     return Reply("", view=egress_picker(ctx.app))
 
@@ -181,7 +189,7 @@ async def egress_pick(tap: Tap) -> str:
 
 @confirm_handler("egress_confirm", effect="io")
 async def egress_confirmed(ctx: CommandContext, arg: str | None) -> Reply:
-    if arg not in EGRESS_MODES:
+    if arg not in TELEGRAM_EGRESS_MODES:
         return Reply("This button is no longer valid.")
     egress = ctx.app.config.egress
     previous = ctx.app.control.set_egress_mode(arg, ctx.actor, egress.mode_default, egress=egress)

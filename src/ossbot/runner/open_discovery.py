@@ -33,6 +33,7 @@ from ossbot.common.config import (
     ConfigBundle,
     helm_hosts,
 )
+from ossbot.common.control_flags import CODE_WEB_MODES
 from ossbot.common.osi_licenses import is_osi
 from ossbot.common.schemas import ISO_TS_RE, SPDX_ID_RE
 from ossbot.runner import ci_detect, scoring
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 OPEN_NOTE = "_open"  # runner note: {"cursor": int, "search_until": float}
-SANDBOX_OPEN = "sandbox_open"  # the only egress mode in which a mode-egress repo skips rule 14
+SANDBOX_OPEN = "sandbox_open"  # named in the rule-14 text; CODE_WEB_MODES decides (ADR-0025)
 EXCLUDED = "excluded"
 INACTIVE = "inactive_default_branch"
 NOT_FOUND = "not_found"
@@ -420,9 +421,9 @@ def uncovered_hosts(hosts: Iterable[str], allowed: Iterable[str]) -> list[str]:
 
 
 def effective_strict(mode: str | None, repo_egress: str) -> bool:
-    """§12.4: strict unless the active mode is ``sandbox_open``; an unknown mode is strict (fail
-    closed); a repo with ``egress: strict`` is strict in every mode."""
-    return mode != SANDBOX_OPEN or repo_egress == "strict"
+    """§12.4: strict unless the active mode is a code-web mode (``sandbox_open``, ``sandbox_full``); an
+    unknown mode is strict (fail closed); a repo with ``egress: strict`` is strict in every mode."""
+    return mode not in CODE_WEB_MODES or repo_egress == "strict"
 
 
 def egress_reason(hosts: list[str], *, repo_strict: bool) -> str:

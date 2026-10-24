@@ -156,13 +156,13 @@ class DryRunRequest(ApiModel):
 class EgressModeRequest(ApiModel):
     """§11.5: ossctl egress mode <m> (TTY-confirmed); Telegram /egress is FEAT-009."""
 
-    mode: Literal["allowlist", "research", "open", "sandbox_open"]
+    mode: EgressMode
 
 
 class EgressModeView(ApiModel):
-    mode: Literal["allowlist", "research", "open", "sandbox_open"]
-    default: Literal["allowlist", "research", "open", "sandbox_open"]
-    previous: Literal["allowlist", "research", "open", "sandbox_open"] | None = None
+    mode: EgressMode
+    default: EgressMode
+    previous: EgressMode | None = None
 
 
 # ADR-0024: the owner's network setting for the coder's executor (agent-exec); widening order off < on_request < auto.
@@ -178,8 +178,8 @@ class ImplementNetworkRequest(ApiModel):
 
 class ImplementNetworkView(ApiModel):
     value: ImplementNetwork
-    active: bool  # value != off and the egress mode is sandbox_open
-    egress_mode: Literal["allowlist", "research", "open", "sandbox_open"]
+    active: bool  # value != off and the egress mode is a code-web mode (sandbox_open, sandbox_full)
+    egress_mode: EgressMode
     previous: ImplementNetwork | None = None
 
 

@@ -1,0 +1,22 @@
+# Kernel floor log reader (build-env design §4.4, ADR-0025): follows the kernel journal for the rendered
+# LOG rules (OSSBOT-FLOOR-, OSSBOT-PFLOOR-, OSSBOT-TFLOOR-) and appends one line per drop plus a 30 s
+# heartbeat to /srv/ossbot/logs/floor/floor.log (root:ossbox 0640), which sandboxd's egress meter reads.
+# It gates nothing: the drop rules prevent the reach on their own; while it is down only the alarm for the
+# kernel-dropped paths is missing (sandboxd reports floor_detector: down and sends one P1 notice).
+[Unit]
+Description=ossbot kernel floor log reader
+After=ossbot-boot-gate.service systemd-journald.service
+[Service]
+Type=simple
+ExecCondition=/opt/ossbot/bin/ossbot-boot-gate --allow minimal
+ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.watchdog.floorlog
+WorkingDirectory=/
+Restart=always
+RestartSec=5
+# CR-001: >= drain timeout (120 s) + 30 s, like every ossbot unit.
+TimeoutStopSec=150
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+[Install]
+WantedBy=multi-user.target

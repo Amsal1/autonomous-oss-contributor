@@ -73,7 +73,7 @@ require_running() {
 EGRESS_FLAG=$CONTROL/egress-mode
 # live_egress_mode: the mode the RUNNING proxy was rendered for (its own copy of the conf).
 live_egress_mode() {
-  docker exec ossbot-proxy sed -n 's/^# Egress mode: \([a-z]*\) .*/\1/p' /etc/squid/squid.conf 2>/dev/null
+  docker exec ossbot-proxy sed -n 's/^# Egress mode: \([a-z_]*\) .*/\1/p' /etc/squid/squid.conf 2>/dev/null
 }
 # snapshot_mode_default: egress.yaml mode_default of the current config snapshot.
 snapshot_mode_default() {

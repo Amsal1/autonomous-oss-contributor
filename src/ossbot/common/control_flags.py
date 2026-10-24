@@ -173,9 +173,15 @@ def require_up(control_dir: Path, what: str) -> None:
 # confirm; applied by root (ossbot-egress.path -> ossbot-egress-apply). Absent = the snapshot's
 # ``egress.mode_default``; unparseable, oversize, a symlink or an unknown mode = ``allowlist`` (fail
 # closed: the narrowest mode). The order is narrow to wide: ``sandbox_open`` (ADR-0023) also gives
-# fetch/validate web_public, guarded by the per-job anomaly limits.
-EgressMode = Literal["allowlist", "research", "open", "sandbox_open"]
-EGRESS_MODES: tuple[EgressMode, ...] = ("allowlist", "research", "open", "sandbox_open")
+# fetch/validate web_public, guarded by the per-job anomaly limits; ``sandbox_full`` (ADR-0025) has the same
+# squid rules, but a web job's volume breach is a note instead of a hold (floor attempts hold in every mode).
+EgressMode = Literal["allowlist", "research", "open", "sandbox_open", "sandbox_full"]
+EGRESS_MODES: tuple[EgressMode, ...] = ("allowlist", "research", "open", "sandbox_open", "sandbox_full")
+# The modes in which repo code (fetch, validate, agent-exec under implement_network) may get web_public, and
+# the modes in which the llm pool (agent-llm, catalog) gets it. Every former ``== "sandbox_open"`` test is
+# ``in CODE_WEB_MODES`` (ADR-0025).
+CODE_WEB_MODES: tuple[EgressMode, ...] = ("sandbox_open", "sandbox_full")
+LLM_WEB_MODES: tuple[EgressMode, ...] = ("open", "sandbox_open", "sandbox_full")
 EGRESS_MODE_FILE = "egress-mode"
 
 

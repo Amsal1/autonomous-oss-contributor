@@ -48,6 +48,7 @@ STORES: tuple[str, ...] = (
     "fstrim",
 )  # fmt: skip
 PROXY_LOG_LIVE = "access.log"  # squid writes it: never selected (rotated ones are access.log.<UTC stamp>)
+FLOOR_LOG_LIVE = "floor.log"  # ossbot-floorlog writes it (ADR-0025): rotated ones are floor.log.<UTC stamp>
 DEFAULT_STORES: tuple[str, ...] = tuple(s for s in STORES if s != "build-cache")  # build cache: weekly unit
 EXIT_OK, EXIT_FAIL, EXIT_CONFIG, EXIT_STOPPED = 0, 1, 2, 3
 DOCKER = "/usr/bin/docker"
@@ -100,6 +101,7 @@ class Roots:
     artifacts: Path = Path("/srv/ossbot/artifacts")
     run_logs: Path = Path("/srv/ossbot/logs/runs")
     proxy_logs: Path = Path("/srv/ossbot/logs/proxy")  # open-discovery §13.5: rotated squid access logs
+    floor_logs: Path = Path("/srv/ossbot/logs/floor")  # build-env §4.4: rotated kernel floor logs, same retention
     hermes_sessions: Path = Path("/home/hermes/.hermes/sessions")
     state_file: Path = Path("/var/lib/ossbot/gc/last.json")
     lock: Path = Path("/etc/ossbot/versions.lock.yaml")
@@ -251,6 +253,12 @@ def select_proxy_logs(root: Path, days: int, now: float) -> list[Entry]:
     """``/srv/ossbot/logs/proxy/access.log.*`` (renamed by ``ossbot-proxy-rotate``): regular files older than
     ``days`` (``retention.proxy_logs_days``, >= 30); never the live ``access.log`` squid writes."""
     return _select_files(root, days, now, lambda name: name.startswith(PROXY_LOG_LIVE + "."))
+
+
+def select_floor_logs(root: Path, days: int, now: float) -> list[Entry]:
+    """``/srv/ossbot/logs/floor/floor.log.*`` (renamed by ``ossbot-floorlog`` at 64 MiB): regular files older
+    than ``days`` (the proxy-log retention); never the live ``floor.log``."""
+    return _select_files(root, days, now, lambda name: name.startswith(FLOOR_LOG_LIVE + "."))
 
 
 def select_hermes_sessions(root: Path, days: int, now: float) -> list[Entry]:
@@ -500,8 +508,18 @@ def run_gc(
     def do_proxy_logs() -> StoreResult:
         days = policy.proxy_logs_days
         entries = select_proxy_logs(roots.proxy_logs, days, now)
-        return files_store("proxy-logs", entries, roots.proxy_logs, f"rotated, older than {days} d",
-                           mtime_old(now - days * DAY_S))  # fmt: skip
+        proxy = files_store("proxy-logs", entries, roots.proxy_logs, f"rotated, older than {days} d",
+                            mtime_old(now - days * DAY_S))  # fmt: skip
+        if not roots.floor_logs.is_dir():  # ossbot-floorlog not provisioned yet
+            return proxy
+        floor = files_store("proxy-logs", select_floor_logs(roots.floor_logs, days, now), roots.floor_logs,
+                            "floor logs", mtime_old(now - days * DAY_S))  # fmt: skip
+        status: Status = "FAIL" if "FAIL" in (proxy.status, floor.status) else proxy.status
+        detail = proxy.detail + (f"; floor logs {floor.count}" if floor.count or floor.status == "FAIL" else "")
+        if floor.status == "FAIL":
+            detail += f" ({floor.detail})"
+        return StoreResult("proxy-logs", status, proxy.count + floor.count, proxy.bytes + floor.bytes, detail,
+                           (proxy.items + floor.items)[:ITEMS_MAX])  # fmt: skip
 
     def do_hermes() -> StoreResult:
         entries = select_hermes_sessions(roots.hermes_sessions, policy.hermes_sessions_days, now)

@@ -21,6 +21,7 @@ from typing import Any, Literal
 from ossbot.common.clock import Clock, to_iso
 from ossbot.common.config import EgressConfig
 from ossbot.common.control_flags import (
+    CODE_WEB_MODES,
     EGRESS_MODE_FILE,
     HERMES_TIER_FILE,
     Blocked,
@@ -324,7 +325,7 @@ class ControlService:
         """Human-confirmed (ossctl TTY, Telegram /egress): write the flag, audit, FYI.
 
         Root applies it (ossbot-egress.path -> ossbot-egress-apply re-renders squid and restarts the
-        proxy). Returns the previous mode. Only sandbox_open changes what fetch/validate reach
+        proxy). Returns the previous mode. Only sandbox_open/sandbox_full change what fetch/validate reach
         (web_public; strict repos never), and the FYI says so. A switch invalidates nothing: approvals
         don't bind the egress mode, and holds, prefs and discovered targets are untouched (design §12.2)."""
         with db.transaction(self.conn):
@@ -376,7 +377,7 @@ class ControlService:
         if value == "off":
             state = "the coder's executor never gets a network"
         else:
-            state = "active" if mode == "sandbox_open" else "inactive until egress mode sandbox_open"
+            state = "active" if mode in CODE_WEB_MODES else "inactive until egress mode sandbox_open"
         self.notify(f"🌐 Implement network {previous} → {value} by {actor} ({state})")
         return previous
 

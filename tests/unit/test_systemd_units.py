@@ -280,6 +280,53 @@ def test_host_sysctls_enable_plpmtud_next_to_io_uring() -> None:
     assert "sysctl -q -w net.ipv4.tcp_mtu_probing=1" in firewall_sh
 
 
+def _services_sh() -> tuple[list[str], str, str]:
+    services_sh = (UNITS.parent / "scripts" / "lib" / "services.sh").read_text(encoding="utf-8")
+    enable = services_sh.split("OSSBOT_ENABLE_UNITS=(", 1)[1].split(")", 1)[0].split()
+    start = services_sh.split("step_enable_start()", 1)[1].split("case $level", 1)[0]
+    return enable, start, services_sh
+
+
+def test_floorlog_unit_shape_and_wiring() -> None:
+    """build-env design §4.4: a root reader of the kernel journal, restarted by systemd, gated by the boot
+    gate, enabled and started by provisioning (root helpers: always), restarted on a code deploy."""
+    unit = _unit(UNITS / "ossbot-floorlog.service")
+    service = unit["Service"]
+    assert service["Type"] == "simple" and service["Restart"] == "always" and service["RestartSec"] == "5"
+    assert _seconds(service["TimeoutStopSec"]) == 150 and "User" not in service
+    assert service["ExecCondition"] == "/opt/ossbot/bin/ossbot-boot-gate --allow minimal"
+    assert service["ExecStart"] == "/opt/ossbot/app/.venv/bin/python -I -m ossbot.watchdog.floorlog"
+    assert "systemd-journald.service" in unit["Unit"]["After"].split()
+    enable, start, services_sh = _services_sh()
+    assert "ossbot-floorlog.service" in enable and "ossbot-floorlog.service" in start
+    restart = services_sh.split("if ((OSSBOT_APP_CHANGED || OSSBOT_UNITS_CHANGED)); then", 1)[1].split("done", 1)[0]
+    assert "ossbot-floorlog.service" in restart
+    # the log dir sandboxd reads (group ossbox), created by step audit-anchors
+    assert "ensure_dir /srv/ossbot/logs/floor root ossbox 0750" in services_sh
+    assert 'install -o root -g ossbox -m 0640 /dev/null "$floor"' in services_sh
+
+
+def test_pubip_units_and_the_proxy_floor_directory() -> None:
+    """build-env design §4.7: a root oneshot every 60 s (20 s after boot), before the proxy starts; the proxy
+    binds the root-only floor directory read-only as a directory (renames stay visible after SIGHUP)."""
+    service = _unit(UNITS / "ossbot-pubip.service")["Service"]
+    assert service["Type"] == "oneshot" and "User" not in service
+    assert service["ExecStart"] == "/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.pubip"
+    assert service["ExecCondition"] == "/opt/ossbot/bin/ossbot-boot-gate --allow minimal"
+    assert _seconds(service["TimeoutStartSec"]) == 45 and _seconds(service["TimeoutStopSec"]) == 150
+    assert (service["NoNewPrivileges"], service["ProtectHome"], service["PrivateTmp"]) == ("yes", "yes", "yes")
+    timer = _unit(UNITS / "ossbot-pubip.timer")["Timer"]
+    assert (timer["OnBootSec"], timer["OnUnitActiveSec"], timer["AccuracySec"]) == ("20s", "60s", "5s")
+    proxy = _unit(UNITS / "ossbot-proxy.service")["Unit"]
+    assert "ossbot-pubip.service" in proxy["Wants"].split() and "ossbot-pubip.service" in proxy["After"].split()
+    enable, start, services_sh = _services_sh()
+    assert "ossbot-pubip.timer" in enable and "ossbot-pubip.timer" in start
+    assert "ensure_dir /etc/ossbot/proxy/floor root root 0755" in services_sh
+    run = (UNITS.parent / "scripts" / "bin" / "ossbot-proxy-run").read_text(encoding="utf-8")
+    assert '--mount "type=bind,src=$FLOOR,dst=/etc/squid/floor,readonly"' in run
+    assert "FLOOR=/etc/ossbot/proxy/floor" in run
+
+
 @pytest.mark.parametrize("path", NON_ROOT, ids=lambda p: p.name)
 def test_non_root_units_protect_home(path: Path) -> None:
     """P1-17: no non-root unit sees /home or /root (yes) or only an empty tmpfs (tmpfs, for units

@@ -62,10 +62,16 @@ def test_golden_contains_design_section_11_4_in_order() -> None:
     assert len(design) == 34
     positions = [golden.index(line) for line in design]  # ValueError if any design rule is missing
     assert positions == sorted(positions)
-    # the only additions are the ip6tables chains (DESIGN: "ip6tables ... DROP for the same uids") and the
-    # mangle MSS clamp chains (build-env F1c, ADR-0005 addendum 2026-10-24)
+    # the only additions are the ip6tables chains (DESIGN: "ip6tables ... DROP for the same uids"), the
+    # mangle MSS clamp chains (build-env F1c, ADR-0005 addendum 2026-10-24) and the ADR-0025 kernel floors
+    # (DESIGN §11.4: the LOG rules, the proxy floor per floor range and OSSBOT-PUBFLOOR, rendered per range)
     extra = [line for line in golden if line not in design]
-    assert extra and all(line.startswith(("ip6tables ", "iptables -t mangle ")) for line in extra)
+
+    def floor_line(line: str) -> bool:
+        return "OSSBOT-PUBFLOOR" in line or (line.startswith("iptables -A OSSBOT-") and (
+            "-j LOG --log-prefix OSSBOT-" in line or " -m conntrack --ctstate NEW -j DROP" in line))  # fmt: skip
+
+    assert extra and all(line.startswith(("ip6tables ", "iptables -t mangle ")) or floor_line(line) for line in extra)
 
 
 def test_parts_split_host_and_docker() -> None:
@@ -81,13 +87,15 @@ def test_parts_split_host_and_docker() -> None:
         ("iptables", "OSSBOT-MSS-IN", "INPUT", "mangle"),
     ]
     assert [(c.family, c.name, c.parent, c.table) for c in plan["docker"]] == [
+        ("iptables", "OSSBOT-PUBFLOOR", None, "filter"),
         ("iptables", "OSSBOT-FWD", "DOCKER-USER", "filter"),
     ]
 
 
 def test_dns_accepts_precede_the_drops() -> None:
     rules = render.firewall_plan(NS)["host"][0].rules
-    assert [r[-1] for r in rules] == ["ACCEPT", "ACCEPT", "DROP", "DROP"]
+    verdicts = [r[r.index("-j") + 1] for r in rules]
+    assert verdicts == ["ACCEPT", "ACCEPT", "LOG", "LOG", "DROP", "LOG", "DROP", "LOG", "DROP"]
 
 
 def test_every_service_uid_refuses_dns_before_the_lo_accept() -> None:
@@ -207,7 +215,9 @@ def test_nameservers_from_resolv_conf(tmp_path: Path) -> None:
 
 
 # ------------------------------------------------------------------------------ squid
-MODES = ("allowlist", "research", "open", "sandbox_open")
+MODES = ("allowlist", "research", "open", "sandbox_open", "sandbox_full")
+CODE_WEB = ("sandbox_open", "sandbox_full")
+FLOOR = " !denied_dst_loop !denied_dst"  # ADR-0025: the split dst ACL ends every allow line
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -236,16 +246,17 @@ def test_mode_table_of_design_11_5() -> None:
     web = {m: {line for line in _allows(t) if " all " in line} for m, t in texts.items()}
     assert web["allowlist"] == set()
     assert web["research"] == {
-        "http_access allow port_sandbox pool_research all !denied_dst",
-        "http_access allow port_hermes src_host all !denied_dst",
+        f"http_access allow port_sandbox pool_research all{FLOOR}",
+        f"http_access allow port_hermes src_host all{FLOOR}",
     }
-    assert web["open"] == web["research"] | {"http_access allow port_sandbox pool_llm all !denied_dst"}
-    assert web["sandbox_open"] == web["open"] | {"http_access allow port_sandbox pool_fetch all !denied_dst"}
+    assert web["open"] == web["research"] | {f"http_access allow port_sandbox pool_llm all{FLOOR}"}
+    assert web["sandbox_open"] == web["open"] | {f"http_access allow port_sandbox pool_fetch code_web_ok all{FLOOR}"}
+    assert web["sandbox_full"] == web["sandbox_open"]  # ADR-0025: the same squid rules
     for text in texts.values():
         acl = "acl cat_github_user_content dstdomain -n .github.io gist.github.com gist.githubusercontent.com\n"
         assert acl in text
-        assert "http_access allow port_sandbox pool_research cat_github_user_content !denied_dst\n" in text
-        assert "http_access allow port_hermes src_host cat_github_user_content !denied_dst\n" in text
+        assert f"http_access allow port_sandbox pool_research cat_github_user_content{FLOOR}\n" in text
+        assert f"http_access allow port_hermes src_host cat_github_user_content{FLOOR}\n" in text
         for line in _allows(text):
             if "pool_fetch" in line or "port_runner" in line or "port_gatekeeper" in line or "pool_llm" in line:
                 assert "github_user_content" not in line, line
@@ -261,15 +272,20 @@ def test_invariants_identical_in_every_mode() -> None:
             line for line in text.splitlines()
             if not line.startswith("# Egress mode:")
             and not (line.startswith("http_access allow ") and any(
-                k in line for k in ("pool_research", "port_hermes", "pool_llm", "pool_fetch all ")))
+                k in line for k in ("pool_research", "port_hermes", "pool_llm", "pool_fetch code_web_ok all ")))
+            and not (line.startswith("http_access deny port_sandbox ") and " all denied_dst" in line)
         ]  # fmt: skip
 
-    assert fixed(texts["allowlist"]) == fixed(texts["research"]) == fixed(texts["open"]) == fixed(texts["sandbox_open"])
+    views = {m: fixed(t) for m, t in texts.items()}
+    assert all(v == views["allowlist"] for v in views.values())
+    assert texts["sandbox_full"] == texts["sandbox_open"].replace(
+        "# Egress mode: sandbox_open ", "# Egress mode: sandbox_full ", 1
+    )  # ADR-0025: byte-identical but the label
     denied = _acls(texts["open"])["denied_domains"][2:]
     assert {"uploads.github.com", "checkpoint-api.hashicorp.com", "telegra.ph", "api.telegra.ph",
             "edit.telegra.ph"} == set(denied)  # fmt: skip
     assert ".github.io" not in denied and "gist.github.com" not in denied
-    assert "::/128" in _acls(texts["open"])["denied_dst"]  # P1-15
+    assert "::/128" in _acls(texts["open"])["denied_dst_loop"]  # P1-15 (a loopback floor: a note)
 
 
 def _with_telegraph(bundle: render.ConfigBundle, enabled: bool) -> render.ConfigBundle:
@@ -294,7 +310,7 @@ def test_telegraph_category_only_for_the_gatekeeper_and_only_when_enabled(mode: 
     assert _acls(on)["cat_telegraph"][2:] == ["api.telegra.ph"]
     lines = on.splitlines()
     uses = [ln for ln in lines if "cat_telegraph" in ln and ln.startswith("http_access")]
-    assert uses == ["http_access allow port_gatekeeper src_host cat_telegraph !ip_literal !denied_dst"]
+    assert uses == [f"http_access allow port_gatekeeper src_host cat_telegraph !ip_literal{FLOOR}"]
     assert lines.index(uses[0]) < lines.index("http_access deny denied_domains")
     assert {"telegra.ph", "api.telegra.ph", "edit.telegra.ph"} <= set(_acls(on)["denied_domains"][2:])
 
@@ -364,11 +380,16 @@ def test_renderer_refuses_mode_dependent_invariants() -> None:
     )
     with pytest.raises(render.RenderError, match=r"telegra\.ph"):
         render.render_squid(_with_egress(bundle, always_denied=denied), "0" * 64, [NS], TEMPLATE)
+    # ADR-0025: the built-in address floors are unioned, so config can only add: a snapshot that lacks one
+    # (or predates the IPv6 additions) still renders every floor
     cidrs = bundle.egress.always_denied.model_copy(
-        update={"cidrs": [c for c in bundle.egress.always_denied.cidrs if c != "169.254.0.0/16"]}
+        update={"cidrs": [c for c in bundle.egress.always_denied.cidrs if c not in ("169.254.0.0/16", "ff00::/8")]}
     )
-    with pytest.raises(render.RenderError, match=r"169\.254"):
-        render.render_squid(_with_egress(bundle, always_denied=cidrs), "0" * 64, [NS], TEMPLATE)
+    text = render.render_squid(_with_egress(bundle, always_denied=cidrs), "0" * 64, [NS], TEMPLATE)
+    assert {"169.254.0.0/16", "ff00::/8"} <= set(_acls(text)["denied_dst"])
+    assert set(_acls(text)["denied_dst"]) == set(
+        _acls(render.render_squid(bundle, "0" * 64, [NS], TEMPLATE))["denied_dst"]
+    )
 
 
 def test_check_mode_invariants_catches_a_grant_to_the_code_pool(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -395,6 +416,8 @@ WEB_MATRIX = {
     "open": {("sandbox", "pool_research"), ("hermes", "src_host"), ("sandbox", "pool_llm")},
     "sandbox_open": {("sandbox", "pool_research"), ("hermes", "src_host"), ("sandbox", "pool_llm"),
                      ("sandbox", "pool_fetch")},
+    "sandbox_full": {("sandbox", "pool_research"), ("hermes", "src_host"), ("sandbox", "pool_llm"),
+                     ("sandbox", "pool_fetch")},
 }  # fmt: skip
 
 
@@ -409,25 +432,29 @@ def test_mode_pool_matrix_rule_by_rule(mode: str) -> None:
         by_src.setdefault(r["src"] if r["port"] == "sandbox" else r["port"], []).append(r["dst"])
     cats = [f"cat_{c}" for c in base["fetch"] if f"cat_{c}" in {r["dst"] for r in ctx["rules"]}]
     assert by_src["pool_strict"] == cats  # the fetch base list, never a grant
-    assert by_src["pool_fetch"] == cats + (["all"] if mode == "sandbox_open" else [])
+    assert by_src["pool_fetch"] == cats + (["all"] if mode in CODE_WEB else [])
     assert by_src["runner"] == ["cat_github_read"] and by_src["gatekeeper"] == ["cat_gatekeeper"]
     assert "all" not in by_src["pool_strict"]
 
 
-def test_pool_strict_is_identical_in_all_four_goldens() -> None:
+def test_pool_strict_is_identical_in_all_five_goldens() -> None:
     texts = {m: (GOLDEN / f"squid.{m}.conf").read_text(encoding="utf-8") for m in MODES}
     strict = {
         m: [ln for ln in t.splitlines() if "pool_strict" in ln and not ln.startswith("#")] for m, t in texts.items()
     }
-    assert strict["allowlist"] == strict["research"] == strict["open"] == strict["sandbox_open"]
-    lines = strict["sandbox_open"]
+    assert all(v == strict["allowlist"] for v in strict.values())
+    lines = strict["sandbox_full"]
     assert lines[0] == "acl pool_strict src 10.213.192.0/19"
-    allows = lines[1:]
+    floors = [ln for ln in lines[1:] if ln.startswith("http_access deny ")]
+    allows = [ln for ln in lines[1:] if ln.startswith("http_access allow ")]
+    assert len(floors) + len(allows) == len(lines) - 1
     assert allows and all(ln.startswith("http_access allow port_sandbox pool_strict cat_") for ln in allows)
-    assert all(ln.endswith(" !denied_dst") for ln in allows)
+    assert all(ln.endswith(FLOOR) for ln in allows)
+    assert len(floors) == 2 * len(allows)  # one dst and one dst_loop floor line per rule (ADR-0025)
     fetch = [ln.replace("pool_fetch", "pool_strict") for ln in texts["allowlist"].splitlines()
              if ln.startswith("http_access allow port_sandbox pool_fetch ")]  # fmt: skip
     assert allows == fetch
+    assert not [ln for ln in lines if " all " in f"{ln} " or "code_web_ok" in ln]
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -450,17 +477,19 @@ def test_always_denied_precede_every_web_allow_and_floors_hold(mode: str) -> Non
     denies = [lines.index(f"http_access deny {a}") for a in ("denied_domains", "ip_literal")]
     for i, line in enumerate(lines):
         if line.startswith("http_access allow ") and " all " in line:
-            assert i > max(denies) and line.endswith(" !denied_dst"), line
+            assert i > max(denies) and line.endswith(FLOOR), line
     acls = _acls(text)
     assert set(render.REQUIRED_DENIED_DOMAINS) <= set(acls["denied_domains"][2:])
-    denied = {str(ipaddress.ip_network(c)) for c in acls["denied_dst"][1:]}
+    values = [c for c in acls["denied_dst"][1:] + acls["denied_dst_loop"][1:] if not c.startswith('"')]
+    denied = {str(ipaddress.ip_network(c)) for c in values}
     assert {str(ipaddress.ip_network(c)) for c in render.REQUIRED_DENIED_CIDRS} <= denied
+    assert '"/etc/squid/floor/public.txt"' in acls["denied_dst"]  # the public-address floor (§4.7)
 
 
 @pytest.mark.parametrize("mode", MODES)
 def test_log_format_carries_bytes_and_time(mode: str) -> None:
     text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, mode=mode)  # type: ignore[arg-type]
-    assert "logformat ossbot %ts.%03tu %>a %>lp %Ss/%03>Hs %rm %ru %<a %>st %<st %tr\n" in text
+    assert "logformat ossbot %ts.%03tu %>a %>lp %Ss/%03>Hs %rm %ru %<a %>st %<st %tr %{ossbot_floor}note\n" in text
     assert "access_log stdio:/var/log/squid/access.log logformat=ossbot rotate=0\n" in text
 
 
@@ -474,9 +503,9 @@ def _grant_code_web(bundle: render.ConfigBundle, mode: str) -> render.ConfigBund
 @pytest.mark.parametrize("mode", ["allowlist", "research", "open"])
 def test_check_mode_invariants_fails_when_fetch_gets_web_public_outside_sandbox_open(mode: str) -> None:
     bundle = _grant_code_web(_bundle(), mode)
-    with pytest.raises(render.RenderError, match="only in egress mode sandbox_open"):
+    with pytest.raises(render.RenderError, match="only in egress modes sandbox_open/sandbox_full"):
         render.check_mode_invariants(bundle, [NS])
-    with pytest.raises(render.RenderError, match="only in egress mode sandbox_open"):
+    with pytest.raises(render.RenderError, match="only in egress modes sandbox_open/sandbox_full"):
         render.render_squid(bundle, "0" * 64, [NS], TEMPLATE, mode="sandbox_open")
 
 
@@ -530,7 +559,7 @@ def _snapshot_env(tmp_path: Path, mode: str | None) -> tuple[Path, Path, Path, P
 
 
 def _drift(conf: Path, root: Path, template: Path, resolv: Path, control: Path, now: float | None = None) -> list[str]:
-    return render.squid_drift(conf, root, template, resolv, control, now)
+    return render.squid_drift(conf, root, template, resolv, control, now, host_cidrs=())
 
 
 def test_squid_drift_none_when_live_matches_the_mode(tmp_path: Path) -> None:
@@ -561,12 +590,16 @@ def test_squid_drift_open_login_window_needs_the_login_flag(tmp_path: Path) -> N
     conf.write_text(
         render.render_squid(parse_bundle(files), digest, [NS], TEMPLATE, hermes_login=True, mode="research")
     )
-    [problem] = render.squid_drift(conf, root, template, resolv, control, login_window_flag=flag)
+
+    def drift() -> list[str]:
+        return render.squid_drift(conf, root, template, resolv, control, login_window_flag=flag, host_cidrs=())
+
+    [problem] = drift()
     assert problem.startswith("firewall_drift:squid_mode ")  # left open, no login running
     flag.touch()
-    assert render.squid_drift(conf, root, template, resolv, control, login_window_flag=flag) == []  # login running
+    assert drift() == []  # login running
     conf.write_text(render.render_squid(parse_bundle(files), digest, [NS], TEMPLATE, mode="research"))
-    assert render.squid_drift(conf, root, template, resolv, control, login_window_flag=flag) == []  # closing
+    assert drift() == []  # closing
 
 
 def test_squid_drift_unparseable_flag_means_allowlist(tmp_path: Path) -> None:
@@ -682,17 +715,21 @@ def test_squid_listeners_and_classes() -> None:
     allow_all = [i for i, line in enumerate(text.splitlines()) if " all " in line and "allow" in line]
     last_deny = max(i for i, line in enumerate(text.splitlines()) if line.startswith("http_access deny port_sandbox"))
     assert allow_all and min(allow_all) > last_deny
-    assert "http_access allow port_sandbox pool_research all !denied_dst\n" in text
-    assert "http_access allow port_hermes src_host all !denied_dst\n" in text
-    assert "http_access allow port_sandbox pool_llm cat_kiro_core !denied_dst\n" in text
-    assert "pool_llm all" not in text and "pool_fetch all" not in text
-    assert "http_access allow port_gatekeeper src_host cat_gatekeeper !denied_dst\n" in text
+    assert f"http_access allow port_sandbox pool_research all{FLOOR}\n" in text
+    assert f"http_access allow port_hermes src_host all{FLOOR}\n" in text
+    assert f"http_access allow port_sandbox pool_llm cat_kiro_core{FLOOR}\n" in text
+    assert "pool_llm all" not in text and "pool_fetch all" not in text and "pool_fetch code_web_ok all" not in text
+    assert f"http_access allow port_gatekeeper src_host cat_gatekeeper{FLOOR}\n" in text
     assert "port_gatekeeper src_host all" not in text and "port_runner src_host all" not in text
 
 
 def test_squid_denied_by_default_and_inactive_categories_absent() -> None:
     text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE)
-    assert "telemetry" not in text  # kiro_telemetry is denied_by_default
+    # kiro_telemetry is denied_by_default: no category ACL or allow names it (ADR-0025's code_denied may)
+    assert "cat_kiro_telemetry" not in text
+    assert not [
+        ln for ln in text.splitlines() if "telemetry" in ln and ln.startswith(("acl cat_", "http_access allow"))
+    ]
     assert "cat_kiro_idc_login" not in text  # only while `ossctl hermes login` runs
     assert "cat_pkg_helm" not in text  # no egress_extra in targets.yaml
 
@@ -700,13 +737,13 @@ def test_squid_denied_by_default_and_inactive_categories_absent() -> None:
 def test_squid_hermes_login_window_adds_idc_hosts() -> None:
     text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, hermes_login=True)
     assert "acl cat_kiro_idc_login dstdomain -n test-org.awsapps.com oidc.us-east-1.amazonaws.com" in text
-    assert "http_access allow port_hermes src_host cat_kiro_idc_login !denied_dst\n" in text
+    assert f"http_access allow port_hermes src_host cat_kiro_idc_login{FLOOR}\n" in text
 
 
 def test_squid_pkg_helm_from_targets_snapshot() -> None:
     text = render.render_squid(_bundle("  egress_extra: [charts.jetstack.io]"), "0" * 64, [NS], TEMPLATE)
     assert "acl cat_pkg_helm dstdomain -n charts.jetstack.io\n" in text
-    assert "http_access allow port_sandbox pool_fetch cat_pkg_helm !denied_dst\n" in text
+    assert f"http_access allow port_sandbox pool_fetch cat_pkg_helm{FLOOR}\n" in text
 
 
 def test_squid_refuses_pool_sharing_profiles_with_different_categories() -> None:
@@ -731,11 +768,16 @@ _NAME_TYPES = {"dstdomain", "dstdom_regex"}
 
 
 def _acls(text: str) -> dict[str, list[str]]:
-    """ACL name -> [type, args...] of the rendered config."""
+    """ACL name -> [type, args...] of the rendered config. Only ``denied_dst`` has a second definition line
+    (the public-address floor file, ADR-0025); its values are appended, as squid does."""
     out: dict[str, list[str]] = {}
     for line in text.splitlines():
         if line.startswith("acl "):
             _, name, *rest = line.split()
+            if name == "denied_dst" and name in out:
+                assert rest == ["dst", '"/etc/squid/floor/public.txt"'], rest
+                out[name] += rest[1:]
+                continue
             assert name not in out, f"acl {name} defined twice"
             out[name] = rest
     return out
@@ -764,31 +806,42 @@ def test_squid_name_acls_never_reverse_lookup(hermes_login: bool) -> None:
     names = {n: a for n, a in acls.items() if a[0] in _NAME_TYPES}
     assert {n for n in names if n.startswith("cat_")} >= {"cat_kiro_core", "cat_github_read", "cat_pkg_helm"}
     assert {"denied_domains", "ip_literal"} <= set(names)
+    assert {"notify_only", "code_denied"} <= set(names)  # ADR-0025 name ACLs, also -n
     for name, (_kind, *args) in names.items():
         assert args[0] == "-n", name
-    assert _lookup_acls(acls) == {"denied_dst"}
-    assert acls["denied_dst"][0] == "dst"
+    assert _lookup_acls(acls) == {"denied_dst", "denied_dst_loop"}
+    assert acls["denied_dst"][0] == acls["denied_dst_loop"][0] == "dst"
 
 
 @pytest.mark.parametrize("hermes_login", [False, True])
 def test_squid_no_lookup_before_a_category_match(hermes_login: bool) -> None:
-    """P1-12: no deny line uses a lookup ACL, and on every allow line the resolved-IP deny comes
-    after the port, the source and the category, so only allowed names are ever resolved."""
-    text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, hermes_login=hermes_login)
+    """P1-12: a lookup ACL comes only after the port, the source and the category: on every allow line,
+    and on the ADR-0025 floor deny lines of the sandbox port (one pair per sandbox rule, the same pool and
+    category as its allow line), so only names the caller may reach are ever resolved."""
+    for mode in ("open", "sandbox_full"):
+        text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE, hermes_login=hermes_login, mode=mode)
+        _no_lookup_before_a_category_match(text)
+
+
+def _no_lookup_before_a_category_match(text: str) -> None:
     acls = _acls(text)
     slow = _lookup_acls(acls)
     lines = _access(text)
     assert lines[-1] == ("deny", ["all"])
     allows = [tokens for verdict, tokens in lines if verdict == "allow"]
     assert allows
+    allow_keys = {(t[1], t[-3]) for t in allows if t[0] == "port_sandbox"}
     for verdict, tokens in lines:
-        if verdict == "deny":
-            assert not {t.lstrip("!") for t in tokens} & slow, tokens
+        if verdict == "deny" and {t.lstrip("!") for t in tokens} & slow:
+            port, src, dst, acl, mark = tokens  # deny port_sandbox <pool> <category|all> <dst acl> <mark>
+            assert port == "port_sandbox" and src.startswith("pool_") and acl in slow and mark.startswith("mark_")
+            assert (src, dst) in allow_keys, tokens  # exactly the names the allow line resolves
     for tokens in allows:
-        port, src, dst, *rest = tokens
+        port, src, *mid, dst, loop, floor = tokens
         assert port.startswith("port_") and (src == "src_host" or src.startswith("pool_")), tokens
+        assert mid in ([], ["code_web_ok"]) and (mid == [] or (src, dst) == ("pool_fetch", "all")), tokens
         assert dst == "all" or dst.startswith("cat_"), tokens
-        assert rest == ["!denied_dst"], tokens  # DESIGN §11.3: resolved-IP deny for every allowed name
+        assert [loop, floor] == ["!denied_dst_loop", "!denied_dst"], tokens  # resolved-IP deny, every allowed name
     first_allow = next(i for i, (verdict, _) in enumerate(lines) if verdict == "allow")
     assert ("deny", ["ip_literal"]) in lines[:first_allow]
     # round 5 NIT: cache manager requests never reach the allow lines (web_public callers' `all`)
@@ -819,7 +872,7 @@ def test_ip_literal_patterns_match_literals_only() -> None:
 def test_squid_pinger_off_and_cidrs_validated() -> None:
     text = render.render_squid(_bundle(), "0" * 64, [NS], TEMPLATE)
     assert "pinger_enable off\n" in text  # no ICMP helper (it could not open a raw socket anyway)
-    assert "0.0.0.0/8" in _acls(text)["denied_dst"]  # a name resolving to 0.0.0.0 reaches squid's own lo
+    assert "0.0.0.0/8" in _acls(text)["denied_dst_loop"]  # a name resolving to 0.0.0.0 reaches squid's own lo
     # fake-IP range of Windows VPN/proxy clients (via the WSL NAT), IETF, multicast, reserved
     for cidr in ("198.18.0.0/15", "192.0.0.0/24", "224.0.0.0/4", "240.0.0.0/4"):
         assert cidr in _acls(text)["denied_dst"], cidr

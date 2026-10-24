@@ -8,9 +8,12 @@ from pathlib import Path
 import pytest
 
 from ossbot.common.control_flags import (
+    CODE_WEB_MODES,
     EGRESS_MODE_FILE,
+    EGRESS_MODES,
     FLAG_MAX_BYTES,
     HERMES_TIER_FILE,
+    LLM_WEB_MODES,
     read_egress_mode,
     read_hermes_tier,
     write_flag,
@@ -44,13 +47,22 @@ def test_symlinked_hermes_tier_is_locked(tmp_path: Path) -> None:
     assert read_hermes_tier(tmp_path, "self_improve") == "locked"
 
 
-@pytest.mark.parametrize("mode", ["allowlist", "research", "open", "sandbox_open"])
+def test_five_modes_in_widening_order() -> None:
+    """ADR-0025: sandbox_full is the fifth mode, after sandbox_open; the two code-web modes and the three
+    llm-web modes are subsets in that order."""
+    assert EGRESS_MODES == ("allowlist", "research", "open", "sandbox_open", "sandbox_full")
+    assert CODE_WEB_MODES == ("sandbox_open", "sandbox_full")
+    assert LLM_WEB_MODES == ("open", "sandbox_open", "sandbox_full")
+    assert set(CODE_WEB_MODES) < set(LLM_WEB_MODES) < set(EGRESS_MODES)
+
+
+@pytest.mark.parametrize("mode", ["allowlist", "research", "open", "sandbox_open", "sandbox_full"])
 def test_egress_mode_from_the_flag(tmp_path: Path, mode: str) -> None:
     write_flag(tmp_path / EGRESS_MODE_FILE, {"mode": mode, "actor": "t", "ts": "x"})
     assert read_egress_mode(tmp_path, "open") == mode
 
 
-@pytest.mark.parametrize("default", ["allowlist", "research", "open", "sandbox_open"])
+@pytest.mark.parametrize("default", ["allowlist", "research", "open", "sandbox_open", "sandbox_full"])
 def test_missing_flag_means_the_snapshot_default(tmp_path: Path, default: str) -> None:
     assert read_egress_mode(tmp_path, default) == default  # type: ignore[arg-type]
 
@@ -67,6 +79,9 @@ def test_missing_flag_means_the_snapshot_default(tmp_path: Path, default: str) -
         b'{"mode": "web"}',
         b'{"mode": "SANDBOX_OPEN"}',
         b'{"mode": "sandbox-open"}',
+        b'{"mode": "SANDBOX_FULL"}',
+        b'{"mode": "sandbox_full "}',
+        b'{"mode": "full"}',
         b'{"mode": ["open"]}',
         b'{"mode": null}',
         b"\xff\xfe",

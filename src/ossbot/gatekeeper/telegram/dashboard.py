@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 
 from ossbot.common import models as model_cfg
 from ossbot.common.clock import from_iso, to_iso
+from ossbot.common.control_flags import CODE_WEB_MODES
 from ossbot.common.hashing import sha256_text
 from ossbot.common.ids import new_token
 from ossbot.gatekeeper import db, ratelimit
@@ -99,8 +100,8 @@ class Dashboard:
         tier = ctx.control.hermes_tier(ctx.config.policy.hermes.capability_tier_default)
         rich_pref = prefs.get("rich_views", ctx.config.telegram.rich_views_default)
         size = ctx.discovery_prefs.effective(None).autonomous_max_class
-        impl = ctx.control.implement_network()  # ADR-0024: effective only in sandbox_open
-        inactive = " (inactive)" if impl != "off" and egress != "sandbox_open" else ""
+        impl = ctx.control.implement_network()  # ADR-0024/0025: effective only in sandbox_open/sandbox_full
+        inactive = " (inactive)" if impl != "off" and egress not in CODE_WEB_MODES else ""
         facts = (f"Egress: {egress} · Impl. network: {impl}{inactive} · Hermes: {tier} · Rich views: {rich_pref}"
                  f" · Auto size ≤ {size}")  # fmt: skip
         out: list[k.Line] = []

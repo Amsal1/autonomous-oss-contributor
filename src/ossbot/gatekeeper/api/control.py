@@ -6,6 +6,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Request
 
+from ossbot.common.control_flags import CODE_WEB_MODES
 from ossbot.common.schemas import (
     ControlView,
     DownRequest,
@@ -133,7 +134,7 @@ def _implement_network_view(request: Request, previous: ImplementNetwork | None 
     c = ctx(request)
     mode = c.control.egress_mode(c.config.egress.mode_default)
     value = c.control.implement_network()
-    return ImplementNetworkView(value=value, active=value != "off" and mode == "sandbox_open", egress_mode=mode,
+    return ImplementNetworkView(value=value, active=value != "off" and mode in CODE_WEB_MODES, egress_mode=mode,
                                 previous=previous)  # fmt: skip
 
 

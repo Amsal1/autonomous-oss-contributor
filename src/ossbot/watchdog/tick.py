@@ -7,7 +7,10 @@ Per tick, in order:
    kill (soft) ``firewall_drift`` / ``firewall_drift:resolver_changed`` /
    ``firewall_drift:resolved_ipc`` (systemd-resolved unmasked or listening again, e.g. after an
    apt upgrade) / ``firewall_drift:io_uring`` (``kernel.io_uring_disabled`` is not 2) /
-   ``firewall_drift:squid_mode`` (the live squid.conf differs from the render for the egress mode);
+   ``firewall_drift:squid_mode`` (the live squid.conf differs from the render for the egress mode) /
+   ``firewall_drift:host_floor_changed`` / ``firewall_drift:public_floor`` / ``firewall_drift:floor_lock``
+   (ADR-0025: a moved host address, OSSBOT-PUBFLOOR vs public.txt, three consecutive ``floor_lock_busy``
+   skips of the shared floor lock);
 3. while killed: a running ``ossbot.sandbox=1`` container or an active unit the kill stops ->
    re-enforce (``ossbot-kill --enforce``) + alert;
 4. while running: gatekeeper ``/v1/health`` failing 4 consecutive ticks -> ``paused``
@@ -121,6 +124,17 @@ def unit_active(unit: str) -> bool:
     return _run([SYSTEMCTL, "is-active", "--quiet", unit]).returncode == 0
 
 
+FLOOR_LOCK_BUSY = "floor_lock_busy"
+FLOOR_LOCK_BUSY_TICKS = 3  # consecutive skipped checks before it counts as drift (build-env design §4.7)
+# The --check detail words, first match wins: resolver_changed (a new WSL resolver); host_floor_changed (a
+# host address outside the static floors moved, ADR-0025: the next start re-renders); public_floor
+# (OSSBOT-PUBFLOOR differs from public.txt); floor_lock_untrusted (the root-only lock was replaced, C-M1);
+# resolved_ipc (systemd-resolved unmasked, P1-6); io_uring (kernel.io_uring_disabled != 2, P1-14);
+# squid_mode (the live squid.conf is not the render for the current egress mode, §11.5).
+DRIFT_DETAILS = ("resolver_changed", "host_floor_changed", "public_floor", "floor_lock_untrusted",
+                 "resolved_ipc", "io_uring", "squid_mode")  # fmt: skip
+
+
 def check_firewall(t: Tick) -> None:
     out = _run([FIREWALL, "--check"])
     for _ in range(3):  # a Docker (re)start briefly lacks DOCKER-USER until PartOf re-applies it
@@ -128,16 +142,28 @@ def check_firewall(t: Tick) -> None:
             break
         time.sleep(3)
         out = _run([FIREWALL, "--check"])
-    if out.returncode != 0:
-        reason = "firewall_drift"
-        # resolved_ipc: systemd-resolved unmasked (P1-6); io_uring: kernel.io_uring_disabled != 2 (P1-14);
-        # squid_mode: the live squid.conf is not the render for the current egress mode (§11.5)
-        for detail in ("resolver_changed", "resolved_ipc", "io_uring", "squid_mode"):
-            if detail in out.stderr:
-                reason = f"firewall_drift:{detail}"
-                break
+    if out.returncode == 0:
+        t.state[FLOOR_LOCK_BUSY] = 0
+        return
+    if FLOOR_LOCK_BUSY in out.stderr:
+        # C-M1: an exclusive holder (pubip, --apply) outlasted the shared 10 s wait: skip this tick's verdict;
+        # the third consecutive skip is drift (a wedged lock must not hide a floor change for long)
+        busy = int(t.state.get(FLOOR_LOCK_BUSY, 0)) + 1
+        t.state[FLOOR_LOCK_BUSY] = busy
+        t.event(FLOOR_LOCK_BUSY, ticks=busy)
+        if busy < FLOOR_LOCK_BUSY_TICKS:
+            return
         t.event("firewall_drift", detail=out.stderr.strip()[-500:])
-        kill(t, reason)
+        kill(t, "firewall_drift:floor_lock")
+        return
+    t.state[FLOOR_LOCK_BUSY] = 0
+    reason = "firewall_drift"
+    for detail in DRIFT_DETAILS:
+        if detail in out.stderr:
+            reason = f"firewall_drift:{detail}"
+            break
+    t.event("firewall_drift", detail=out.stderr.strip()[-500:])
+    kill(t, reason)
 
 
 def reenforce_kill(t: Tick, level: str) -> None:

@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from ossbot.common.control_flags import EGRESS_MODES, EgressMode, HermesTier
+from ossbot.common.control_flags import CODE_WEB_MODES, EGRESS_MODES, EgressMode, HermesTier
 from ossbot.common.project import PROJECT_URL
 from ossbot.common.size import CLASS_BOUNDS, SelectableSizeClass
 from ossbot.common.yamlio import YamlError, safe_load
@@ -647,16 +647,31 @@ class HostCaller(Strict):
 class AlwaysDenied(Strict):
     cidrs: list[str]
     domains: list[Annotated[str, Field(pattern=HOST_RE)]]
+    # ADR-0025: the always-denied names that are telemetry, not a write channel: a hit is a note, not a hold.
+    # Absent = the renderer's default ([checkpoint-api.hashicorp.com]); must be a subset of ``domains``.
+    notify_only: Annotated[list[Annotated[str, Field(pattern=HOST_RE)]], Field(min_length=1)] | None = None
+
+    @model_validator(mode="after")
+    def _notify_only_subset(self) -> AlwaysDenied:
+        extra = sorted(set(self.notify_only or []) - set(self.domains))
+        if extra:
+            raise ValueError(f"always_denied.notify_only must be a subset of always_denied.domains; not: {extra}")
+        return self
 
 
 # Egress modes (§11.5, decision B3): a mode only ADDS categories, and only to this closed set of
 # grantees. runner and gatekeeper are not keys, so data can never widen what the trusted writers can
-# reach. fetch and validate (repo code) are keys only for the owner's mode sandbox_open (ADR-0023):
-# the validator below admits them there only, with web_public only, and the same list for both (they
-# share the fetch pool); strict repos keep the base list in every mode. The renderer asserts the rest.
+# reach. fetch and validate (repo code) are keys only for the owner's modes sandbox_open (ADR-0023) and
+# sandbox_full (ADR-0025): the validator below admits them there only, with web_public only, and the same
+# list for both (they share the fetch pool); strict repos keep the base list in every mode. sandbox_full
+# must grant exactly what sandbox_open grants (the difference is sandboxd's guard policy). The renderer
+# asserts the rest.
 ModeGrantee = Literal["research", "hermes", "agent-llm", "catalog", "fetch", "validate"]
 REPO_CODE_GRANTEES: tuple[ModeGrantee, ...] = ("fetch", "validate")
-REPO_CODE_GRANT_MODE = "sandbox_open"
+REPO_CODE_GRANT_MODES: tuple[EgressMode, ...] = CODE_WEB_MODES
+# A snapshot written before ADR-0025 has no modes.sandbox_full: it still parses, the renderer uses the
+# sandbox_open grants for it (identical by the validator), and the gatekeeper refuses to select it.
+OPTIONAL_MODES: tuple[EgressMode, ...] = ("sandbox_full",)
 TELEGRAPH_CATEGORY = "telegraph"  # DESIGN §14.12.8: the gatekeeper's opt-in Telegraph egress
 
 
@@ -675,17 +690,28 @@ class EgressConfig(Strict):
     sandbox_profiles: dict[SandboxProfileName, list[str]]
     host_callers: dict[HostCallerName, HostCaller]
     always_denied: AlwaysDenied
+    # ADR-0025: names no repo-code container may reach in any mode (the renderer unions its built-ins:
+    # Telegram and every Kiro host), so an old snapshot without the key still renders the full list.
+    code_denied: list[Annotated[str, Field(pattern=HOST_RE)]] = Field(default_factory=list)
     mode_default: EgressMode = "open"
     modes: dict[EgressMode, dict[ModeGrantee, list[str]]] = Field(default_factory=dict)
     anomaly: EgressAnomaly = EgressAnomaly()
 
+    def mode_grants(self, mode: str) -> dict[str, list[str]]:
+        """The grants of ``mode``; an absent optional mode (a pre-ADR-0025 snapshot) has sandbox_open's."""
+
+        def find(name: str) -> dict[ModeGrantee, list[str]] | None:
+            return next((g for m, g in self.modes.items() if m == name), None)
+
+        grants = find(mode)
+        if grants is None and mode in OPTIONAL_MODES:
+            grants = find("sandbox_open")
+        return {str(k): v for k, v in (grants or {}).items()}
+
     def repo_code_web(self, mode: str) -> bool:
-        """Whether ``mode`` grants fetch/validate web_public (the validator allows it in sandbox_open only)."""
-        return any(
-            m == mode and "web_public" in grants.get(g, [])
-            for m, grants in self.modes.items()
-            for g in REPO_CODE_GRANTEES
-        )
+        """Whether ``mode`` grants fetch/validate web_public (the validator allows it in the code-web modes only)."""
+        grants = self.mode_grants(mode)
+        return any("web_public" in grants.get(g, []) for g in REPO_CODE_GRANTEES)
 
     def repo_code_change(self, before: str, after: str) -> str:
         """``+web_public`` / ``-web_public`` (a minus sign, U+2212, like egress_changes) when a switch changes
@@ -695,19 +721,23 @@ class EgressConfig(Strict):
 
     @model_validator(mode="after")
     def _references_exist(self) -> EgressConfig:
-        missing_modes = [m for m in EGRESS_MODES if m not in self.modes]
+        missing_modes = [m for m in EGRESS_MODES if m not in self.modes and m not in OPTIONAL_MODES]
         if missing_modes:
             raise ValueError(f"modes must define every egress mode; missing {missing_modes}")
         for mode, grants in self.modes.items():
             code = {g: grants[g] for g in REPO_CODE_GRANTEES if g in grants}
             if not code:
                 continue
-            if mode != REPO_CODE_GRANT_MODE:
-                raise ValueError(f"fetch/validate get grants only in egress mode {REPO_CODE_GRANT_MODE} (not {mode})")
+            if mode not in REPO_CODE_GRANT_MODES:
+                raise ValueError(f"fetch/validate get grants only in egress modes {'/'.join(REPO_CODE_GRANT_MODES)}"
+                                 f" (not {mode})")  # fmt: skip
             if any(cats != ["web_public"] for cats in code.values()):
                 raise ValueError("fetch/validate may be granted web_public only")
             if len(code) != len(REPO_CODE_GRANTEES):
                 raise ValueError("fetch and validate share a squid pool: grant both the same list")
+        if "sandbox_full" in self.modes and self.modes["sandbox_full"] != self.modes.get("sandbox_open"):
+            raise ValueError("sandbox_full_must_equal_sandbox_open: modes.sandbox_full must grant exactly what"
+                             " modes.sandbox_open grants (ADR-0025)")  # fmt: skip
         known = set(self.categories) | {"web_public", "kiro_idc_login", "pkg_helm"}
         refs = [*self.denied_by_default]
         for cats in self.sandbox_profiles.values():

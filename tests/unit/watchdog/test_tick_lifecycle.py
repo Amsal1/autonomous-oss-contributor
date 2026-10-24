@@ -76,6 +76,12 @@ def test_workers_down_keeps_health_and_restarts_only_the_core(calls: list[str]) 
          "firewall_drift:io_uring"),
         ("ossbot-firewall --check: firewall_drift:squid_mode /etc/ossbot/proxy/squid.conf differs from the "
          "render for egress mode allowlist", "firewall_drift:squid_mode"),
+        ("ossbot-firewall --check: firewall_drift:host_floor_changed the live host addresses moved",
+         "firewall_drift:host_floor_changed"),
+        ("ossbot-firewall --check: firewall_drift:public_floor OSSBOT-PUBFLOOR differs from the public floor file",
+         "firewall_drift:public_floor"),
+        ("ossbot-render: floor_lock_untrusted: /etc/ossbot/proxy/floor/.lock: mode 0644, expected 0600",
+         "firewall_drift:floor_lock_untrusted"),
     ],
 )  # fmt: skip
 def test_firewall_drift_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stderr: str, reason: str) -> None:
@@ -86,3 +92,27 @@ def test_firewall_drift_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, 
     tick.check_firewall(t)
     killed = read_flags(tmp_path).killed
     assert killed is not None and killed.reason == reason and killed.level == "soft"
+
+
+def test_floor_lock_busy_skips_twice_then_counts_as_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """C-M1 / design §4.7: a busy shared floor lock skips the tick's firewall verdict (WARNING
+    floor_lock_busy); the third consecutive skip is firewall_drift:floor_lock; a passing check resets it."""
+    monkeypatch.setattr(tick, "CONTROL", tmp_path)
+    monkeypatch.setattr(tick.time, "sleep", lambda s: None)
+    rc = {"value": 2}
+    busy = "ossbot-render: floor_lock_busy: /etc/ossbot/proxy/floor/.lock held by another process for more than 10 s"
+    monkeypatch.setattr(tick, "_run", lambda argv, timeout=15.0: subprocess.CompletedProcess(argv, rc["value"], "",
+                                                                                              busy))  # fmt: skip
+    t = tick.Tick({})
+    for expected in (1, 2):
+        tick.check_firewall(t)
+        assert t.state["floor_lock_busy"] == expected and read_flags(tmp_path).killed is None
+    rc["value"] = 0
+    tick.check_firewall(t)
+    assert t.state["floor_lock_busy"] == 0
+    rc["value"] = 2
+    for _ in range(3):
+        tick.check_firewall(t)
+    killed = read_flags(tmp_path).killed
+    assert killed is not None and killed.reason == "firewall_drift:floor_lock"
+    assert [e["event"] for e in t.events].count("floor_lock_busy") == 5

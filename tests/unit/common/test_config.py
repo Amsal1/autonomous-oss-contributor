@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from pydantic import ValidationError
 
@@ -29,6 +31,7 @@ from ossbot.common.config import (
     resolve_target,
 )
 from ossbot.common.project import PROJECT_URL
+from ossbot.common.yamlio import safe_load
 from tests.conftest import FIXTURES, REPO_ROOT
 
 CONFIG = REPO_ROOT / "config"
@@ -307,15 +310,68 @@ def test_egress_rejects_unknown_category() -> None:
 
 
 def test_shipped_egress_keeps_mode_default_open() -> None:
-    """O7 guard: this run ships sandbox_open selectable only; the owner switches with /egress."""
+    """O7 guard: this run ships sandbox_open/sandbox_full selectable only; the owner switches with /egress."""
     egress = parse_yaml_model(EgressConfig, "egress.yaml", load("egress.yaml"))
     assert egress.mode_default == "open"
-    assert list(egress.modes) == ["allowlist", "research", "open", "sandbox_open"]
+    assert list(egress.modes) == ["allowlist", "research", "open", "sandbox_open", "sandbox_full"]
     grants = egress.modes["sandbox_open"]
     assert grants["fetch"] == grants["validate"] == ["web_public"]
+    assert egress.modes["sandbox_full"] == grants  # ADR-0025: the same squid rules
     for mode in ("allowlist", "research", "open"):
         assert "fetch" not in egress.modes[mode] and "validate" not in egress.modes[mode]
     assert (egress.anomaly.max_hosts, egress.anomaly.max_upload_mb, egress.anomaly.max_download_mb) == (60, 50, 6144)
+
+
+def test_shipped_egress_floors_of_adr_0025() -> None:
+    """The three IPv6 floors, notify_only (a subset of the always-denied names) and the repo-code deny list."""
+    egress = parse_yaml_model(EgressConfig, "egress.yaml", load("egress.yaml"))
+    assert {"ff00::/8", "64:ff9b::/96", "2002::/16"} <= set(egress.always_denied.cidrs)
+    assert egress.always_denied.notify_only == ["checkpoint-api.hashicorp.com"]
+    assert {"api.telegram.org", ".telegram.org", "t.me", ".kiro.dev", "q.us-east-1.amazonaws.com"} <= set(
+        egress.code_denied
+    )
+    assert "api.github.com" not in egress.code_denied  # github_read: repo code holds no token (I5 core)
+
+
+def _old_snapshot_egress() -> str:
+    """egress.yaml as written before ADR-0025: no sandbox_full, no code_denied, no notify_only, old CIDRs."""
+    text = load("egress.yaml").decode()
+    start = text.index("  # ADR-0025: the same grants as sandbox_open")
+    end = text.index("# Per-job egress limits")
+    text = text[:start] + text[end:]
+    text = text[: text.index("# ADR-0025: names no repo-code")]
+    text = re.sub(r"\n  # ADR-0025: the one always-denied name.*?notify_only: \[[^\]]*\]\n", "\n", text, flags=re.S)
+    return text.replace(', "ff00::/8", "64:ff9b::/96", "2002::/16"', "")
+
+
+def test_old_snapshot_without_the_new_keys_still_parses() -> None:
+    """A snapshot written before ADR-0025 parses (the owner's /reload comes after the deploy): sandbox_full
+    gets sandbox_open's grants, code_denied is empty, notify_only is absent."""
+    text = _old_snapshot_egress()
+    data = safe_load(text)
+    assert "sandbox_full" not in data["modes"] and "code_denied" not in data
+    assert "notify_only" not in data["always_denied"] and "ff00::/8" not in data["always_denied"]["cidrs"]
+    egress = parse_yaml_model(EgressConfig, "egress.yaml", text.encode())
+    assert "sandbox_full" not in egress.modes
+    assert egress.mode_grants("sandbox_full") == egress.mode_grants("sandbox_open")
+    assert egress.repo_code_web("sandbox_full") and egress.repo_code_web("sandbox_open")
+    assert not egress.repo_code_web("open")
+    assert egress.code_denied == [] and egress.always_denied.notify_only is None
+
+
+def test_sandbox_full_must_equal_sandbox_open() -> None:
+    text = load("egress.yaml").decode()
+    full = text.index("  sandbox_full: {research: [web_public], hermes: [web_public], agent-llm: [web_public]")
+    bad = text[:full] + text[full:].replace("catalog: [web_public],\n", "\n", 1)
+    with pytest.raises(ConfigError, match="sandbox_full_must_equal_sandbox_open"):
+        parse_yaml_model(EgressConfig, "egress.yaml", bad.encode())
+
+
+def test_notify_only_must_be_an_always_denied_name() -> None:
+    text = load("egress.yaml").decode().replace("notify_only: [checkpoint-api.hashicorp.com]",
+                                                "notify_only: [checkpoint-api.hashicorp.com, example.com]")  # fmt: skip
+    with pytest.raises(ConfigError, match="notify_only must be a subset"):
+        parse_yaml_model(EgressConfig, "egress.yaml", text.encode())
 
 
 SANDBOX_OPEN_LINE = (
@@ -329,7 +385,7 @@ SANDBOX_OPEN_LINE = (
     [
         ("  open: {research: [web_public],",
          "  open: {fetch: [web_public], validate: [web_public], research: [web_public],",
-         "only in egress mode sandbox_open"),
+         "only in egress modes sandbox_open/sandbox_full"),
         (SANDBOX_OPEN_LINE, SANDBOX_OPEN_LINE.replace("fetch: [web_public]", "fetch: [pkg_python]"), "web_public only"),
         (SANDBOX_OPEN_LINE,
          SANDBOX_OPEN_LINE.replace("fetch: [web_public], validate", "fetch: [web_public, pkg_python], validate"),

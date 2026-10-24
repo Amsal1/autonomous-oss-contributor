@@ -1,7 +1,8 @@
 """The per-coder-run network decision for the coder's executor, agent-exec (ADR-0024, design §4b/§4e).
 
 ``decide()`` is the gatekeeper half of a two-key check: sandboxd networks agent-exec only when its own
-read of the egress-mode flag is ``sandbox_open`` AND this answers ``web``. Check order (it yields exactly
+read of the egress-mode flag is a code-web mode (``sandbox_open`` or ``sandbox_full``, ADR-0025) AND this
+answers ``web``. Check order (it yields exactly
 the columns (i) and (i') of the decision table): state, setting, egress mode, target/strict, auto, grant.
 
 The grant (set only by the H-only rerun edge) counts only while ``network_grant = 1`` and
@@ -16,6 +17,7 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 from ossbot.common.clock import from_iso
+from ossbot.common.control_flags import CODE_WEB_MODES
 from ossbot.common.schemas import TERMINAL_STATES, ImplementEgress, ImplementEgressReason, State
 from ossbot.gatekeeper import db
 
@@ -45,7 +47,7 @@ def decide(ctx: AppContext, cid: str) -> Decision:
     setting = ctx.control.implement_network()
     if setting == "off":
         return "none", "setting_off"
-    if ctx.control.egress_mode(ctx.config.egress.mode_default) != "sandbox_open":
+    if ctx.control.egress_mode(ctx.config.egress.mode_default) not in CODE_WEB_MODES:
         return "none", "egress_mode"
     target = ctx.discovered.effective_target(str(row["upstream"]))
     if target is None or target.egress == "strict":  # None is unreachable today: fail closed
@@ -104,7 +106,7 @@ def rerun_guard(ctx: AppContext, row: sqlite3.Row) -> str | None:
         return code
     if repo_strict(ctx, str(row["upstream"])):
         return "strict"
-    if ctx.control.egress_mode(ctx.config.egress.mode_default) != "sandbox_open":
+    if ctx.control.egress_mode(ctx.config.egress.mode_default) not in CODE_WEB_MODES:
         return "egress_mode"
     if ctx.control.implement_network() == "off":
         return "setting_off"

@@ -1,0 +1,19 @@
+# Public-address floor (build-env design §4.7, ADR-0025): root learns the owner's public egress address(es)
+# from two providers (root's own network stack, never a sandbox) and keeps them floored in squid
+# (/etc/ossbot/proxy/floor/public.txt, reloaded with SIGHUP) and in the kernel chain OSSBOT-PUBFLOOR, under
+# the root-only floor lock. While no answer is fresher than 300 s the floor is unknown: repo code gets no
+# public web (code-web.txt sentinel) and sandboxd defers web jobs. Every 60 s from ossbot-pubip.timer.
+[Unit]
+Description=ossbot public-address floor update
+After=ossbot-boot-gate.service ossbot-firewall-docker.service docker.service
+[Service]
+Type=oneshot
+ExecCondition=/opt/ossbot/bin/ossbot-boot-gate --allow minimal
+ExecStart=/opt/ossbot/app/.venv/bin/python -I -m ossbot.ctl.pubip
+WorkingDirectory=/
+TimeoutStartSec=45
+# CR-001: >= drain timeout (120 s) + 30 s, like every ossbot unit.
+TimeoutStopSec=150
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes

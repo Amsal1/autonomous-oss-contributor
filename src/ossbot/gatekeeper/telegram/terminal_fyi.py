@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
+from ossbot.common.control_flags import CODE_WEB_MODES
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db, implement_network
 from ossbot.gatekeeper.context import AppContext
@@ -66,7 +67,7 @@ def rerun_offer(ctx: AppContext, row: sqlite3.Row) -> RerunOffer | None:
         return RerunOffer("Next: this repo is egress: strict, so its coder never gets network. Logs: /logs ",
                           False, logs=True)  # fmt: skip
     mode = ctx.control.egress_mode(ctx.config.egress.mode_default)
-    if mode != "sandbox_open":
+    if mode not in CODE_WEB_MODES:
         return RerunOffer(f"Next: a rerun with network needs egress mode sandbox_open (now {mode}) and implement"
                           " network on_request or auto (/egress); then tap below or use /queue.", True)  # fmt: skip
     if ctx.control.implement_network() == "off":

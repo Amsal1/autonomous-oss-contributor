@@ -28,3 +28,10 @@ rows:
   - {setting: auto, mode: open, repo: strict, no_grant: none, grant: none, tap: strict}
   - {setting: auto, mode: sandbox_open, repo: normal, no_grant: web, grant: web, tap: web}
   - {setting: auto, mode: sandbox_open, repo: strict, no_grant: none, grant: none, tap: strict}
+  # ADR-0025: the table reads "egress mode in {sandbox_open, sandbox_full}" where it read "sandbox_open"
+  - {setting: off, mode: sandbox_full, repo: normal, no_grant: none, grant: none, tap: setting_off}
+  - {setting: off, mode: sandbox_full, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: on_request, mode: sandbox_full, repo: normal, no_grant: none, grant: web, tap: web}
+  - {setting: on_request, mode: sandbox_full, repo: strict, no_grant: none, grant: none, tap: strict}
+  - {setting: auto, mode: sandbox_full, repo: normal, no_grant: web, grant: web, tap: web}
+  - {setting: auto, mode: sandbox_full, repo: strict, no_grant: none, grant: none, tap: strict}

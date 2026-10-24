@@ -70,7 +70,7 @@ def test_decision_table_columns_i_and_i_prime(ctx: AppContext, row: dict[str, st
 
 def test_table_is_complete() -> None:
     cells = {(r["setting"], r["mode"], r["repo"]) for r in TABLE}
-    assert len(cells) == len(TABLE) == 3 * 4 * 2
+    assert len(cells) == len(TABLE) == 3 * 5 * 2  # setting x the five egress modes (ADR-0025) x strict
 
 
 def test_reasons_in_check_order(ctx: AppContext) -> None:

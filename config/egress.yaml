@@ -40,18 +40,24 @@ host_callers:
 # (`ossctl egress mode <m>`); absent = mode_default, unparseable = allowlist (fail closed).
 # Grants only ADD categories, and only to research, hermes, agent-llm and catalog (schema keys);
 # agent-llm and catalog share the llm pool, so they always get the same list. fetch and validate
-# (repo code) may be granted web_public only in sandbox_open (ADR-0023, owner decision 2026-10-21),
-# both the same list; repos with `egress: strict` keep the base list in every mode (pool_strict).
-# pool_fetch also holds agent-exec (the coder's executor, no credential) when the owner's
-# implement_network allows it (ADR-0024): the same fetch list, so web_public only in sandbox_open;
-# a strict repo's agent-exec never gets a network.
-# mode_default stays open: the owner switches to sandbox_open himself with /egress (two-tap, audited).
+# (repo code) may be granted web_public only in sandbox_open (ADR-0023, owner decision 2026-10-21)
+# and sandbox_full (ADR-0025), both the same list; repos with `egress: strict` keep the base list in
+# every mode (pool_strict). pool_fetch also holds agent-exec (the coder's executor, no credential) when
+# the owner's implement_network allows it (ADR-0024): the same fetch list, so web_public only in those
+# two modes; a strict repo's agent-exec never gets a network.
+# mode_default stays open: the owner switches to sandbox_open/sandbox_full himself with /egress
+# (two-tap, audited).
 mode_default: open
 modes:
   allowlist: {}
   research: {research: [web_public], hermes: [web_public]}
   open: {research: [web_public], hermes: [web_public], agent-llm: [web_public], catalog: [web_public]}
   sandbox_open: {research: [web_public], hermes: [web_public], agent-llm: [web_public], catalog: [web_public],
+                 fetch: [web_public], validate: [web_public]}
+  # ADR-0025: the same grants as sandbox_open (the schema and the renderer assert it); the difference is
+  # sandboxd's guard policy (volume breaches of web jobs are notes, floor attempts hold) and the
+  # implement_network raise of the owner's confirm.
+  sandbox_full: {research: [web_public], hermes: [web_public], agent-llm: [web_public], catalog: [web_public],
                  fetch: [web_public], validate: [web_public]}
 # Per-job egress limits of fetch/validate jobs (sandboxd meter, design §13); config-only, /reload.
 # Unrelated to policy.yaml `anomaly`, which isn't enforced yet.
@@ -63,12 +69,24 @@ always_denied:
   # 198.18.0.0/15: fake-IP range of Windows VPN/proxy clients (TUN modes), reachable through the WSL NAT.
   # 192.0.0.0/24 (IETF protocol assignments), 224.0.0.0/4 (multicast), 240.0.0.0/4 (reserved, broadcast).
   # ::/128 (unspecified, the IPv6 0.0.0.0, P1-15), ::1/128 (loopback), fc00::/7 (ULA), fe80::/10 (link-local).
+  # ff00::/8 (IPv6 multicast); 64:ff9b::/96 (NAT64) and 2002::/16 (6to4) can embed a private IPv4 (ADR-0025).
   # ::ffff:0:0/96 (IPv4-mapped) is documented, not listed: squid keeps IPv4 addresses in mapped form,
   # so the entry would deny every IPv4 destination; the IPv4 ranges above cover mapped addresses and
   # IP-literal request hosts are denied by name before any lookup.
-  cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 0.0.0.0/8, 198.18.0.0/15, 192.0.0.0/24, 224.0.0.0/4, 240.0.0.0/4, "::/128", "::1/128", "fc00::/7", "fe80::/10"]
+  cidrs: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8, 0.0.0.0/8, 198.18.0.0/15, 192.0.0.0/24, 224.0.0.0/4, 240.0.0.0/4, "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8", "64:ff9b::/96", "2002::/16"]
   # uploads.github.com: accepts release-asset uploads (a write channel).
   # checkpoint-api.hashicorp.com: version/telemetry beacon that leaks usage, never needed (CHECKPOINT_DISABLE=1).
   # telegra.ph, api.telegra.ph, edit.telegra.ph: a public, undeletable publishing channel; no LLM caller
   #   may reach it (CR-003 U11). Only the gatekeeper's opt-in `telegraph` category (above) is let through.
   domains: [uploads.github.com, checkpoint-api.hashicorp.com, telegra.ph, api.telegra.ph, edit.telegra.ph]
+  # ADR-0025: the one always-denied name that is telemetry, not a write channel: a hit is denied and noted,
+  # never a hold. Must be a subset of `domains`.
+  notify_only: [checkpoint-api.hashicorp.com]
+# ADR-0025: names no repo-code container may reach in any mode (they hold no credential, so these would be
+# unauthenticated, but Telegram and Kiro are the control and model channels). api.github.com stays reachable
+# (github_read): repo code holds no token, so a write there is unauthenticated (I5 core). The renderer always
+# unions its built-ins (the Telegram names, .kiro.dev, every kiro_* host and the IdC login hosts).
+code_denied: [api.telegram.org, .telegram.org, t.me, .t.me, telegram.me, .telegram.me, .kiro.dev,
+              prod.us-east-1.auth.desktop.kiro.dev, q.us-east-1.amazonaws.com, q.eu-central-1.amazonaws.com,
+              desktop-release.q.us-east-1.amazonaws.com, dataplane.rum.us-east-1.amazonaws.com,
+              dataplane.rum.eu-central-1.amazonaws.com, prod.us-east-1.telemetry.kiro.aws.dev]

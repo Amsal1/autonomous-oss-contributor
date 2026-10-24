@@ -1,0 +1,10 @@
+# Public-address floor refresh (build-env design §4.7): 20 s after boot, then every 60 s. Enabled by
+# provisioning (OSSBOT_ENABLE_UNITS).
+[Unit]
+Description=ossbot public-address floor refresh timer
+[Timer]
+OnBootSec=20s
+OnUnitActiveSec=60s
+AccuracySec=5s
+[Install]
+WantedBy=timers.target

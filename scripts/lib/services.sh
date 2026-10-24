@@ -15,6 +15,7 @@ OSSBOT_ENABLE_UNITS=(
   ossbot-anchor.socket ossbot-killswitch.path ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer
   ossbot-hermes-tier.path ossbot-hermes-tier.timer ossbot-skills.path ossbot-skills-scan.timer
   ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer ossbot-proxy-rotate.timer
+  ossbot-floorlog.service ossbot-pubip.timer
 )
 OSSBOT_BINS=(ossbot-firewall ossbot-boot-gate ossbot-kill ossbot-resume ossbot-proxy-run ossbot-egress-apply
   ossbot-hermes-tier ossbot-lifecycle ossbot-proxy-rotate)
@@ -82,7 +83,7 @@ step_app_deploy() {
     mark_changed "uv sync --frozen --no-dev ($OSSBOT_APP/.venv)"
     OSSBOT_APP_CHANGED=1
   fi
-  "$OSSBOT_APP/.venv/bin/python" -I -c 'import ossbot.gatekeeper.main, ossbot.dockerfilter.main, ossbot.sandboxd.main, ossbot.runner.main, ossbot.ctl.cli, ossbot.watchdog.tick' \
+  "$OSSBOT_APP/.venv/bin/python" -I -c 'import ossbot.gatekeeper.main, ossbot.dockerfilter.main, ossbot.sandboxd.main, ossbot.runner.main, ossbot.ctl.cli, ossbot.ctl.pubip, ossbot.watchdog.tick, ossbot.watchdog.floorlog' \
     || die "deployed app does not import"
 }
 
@@ -162,6 +163,19 @@ step_audit_anchors() {
     mark_changed "owner/mode of /srv/ossbot/logs/proxy"
   fi
   ensure_dir /etc/ossbot/proxy root root 0755
+  # ADR-0025 public-address floor: root-only writable (pubip, the render's sentinels, the 0600 root lock of
+  # C-M1); squid (uid 13) and ossbox read public.txt, code-web.txt and state.json.
+  ensure_dir /etc/ossbot/proxy/floor root root 0755
+  # ADR-0025 kernel floor log: written by ossbot-floorlog (root), read by sandboxd (group ossbox).
+  ensure_dir /srv/ossbot/logs/floor root ossbox 0750
+  local floor=/srv/ossbot/logs/floor/floor.log
+  if [[ ! -e $floor ]]; then
+    install -o root -g ossbox -m 0640 /dev/null "$floor"
+    mark_changed "created $floor"
+  elif [[ $(stat -c '%U:%G %a' "$floor") != "root:ossbox 640" ]]; then
+    chown root:ossbox "$floor"; chmod 0640 "$floor"
+    mark_changed "owner/mode of $floor"
+  fi
 }
 
 # -------------------------------------------------------------------------------- secrets seed
@@ -224,7 +238,7 @@ step_enable_start() {
     ossbot-firewall-docker.service ossbot-dockerfilter.service ossbot-anchor.socket ossbot-killswitch.path
     ossbot-resume.path ossbot-egress.path ossbot-watchdog.timer ossbot-hermes-tier.path ossbot-hermes-tier.timer
     ossbot-skills.path ossbot-skills-scan.timer ossbot-lifecycle.path ossbot-gc.timer ossbot-docker-prune.timer
-    ossbot-proxy-rotate.timer)
+    ossbot-proxy-rotate.timer ossbot-floorlog.service ossbot-pubip.timer)
   case $level in
     none) units+=(ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service ossbot-runner.service
       ossbot-hermes.service ossbot-hermes-probe.socket) ;;
@@ -235,8 +249,8 @@ step_enable_start() {
     # New code or units: restart the running services (dependency order; each re-checks the
     # firewall in ExecStartPre). The firewall units are one-shot appliers: step 'firewall' already
     # re-applied them on drift, and restarting them would stop every unit that Requires= them.
-    for u in ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service ossbot-sandboxd.service \
-      ossbot-runner.service ossbot-hermes.service; do
+    for u in ossbot-floorlog.service ossbot-dockerfilter.service ossbot-gatekeeper.service ossbot-proxy.service \
+      ossbot-sandboxd.service ossbot-runner.service ossbot-hermes.service; do
       if systemctl is-active --quiet "$u"; then
         systemctl restart "$u" || die "restart $u failed"
         mark_changed "restarted $u"

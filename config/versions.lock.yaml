@@ -95,6 +95,21 @@ iptables:
   source: "dpkg-query -W iptables and iptables --version (v1.8.10 (nf_tables)) on the distro, 2026-10-24; Launchpad API getPublishedBinaries iptables noble amd64 (Release pocket) and git.launchpad.net/ubuntu/+source/iptables (applied/ubuntu/noble, changelog head 1.8.10-3ubuntu2), checked 2026-10-24"
   verified_at: "2026-10-24"
 
+public_floor_providers:
+  # ossbot-pubip (src/ossbot/ctl/pubip.py, build-env design §4.7, ADR-0025): root's own lookups of the owner's
+  # public egress address. Never record the address itself anywhere in the repo.
+  ipv4:
+    - url: "https://1.1.1.1/cdn-cgi/trace"
+      answer: "text/plain key=value lines, one ip=<address> line (keys seen: fl h ip ts visit_scheme uag colo sliver http loc tls sni warp gateway rbi kex)"
+    - url: "https://checkip.amazonaws.com/"
+      answer: "text/plain, the address alone (16 bytes incl. newline for an IPv4)"
+  ipv6:
+    - url: "https://[2606:4700:4700::1111]/cdn-cgi/trace"
+      answer: "as the IPv4 trace; fails in WSL NAT mode (no IPv6 route: curl exit 7), which is expected"
+  curl: "curl -sS --noproxy '*' --proto =https --tlsv1.2 --max-time 10 --max-filesize 4096 -A ossbot-pubip (curl 8.5.0, noble)"
+  source: "V-P1 Windows-side Invoke-WebRequest 2026-10-24; L-13 from root's host netns in the distro 2026-10-24: both IPv4 providers answered a valid global address, they agreed, and the answer equalled the Windows-side one (compared without printing)"
+  verified_at: "2026-10-24"
+
 poppler_utils:
   # Ubuntu noble-updates package in ossbot/sandbox-full: pdftotext for the extract_text entrypoint (§14.12.5).
   # 2026-10-24: 9.10 was superseded by the security update 9.11 and left the noble index (the provision build

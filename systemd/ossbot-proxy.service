@@ -5,7 +5,10 @@
 [Unit]
 Description=ossbot egress proxy (squid)
 Requires=ossbot-boot-gate.service docker.service ossbot-firewall.service ossbot-firewall-docker.service
-After=ossbot-boot-gate.service docker.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-gatekeeper.service
+# ADR-0025: the first public-address lookup runs before the proxy starts (a failed one leaves the floor
+# unknown: fail closed, repo code has no public web until it is known)
+Wants=ossbot-pubip.service
+After=ossbot-boot-gate.service docker.service ossbot-firewall.service ossbot-firewall-docker.service ossbot-gatekeeper.service ossbot-pubip.service
 
 [Service]
 # CR-001: >= drain timeout (120 s) + 30 s, so a graceful stop is never cut short by systemd.

@@ -33,6 +33,7 @@ from typing import Any, Literal
 
 from ossbot.common.clock import from_iso, to_iso
 from ossbot.common.config import resolve_target
+from ossbot.common.control_flags import CODE_WEB_MODES
 from ossbot.common.schemas import State
 from ossbot.gatekeeper import db, implement_network
 from ossbot.gatekeeper.approvals import reissue_eligible
@@ -269,7 +270,7 @@ def _reruns(ctx: AppContext) -> list[Item]:
                               (cutoff,)).fetchall():  # fmt: skip
         if implement_network.item_guard(ctx, r) is not None or implement_network.repo_strict(ctx, str(r["upstream"])):
             continue
-        blocked = " · needs sandbox_open" if mode != "sandbox_open" else (
+        blocked = " · needs sandbox_open" if mode not in CODE_WEB_MODES else (
             " · implement network off" if setting == "off" else "")  # fmt: skip
         reason = middle_cut(str(r["state_reason"] or "?"), 20)
         out.append(Item(0, 4, from_iso(r["updated_at"]) + implement_network.RERUN_WINDOW,

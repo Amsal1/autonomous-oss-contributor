@@ -1,7 +1,12 @@
 iptables -N OSSBOT-IN 2>/dev/null || iptables -F OSSBOT-IN
 iptables -A OSSBOT-IN -s 10.212.0.2/32 -d 10.255.255.254/32 -p udp --dport 53 -j ACCEPT
 iptables -A OSSBOT-IN -s 10.212.0.2/32 -d 10.255.255.254/32 -p tcp --dport 53 -j ACCEPT
+iptables -A OSSBOT-IN -s 10.213.0.0/16 -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK SYN -m pkttype --pkt-type unicast -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip --hashlimit-name ossbot_floor_in -j LOG --log-prefix OSSBOT-FLOOR-
+iptables -A OSSBOT-IN -s 10.213.0.0/16 -p udp -m udp -m pkttype --pkt-type unicast -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip --hashlimit-name ossbot_floor_in -j LOG --log-prefix OSSBOT-FLOOR-
 iptables -A OSSBOT-IN -s 10.213.0.0/16 -j DROP
+iptables -A OSSBOT-IN -s 10.212.0.2/32 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_pin -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-IN -s 10.212.0.2/32 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-IN -s 10.212.0.0/24 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tin -j LOG --log-prefix OSSBOT-TFLOOR-
 iptables -A OSSBOT-IN -s 10.212.0.0/24 -m conntrack --ctstate NEW -j DROP
 iptables -C INPUT -j OSSBOT-IN 2>/dev/null || iptables -I INPUT 1 -j OSSBOT-IN
 iptables -N OSSBOT-OUT 2>/dev/null || iptables -F OSSBOT-OUT
@@ -70,6 +75,74 @@ iptables -t mangle -C OUTPUT -j OSSBOT-MSS-OUT 2>/dev/null || iptables -t mangle
 iptables -t mangle -N OSSBOT-MSS-IN 2>/dev/null || iptables -t mangle -F OSSBOT-MSS-IN
 iptables -t mangle -A OSSBOT-MSS-IN -p tcp -m tcp --tcp-flags SYN,RST SYN ! -i lo -j TCPMSS --set-mss 1300
 iptables -t mangle -C INPUT -j OSSBOT-MSS-IN 2>/dev/null || iptables -t mangle -I INPUT 1 -j OSSBOT-MSS-IN
+iptables -N OSSBOT-PUBFLOOR 2>/dev/null || iptables -F OSSBOT-PUBFLOOR
 iptables -N OSSBOT-FWD 2>/dev/null || iptables -F OSSBOT-FWD
+iptables -A OSSBOT-FWD -j OSSBOT-PUBFLOOR
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 10.0.0.0/8 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 10.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 10.0.0.0/8 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 10.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 10.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 10.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 172.16.0.0/12 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 172.16.0.0/12 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 172.16.0.0/12 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 172.16.0.0/12 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 172.16.0.0/12 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 172.16.0.0/12 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 192.168.0.0/16 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 192.168.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 192.168.0.0/16 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 192.168.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 192.168.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 192.168.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 100.64.0.0/10 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 100.64.0.0/10 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 100.64.0.0/10 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 100.64.0.0/10 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 100.64.0.0/10 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 100.64.0.0/10 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 169.254.0.0/16 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 169.254.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 169.254.0.0/16 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 169.254.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 169.254.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 169.254.0.0/16 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 127.0.0.0/8 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 127.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 127.0.0.0/8 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 127.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 127.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 127.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 0.0.0.0/8 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 0.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 0.0.0.0/8 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 0.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 0.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 0.0.0.0/8 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 198.18.0.0/15 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 198.18.0.0/15 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 198.18.0.0/15 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 198.18.0.0/15 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 198.18.0.0/15 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 198.18.0.0/15 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 192.0.0.0/24 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 192.0.0.0/24 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 192.0.0.0/24 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 192.0.0.0/24 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 192.0.0.0/24 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 192.0.0.0/24 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 224.0.0.0/4 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 224.0.0.0/4 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 224.0.0.0/4 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 224.0.0.0/4 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 224.0.0.0/4 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 224.0.0.0/4 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 240.0.0.0/4 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode dstip --hashlimit-name ossbot_floor_px -j LOG --log-prefix OSSBOT-PFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.2/32 -d 240.0.0.0/4 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 240.0.0.0/4 -m conntrack --ctstate NEW -m hashlimit --hashlimit-upto 20/sec --hashlimit-burst 40 --hashlimit-mode srcip,dstip --hashlimit-name ossbot_floor_tx -j LOG --log-prefix OSSBOT-TFLOOR-
+iptables -A OSSBOT-FWD -s 10.212.0.0/24 -d 240.0.0.0/4 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.211.0.0/24 -d 240.0.0.0/4 -m conntrack --ctstate NEW -j DROP
+iptables -A OSSBOT-FWD -s 10.214.0.0/16 -d 240.0.0.0/4 -m conntrack --ctstate NEW -j DROP
 iptables -A OSSBOT-FWD -s 10.213.0.0/16 ! -d 10.213.0.0/16 -j DROP
 iptables -C DOCKER-USER -j OSSBOT-FWD 2>/dev/null || iptables -I DOCKER-USER 1 -j OSSBOT-FWD
