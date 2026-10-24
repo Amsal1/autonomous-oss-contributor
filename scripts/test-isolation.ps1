@@ -5,8 +5,9 @@
   Restarts WSL (wsl --shutdown; WSL is dedicated to ossbot), then checks: /mnt/c absent, /mnt/d
   lists only Work, /mnt/d/Work only the repo, no Windows entries on PATH, a PE file on the mount
   fails with "Exec format error", WSLInterop binfmt absent or disabled, default login user is
-  ossnobody, nproc 20, ~20 GB RAM, ~8 GB swap, and Windows localhost cannot reach a distro
-  127.0.0.1 listener. Exit 0 when every check passes.
+  ossnobody, the Hyper-V firewall for the WSL VM (on, both defaults Block, only the two ossbot
+  allows TCP 443/80 and WSL's inbound defaults enabled; read-only), nproc 20, ~20 GB RAM, ~8 GB swap,
+  and Windows localhost cannot reach a distro 127.0.0.1 listener. Exit 0 when every check passes.
 .PARAMETER NoRestart
   Skip the wsl --shutdown/restart (faster re-checks; the full test restarts).
 #>
@@ -66,6 +67,48 @@ Add-Result 'no_windows_tools' (-not (($r.Out -join '').Trim())) (($r.Out -join '
 # Default login user (plain wsl.exe -d ossbot).
 $out = ConvertFrom-OssWslText (& wsl.exe -d $script:OssDistro --exec id -un 2>&1)
 Add-Result 'default_user_ossnobody' ((($out -join '').Trim()) -eq 'ossnobody') (($out -join '').Trim())
+
+# Hyper-V firewall for the WSL VM (build-env design 10, ADR-0013): read-only. The VM setting is on with both
+# defaults Block; the only enabled Allow rules are the two ossbot allows and WSL's own inbound defaults; the
+# allows are exactly TCP 443 and TCP 80. Missing cmdlets (older Windows) are a FAIL, never a silent skip.
+$wslId = $script:OssHyperVCreatorId
+if (-not (Get-Command Get-NetFirewallHyperVVMSetting -ErrorAction SilentlyContinue) -or
+    -not (Get-Command Get-NetFirewallHyperVRule -ErrorAction SilentlyContinue)) {
+    $msg = 'Hyper-V firewall cmdlets not available on this Windows build'
+    Add-Result 'hyperv_vm_setting' $false $msg
+    Add-Result 'hyperv_enabled_rules' $false $msg
+    Add-Result 'hyperv_allow_ports' $false $msg
+} else {
+    try {
+        $hv = Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name $wslId -ErrorAction Stop
+        $ok = ([string]$hv.Enabled -eq 'True') -and ([string]$hv.DefaultInboundAction -eq 'Block') -and
+              ([string]$hv.DefaultOutboundAction -eq 'Block')
+        Add-Result 'hyperv_vm_setting' $ok ("Enabled {0}, DefaultInbound {1}, DefaultOutbound {2}" -f $hv.Enabled, $hv.DefaultInboundAction, $hv.DefaultOutboundAction)
+    } catch {
+        Add-Result 'hyperv_vm_setting' $false ("Get-NetFirewallHyperVVMSetting failed: " + $_.Exception.Message)
+    }
+    try {
+        $all = @(Get-NetFirewallHyperVRule -ErrorAction Stop | Where-Object { [string]$_.VMCreatorId -eq $wslId })
+        $allowed = @($all | Where-Object { [string]$_.Enabled -eq 'True' -and [string]$_.Action -eq 'Allow' })
+        $names = @($script:OssHyperVRules | ForEach-Object { $_.Name })
+        $extra = @($allowed | Where-Object { $names -notcontains $_.Name -and [string]$_.Name -notlike 'WslCore-Allow-Inbound-*' })
+        $wslOut = @($allowed | Where-Object { [string]$_.Name -like 'WslCore-Allow-Inbound-*' -and [string]$_.Direction -ne 'Inbound' })
+        $bad = @($extra) + @($wslOut)
+        $shown = (@($allowed | ForEach-Object { $_.Name }) | Sort-Object) -join ', '
+        Add-Result 'hyperv_enabled_rules' ($bad.Count -eq 0) ("enabled allows: $shown" + $(if ($bad.Count) { "; unexpected: " + ((@($bad | ForEach-Object { $_.Name })) -join ', ') } else { '' }))
+        $problems = New-Object System.Collections.Generic.List[string]
+        foreach ($spec in $script:OssHyperVRules) {
+            $found = @($all | Where-Object { $_.Name -eq $spec.Name })
+            if ($found.Count -ne 1) { $problems.Add("$($spec.Name): $($found.Count) rule(s)"); continue }
+            foreach ($p in @(Get-OssHyperVRuleProblems -Rule $found[0] -Port $spec.Port)) { $problems.Add("$($spec.Name): $p") }
+        }
+        $ports = (@($script:OssHyperVRules | ForEach-Object { "{0} TCP {1}" -f $_.Name, $_.Port })) -join ', '
+        Add-Result 'hyperv_allow_ports' ($problems.Count -eq 0) $(if ($problems.Count) { $problems -join '; ' } else { $ports })
+    } catch {
+        Add-Result 'hyperv_enabled_rules' $false ("Get-NetFirewallHyperVRule failed: " + $_.Exception.Message)
+        Add-Result 'hyperv_allow_ports' $false ("Get-NetFirewallHyperVRule failed: " + $_.Exception.Message)
+    }
+}
 
 # Resources (.wslconfig).
 $problems = @(Test-OssWslResources)
