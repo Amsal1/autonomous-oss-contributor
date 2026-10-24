@@ -86,6 +86,15 @@ squid:
   apt_version: "6.14-0ubuntu0.24.04.5"
   source: "Launchpad API getPublishedBinaries squid noble amd64 (Security 2026-10-20, Updates 2026-10-21), https://api.launchpad.net/1.0/ubuntu/+archive/primary, checked 2026-10-24 (was 6.14-0ubuntu0.24.04.4, apt-cache policy on the distro, 2026-10-17)"
 
+iptables:
+  # The distro's iptables (nf_tables backend). tests/fixtures/firewall/iptables-S-1.8.10-nft.txt is its real
+  # `-S` output for the rendered plan (tests/system/capture_firewall_fixture.sh, scratch netns; build-env L-6),
+  # and the --check normaliser's canonical forms follow its source (build-env design §4.4, V-I1).
+  apt_version: "1.8.10-3ubuntu2"
+  fixture_captured: "2026-10-24"
+  source: "dpkg-query -W iptables and iptables --version (v1.8.10 (nf_tables)) on the distro, 2026-10-24; Launchpad API getPublishedBinaries iptables noble amd64 (Release pocket) and git.launchpad.net/ubuntu/+source/iptables (applied/ubuntu/noble, changelog head 1.8.10-3ubuntu2), checked 2026-10-24"
+  verified_at: "2026-10-24"
+
 poppler_utils:
   # Ubuntu noble-updates package in ossbot/sandbox-full: pdftotext for the extract_text entrypoint (§14.12.5).
   # 2026-10-24: 9.10 was superseded by the security update 9.11 and left the noble index (the provision build

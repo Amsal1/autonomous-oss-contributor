@@ -38,20 +38,30 @@ mask_resolved() {
 # nothing in the stack uses it. systemd-sysctl applies the file at boot; 'ossbot-firewall --check'
 # fails with firewall_drift:io_uring while the value is not 2. The non-root units also filter the
 # io_uring syscalls themselves.
-disable_io_uring() {
+# F1c (build-env design §7, ADR-0005 addendum 2026-10-24): a TCP path-MTU black hole to Fastly
+# (pypi.org, files.pythonhosted.org) stalled full-size segments with no ICMP frag-needed. The MSS
+# clamp (mangle OSSBOT-MSS-*) fixes the known path; net.ipv4.tcp_mtu_probing = 1 (PLPMTUD) recovers
+# any other black hole below it for the distro's own connections (the proxy netns sets it itself in
+# ossbot-proxy-run). Doctor WARNs when it is not 1; it is not a floor, so --check ignores it.
+apply_host_sysctls() {
   ensure_file /etc/sysctl.d/60-ossbot.conf root root 0644 <<'EOF'
-# Managed by ossbot scripts/lib/firewall.sh (Phase 1 review P1-14). Do not edit.
+# Managed by ossbot scripts/lib/firewall.sh (Phase 1 review P1-14; build-env F1c). Do not edit.
 kernel.io_uring_disabled = 2
+net.ipv4.tcp_mtu_probing = 1
 EOF
   if [[ $(cat /proc/sys/kernel/io_uring_disabled 2>/dev/null) != 2 ]]; then
     sysctl -q -w kernel.io_uring_disabled=2 || die "sysctl kernel.io_uring_disabled=2 failed (kernel 6.6+ needed)"
     mark_changed "kernel.io_uring_disabled = 2"
   fi
+  if [[ $(cat /proc/sys/net/ipv4/tcp_mtu_probing 2>/dev/null) != 1 ]]; then
+    sysctl -q -w net.ipv4.tcp_mtu_probing=1 || die "sysctl net.ipv4.tcp_mtu_probing=1 failed"
+    mark_changed "net.ipv4.tcp_mtu_probing = 1"
+  fi
 }
 
 step_firewall() {
   mask_resolved
-  disable_io_uring
+  apply_host_sysctls
   # The renderer lives in the app venv (step app-deploy); ossbot-firewall is the thin root wrapper.
   ensure_file /opt/ossbot/bin/ossbot-firewall root root 0755 <"$OSSBOT_REPO/scripts/bin/ossbot-firewall"
   install_unit ossbot-firewall.service

@@ -12,7 +12,8 @@ firewall: ``OSSBOT-IN``/``OSSBOT-OUT`` (+ ip6tables) for ``ossbot-firewall.servi
 exits 1 on any drift, including a changed resolver (``firewall_drift:resolver_changed``) and,
 for the host part, a systemd-resolved that is not masked or still listening
 (``firewall_drift:resolved_ipc``, Phase 1 review P1-6) and io_uring not disabled system-wide
-(``firewall_drift:io_uring``, P1-14).
+(``firewall_drift:io_uring``, P1-14). Part ``host`` also holds the three mangle chains that clamp the
+TCP MSS (``OSSBOT-MSS-FWD/-OUT/-IN``, F1c: a path-MTU black hole to Fastly stalled PyPI and uploads).
 
 Egress modes (§11.5, CR-002): ``squid`` renders base lists plus the grants of the active mode (the
 ``egress-mode`` control flag, else the snapshot's ``mode_default``). Every render first renders all
@@ -33,6 +34,7 @@ import ipaddress
 import os
 import pwd
 import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -452,8 +454,28 @@ def squid_drift(
 class Chain:
     family: str  # iptables | ip6tables
     name: str
-    parent: str
+    # None: the chain is created and filled but gets no jump of its own (its single reference is a
+    # rule of another chain); check() then compares only its rules.
+    parent: str | None
     rules: tuple[tuple[str, ...], ...]
+    table: str = "filter"
+
+
+# F1c (build-env design §7): a TCP path-MTU black hole between the uplink and Fastly (pypi.org,
+# files.pythonhosted.org) drops full-size segments with no ICMP frag-needed. --set-mss only lowers
+# a larger MSS (never raises one) and, unlike --clamp-mss-to-pmtu, works in every hook (V-K2).
+# 1300 leaves margin under the largest tested good value (1360) for VPN/PPPoE paths.
+MSS_CLAMP = "1300"
+_MSS_SYN = ("-p", "tcp", "-m", "tcp", "--tcp-flags", "SYN,RST", "SYN")
+_MSS_SET = ("-j", "TCPMSS", "--set-mss", MSS_CLAMP)
+# FORWARD: squid's upstream SYN and the peer's SYN-ACK (every sandbox request, every mode);
+# OUTPUT: the distro's own SYNs (what the peer sends us); INPUT: the peer's SYN-ACK to host sockets
+# (what we send). One chain per parent: -o is meaningless in INPUT and -i in OUTPUT.
+MSS_CHAINS = (
+    Chain("iptables", "OSSBOT-MSS-FWD", "FORWARD", ((*_MSS_SYN, *_MSS_SET),), "mangle"),
+    Chain("iptables", "OSSBOT-MSS-OUT", "OUTPUT", ((*_MSS_SYN, "!", "-o", "lo", *_MSS_SET),), "mangle"),
+    Chain("iptables", "OSSBOT-MSS-IN", "INPUT", ((*_MSS_SYN, "!", "-i", "lo", *_MSS_SET),), "mangle"),
+)
 
 
 def firewall_plan(ns: str, uids: Mapping[str, str] | None = None) -> dict[str, list[Chain]]:
@@ -505,6 +527,7 @@ def firewall_plan(ns: str, uids: Mapping[str, str] | None = None) -> dict[str, l
             Chain("ip6tables", "OSSBOT-OUT", "OUTPUT", tuple(out6)),
             Chain("ip6tables", "OSSBOT-IN", "INPUT", in6),
             Chain("ip6tables", "OSSBOT-FWD", "FORWARD", fwd6),
+            *MSS_CHAINS,
         ],
         "docker": [
             Chain("iptables", "OSSBOT-FWD", "DOCKER-USER", (("-s", TASK_NET, "!", "-d", TASK_NET, "-j", "DROP"),)),
@@ -522,19 +545,43 @@ def render_script(chains: Iterable[Chain]) -> str:
     """The shell form of §11.4 (golden-file and ``--print`` output)."""
     lines: list[str] = []
     for c in chains:
-        f = c.family
+        # filter chains keep the historical form byte for byte; other tables name theirs
+        f = c.family if c.table == "filter" else f"{c.family} -t {c.table}"
         lines.append(f"{f} -N {c.name} 2>/dev/null || {f} -F {c.name}")
         lines.extend(f"{f} -A {c.name} {' '.join(rule)}" for rule in c.rules)
-        lines.append(f"{f} -C {c.parent} -j {c.name} 2>/dev/null || {f} -I {c.parent} 1 -j {c.name}")
+        if c.parent is not None:
+            lines.append(f"{f} -C {c.parent} -j {c.name} 2>/dev/null || {f} -I {c.parent} 1 -j {c.name}")
     return "\n".join(lines) + "\n"
 
 
-_VALUE_OPTS = {
-    "-s", "-d", "-i", "-o", "-p", "--dport", "--sport", "--uid-owner", "--ctstate", "-j", "-m", "--reject-with",
+# Number of values each known option takes (build-env design §4.4 item 3). Rules are rendered in the
+# forms `iptables -S` prints (iptables 1.8.10, V-I1); anything else is ("?", tok) = drift.
+_ARITY: dict[str, int] = {
+    "--tcp-flags": 2,
+    **dict.fromkeys((
+        "-s", "-d", "-i", "-o", "-p", "--dport", "--sport", "--uid-owner", "--ctstate", "-j", "-m",
+        "--reject-with", "--set-mss", "--log-prefix", "--log-level", "--pkt-type",
+        "--hashlimit-upto", "--hashlimit-burst", "--hashlimit-mode", "--hashlimit-name",
+        "--hashlimit-htable-size", "--hashlimit-htable-max", "--hashlimit-htable-gcinterval",
+        "--hashlimit-htable-expire", "--hashlimit-srcmask", "--hashlimit-dstmask",
+    ), 1),
 }  # fmt: skip
 _IMPLICIT_MODULES = {"udp", "tcp"}
-# `iptables -S` prints the REJECT default explicitly (verified live on iptables 1.8.10 nf_tables).
-_DEFAULT_REJECT = {"icmp-port-unreachable", "icmp6-port-unreachable"}
+# Printed defaults dropped on both sides: `iptables -S` prints the REJECT default explicitly (verified
+# live on iptables 1.8.10 nf_tables) and LOG's --log-level only when it is not warning (4).
+_DEFAULTS: dict[str, frozenset[str]] = {
+    "--reject-with": frozenset({"icmp-port-unreachable", "icmp6-port-unreachable"}),
+    "--log-level": frozenset({"4", "warning"}),
+}
+# hashlimit table tuning (never what is dropped): compared only when the rendered rule sets it.
+_HASHLIMIT_TUNING = frozenset({
+    "--hashlimit-htable-size", "--hashlimit-htable-max", "--hashlimit-htable-gcinterval",
+    "--hashlimit-htable-expire", "--hashlimit-srcmask", "--hashlimit-dstmask",
+})  # fmt: skip
+
+
+def _sorted_flags(value: str) -> str:
+    return ",".join(sorted(value.split(",")))
 
 
 def normalize_rule(tokens: Sequence[str]) -> frozenset[tuple[str, str]]:
@@ -547,13 +594,19 @@ def normalize_rule(tokens: Sequence[str]) -> frozenset[tuple[str, str]]:
             negate = True
             i += 1
             continue
-        if tok not in _VALUE_OPTS or i + 1 >= len(tokens):
+        arity = _ARITY.get(tok)
+        if arity is None or i + arity >= len(tokens):
             items.add(("?", tok))  # anything unexpected makes the rule differ (drift), never matches
             i += 1
             continue
-        value = tokens[i + 1]
-        i += 2
-        if (tok == "-m" and value in _IMPLICIT_MODULES) or (tok == "--reject-with" and value in _DEFAULT_REJECT):
+        values = tokens[i + 1 : i + 1 + arity]
+        i += 1 + arity
+        if tok == "--tcp-flags":
+            value = " ".join(_sorted_flags(v) for v in values)
+        else:
+            value = values[0]
+        if (tok == "-m" and value in _IMPLICIT_MODULES) or value in _DEFAULTS.get(tok, frozenset()):
+            negate = False
             continue
         if tok in {"-s", "-d"} and "/" not in value:
             value = f"{value}/32" if ":" not in value else f"{value}/128"
@@ -562,34 +615,60 @@ def normalize_rule(tokens: Sequence[str]) -> frozenset[tuple[str, str]]:
     return frozenset(items)
 
 
-def parse_listing(listing: str, chain: str) -> list[frozenset[tuple[str, str]]]:
-    """Rules of ``chain`` from ``iptables -S <chain>`` output, in order."""
+def _rule_matches(want: frozenset[tuple[str, str]], have: frozenset[tuple[str, str]]) -> bool:
+    """``have`` (listed) equals ``want`` (rendered), ignoring hashlimit tuning ``want`` does not set."""
+    set_by_want = {k for k, _ in want}
+    return want == frozenset(kv for kv in have if kv[0] not in _HASHLIMIT_TUNING or kv[0] in set_by_want)
+
+
+def _label(chain: Chain) -> str:
+    return chain.family if chain.table == "filter" else f"{chain.family} -t {chain.table}"
+
+
+def parse_listing(listing: str, chain: str, table: str = "filter") -> list[frozenset[tuple[str, str]]]:
+    """Rules of ``chain`` from ``iptables [-t table] -S <chain>`` output, in order.
+
+    Raises ValueError (naming the table and chain) for a line shlex cannot split."""
     out = []
     prefix = f"-A {chain} "
     for line in listing.splitlines():
         if line.startswith(prefix):
-            out.append(normalize_rule(line[len(prefix) :].split()))
+            try:
+                tokens = shlex.split(line[len(prefix) :])
+            except ValueError as exc:
+                raise ValueError(f"{table} {chain}: unparseable listing line ({exc})") from exc
+            out.append(normalize_rule(tokens))
     return out
 
 
 def check_chain(chain: Chain, chain_listing: str, parent_listing: str) -> list[str]:
     problems: list[str] = []
+    label = _label(chain)
     want = [normalize_rule(r) for r in chain.rules]
-    have = parse_listing(chain_listing, chain.name)
-    if have != want:
-        problems.append(f"{chain.family} {chain.name}: rules differ from the rendered set")
+    try:
+        have = parse_listing(chain_listing, chain.name, chain.table)
+        parent_rules = [] if chain.parent is None else parse_listing(parent_listing, chain.parent, chain.table)
+    except ValueError as exc:
+        return [f"{chain.family} {exc}"]
+    if len(have) != len(want) or not all(_rule_matches(w, h) for w, h in zip(want, have, strict=True)):
+        problems.append(f"{label} {chain.name}: rules differ from the rendered set")
+    if chain.parent is None:
+        return problems
     jump = frozenset({("-j", chain.name)})
-    parent_rules = parse_listing(parent_listing, chain.parent)
     if not parent_rules or parent_rules[0] != jump:
-        problems.append(f"{chain.family} {chain.parent}: jump to {chain.name} is not at position 1")
+        problems.append(f"{label} {chain.parent}: jump to {chain.name} is not at position 1")
     if parent_rules.count(jump) != 1:
-        problems.append(f"{chain.family} {chain.parent}: expected exactly one jump to {chain.name}")
+        problems.append(f"{label} {chain.parent}: expected exactly one jump to {chain.name}")
     return problems
 
 
 def resolver_drift(chain_listing: str, ns: str) -> bool:
     """True when OSSBOT-IN accepts DNS for a different resolver than /etc/resolv.conf now names."""
-    for rule in parse_listing(chain_listing, "OSSBOT-IN"):
+    try:
+        rules = parse_listing(chain_listing, "OSSBOT-IN")
+    except ValueError:
+        return False  # check_chain reports the unparseable listing as drift
+    for rule in rules:
         dst = dict(rule).get("-d")
         if dict(rule).get("--dport") == "53" and dst is not None and dst != f"{ns}/32":
             return True
@@ -602,26 +681,31 @@ def _ipt(family: str, *args: str, check: bool = True) -> subprocess.CompletedPro
 
 def apply(chains: Iterable[Chain]) -> None:
     for c in chains:
-        if _ipt(c.family, "-N", c.name, check=False).returncode != 0:
-            _ipt(c.family, "-F", c.name)
+        t = ("-t", c.table)
+        if _ipt(c.family, *t, "-N", c.name, check=False).returncode != 0:
+            _ipt(c.family, *t, "-F", c.name)
         for rule in c.rules:
-            _ipt(c.family, "-A", c.name, *rule)
-        while _ipt(c.family, "-D", c.parent, "-j", c.name, check=False).returncode == 0:
+            _ipt(c.family, *t, "-A", c.name, *rule)
+        if c.parent is None:
+            continue
+        while _ipt(c.family, *t, "-D", c.parent, "-j", c.name, check=False).returncode == 0:
             pass
-        _ipt(c.family, "-I", c.parent, "1", "-j", c.name)
+        _ipt(c.family, *t, "-I", c.parent, "1", "-j", c.name)
 
 
 def check(chains: Iterable[Chain], ns: str) -> list[str]:
     problems: list[str] = []
     for c in chains:
-        listing = _ipt(c.family, "-S", c.name, check=False)
-        parent = _ipt(c.family, "-S", c.parent, check=False)
+        t = ("-t", c.table)
+        listing = _ipt(c.family, *t, "-S", c.name, check=False)
+        parent = None if c.parent is None else _ipt(c.family, *t, "-S", c.parent, check=False)
         if listing.returncode != 0:
-            problems.append(f"{c.family} {c.name}: chain missing")
+            problems.append(f"{_label(c)} {c.name}: chain missing")
             continue
         if c.name == "OSSBOT-IN" and resolver_drift(listing.stdout, ns):
             problems.append("firewall_drift:resolver_changed")
-        problems.extend(check_chain(c, listing.stdout, parent.stdout if parent.returncode == 0 else ""))
+        parent_listing = parent.stdout if parent is not None and parent.returncode == 0 else ""
+        problems.extend(check_chain(c, listing.stdout, parent_listing))
     return problems
 
 

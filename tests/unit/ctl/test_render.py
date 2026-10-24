@@ -62,21 +62,27 @@ def test_golden_contains_design_section_11_4_in_order() -> None:
     assert len(design) == 34
     positions = [golden.index(line) for line in design]  # ValueError if any design rule is missing
     assert positions == sorted(positions)
-    # the only additions are the ip6tables chains (DESIGN: "ip6tables ... DROP for the same uids")
+    # the only additions are the ip6tables chains (DESIGN: "ip6tables ... DROP for the same uids") and the
+    # mangle MSS clamp chains (build-env F1c, ADR-0005 addendum 2026-10-24)
     extra = [line for line in golden if line not in design]
-    assert extra and all(line.startswith("ip6tables ") for line in extra)
+    assert extra and all(line.startswith(("ip6tables ", "iptables -t mangle ")) for line in extra)
 
 
 def test_parts_split_host_and_docker() -> None:
     plan = render.firewall_plan(NS)
-    assert [(c.family, c.name, c.parent) for c in plan["host"]] == [
-        ("iptables", "OSSBOT-IN", "INPUT"),
-        ("iptables", "OSSBOT-OUT", "OUTPUT"),
-        ("ip6tables", "OSSBOT-OUT", "OUTPUT"),
-        ("ip6tables", "OSSBOT-IN", "INPUT"),
-        ("ip6tables", "OSSBOT-FWD", "FORWARD"),
+    assert [(c.family, c.name, c.parent, c.table) for c in plan["host"]] == [
+        ("iptables", "OSSBOT-IN", "INPUT", "filter"),
+        ("iptables", "OSSBOT-OUT", "OUTPUT", "filter"),
+        ("ip6tables", "OSSBOT-OUT", "OUTPUT", "filter"),
+        ("ip6tables", "OSSBOT-IN", "INPUT", "filter"),
+        ("ip6tables", "OSSBOT-FWD", "FORWARD", "filter"),
+        ("iptables", "OSSBOT-MSS-FWD", "FORWARD", "mangle"),
+        ("iptables", "OSSBOT-MSS-OUT", "OUTPUT", "mangle"),
+        ("iptables", "OSSBOT-MSS-IN", "INPUT", "mangle"),
     ]
-    assert [(c.family, c.name, c.parent) for c in plan["docker"]] == [("iptables", "OSSBOT-FWD", "DOCKER-USER")]
+    assert [(c.family, c.name, c.parent, c.table) for c in plan["docker"]] == [
+        ("iptables", "OSSBOT-FWD", "DOCKER-USER", "filter"),
+    ]
 
 
 def test_dns_accepts_precede_the_drops() -> None:

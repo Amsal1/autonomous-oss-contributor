@@ -1,0 +1,105 @@
+# Recorded by tests/system/capture_firewall_fixture.sh on 2026-10-24 in a scratch netns (never the live rules).
+# iptables v1.8.10 (nf_tables) (1.8.10-3ubuntu2)
+# ns 10.255.255.254
+# uid ossrunner 997
+# uid hermes 994
+# uid gatekeeper 999
+# uid ossbox 995
+# uid ossnobody 1001
+## iptables filter
+-P INPUT ACCEPT
+-P FORWARD ACCEPT
+-P OUTPUT ACCEPT
+-N DOCKER-USER
+-N OSSBOT-FWD
+-N OSSBOT-IN
+-N OSSBOT-OUT
+-A INPUT -j OSSBOT-IN
+-A FORWARD -j DOCKER-USER
+-A OUTPUT -j OSSBOT-OUT
+-A DOCKER-USER -j OSSBOT-FWD
+-A OSSBOT-FWD -s 10.213.0.0/16 ! -d 10.213.0.0/16 -j DROP
+-A OSSBOT-IN -s 10.212.0.2/32 -d 10.255.255.254/32 -p udp -m udp --dport 53 -j ACCEPT
+-A OSSBOT-IN -s 10.212.0.2/32 -d 10.255.255.254/32 -p tcp -m tcp --dport 53 -j ACCEPT
+-A OSSBOT-IN -s 10.213.0.0/16 -j DROP
+-A OSSBOT-IN -s 10.212.0.0/24 -m conntrack --ctstate NEW -j DROP
+-A OSSBOT-OUT -p udp -m owner --uid-owner 997 -m udp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 997 -m tcp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -d 10.212.0.2/32 -p tcp -m owner --uid-owner 997 -m tcp --dport 3140 -j ACCEPT
+-A OSSBOT-OUT -o lo -m owner --uid-owner 997 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 997 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p udp -m owner --uid-owner 994 -m udp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 994 -m tcp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -d 10.212.0.2/32 -p tcp -m owner --uid-owner 994 -m tcp --dport 3141 -j ACCEPT
+-A OSSBOT-OUT -o lo -m owner --uid-owner 994 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 994 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p udp -m owner --uid-owner 999 -m udp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 999 -m tcp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -d 10.212.0.2/32 -p tcp -m owner --uid-owner 999 -m tcp --dport 3150 -j ACCEPT
+-A OSSBOT-OUT -o lo -m owner --uid-owner 999 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 999 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p udp -m owner --uid-owner 995 -m udp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 995 -m tcp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -o lo -m owner --uid-owner 995 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 995 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p udp -m owner --uid-owner 1001 -m udp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 1001 -m tcp --dport 53 -j REJECT --reject-with icmp-port-unreachable
+-A OSSBOT-OUT -o lo -m owner --uid-owner 1001 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 1001 -j REJECT --reject-with icmp-port-unreachable
+## iptables mangle
+-P PREROUTING ACCEPT
+-P INPUT ACCEPT
+-P FORWARD ACCEPT
+-P OUTPUT ACCEPT
+-P POSTROUTING ACCEPT
+-N OSSBOT-MSS-FWD
+-N OSSBOT-MSS-IN
+-N OSSBOT-MSS-OUT
+-A INPUT -j OSSBOT-MSS-IN
+-A FORWARD -j OSSBOT-MSS-FWD
+-A OUTPUT -j OSSBOT-MSS-OUT
+-A OSSBOT-MSS-FWD -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300
+-A OSSBOT-MSS-IN ! -i lo -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300
+-A OSSBOT-MSS-OUT ! -o lo -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300
+## ip6tables filter
+-P INPUT ACCEPT
+-P FORWARD ACCEPT
+-P OUTPUT ACCEPT
+-N OSSBOT-FWD
+-N OSSBOT-IN
+-N OSSBOT-OUT
+-A INPUT -j OSSBOT-IN
+-A FORWARD -j OSSBOT-FWD
+-A OUTPUT -j OSSBOT-OUT
+-A OSSBOT-FWD -i docker0 -j DROP
+-A OSSBOT-FWD -o docker0 -j DROP
+-A OSSBOT-FWD -i br-+ -j DROP
+-A OSSBOT-FWD -o br-+ -j DROP
+-A OSSBOT-IN -i docker0 -j DROP
+-A OSSBOT-IN -i br-+ -j DROP
+-A OSSBOT-OUT -p udp -m owner --uid-owner 997 -m udp --dport 53 -j DROP
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 997 -m tcp --dport 53 -j DROP
+-A OSSBOT-OUT -o lo -m owner --uid-owner 997 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 997 -j DROP
+-A OSSBOT-OUT -p udp -m owner --uid-owner 994 -m udp --dport 53 -j DROP
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 994 -m tcp --dport 53 -j DROP
+-A OSSBOT-OUT -o lo -m owner --uid-owner 994 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 994 -j DROP
+-A OSSBOT-OUT -p udp -m owner --uid-owner 999 -m udp --dport 53 -j DROP
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 999 -m tcp --dport 53 -j DROP
+-A OSSBOT-OUT -o lo -m owner --uid-owner 999 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 999 -j DROP
+-A OSSBOT-OUT -p udp -m owner --uid-owner 995 -m udp --dport 53 -j DROP
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 995 -m tcp --dport 53 -j DROP
+-A OSSBOT-OUT -o lo -m owner --uid-owner 995 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 995 -j DROP
+-A OSSBOT-OUT -p udp -m owner --uid-owner 1001 -m udp --dport 53 -j DROP
+-A OSSBOT-OUT -p tcp -m owner --uid-owner 1001 -m tcp --dport 53 -j DROP
+-A OSSBOT-OUT -o lo -m owner --uid-owner 1001 -j ACCEPT
+-A OSSBOT-OUT -m owner --uid-owner 1001 -j DROP
+## ip6tables mangle
+-P PREROUTING ACCEPT
+-P INPUT ACCEPT
+-P FORWARD ACCEPT
+-P OUTPUT ACCEPT
+-P POSTROUTING ACCEPT

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # ossbot-proxy-run (installed as /opt/ossbot/bin/ossbot-proxy-run; ExecStart of ossbot-proxy.service,
 # DESIGN 11.2). Runs squid in the root-managed container 'ossbot-proxy' in the foreground:
-# ossbot-egress at 10.212.0.2, no published ports, ip_forward=0 in its netns, unprivileged
+# ossbot-egress at 10.212.0.2, no published ports, ip_forward=0 and tcp_mtu_probing=1 (PLPMTUD:
+# squid originates every upstream TCP connection, F1c path-MTU black hole) in its netns, unprivileged
 # (uid 13 = proxy), read-only rootfs, the rendered conf read-only, logs to /srv/ossbot/logs/proxy.
 # The image is the digest pinned in /etc/ossbot/versions.lock.yaml (images.proxy.digest).
 set -euo pipefail
@@ -19,6 +20,7 @@ digest=$(awk '
 
 exec /usr/bin/docker run --rm --name ossbot-proxy --pull never \
   --network ossbot-egress --ip 10.212.0.2 --sysctl net.ipv4.ip_forward=0 \
+  --sysctl net.ipv4.tcp_mtu_probing=1 \
   --user 13:13 --read-only --cap-drop ALL --security-opt no-new-privileges \
   --pids-limit 512 --memory 1g --memory-swap 1g \
   --tmpfs /run:rw,nosuid,nodev,noexec,mode=1777,size=16m \

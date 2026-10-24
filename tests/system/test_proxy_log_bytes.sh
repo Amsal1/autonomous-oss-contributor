@@ -68,11 +68,15 @@ else
 fi
 
 start=$(( $(wc -l <"$LOG") + 1 ))
-up=$(in_pool 'head -c 1048576 /dev/urandom >/tmp/blob
-  curl -s -o /dev/null --max-time 60 -H "Expect:" --data-binary @/tmp/blob -w "%{size_upload}" https://pypi.org/simple/ || true')
-up=${up//[^0-9]/}
+# The probe prints "<size_upload> <exitcode>": size_upload is 0 on a timeout (28), so the exit code names
+# the cause (build-env F1c: a path-MTU black hole stalled the upload after 64 KiB).
+probe=$(in_pool 'head -c 1048576 /dev/urandom >/tmp/blob
+  curl -s -o /dev/null --max-time 60 -H "Expect:" --data-binary @/tmp/blob -w "%{size_upload} %{exitcode}" \
+    https://pypi.org/simple/ || true')
+up='' up_rc=''
+read -r up up_rc < <(grep -Eo '[0-9]+ [0-9]+' <<<"$probe" | tail -n 1)
 if [[ -n $up ]] && ((up >= 65536)); then
-  pass "upload through the fetch pool: $up bytes sent"
+  pass "upload through the fetch pool: $up bytes sent (curl exit code $up_rc)"
   if wait_line pypi.org "$start"; then
     read -r _ _ _ _ _ _ _ up_b _ _ <<<"$(line_for pypi.org "$start")"
     if [[ $up_b =~ ^[0-9]+$ ]] && ((up_b >= up)); then
@@ -84,7 +88,7 @@ if [[ -n $up ]] && ((up >= 65536)); then
     fail "no CONNECT line for the upload within 20 s"
   fi
 else
-  fail "the upload probe sent too little to judge ('$up' bytes)"
+  fail "the upload probe sent too little to judge ('$up' bytes, curl exit code '${up_rc:-none}'; 28 = timeout)"
 fi
 
 # ------------------------------------------------------------- V11b: proxy not running

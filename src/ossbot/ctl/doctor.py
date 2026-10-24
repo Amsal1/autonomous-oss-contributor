@@ -340,6 +340,22 @@ def check_io_uring() -> Result:
     )  # fmt: skip
 
 
+TCP_MTU_PROBING_SYSCTL = Path("/proc/sys/net/ipv4/tcp_mtu_probing")
+
+
+def check_tcp_mtu_probing(sysctl: Path = TCP_MTU_PROBING_SYSCTL) -> Result:
+    """F1c (build-env design §7): PLPMTUD in the host netns recovers a path-MTU black hole below the
+    MSS clamp. A robustness setting, not a floor: WARN, never part of ``ossbot-firewall --check``."""
+    try:
+        value = sysctl.read_text(encoding="ascii").strip()
+    except OSError:
+        value = "unavailable"
+    return Result(
+        PASS if value == "1" else WARN, "tcp_mtu_probing", f"net.ipv4.tcp_mtu_probing = {value}" +
+        ("" if value == "1" else ", expected 1"), "provision step firewall (/etc/sysctl.d/60-ossbot.conf)",
+    )  # fmt: skip
+
+
 def dns_probe_targets() -> list[str]:
     """Every resolv.conf nameserver plus the systemd-resolved stub address (P1-1)."""
     from ossbot.ctl.render import RenderError, nameservers  # noqa: PLC0415
@@ -1036,7 +1052,8 @@ def check_lock_drift() -> Result:
 def run(quick: bool = False, probes: bool = False) -> list[Result]:
     steps: list[Callable[[], Result | Iterable[Result]]] = [
         check_mounts, check_default_user, check_users, check_perms, check_docker,
-        filter_deny_probe, check_firewall, check_resolved, check_io_uring, check_no_user_managers,
+        filter_deny_probe, check_firewall, check_resolved, check_io_uring, check_tcp_mtu_probing,
+        check_no_user_managers,
     ]  # fmt: skip
     if not quick:
         steps += [check_uid_probes, check_proxy_denies]

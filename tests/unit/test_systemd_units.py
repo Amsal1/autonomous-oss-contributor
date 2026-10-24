@@ -258,6 +258,28 @@ def test_proxy_renders_before_its_firewall_check() -> None:
     assert render < check
 
 
+def test_proxy_netns_enables_plpmtud() -> None:
+    """F1c (build-env design §7): squid originates every upstream TCP connection, so its netns probes
+    the path MTU (a black hole below the MSS clamp recovers) next to ip_forward=0."""
+    run = (UNITS.parent / "scripts" / "bin" / "ossbot-proxy-run").read_text(encoding="utf-8")
+    docker_run = run.split("exec /usr/bin/docker run", 1)[1]
+    flags = re.findall(r"--sysctl (\S+)", docker_run)
+    assert flags == ["net.ipv4.ip_forward=0", "net.ipv4.tcp_mtu_probing=1"]
+
+
+def test_host_sysctls_enable_plpmtud_next_to_io_uring() -> None:
+    """F1c: the host netns gets tcp_mtu_probing = 1 in the same managed sysctl file as io_uring, and
+    provisioning applies it at once when the live value differs."""
+    firewall_sh = (UNITS.parent / "scripts" / "lib" / "firewall.sh").read_text(encoding="utf-8")
+    conf = firewall_sh.split("ensure_file /etc/sysctl.d/60-ossbot.conf root root 0644 <<'EOF'\n", 1)[1]
+    conf = conf.split("\nEOF\n", 1)[0].splitlines()
+    assert [line for line in conf if not line.startswith("#")] == [
+        "kernel.io_uring_disabled = 2", "net.ipv4.tcp_mtu_probing = 1",
+    ]  # fmt: skip
+    assert "$(cat /proc/sys/net/ipv4/tcp_mtu_probing 2>/dev/null) != 1" in firewall_sh
+    assert "sysctl -q -w net.ipv4.tcp_mtu_probing=1" in firewall_sh
+
+
 @pytest.mark.parametrize("path", NON_ROOT, ids=lambda p: p.name)
 def test_non_root_units_protect_home(path: Path) -> None:
     """P1-17: no non-root unit sees /home or /root (yes) or only an empty tmpfs (tmpfs, for units

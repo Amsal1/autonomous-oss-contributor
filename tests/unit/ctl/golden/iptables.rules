@@ -61,6 +61,15 @@ ip6tables -A OSSBOT-FWD -o docker0 -j DROP
 ip6tables -A OSSBOT-FWD -i br-+ -j DROP
 ip6tables -A OSSBOT-FWD -o br-+ -j DROP
 ip6tables -C FORWARD -j OSSBOT-FWD 2>/dev/null || ip6tables -I FORWARD 1 -j OSSBOT-FWD
+iptables -t mangle -N OSSBOT-MSS-FWD 2>/dev/null || iptables -t mangle -F OSSBOT-MSS-FWD
+iptables -t mangle -A OSSBOT-MSS-FWD -p tcp -m tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss 1300
+iptables -t mangle -C FORWARD -j OSSBOT-MSS-FWD 2>/dev/null || iptables -t mangle -I FORWARD 1 -j OSSBOT-MSS-FWD
+iptables -t mangle -N OSSBOT-MSS-OUT 2>/dev/null || iptables -t mangle -F OSSBOT-MSS-OUT
+iptables -t mangle -A OSSBOT-MSS-OUT -p tcp -m tcp --tcp-flags SYN,RST SYN ! -o lo -j TCPMSS --set-mss 1300
+iptables -t mangle -C OUTPUT -j OSSBOT-MSS-OUT 2>/dev/null || iptables -t mangle -I OUTPUT 1 -j OSSBOT-MSS-OUT
+iptables -t mangle -N OSSBOT-MSS-IN 2>/dev/null || iptables -t mangle -F OSSBOT-MSS-IN
+iptables -t mangle -A OSSBOT-MSS-IN -p tcp -m tcp --tcp-flags SYN,RST SYN ! -i lo -j TCPMSS --set-mss 1300
+iptables -t mangle -C INPUT -j OSSBOT-MSS-IN 2>/dev/null || iptables -t mangle -I INPUT 1 -j OSSBOT-MSS-IN
 iptables -N OSSBOT-FWD 2>/dev/null || iptables -F OSSBOT-FWD
 iptables -A OSSBOT-FWD -s 10.213.0.0/16 ! -d 10.213.0.0/16 -j DROP
 iptables -C DOCKER-USER -j OSSBOT-FWD 2>/dev/null || iptables -I DOCKER-USER 1 -j OSSBOT-FWD
