@@ -63,7 +63,9 @@ ROOT = Path(__file__).resolve().parents[2]
 STUB = ROOT / "tests" / "bin" / "kiro-cli"
 ENTRYPOINTS = ROOT / "sandbox" / "entrypoints"
 RUNNER_UID = 2001
-MODELS = ("claude-opus-5.5", "claude-sonnet-5", "claude-sonnet-5.5", "claude-haiku-4.5", "claude-opus-5")
+# = the stub kiro-cli catalog; includes roles.test of config/models.yaml (claude-haiku-5.5 since c555054)
+MODELS = ("claude-opus-5.5", "claude-sonnet-5", "claude-sonnet-5.5", "claude-haiku-4.5", "claude-opus-5",
+          "claude-haiku-5.5")  # fmt: skip
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:

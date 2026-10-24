@@ -29,7 +29,9 @@ from tests.fakes.fake_github import FakeGitHub
 from tests.unit.gatekeeper.api_helpers import InjectPeer
 
 Handler = Callable[[dict[str, Any], Path], int]  # (spec, output dir) -> exit code (0 = succeeded)
-MODELS = ("claude-opus-5.5", "claude-sonnet-5", "claude-sonnet-5.5", "claude-haiku-4.5", "claude-opus-5")
+# the fake catalog; includes roles.test of config/models.yaml (claude-haiku-5.5 since c555054)
+MODELS = ("claude-opus-5.5", "claude-sonnet-5", "claude-sonnet-5.5", "claude-haiku-4.5", "claude-opus-5",
+          "claude-haiku-5.5")  # fmt: skip
 
 
 def fenced(doc: dict[str, Any]) -> str:
