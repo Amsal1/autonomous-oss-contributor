@@ -6,6 +6,11 @@ OSSBOT_APP=/opt/ossbot/app
 OSSBOT_UNIT_DIR=/etc/systemd/system
 OSSBOT_UNITS_CHANGED=0
 OSSBOT_APP_CHANGED=0
+# F-SN-1 (build-env design §11): a restart this run owes is remembered on disk until step enable-start has
+# restarted the services, so a run that dies in between (images, firewall, ...) still restarts them next time.
+# Root's own state dir, never the control dir.
+OSSBOT_PROVISION_STATE=${OSSBOT_PROVISION_STATE:-/var/lib/ossbot/provision}
+OSSBOT_RESTART_MARKER=$OSSBOT_PROVISION_STATE/restart-pending
 # Units, boot gate first (§18.2 "boot gate enabled first"). The runner arrived with FEAT-006, Hermes
 # and its probe socket with FEAT-007.
 OSSBOT_ENABLE_UNITS=(
@@ -26,9 +31,34 @@ install_unit() {
   OSSBOT_STEP_CHANGED=0
   [[ -n $sub ]] && ensure_dir "$OSSBOT_UNIT_DIR/$sub" root root 0755
   ensure_file "$OSSBOT_UNIT_DIR/${sub:+$sub/}$name" root root 0644 <"$OSSBOT_REPO/systemd/${sub:+$sub/}$name"
-  if ((OSSBOT_STEP_CHANGED)); then OSSBOT_UNITS_CHANGED=1; fi
+  if ((OSSBOT_STEP_CHANGED)); then OSSBOT_UNITS_CHANGED=1; restart_pending_mark units; fi
   ((before)) && OSSBOT_STEP_CHANGED=1
   return 0
+}
+
+# restart_pending_mark app|units: remember that the services owe a restart (idempotent, one line per kind).
+restart_pending_mark() {
+  install -d -m 0700 "$OSSBOT_PROVISION_STATE"
+  [[ -L $OSSBOT_RESTART_MARKER ]] && rm -f "$OSSBOT_RESTART_MARKER"  # never write through a planted link
+  grep -qx "$1" "$OSSBOT_RESTART_MARKER" 2>/dev/null || printf '%s\n' "$1" >>"$OSSBOT_RESTART_MARKER"
+  chmod 0600 "$OSSBOT_RESTART_MARKER"
+}
+
+# restart_pending: a marker from an earlier (or this) run exists; a symlink in its place counts as pending.
+restart_pending() { [[ -L $OSSBOT_RESTART_MARKER || -s $OSSBOT_RESTART_MARKER ]]; }
+
+# restart_pending_kinds: "app", "units" or "app units" (a symlink: both, without reading it; unknown
+# content: app, so the services restart anyway).
+restart_pending_kinds() {
+  local -a kinds=()
+  if [[ -L $OSSBOT_RESTART_MARKER ]]; then
+    kinds=(app units)
+  else
+    if grep -qx app "$OSSBOT_RESTART_MARKER" 2>/dev/null; then kinds+=(app); fi
+    if grep -qx units "$OSSBOT_RESTART_MARKER" 2>/dev/null; then kinds+=(units); fi
+    ((${#kinds[@]})) || kinds=(app)
+  fi
+  echo "${kinds[*]}"
 }
 
 install_bins() {
@@ -71,6 +101,7 @@ step_app_deploy() {
     if [[ -n $content ]]; then
       mark_changed "rsync to $OSSBOT_APP ($(wc -l <<<"$content") content items, $n itemized)"
       OSSBOT_APP_CHANGED=1
+      restart_pending_mark app
     else
       log "  rsync: $n metadata-only item(s), no content change (no uv sync, no restarts)"
     fi
@@ -82,6 +113,7 @@ step_app_deploy() {
     chmod -R go+rX "$OSSBOT_APP/.venv"
     mark_changed "uv sync --frozen --no-dev ($OSSBOT_APP/.venv)"
     OSSBOT_APP_CHANGED=1
+    restart_pending_mark app
   fi
   "$OSSBOT_APP/.venv/bin/python" -I -c 'import ossbot.gatekeeper.main, ossbot.dockerfilter.main, ossbot.sandboxd.main, ossbot.runner.main, ossbot.ctl.cli, ossbot.ctl.pubip, ossbot.watchdog.tick, ossbot.watchdog.floorlog' \
     || die "deployed app does not import"
@@ -245,7 +277,23 @@ step_enable_start() {
     soft) units+=(ossbot-gatekeeper.service ossbot-proxy.service) ;;
   esac
   [[ $level == none ]] || warn "killed (level $level): not starting the units the kill stops"
-  if ((OSSBOT_APP_CHANGED || OSSBOT_UNITS_CHANGED)); then
+  # F-SN-1: what an earlier run changed but never restarted (this run's own changes are in the flags)
+  local owed="" pending=""
+  local -a earlier=()
+  if restart_pending; then
+    owed=$(restart_pending_kinds)
+    if [[ $owed == *app* ]] && ((OSSBOT_APP_CHANGED == 0)); then earlier+=(app); fi
+    if [[ $owed == *units* ]] && ((OSSBOT_UNITS_CHANGED == 0)); then earlier+=(units); fi
+  fi
+  if ((${#earlier[@]})); then
+    pending=${earlier[*]}
+    log "restart pending from an earlier run (${pending// /, })"
+    if [[ $pending == *units* ]]; then
+      systemctl daemon-reload || die "systemctl daemon-reload failed"
+      mark_changed "systemctl daemon-reload (pending from an earlier run)"
+    fi
+  fi
+  if ((OSSBOT_APP_CHANGED || OSSBOT_UNITS_CHANGED)) || [[ -n $pending ]]; then
     # New code or units: restart the running services (dependency order; each re-checks the
     # firewall in ExecStartPre). The firewall units are one-shot appliers: step 'firewall' already
     # re-applied them on drift, and restarting them would stop every unit that Requires= them.
@@ -267,6 +315,8 @@ step_enable_start() {
   for u in "${units[@]}"; do
     systemctl is-active --quiet "$u" || die "$u is not active after start"
   done
+  # F-SN-1: only now is the owed restart done (any die above leaves the marker for the next run)
+  rm -f "$OSSBOT_RESTART_MARKER"
 }
 
 # -------------------------------------------------------------------------------------- doctor

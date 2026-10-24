@@ -299,7 +299,8 @@ def test_floorlog_unit_shape_and_wiring() -> None:
     assert "systemd-journald.service" in unit["Unit"]["After"].split()
     enable, start, services_sh = _services_sh()
     assert "ossbot-floorlog.service" in enable and "ossbot-floorlog.service" in start
-    restart = services_sh.split("if ((OSSBOT_APP_CHANGED || OSSBOT_UNITS_CHANGED)); then", 1)[1].split("done", 1)[0]
+    restart = services_sh.split("if ((OSSBOT_APP_CHANGED || OSSBOT_UNITS_CHANGED)) || [[ -n $pending ]]; then",
+                                1)[1].split("done", 1)[0]  # fmt: skip
     assert "ossbot-floorlog.service" in restart
     # the log dir sandboxd reads (group ossbox), created by step audit-anchors
     assert "ensure_dir /srv/ossbot/logs/floor root ossbox 0750" in services_sh
