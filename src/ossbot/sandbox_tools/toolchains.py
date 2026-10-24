@@ -1151,13 +1151,24 @@ class Resolver:
             base = home / "v1" / name
             return str(base / version) if (base / version).is_dir() else None
 
-        got = self.ensure(f"corepack-{name}@{version}", [corepack, "install"], in_cache,
-                          env={"COREPACK_HOME": str(home), "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0"})  # fmt: skip
+        # corepack and the first run of the package manager work in a scratch project that names only the
+        # packageManager, never in the repo (a package manager may write a lockfile where it runs)
+        scratch = self.ctx.state / "pm"
+        if self.ctx.mode == "install":
+            with contextlib.suppress(OSError):
+                scratch.mkdir(parents=True, exist_ok=True)
+                shims.mkdir(parents=True, exist_ok=True)  # corepack enable needs an existing directory
+                _write(scratch / "package.json", json.dumps({"name": "ossbot-pm", "private": True,
+                                                             "packageManager": f"{name}@{version}"}) + "\n")  # fmt: skip
+        env = {"COREPACK_HOME": str(home), "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+               "PATH": f"{node_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}"}  # fmt: skip
+        key = f"corepack-{name}@{version}"
+        got = self.ensure(key, [corepack, "install"], in_cache, cwd=str(scratch), env=env)
         if got.path:
             shim = self.ensure(f"corepack-enable-{name}",
                                [corepack, "enable", "--install-directory", str(shims), name],
-                               lambda: str(shims) if (shims / name).exists() else None,
-                               env={"COREPACK_HOME": str(home)})  # fmt: skip
+                               lambda: str(shims) if (shims / name).exists() else None, cwd=str(scratch),
+                               env=env)  # fmt: skip
             if shim.path and str(shims) not in self.path:
                 self.path.insert(0, str(shims))
             if shim.path:  # the first run of a package manager may fetch more (pnpm >= 11: its platform binary)
@@ -1166,13 +1177,10 @@ class Resolver:
                 def warmed(code: int) -> None:
                     if code == 0:
                         with contextlib.suppress(OSError):
-                            self.ctx.state.mkdir(parents=True, exist_ok=True)
                             _write(warm, "ok\n")
 
-                path = f"{node_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}"
                 self.ensure(f"warm-{name}@{version}", [str(shims / name), "--version"],
-                            lambda: str(warm) if warm.is_file() else None, cwd=str(self.ctx.repo),
-                            env={"COREPACK_HOME": str(home), "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0", "PATH": path},
+                            lambda: str(warm) if warm.is_file() else None, cwd=str(scratch), env=env,
                             after=warmed)  # fmt: skip
         self.report.add(name, declared=version, source="package.json packageManager", chosen=f"{name}@{version}",
                         path=got.path, action=got.action, exit_code=got.exit_code, gap=got.gap,

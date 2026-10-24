@@ -43,5 +43,14 @@ def test_go_mod_minimums_use_the_image_go_and_install_nothing(sandbox: Sandbox) 
         assert not [e for e in info["toolchains"] if e.get("action") == "install"], info["toolchains"]
         out, done = validate(sandbox, MOD_CID, [{"name": "go", "cmd": "go version && go run .", "timeout_s": 300}])
         assert done["go"]["exit_code"] == 0 and log(out, "go").splitlines()[1] == "go1.27.3", log(out, "go")
+        # L-4: the image's mise tools through /opt/mise/shims under execd's env -i, offline (MISE_OFFLINE=1,
+        # MISE_SHARED_INSTALL_DIRS + MISE_SYSTEM_CONFIG_FILE; the findings §3.6 shim bug)
+        image_tools = "go version && node --version && terraform version | head -1 && tofu version | head -1"
+        replies = execd_runs(sandbox, MOD_CID, [{"id": 1, "timeout_s": 120, "cmd": image_tools}])
+        result = replies["1"]["result"]
+        assert result["exit_code"] == 0, (result["stdout"][-1500:], result["stderr"][-1500:])
+        lines = result["stdout"].splitlines()
+        assert lines[0].startswith("go version go1.27.3 ") and lines[1] == "v24.22.1", lines
+        assert lines[2] == "Terraform v1.17.0" and lines[3] == "OpenTofu v1.13.1", lines
     finally:
         sandbox.cleanup(MOD_CID)

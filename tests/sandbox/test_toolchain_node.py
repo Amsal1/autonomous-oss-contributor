@@ -22,7 +22,13 @@ def test_nvmrc_22_and_pnpm_through_corepack_also_offline(sandbox: Sandbox) -> No
         pnpm = tool(info, "pnpm")
         assert pnpm["chosen"] == "pnpm@12.15.0" and pnpm["action"] == "install", info["toolchains"]
         assert_l12(job_lines(sandbox, CID, "fetch-strict", start))
-        out, done = validate(sandbox, CID, [{"name": "check", "cmd": CHECK, "timeout_s": 300}])
+        out, done = validate(sandbox, CID, [
+            # the fixture is staged (prepare's `git add -A`): anything else is a change the fetch made
+            {"name": "tree", "cmd": "git status --porcelain --untracked-files=all | grep -v '^A  ' || true",
+             "timeout_s": 60},
+            {"name": "check", "cmd": CHECK, "timeout_s": 300},
+        ])  # fmt: skip
+        assert done["tree"]["exit_code"] == 0 and log(out, "tree") == "", log(out, "tree")  # the resolver wrote nothing
         lines = log(out, "check").splitlines()
         assert done["check"]["exit_code"] == 0, lines
         assert (

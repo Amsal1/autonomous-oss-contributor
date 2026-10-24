@@ -313,6 +313,10 @@ def test_package_manager_through_corepack(tmp_path: Path) -> None:
     # warmed once at install (pnpm >= 11 fetches its platform binary on first use), with the chosen Node first
     (warm,) = [c for c in r.fake.calls if c[0] == [f"{shims}/pnpm", "--version"]]
     assert warm[1]["PATH"].startswith(f"{node_bin}:") and (r.state / "pnpm-12.15.0.warm").is_file()
+    pm_calls = [c for c in r.fake.calls if c[0][0].endswith(("/corepack", "/pnpm"))]
+    assert len(pm_calls) == 3 and {c[2] for c in pm_calls} == {str(r.state / "pm")}  # never in the repo
+    scratch = json.loads((r.state / "pm" / "package.json").read_text())
+    assert scratch["packageManager"] == "pnpm@12.15.0" and not (r.repo / "pnpm-lock.yaml").exists()
     assert r.entry("pnpm")["action"] == "install"
     calls = len(r.fake.calls)
     r.go("select", fetch=None)  # offline: nothing runs again
