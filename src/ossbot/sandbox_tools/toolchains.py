@@ -1160,6 +1160,20 @@ class Resolver:
                                env={"COREPACK_HOME": str(home)})  # fmt: skip
             if shim.path and str(shims) not in self.path:
                 self.path.insert(0, str(shims))
+            if shim.path:  # the first run of a package manager may fetch more (pnpm >= 11: its platform binary)
+                warm = self.ctx.state / f"{name}-{version}.warm"
+
+                def warmed(code: int) -> None:
+                    if code == 0:
+                        with contextlib.suppress(OSError):
+                            self.ctx.state.mkdir(parents=True, exist_ok=True)
+                            _write(warm, "ok\n")
+
+                path = f"{node_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+                self.ensure(f"warm-{name}@{version}", [str(shims / name), "--version"],
+                            lambda: str(warm) if warm.is_file() else None, cwd=str(self.ctx.repo),
+                            env={"COREPACK_HOME": str(home), "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0", "PATH": path},
+                            after=warmed)  # fmt: skip
         self.report.add(name, declared=version, source="package.json packageManager", chosen=f"{name}@{version}",
                         path=got.path, action=got.action, exit_code=got.exit_code, gap=got.gap,
                         tail=got.tail)  # fmt: skip

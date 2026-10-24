@@ -310,9 +310,16 @@ def test_package_manager_through_corepack(tmp_path: Path) -> None:
     shims = str(r.cache / "corepack-bin" / "bin")
     assert corepack[1] == [f"{node_bin}/corepack", "enable", "--install-directory", shims, "pnpm"]
     assert r.env["OSSBOT_PATH_PREPEND"].split(":")[:2] == [shims, node_bin]
+    # warmed once at install (pnpm >= 11 fetches its platform binary on first use), with the chosen Node first
+    (warm,) = [c for c in r.fake.calls if c[0] == [f"{shims}/pnpm", "--version"]]
+    assert warm[1]["PATH"].startswith(f"{node_bin}:") and (r.state / "pnpm-12.15.0.warm").is_file()
+    assert r.entry("pnpm")["action"] == "install"
+    calls = len(r.fake.calls)
+    r.go("select", fetch=None)  # offline: nothing runs again
+    assert len(r.fake.calls) == calls and r.entry("pnpm")["action"] == "cached"
     install_env = next(c[1] for c in r.fake.calls if c[0][1:] == ["install"] and c[0][0].endswith("corepack"))
     assert install_env["COREPACK_HOME"] == str(r.cache / "corepack")
-    assert r.entry("pnpm")["chosen"] == "pnpm@12.15.0" and r.entry("pnpm")["action"] == "install"
+    assert r.entry("pnpm")["chosen"] == "pnpm@12.15.0" and r.entry("pnpm")["action"] == "cached"  # the 2nd run
 
 
 def test_package_manager_without_a_bundled_corepack_uses_the_baked_fallback(tmp_path: Path) -> None:
