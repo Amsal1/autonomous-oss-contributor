@@ -47,7 +47,66 @@ OPS = ("read_file", "write_file", "list_dir", "run")
 
 
 PROXY_RE = re.compile(r"^http://([a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})/?$")  # lib/jvm_env.sh's
-OFFLINE_ONLY = ("GOPROXY", "npm_config_offline", "UV_OFFLINE", "PIP_NO_INDEX")
+OFFLINE_ONLY = ("GOPROXY", "npm_config_offline", "UV_OFFLINE", "PIP_NO_INDEX", "MISE_OFFLINE", "RUSTUP_AUTO_INSTALL",
+                "COREPACK_ENABLE_NETWORK")  # fmt: skip
+DEFAULT_JAVA_HOME = "/usr/lib/jvm/java-21-openjdk-amd64"
+BASE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/mise/shims:/opt/rust/cargo/bin"
+PYTHON_MIRROR = "https://github.com/astral-sh/python-build-standalone/releases/download"
+
+# toolchain.env (build-env design §6.3), written by ossbot-toolchains in exec.sh: read line by line, never sourced,
+# with the same rules as sandbox_tools/toolchains.valid_env and lib/tool_env.sh (tests/unit/sandbox_tools).
+TC_KEYS = ("JAVA_HOME", "OSSBOT_GRADLE_JAVA_HOME", "OSSBOT_JDKS", "OSSBOT_PATH_PREPEND", "GOTOOLCHAIN",
+           "RUSTUP_TOOLCHAIN", "RUSTUP_HOME", "CARGO_HOME", "COREPACK_HOME", "UV_PYTHON_INSTALL_DIR",
+           "UV_PYTHON_INSTALL_MIRROR", "MISE_GLOBAL_CONFIG_FILE")  # fmt: skip
+TC_VALUE_RE = re.compile(r"[A-Za-z0-9_./:@+,=-]{1,1024}")
+TC_JVM_RE = re.compile(r"/usr/lib/jvm/java-(8|11|17|21|25)-openjdk-amd64")
+TC_OPT_RE = re.compile(r"/opt/(mise|rust|maven|uv-python)(/[A-Za-z0-9._+-]{1,128}){0,6}")
+TC_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,63}")
+
+
+def _tc_path(value: str, work: str) -> bool:
+    if any(part in (".", "..") for part in value.split("/")[1:]):
+        return False
+    cache = re.compile(rf"{re.escape(work)}/cache/(mise|rustup|cargo|corepack|corepack-bin|uv-python)"
+                       r"(/[A-Za-z0-9._+-]{1,128}){0,6}")  # fmt: skip
+    return bool(TC_JVM_RE.fullmatch(value) or cache.fullmatch(value) or TC_OPT_RE.fullmatch(value))
+
+
+def tc_valid(key: str, value: str, work: str = "/work") -> bool:
+    if key not in TC_KEYS or not TC_VALUE_RE.fullmatch(value):
+        return False
+    fixed = {"RUSTUP_HOME": f"{work}/cache/rustup", "CARGO_HOME": f"{work}/cache/cargo",
+             "COREPACK_HOME": f"{work}/cache/corepack", "UV_PYTHON_INSTALL_DIR": f"{work}/cache/uv-python",
+             "UV_PYTHON_INSTALL_MIRROR": PYTHON_MIRROR, "MISE_GLOBAL_CONFIG_FILE": f"{work}/.home/.ossbot/mise.toml",
+             "GOTOOLCHAIN": "local"}  # fmt: skip
+    if key in fixed:
+        return value == fixed[key]
+    if key == "RUSTUP_TOOLCHAIN":
+        return TC_NAME_RE.fullmatch(value) is not None
+    if key in ("JAVA_HOME", "OSSBOT_GRADLE_JAVA_HOME"):
+        return _tc_path(value, work)
+    return all(_tc_path(p, work) for p in value.split("," if key == "OSSBOT_JDKS" else ":"))
+
+
+def read_toolchain_env(work: str = "/work") -> dict[str, str]:
+    """The validated keys of ``{work}/.home/.ossbot/toolchain.env`` (missing, a symlink or > 64 KiB: none)."""
+    path = f"{work}/.home/.ossbot/toolchain.env"
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+    except OSError:
+        return {}
+    with os.fdopen(fd, "rb") as fh:
+        if not stat.S_ISREG(os.fstat(fh.fileno()).st_mode):
+            return {}
+        text = fh.read(65537).decode("utf-8", "replace")
+    if len(text) > 65536:
+        return {}
+    out: dict[str, str] = {}
+    for line in text.splitlines()[:64]:
+        key, sep, value = line.partition("=")
+        if sep and key not in out and tc_valid(key, value, work):
+            out[key] = value
+    return out
 
 
 def valid_proxy(value: str | None) -> tuple[str, str] | None:
@@ -58,18 +117,29 @@ def valid_proxy(value: str | None) -> tuple[str, str] | None:
     return match.group(1), match.group(3)
 
 
-def fixed_env(work: str = "/work", online: bool = False, proxy: str | None = None) -> dict[str, str]:
+def fixed_env(work: str = "/work", online: bool = False, proxy: str | None = None,
+              toolchain: dict[str, str] | None = None) -> dict[str, str]:  # fmt: skip
     """The complete environment of every ``run`` command (env -i + this set).
 
     ``online`` (ADR-0024, agent-exec on its -exec network): the offline switches go, the proxy (execd's own
     ``HTTPS_PROXY``, re-validated, else omitted) and the Maven proxy properties come in; caches stay.
-    ``OSSBOT_EXEC_NETWORK`` tells the coder's commands the real admission result."""
+    ``OSSBOT_EXEC_NETWORK`` tells the coder's commands the real admission result. ``toolchain`` (the validated
+    toolchain.env of exec.sh's resolver run, build-env design §6.3) sets JAVA_HOME, the PATH prepend and the Rust
+    toolchain; without it the image defaults apply."""
     env = _base_env(work)
     env["OSSBOT_EXEC_NETWORK"] = "web" if online else "none"
+    tc = {k: v for k, v in (toolchain or {}).items() if tc_valid(k, v, work)}
+    java = tc.get("JAVA_HOME", DEFAULT_JAVA_HOME)
+    env["JAVA_HOME"] = java
+    env["PATH"] = ":".join([*([tc["OSSBOT_PATH_PREPEND"]] if "OSSBOT_PATH_PREPEND" in tc else []), f"{java}/bin",
+                            BASE_PATH])  # fmt: skip
+    if "RUSTUP_TOOLCHAIN" in tc:
+        env["RUSTUP_TOOLCHAIN"] = tc["RUSTUP_TOOLCHAIN"]
     if not online:
         return env
     for name in OFFLINE_ONLY:
         env.pop(name, None)
+    env["UV_PYTHON_DOWNLOADS"] = "automatic"
     parsed = valid_proxy(proxy)
     if parsed is not None:
         host, port = parsed
@@ -84,7 +154,7 @@ def fixed_env(work: str = "/work", online: bool = False, proxy: str | None = Non
 def _base_env(work: str) -> dict[str, str]:
     cache = f"{work}/cache"
     return {
-        "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/mise/shims",
+        "PATH": f"{DEFAULT_JAVA_HOME}/bin:{BASE_PATH}",
         "HOME": f"{work}/.home",
         "LANG": "C.UTF-8",
         "GOFLAGS": "-mod=mod",
@@ -100,10 +170,32 @@ def _base_env(work: str) -> dict[str, str]:
         # Gradle runs offline through $GRADLE_USER_HOME/init.d/ossbot-offline.init.gradle and Maven through
         # ~/.m2/settings.xml, both written by exec.sh (lib/jvm_env.sh offline); GRADLE_OPTS stays unset.
         "GRADLE_USER_HOME": f"{cache}/gradle",
-        "JAVA_HOME": "/usr/lib/jvm/java-21-openjdk-amd64",
+        "JAVA_HOME": DEFAULT_JAVA_HOME,
         "MAVEN_USER_HOME": f"{work}/.home/.m2",
         "MAVEN_OPTS": f"-Duser.home={work}/.home",
+        # build-env design §6.3 (= lib/tool_env.sh): the task's mise installs, the image's pinned tools as the
+        # read-only fallback, never mise-versions.jdx.dev (M3); Go never downloads a toolchain itself; Rust,
+        # corepack and uv's Pythons on the task volume. The offline switches go when online.
         "MISE_DATA_DIR": f"{cache}/mise",
+        "MISE_SHARED_INSTALL_DIRS": "/opt/mise/installs",
+        "MISE_SYSTEM_CONFIG_FILE": "/opt/mise/config/config.toml",
+        "MISE_GLOBAL_CONFIG_FILE": f"{work}/.home/.ossbot/mise.toml",
+        "MISE_TRUSTED_CONFIG_PATHS": f"{work}/repo",
+        "MISE_YES": "1",
+        "MISE_USE_VERSIONS_HOST": "false",
+        "MISE_USE_VERSIONS_HOST_TRACK": "false",
+        "MISE_RUBY_COMPILE": "false",
+        "MISE_OFFLINE": "1",
+        "GOTOOLCHAIN": "local",
+        "RUSTUP_HOME": f"{cache}/rustup",
+        "CARGO_HOME": f"{cache}/cargo",
+        "RUSTUP_AUTO_INSTALL": "0",
+        "COREPACK_HOME": f"{cache}/corepack",
+        "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
+        "COREPACK_ENABLE_NETWORK": "0",
+        "UV_PYTHON_INSTALL_DIR": f"{cache}/uv-python",
+        "UV_PYTHON_INSTALL_MIRROR": PYTHON_MIRROR,
+        "UV_PYTHON_DOWNLOADS": "never",
         "CHECKPOINT_DISABLE": "1",
         "TMPDIR": "/tmp",  # noqa: S108 - container tmpfs
     }
@@ -123,7 +215,7 @@ class Executor:
     def __init__(self, repo: str = "/work/repo", work: str = "/work", online: bool = False,
                  proxy: str | None = None) -> None:  # fmt: skip
         self.repo = os.path.realpath(repo)
-        self.env = fixed_env(work, online, proxy)
+        self.env = fixed_env(work, online, proxy, read_toolchain_env(work))
         self.before_open: Callable[[str], None] = lambda _parent: None  # test hook (TOCTOU)
 
     # ------------------------------------------------------------------ paths

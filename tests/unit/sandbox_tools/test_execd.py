@@ -276,6 +276,54 @@ def test_executor_run_env_carries_the_network(tmp_path: Path) -> None:
     assert "net=none" in result["stdout"]
 
 
+# ------------------------------------------------------------------- build-env design §6.3 (toolchains)
+def test_fixed_env_has_the_toolchain_set_offline_and_online() -> None:
+    offline = execd.fixed_env("/work")
+    assert offline["MISE_USE_VERSIONS_HOST"] == "false" and offline["MISE_USE_VERSIONS_HOST_TRACK"] == "false"
+    assert offline["MISE_SHARED_INSTALL_DIRS"] == "/opt/mise/installs"
+    assert offline["MISE_SYSTEM_CONFIG_FILE"] == "/opt/mise/config/config.toml"
+    assert offline["MISE_GLOBAL_CONFIG_FILE"] == "/work/.home/.ossbot/mise.toml"
+    assert offline["MISE_TRUSTED_CONFIG_PATHS"] == "/work/repo" and offline["MISE_YES"] == "1"
+    assert offline["GOTOOLCHAIN"] == "local" and offline["RUSTUP_HOME"] == "/work/cache/rustup"
+    assert offline["CARGO_HOME"] == "/work/cache/cargo" and offline["COREPACK_HOME"] == "/work/cache/corepack"
+    assert offline["UV_PYTHON_INSTALL_DIR"] == "/work/cache/uv-python" and offline["UV_PYTHON_DOWNLOADS"] == "never"
+    assert offline["MISE_OFFLINE"] == "1" and offline["RUSTUP_AUTO_INSTALL"] == "0"
+    assert offline["COREPACK_ENABLE_NETWORK"] == "0"
+    assert offline["PATH"] == ("/usr/lib/jvm/java-21-openjdk-amd64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:"
+                               "/usr/bin:/sbin:/bin:/opt/mise/shims:/opt/rust/cargo/bin")  # fmt: skip
+    online = execd.fixed_env("/work", True, "http://proxy:3128")
+    for name in ("MISE_OFFLINE", "RUSTUP_AUTO_INSTALL", "COREPACK_ENABLE_NETWORK"):
+        assert name not in online
+    assert online["UV_PYTHON_DOWNLOADS"] == "automatic" and online["MISE_USE_VERSIONS_HOST"] == "false"
+
+
+def test_fixed_env_takes_the_validated_toolchain_env() -> None:
+    node = "/work/cache/mise/installs/node/22.23.4/bin"
+    env = execd.fixed_env("/work", toolchain={"JAVA_HOME": "/usr/lib/jvm/java-25-openjdk-amd64",
+                                              "OSSBOT_PATH_PREPEND": f"/work/cache/corepack-bin/bin:{node}",
+                                              "RUSTUP_TOOLCHAIN": "1.98.0"})  # fmt: skip
+    assert env["JAVA_HOME"] == "/usr/lib/jvm/java-25-openjdk-amd64" and env["RUSTUP_TOOLCHAIN"] == "1.98.0"
+    assert env["PATH"].startswith(f"/work/cache/corepack-bin/bin:{node}:/usr/lib/jvm/java-25-openjdk-amd64/bin:")
+    hostile = {"JAVA_HOME": "/tmp/jdk", "OSSBOT_PATH_PREPEND": "/usr/bin", "RUSTUP_TOOLCHAIN": "-x",
+               "LD_PRELOAD": "/work/cache/mise/x"}  # fmt: skip
+    bad = execd.fixed_env("/work", toolchain=hostile)
+    assert bad == execd.fixed_env("/work")
+
+
+def test_executor_reads_the_toolchain_env_file(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    state = tmp_path / ".home" / ".ossbot"
+    state.mkdir(parents=True)
+    (state / "toolchain.env").write_text("JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64\nGARBAGE\nPATH=/x\n")
+    assert Executor(str(repo), str(tmp_path)).env["JAVA_HOME"] == "/usr/lib/jvm/java-25-openjdk-amd64"
+    (state / "toolchain.env").unlink()
+    (state / "toolchain.env").symlink_to(tmp_path / "elsewhere")  # a planted symlink is never followed
+    (tmp_path / "elsewhere").write_text("JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64\n")
+    assert Executor(str(repo), str(tmp_path)).env["JAVA_HOME"] == "/usr/lib/jvm/java-21-openjdk-amd64"
+    assert execd.read_toolchain_env(str(tmp_path / "missing")) == {}
+
+
 @pytest.mark.parametrize(("cmd", "code"), [("false | cat", 1), ("true | cat", 0), ("exit 3 | cat", 3)])
 def test_run_has_pipefail(ex: Executor, cmd: str, code: int) -> None:
     result, _ = ex.run({"cmd": cmd, "timeout_s": 10})

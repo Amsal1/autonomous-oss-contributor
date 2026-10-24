@@ -232,11 +232,15 @@ def _fetch(tmp_path: Path, env: dict[str, str], path: str = "/usr/bin:/bin") -> 
 
 
 def test_jvm_setup_is_guarded_and_runs_before_the_first_prefetch() -> None:
-    call = '[[ "$PREFETCH_ON" == 1 ]] && ossbot_jvm_setup online'
-    assert re.search(rf"^{re.escape(call)}$", FETCH_SH, re.MULTILINE)
-    assert FETCH_SH.index('export GOMODCACHE="$WORK/cache/go/mod"') < FETCH_SH.index(call)
-    assert FETCH_SH.index(call) < FETCH_SH.index("prefetch mise mise install")
+    """The resolver (build-env design §6.3), then the JVM files, then PATH: only outside scout mode, before
+    the first prefetch."""
+    guard = 'if [[ "$PREFETCH_ON" == 1 ]]; then\n  ossbot_toolchains install 1800 "$OUT/toolchains.json"\n'
+    guard += "  ossbot_jvm_setup online\n  ossbot_tool_paths novenv\nfi\n"
+    assert guard in FETCH_SH
+    assert FETCH_SH.index('export GOMODCACHE="$WORK/cache/go/mod"') < FETCH_SH.index(guard)
+    assert FETCH_SH.index(guard) < FETCH_SH.index("prefetch go go mod download")
     assert 'source "$(dirname -- "$0")/lib/jvm_env.sh"' in FETCH_SH
+    assert 'source "$(dirname -- "$0")/lib/tool_env.sh"' in FETCH_SH
 
 
 @needs_bash

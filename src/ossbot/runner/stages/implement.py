@@ -47,6 +47,7 @@ REFETCH_TIMEOUT_S = 1800  # the fetch profile allows at most 3600 s; STAGE_TIMEO
 DEPS_MAX = 50  # fetch.json deps_changed (untrusted: written by a container running repo code)
 DEP_PATH_RE = re.compile(r"[A-Za-z0-9._/@+-]{1,200}")
 FACTS_MAX = 4000  # the fetch facts / re-fetch result sections
+TOOLCHAINS_MAX = 4000  # the resolver's report inside the fetch facts (build-env design §6.1)
 REFETCH_LINE = "The runner re-fetched dependencies once for your change; continue and run the checks again."
 NETWORK_LINE = (  # ADR-0024, carried criterion D22: conditional, the coder checks the real admission result
     "This run should have network (check `echo $OSSBOT_EXEC_NETWORK`): the public web through a proxy, allowed by"
@@ -125,6 +126,9 @@ def feedback(sc: StageContext, c: dict[str, Any]) -> list[str]:
     if c["state"] == "VALIDATION_FAILED" and notes.get("validation"):
         failed = [cmd for cmd in notes["validation"].get("commands", []) if cmd.get("exit_code") != 0]
         out.append(prompts.untrusted("failed validation commands (tails)", json.dumps(failed, indent=1)[:30_000]))
+        gaps = notes["validation"].get("toolchain_gaps")
+        if isinstance(gaps, list) and gaps:  # build-env §8.2: toolchains validate's resolver could not install
+            out.append(prompts.untrusted("toolchain gaps in validate", json.dumps(gaps[:10], indent=1)[:4000]))
     if c["state"] == "REVISE" and notes.get("review"):
         out.append(prompts.untrusted("reviewer findings", json.dumps(notes["review"].get("blocking", []))[:20_000]))
     for request in c.get("change_requests") or []:
@@ -170,6 +174,9 @@ def last_failure_summary(sc: StageContext, c: dict[str, Any], lead: str = "") ->
     concerns = (notes.get("implement") or {}).get("open_concerns") or []
     if concerns and str(concerns[0]).strip():
         parts.append(f"Coder's note: {_clip(str(concerns[0]).strip(), CONCERN_MAX)}")
+    tool_gaps = (notes.get("validation") or {}).get("toolchain_gaps") or []
+    if isinstance(tool_gaps, list) and tool_gaps and str(tool_gaps[0]).strip():  # validate's "Sandbox gap: …"
+        parts.append(f"{_clip(str(tool_gaps[0]).strip(), GAP_SHOWN).rstrip('.')}.")
     gap = _gap_sentence(notes)
     if not gap:
         return _clip(" ".join(parts), SUMMARY_MAX)
@@ -203,10 +210,21 @@ def deps_changed(info: object) -> list[str]:
 
 
 def fetch_facts(info: object) -> dict[str, Any]:
-    """``ecosystems``, ``prefetch`` and ``prefetch_failed`` of a fetch.json (shown to the coder as untrusted)."""
+    """``ecosystems``, ``prefetch``, ``prefetch_failed`` and the toolchain resolver's ``toolchains`` (build-env
+    design §6.1, <= TOOLCHAINS_MAX chars, whole entries only) of a fetch.json (shown to the coder as untrusted)."""
     if not isinstance(info, dict):
         return {}
-    return {key: info[key] for key in ("ecosystems", "prefetch", "prefetch_failed") if key in info}
+    facts = {key: info[key] for key in ("ecosystems", "prefetch", "prefetch_failed") if key in info}
+    tools = info.get("toolchains")
+    if isinstance(tools, list):
+        kept: list[Any] = []
+        for entry in tools[:40]:
+            if len(json.dumps([*kept, entry])) > TOOLCHAINS_MAX:
+                break
+            kept.append(entry)
+        if kept:
+            facts["toolchains"] = kept
+    return facts
 
 
 def _refetch(sc: StageContext, c: dict[str, Any]) -> dict[str, Any]:
@@ -254,9 +272,9 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
             _unbundle(sc, c)
         issue, _ = issue_text(sc, c)
         facts = fetch_facts(sc.load(cid).get("fetch"))
+        shown = json.dumps(facts)[: FACTS_MAX + TOOLCHAINS_MAX]
         sections = [issue, *owner_notes(c), prompts.untrusted("approved plan", json.dumps(plan, indent=1)),
-                    *([prompts.untrusted("fetch facts", json.dumps(facts)[:FACTS_MAX])] if facts else []),
-                    *feedback(sc, c)]  # fmt: skip
+                    *([prompts.untrusted("fetch facts", shown)] if facts else []), *feedback(sc, c)]  # fmt: skip
         task_line = instruction(c)
         # ADR-0024: every coder job states its egress; anything but "mode" is strict (fail closed)
         egress: JobEgress = "mode" if target(sc, str(c["upstream"])).egress == "mode" else "strict"
@@ -268,7 +286,10 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
             changed = deps_changed(info)
             if changed:
                 found = {"deps_changed": changed, **{k: v for k, v in fetch_facts(info).items() if k != "ecosystems"}}
-                again = [*sections, prompts.untrusted("re-fetch result", json.dumps(found)[:FACTS_MAX])]
+                again = [
+                    *sections,
+                    prompts.untrusted("re-fetch result", json.dumps(found)[: FACTS_MAX + TOOLCHAINS_MAX]),
+                ]
                 first_gaps = report.sandbox_gaps
                 result = _coder(sc, cid, f"{task_line} {REFETCH_LINE}", again, egress)
                 run_.model_actual = result.model_actual

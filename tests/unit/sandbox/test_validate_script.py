@@ -3,9 +3,12 @@ JVM option: it killed every ./gradlew), the JVM setup of lib/jvm_env.sh, and pip
 
 from __future__ import annotations
 
+import json
 import re
 import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 ENTRYPOINTS = ROOT / "sandbox" / "entrypoints"
@@ -116,6 +119,90 @@ def test_gitconfig_sends_ssh_github_urls_over_https(tmp_path: Path) -> None:
     got = subprocess.run(["/usr/bin/git", "config", "--file", str(home / ".gitconfig"), "--get-all",
                           "url.https://github.com/.insteadof"], capture_output=True, text=True, check=True)  # fmt: skip
     assert got.stdout.split() == ["git@github.com:", "ssh://git@github.com/"]
+
+
+# ------------------------------------------------------- the resolver in validate (build-env §6.3, §8.2, C-N3)
+SWITCH_RE = r"^(UV_OFFLINE|PIP_NO_INDEX|GOPROXY|npm_config_offline)="
+FAKE_RESOLVER = """import json, os, sys
+args = sys.argv[1:]
+seen = {k: v for k, v in os.environ.items() if k in ("UV_OFFLINE", "PIP_NO_INDEX", "GOPROXY", "npm_config_offline")}
+json.dump({"argv": args, "switches": seen}, open(os.environ["FAKE_SEEN"], "w"))
+report = args[args.index("--report") + 1]
+json.dump({"tools": [], "gaps": ["java 23: install_failed", "rust 1.98.0: timeout"]}, open(report, "w"))
+"""
+
+
+def _run_validate(tmp_path: Path, net: str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
+    work, io = tmp_path / "work", tmp_path / "io"
+    (work / "repo").mkdir(parents=True)
+    (io / "input").mkdir(parents=True)
+    plan = {"commands": [{"name": "switches", "cmd": f"env | grep -E '{SWITCH_RE}' | sort || true", "timeout_s": 30},
+                         {"name": "java", "cmd": 'echo "$JAVA_HOME"; echo "$PATH"', "timeout_s": 30}]}  # fmt: skip
+    (io / "input" / "validate.json").write_text(json.dumps(plan))
+    fake = tmp_path / "resolver.py"
+    fake.write_text(FAKE_RESOLVER)
+    env = {"PATH": "/usr/bin:/bin", "OSSBOT_WORK": str(work), "OSSBOT_IO": str(io), "TOOLCHAINS_BIN": str(fake),
+           "FAKE_SEEN": str(tmp_path / "seen.json"), "OSSBOT_GRADLE_DIR": str(ROOT / "sandbox" / "gradle")}  # fmt: skip
+    if net is not None:
+        env["OSSBOT_NET"] = net
+    proc = subprocess.run(["/bin/bash", str(ENTRYPOINTS / "validate.sh")], capture_output=True, text=True, env=env,
+                          check=False, timeout=60)  # fmt: skip
+    return proc, io / "output"
+
+
+@pytest.mark.parametrize("net", [None, "base", "web"])
+def test_cn3_resolver_never_sees_the_offline_switches_and_the_plan_keeps_them_outside_web(
+    tmp_path: Path, net: str | None
+) -> None:
+    proc, out = _run_validate(tmp_path, net)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    seen = json.loads((tmp_path / "seen.json").read_text())
+    assert seen["switches"] == {}  # every mode: env -u UV_OFFLINE -u PIP_NO_INDEX -u GOPROXY -u npm_config_offline
+    assert seen["argv"][seen["argv"].index("--mode") + 1] == "install"
+    assert seen["argv"][seen["argv"].index("--budget") + 1] == "600"
+    switches = (out / "logs" / "switches.log").read_text().split()
+    if net == "web":
+        assert switches == []
+    else:
+        assert switches == ["GOPROXY=off", "PIP_NO_INDEX=1", "UV_OFFLINE=1", "npm_config_offline=true"]
+    doc = json.loads((out / "validation.json").read_text())
+    assert doc["toolchain_gaps"] == ["java 23: install_failed", "rust 1.98.0: timeout"]
+    java_home, path = (out / "logs" / "java.log").read_text().splitlines()[:2]
+    assert java_home == "/usr/lib/jvm/java-21-openjdk-amd64"  # no toolchain.env written by the fake: the default
+    assert f"{java_home}/bin:{tmp_path}/work/venv/bin:/opt/mise/shims:/opt/rust/cargo/bin:" in path
+
+
+def test_cn3_the_resolver_line_names_the_four_flags() -> None:
+    lib = (ENTRYPOINTS / "lib" / "tool_env.sh").read_text(encoding="utf-8")
+    assert "env -u UV_OFFLINE -u PIP_NO_INDEX -u GOPROXY -u npm_config_offline \\\n" in lib
+    body = code(VALIDATE_SH)
+    order = [body.index(s) for s in ("ossbot_tool_env online", "ossbot_offline_switches", "ossbot_netshim_start",
+                                     "ossbot_toolchains install 600", "ossbot_jvm_setup validate",
+                                     "ossbot_tool_paths venv", 'cd "$WORK/repo"')]  # fmt: skip
+    assert order == sorted(order)
+    assert '[[ "${OSSBOT_NET:-base}" == web ]] || ossbot_offline_switches' in body
+
+
+def test_exec_installs_with_web_and_selects_without() -> None:
+    body = code(EXEC_SH)
+    web = body.split("if [[ $NET == web ]]; then", 1)[1].split("else", 1)[0]
+    offline = body.split("if [[ $NET == web ]]; then", 1)[1].split("else", 1)[1].split("\nfi", 1)[0]
+    assert "ossbot_tool_env online" in web and "ossbot_toolchains install 600" in web
+    assert web.index("ossbot_netshim_start") < web.index("ossbot_toolchains") < web.index("ossbot_jvm_setup online")
+    assert "ossbot_tool_env offline" in offline and "ossbot_toolchains select 0" in offline
+
+
+def test_fetch_resolves_before_the_prefetch_with_the_fetch_budget() -> None:
+    body = code((ENTRYPOINTS / "fetch.sh").read_text(encoding="utf-8"))
+    assert body.index("ossbot_tool_env online") < body.index("ossbot_toolchains install 1800")
+    assert body.index("ossbot_toolchains install 1800") < body.index("ossbot_jvm_setup online")
+    assert body.index("ossbot_jvm_setup online") < body.index("prefetch go go mod download")
+    assert '[[ "$name" == gradle || "$name" == maven* ]] && limit=1800' in body  # BE-5.5
+    assert "GOTOOLCHAIN=auto" not in body and "prefetch mise mise install" not in body
+    for name in (".tool-versions", "mise.toml", ".java-version", ".sdkmanrc", ".nvmrc", ".node-version",
+                 ".python-version", "rust-toolchain.toml", ".terraform-version", ".ruby-version",
+                 "gradle-wrapper.properties", "maven-wrapper.properties", "gradle-daemon-jvm.properties"):  # fmt: skip
+        assert f" {name} " in body or f" {name})" in body, name  # §8.2 deps_changed
 
 
 def test_netshim_is_baked_into_the_full_image_only() -> None:

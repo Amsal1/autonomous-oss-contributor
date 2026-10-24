@@ -4,8 +4,15 @@
 #
 # ossbot_jvm_setup <online|validate|offline>   (needs WORK, HOME=$WORK/.home, GRADLE_USER_HOME set by the caller)
 #   online   (fetch, networked agent-exec): Gradle online,  Maven online,  proxy everywhere
-#   validate (validate):                   Gradle offline, Maven online,  proxy everywhere (V-M6)
+#   validate (validate):                   Gradle offline, Maven online,  proxy everywhere (V-M6); with
+#                                          OSSBOT_NET=web (build-env design §8.2) Gradle online too
 #   offline  (offline agent-exec):         Gradle offline, Maven offline, no proxy needed (no network)
+#
+# The JDKs (build-env design §6.3): JAVA_HOME, the Gradle daemon JVM (org.gradle.java.home) and the extra JDKs
+# come from the resolver's $HOME/.ossbot/toolchain.env through ossbot_tc_read (lib/tool_env.sh: validated line
+# by line, never sourced); without it (or a malformed line) the image defaults apply: JAVA_HOME 21, the image
+# JDKs 8/11/17/21/25 in org.gradle.java.installations.paths and ~/.m2/toolchains.xml. Gradle toolchain
+# auto-download is on whenever the container has a network that Gradle uses (online; validate with web).
 #
 # The JVM ignores HTTPS_PROXY, so the proxy goes into $GRADLE_USER_HOME/gradle.properties and a Maven
 # user settings.xml. Gradle offline mode comes from an init script (there is no offline Gradle property;
@@ -15,11 +22,29 @@
 # A missing or malformed HTTPS_PROXY writes no proxy lines (one stderr line) and never fails the job.
 
 PROXY_RE='^http://([a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?):([0-9]{1,5})/?$'
-JDKS=/usr/lib/jvm/java-17-openjdk-amd64,/usr/lib/jvm/java-21-openjdk-amd64,/usr/lib/jvm/java-25-openjdk-amd64
+IMAGE_JDK_FEATURES=(8 11 17 21 25)
 OSSBOT_GRADLE_DIR="${OSSBOT_GRADLE_DIR:-/opt/ossbot/gradle}"  # the baked init scripts (tests relocate it)
 
+_ossbot_jvm_tc() { # KEY: the validated toolchain.env value, or nothing without lib/tool_env.sh
+  if declare -F ossbot_tc_read >/dev/null; then ossbot_tc_read "$1"; fi
+}
+
+_ossbot_jdk_feature_vendor() { # HOME -> "<feature> <vendor>" of an image or resolver-installed JDK
+  local home=$1 base
+  if [[ $home =~ ^/usr/lib/jvm/java-([0-9]+)-openjdk-amd64$ ]]; then
+    printf '%s openjdk\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  base="${home##*/}"
+  if [[ $base =~ ^([a-z][a-z-]*)-(1\.)?([0-9]+) ]]; then
+    printf '%s %s\n' "${BASH_REMATCH[3]}" "${BASH_REMATCH[1]}"
+    return 0
+  fi
+  return 1
+}
+
 ossbot_jvm_setup() {
-  local mode="${1:-}" host="" port="" offline=false
+  local mode="${1:-}" host="" port="" offline=false gradle_offline=false auto=false
   case "$mode" in
     online | validate | offline) ;;
     *)
@@ -48,11 +73,33 @@ ossbot_jvm_setup() {
   else
     offline=true
   fi
+  # Gradle online (no offline init script, toolchain auto-download on): online, and validate in web (§8.2)
+  if [[ "$mode" == offline || ("$mode" == validate && "${OSSBOT_NET:-}" != web) ]]; then
+    gradle_offline=true
+  else
+    auto=true
+  fi
+
+  # 2. The JDKs: the resolver's choice (validated), else the image default 21; the image JDKs plus the
+  # installed ones for Gradle's installations.paths and Maven's toolchains.xml.
+  local java_home gradle_home extra f jdks=() homes=() home
+  java_home="$(_ossbot_jvm_tc JAVA_HOME)"
+  java_home="${java_home:-/usr/lib/jvm/java-21-openjdk-amd64}"
+  gradle_home="$(_ossbot_jvm_tc OSSBOT_GRADLE_JAVA_HOME)"
+  extra="$(_ossbot_jvm_tc OSSBOT_JDKS)"
+  for f in "${IMAGE_JDK_FEATURES[@]}"; do homes+=("/usr/lib/jvm/java-$f-openjdk-amd64"); done
+  if [[ -n "$extra" ]]; then
+    IFS=, read -r -a jdks <<<"$extra"
+    for home in "${jdks[@]}"; do
+      [[ " ${homes[*]} " == *" $home "* ]] || homes+=("$home")
+    done
+  fi
 
   mkdir -p "$GRADLE_USER_HOME/init.d" "$HOME/.m2" "$WORK/cache/m2"
 
-  # 3. gradle.properties: the proxy (V-G1; HTTPS uses http.nonProxyHosts), the JDK homes (V-G4).
-  local gprops="$GRADLE_USER_HOME/gradle.properties"
+  # 3. gradle.properties: the proxy (V-G1; HTTPS uses http.nonProxyHosts), the JDK homes (V-G4), the daemon JVM.
+  local gprops="$GRADLE_USER_HOME/gradle.properties" paths
+  paths="$(IFS=,; echo "${homes[*]}")"
   rm -f -- "$gprops"
   {
     echo "# written by ossbot (sandbox/entrypoints/lib/jvm_env.sh) at every job start; edits are lost"
@@ -61,17 +108,16 @@ ossbot_jvm_setup() {
       printf 'systemProp.http.proxyHost=%s\nsystemProp.http.proxyPort=%s\n' "$host" "$port"
       echo 'systemProp.http.nonProxyHosts=localhost|127.*|[::1]'
     fi
-    echo "org.gradle.java.installations.paths=$JDKS"
-    if [[ "$mode" != online ]]; then
-      echo "org.gradle.java.installations.auto-download=false"
-    fi
+    [[ -n "$gradle_home" ]] && echo "org.gradle.java.home=$gradle_home"
+    echo "org.gradle.java.installations.paths=$paths"
+    echo "org.gradle.java.installations.auto-download=$auto"
   } >"$gprops"
   chmod 0644 "$gprops"
 
-  # 4. Gradle offline mode (V-G2, V-G3): the init script in validate and offline, none online.
+  # 4. Gradle offline mode (V-G2, V-G3): the init script in offline and in validate without web, none online.
   local init="$GRADLE_USER_HOME/init.d/ossbot-offline.init.gradle"
   rm -f -- "$init"
-  if [[ "$mode" != online ]]; then
+  if [[ "$gradle_offline" == true ]]; then
     if cp -- "$OSSBOT_GRADLE_DIR/ossbot-offline.init.gradle" "$init"; then
       chmod 0644 "$init"
     else
@@ -103,28 +149,31 @@ ossbot_jvm_setup() {
   } >"$settings"
   chmod 0644 "$settings"
 
-  # 5a. Maven toolchains (maven-toolchains-plugin): the same three JDKs, in every mode.
-  local toolchains="$HOME/.m2/toolchains.xml" v
+  # 5a. Maven toolchains (maven-toolchains-plugin): every JDK of the set with its feature and vendor, in every
+  # mode (a repo's own toolchains.xml is never used: its jdkHome paths are the author's machine).
+  local toolchains="$HOME/.m2/toolchains.xml" fv
   rm -f -- "$toolchains"
   {
     echo '<?xml version="1.0" encoding="UTF-8"?>'
     echo '<!-- written by ossbot (sandbox/entrypoints/lib/jvm_env.sh) at every job start; edits are lost -->'
     echo '<toolchains xmlns="http://maven.apache.org/TOOLCHAINS/1.1.0">'
-    for v in 17 21 25; do
-      printf '  <toolchain><type>jdk</type><provides><version>%s</version><vendor>openjdk</vendor></provides>' "$v"
-      printf '<configuration><jdkHome>/usr/lib/jvm/java-%s-openjdk-amd64</jdkHome></configuration></toolchain>\n' "$v"
+    for home in "${homes[@]}"; do
+      fv="$(_ossbot_jdk_feature_vendor "$home")" || continue
+      printf '  <toolchain><type>jdk</type><provides><version>%s</version><vendor>%s</vendor></provides>' \
+        "${fv% *}" "${fv#* }"
+      printf '<configuration><jdkHome>%s</jdkHome></configuration></toolchain>\n' "$home"
     done
     echo '</toolchains>'
   } >"$toolchains"
   chmod 0644 "$toolchains"
 
-  # 6. Environment: JDK 21 is the default; Maven finds its settings through user.home (V-M2, V-M3); bin-type
-  # Maven wrappers download through the JVM proxy properties (V-M5). JAVA_TOOL_OPTIONS prints "Picked up".
+  # 6. Environment: the resolver's JAVA_HOME (else 21); Maven finds its settings through user.home (V-M2, V-M3);
+  # bin-type Maven wrappers download through the JVM proxy properties (V-M5). JAVA_TOOL_OPTIONS prints "Picked up".
   local mopts="-Duser.home=$HOME"
   if [[ -n "$host" ]]; then
     mopts+=" -Dhttps.proxyHost=$host -Dhttps.proxyPort=$port -Dhttp.proxyHost=$host -Dhttp.proxyPort=$port"
   fi
-  export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 MAVEN_USER_HOME="$HOME/.m2" MAVEN_OPTS="$mopts"
+  export JAVA_HOME="$java_home" MAVEN_USER_HOME="$HOME/.m2" MAVEN_OPTS="$mopts"
   unset GRADLE_OPTS JAVA_TOOL_OPTIONS
   return 0
 }

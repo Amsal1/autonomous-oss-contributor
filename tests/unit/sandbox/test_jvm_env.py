@@ -12,8 +12,9 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 LIB = ROOT / "sandbox" / "entrypoints" / "lib" / "jvm_env.sh"
+TOOL_ENV = ROOT / "sandbox" / "entrypoints" / "lib" / "tool_env.sh"
 GRADLE_DIR = ROOT / "sandbox" / "gradle"
-JDK_HOMES = [f"/usr/lib/jvm/java-{v}-openjdk-amd64" for v in (17, 21, 25)]
+JDK_HOMES = [f"/usr/lib/jvm/java-{v}-openjdk-amd64" for v in (8, 11, 17, 21, 25)]
 PROXY_KEYS = ("systemProp.https.proxyHost=proxy", "systemProp.https.proxyPort=3128", "systemProp.http.proxyHost=proxy",
               "systemProp.http.proxyPort=3128", "systemProp.http.nonProxyHosts=localhost|127.*|[::1]")  # fmt: skip
 DRIVER = (
@@ -51,7 +52,8 @@ def test_online_writes_the_proxy_and_the_jdks_and_no_offline_script(tmp_path: Pa
     for key in PROXY_KEYS:
         assert key in gprops.splitlines(), key
     assert f"org.gradle.java.installations.paths={','.join(JDK_HOMES)}" in gprops.splitlines()
-    assert "auto-download" not in gprops
+    assert "org.gradle.java.installations.auto-download=true" in gprops.splitlines()  # BE-4.4: with a network
+    assert "org.gradle.java.home" not in gprops  # no resolver output: Gradle's own choice
     assert not init.exists()
     assert f"<localRepository>{tmp_path}/cache/m2</localRepository>" in settings
     assert "<offline>false</offline>" in settings
@@ -72,7 +74,7 @@ def test_validate_and_offline_write_the_offline_init_script(tmp_path: Path, mode
     assert "gradle.startParameter.offline = true" in init.read_text(encoding="utf-8")
     assert "org.gradle.java.installations.auto-download=false" in gprops.splitlines()
     assert f"<localRepository>{tmp_path}/cache/m2</localRepository>" in settings
-    for v in ("17", "21", "25"):
+    for v in ("8", "11", "17", "21", "25"):
         assert f"<version>{v}</version>" in toolchains
     if mode == "validate":  # V-M6: Maven stays online in validate (surefire providers), through the proxy
         assert "<offline>false</offline>" in settings and settings.count("<proxy>") == 2
@@ -125,6 +127,70 @@ def test_a_malformed_proxy_writes_no_proxy_lines(tmp_path: Path, proxy: str | No
     gprops, settings, _, _ = files(tmp_path)
     assert "proxy" not in gprops.lower() and "<proxy>" not in settings
     assert out["MAVEN_OPTS"] == f"-Duser.home={tmp_path}/.home"
+
+
+# ------------------------------------------------------------- the resolver's toolchain.env (build-env §6.3)
+TC_DRIVER = 'source "$1"; source "$2"; ossbot_jvm_setup "$3"; rc=$?; echo "rc=$rc"; echo "JAVA_HOME=${JAVA_HOME-}"'
+
+
+def run_tc(work: Path, mode: str, env_file: str | None, net: str | None = None) -> dict[str, str]:
+    if env_file is not None:
+        (work / ".home" / ".ossbot").mkdir(parents=True, exist_ok=True)
+        (work / ".home" / ".ossbot" / "toolchain.env").write_text(env_file, encoding="utf-8")
+    env = {"PATH": "/usr/bin:/bin", "WORK": str(work), "HOME": str(work / ".home"),
+           "GRADLE_USER_HOME": str(work / "cache" / "gradle"), "OSSBOT_GRADLE_DIR": str(GRADLE_DIR),
+           "HTTPS_PROXY": "http://proxy:3128"}  # fmt: skip
+    if net is not None:
+        env["OSSBOT_NET"] = net
+    proc = subprocess.run(["/bin/bash", "-c", TC_DRIVER, "driver", str(TOOL_ENV), str(LIB), mode],
+                          capture_output=True, text=True, env=env, check=False, timeout=30)  # fmt: skip
+    return dict(line.split("=", 1) for line in proc.stdout.splitlines() if "=" in line)
+
+
+def test_the_resolvers_jdks_reach_java_home_gradle_and_maven(tmp_path: Path) -> None:
+    temurin = f"{tmp_path}/cache/mise/installs/java/temurin-22.0.2+9"
+    env_file = (f"JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64\nOSSBOT_GRADLE_JAVA_HOME={temurin}\n"
+                f"OSSBOT_JDKS={temurin}\n")  # fmt: skip
+    out = run_tc(tmp_path, "online", env_file)
+    assert out["rc"] == "0" and out["JAVA_HOME"] == "/usr/lib/jvm/java-25-openjdk-amd64"  # floci: no prefix needed
+    gprops, _, toolchains, _ = files(tmp_path)
+    assert f"org.gradle.java.home={temurin}" in gprops.splitlines()
+    assert f"org.gradle.java.installations.paths={','.join([*JDK_HOMES, temurin])}" in gprops.splitlines()
+    assert (f"<version>22</version><vendor>temurin</vendor></provides><configuration><jdkHome>{temurin}</jdkHome>"
+            in toolchains)  # fmt: skip
+    assert "<version>25</version><vendor>openjdk</vendor>" in toolchains
+
+
+@pytest.mark.parametrize("line", [
+    "JAVA_HOME=/usr/lib/jvm/java-22-openjdk-amd64",  # not an image JDK
+    "JAVA_HOME=/tmp/evil",
+    "JAVA_HOME={work}/cache/mise/../../../etc",
+    "JAVA_HOME={work}/repo/jdk",
+    "JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64 -XX:x",
+])  # fmt: skip
+def test_a_malformed_java_home_line_falls_back_to_21(tmp_path: Path, line: str) -> None:
+    out = run_tc(tmp_path, "offline", line.format(work=tmp_path) + "\nOSSBOT_JDKS=/tmp/x\n")
+    assert out["rc"] == "0" and out["JAVA_HOME"] == "/usr/lib/jvm/java-21-openjdk-amd64"
+    gprops, _, toolchains, _ = files(tmp_path)
+    assert f"org.gradle.java.installations.paths={','.join(JDK_HOMES)}" in gprops.splitlines()
+    assert "/tmp" not in toolchains and "/tmp" not in gprops
+
+
+def test_the_env_file_is_never_sourced(tmp_path: Path) -> None:
+    marker = tmp_path / "pwned"
+    out = run_tc(tmp_path, "offline", f"touch {marker}\nJAVA_HOME=$(touch {marker})\n`touch {marker}`\n")
+    assert out["JAVA_HOME"] == "/usr/lib/jvm/java-21-openjdk-amd64" and not marker.exists()
+
+
+@pytest.mark.parametrize(("net", "offline_gradle"), [("web", False), ("base", True), (None, True)])
+def test_validate_runs_gradle_online_only_with_web(tmp_path: Path, net: str | None, offline_gradle: bool) -> None:
+    """§8.2: validate with OSSBOT_NET=web runs Gradle online (no init script, auto-download on)."""
+    run_tc(tmp_path, "validate", None, net)
+    gprops, settings, _, init = files(tmp_path)
+    assert init.exists() is offline_gradle
+    want = "false" if offline_gradle else "true"
+    assert f"org.gradle.java.installations.auto-download={want}" in gprops.splitlines()
+    assert "<offline>false</offline>" in settings  # Maven online in validate either way (V-M6)
 
 
 def test_existing_symlinks_are_replaced_not_followed(tmp_path: Path) -> None:

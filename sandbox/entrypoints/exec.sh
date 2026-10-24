@@ -21,13 +21,21 @@ mkdir -p "$HOME" /work/cache
 # shellcheck source=sandbox/entrypoints/lib/netshim.sh disable=SC1091
 source "$(dirname -- "$0")/lib/netshim.sh"
 ossbot_gitconfig
+# build-env design §6.3: the resolver installs what is missing with web, else only selects what fetch installed;
+# execd reads the same toolchain.env for its commands (fixed_env).
+# shellcheck source=sandbox/entrypoints/lib/tool_env.sh disable=SC1091
+source "$(dirname -- "$0")/lib/tool_env.sh"
 # shellcheck source=sandbox/entrypoints/lib/jvm_env.sh disable=SC1091
 source "$(dirname -- "$0")/lib/jvm_env.sh"
 if [[ $NET == web ]]; then
   ossbot_netshim_start
+  ossbot_tool_env online
+  ossbot_toolchains install 600 /io/output/toolchains.json
   ossbot_jvm_setup online
   NETWORK=web
 else
+  ossbot_tool_env offline
+  ossbot_toolchains select 0 /io/output/toolchains.json
   ossbot_jvm_setup offline
   NETWORK=none
 fi

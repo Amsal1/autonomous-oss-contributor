@@ -1,0 +1,3 @@
+[versions]
+java-toolchain = "21"
+kotlin = "2.3.0"

@@ -3,13 +3,23 @@
 //   bash ./gradlew --no-daemon --no-configuration-cache -I /opt/ossbot/gradle/ossbot-prefetch.init.gradle ossbotPrefetch
 // Settings plugins, buildscript classpaths, buildSrc and the wrapper distribution resolve while Gradle
 // configures; a configuration that fails to resolve is logged and the rest continue.
+// build-env design §6.2 (M7, BE-4.4): the project's Java toolchain is resolved once too, so a toolchain the
+// resolver could not see (a computed languageVersion) is provisioned by Gradle itself (foojay, auto-download
+// on at fetch) into $GRADLE_USER_HOME/jdks on the task volume, and later offline builds find it there.
 allprojects { p ->
     p.tasks.register("ossbotPrefetch") {
         def confs = p.configurations          // captured at configuration time
+        def javaExt = p.extensions.findByName("java")
+        def toolchains = p.extensions.findByName("javaToolchains")
+        def launcher = (javaExt != null && toolchains != null) ? toolchains.launcherFor(javaExt.toolchain) : null
         doLast {
             confs.findAll { it.canBeResolved }.each { c ->
                 try { c.resolve() }
                 catch (Exception e) { logger.warn("ossbot-prefetch: ${p.path}:${c.name}: ${e.class.simpleName}") }
+            }
+            if (launcher != null) {
+                try { logger.lifecycle("ossbot-prefetch: ${p.path}: toolchain ${launcher.get().metadata.languageVersion}") }
+                catch (Exception e) { logger.warn("ossbot-prefetch: ${p.path}: toolchain ${e.class.simpleName}") }
             }
         }
     }

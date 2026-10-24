@@ -1,0 +1,6 @@
+jobs:
+  t:
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          java-version: 11

@@ -756,6 +756,45 @@ def test_validation_stuck_on_a_live_pr_returns_to_watching(sc: StageContext, ctx
     assert _coder_jobs(sbx) == 0 and _terminal(ctx, cid) == []
 
 
+def test_validate_toolchain_gaps_reach_the_retry_and_the_failure_summary(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub
+) -> None:
+    """build-env design §8.2: validation.json ``toolchain_gaps`` (untrusted, bounded) are saved as ``Sandbox gap: …``
+    lines, shown to the coder's retry and named in the owner's summary when the validation loop ends."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 101, plan_json=json.dumps(PLAN), base_sha="1" * 40)
+    sbx.kiro("coder", CODER)
+    implement.run(sc, sc.gk.contribution(cid))
+    gaps = ["java 23: install_failed", "", 7, "x" * 500, *[f"g{i}: timeout" for i in range(20)]]
+
+    def handler(spec: dict[str, Any], out: Path) -> int:
+        doc = {"commands": [{"name": "ossbot-diff", "exit_code": 0, "tail": ""}, *FAILING], "toolchain_gaps": gaps}
+        (out / "validation.json").write_text(json.dumps(doc))
+        (out / "logs").mkdir(exist_ok=True)
+        (out / "logs" / "ossbot-diff.log").write_text("diff --git a/x b/x\n+x\n")
+        return 0
+
+    sbx.handlers["validate"] = handler
+    validate.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "VALIDATION_FAILED"
+    saved = sc.load(cid)["validation"]["toolchain_gaps"]
+    assert saved[0] == "Sandbox gap: java 23: install_failed" and saved[1] == "Sandbox gap: " + "x" * 200
+    assert len(saved) == 8  # the first 10 entries, the empty and non-string ones dropped
+    sections = implement.feedback(sc, sc.gk.contribution(cid))
+    assert any("toolchain gaps in validate" in s and "java 23: install_failed" in s for s in sections)
+    summary = implement.last_failure_summary(sc, {"id": cid, "implement_attempts": 2})
+    assert "Sandbox gap: java 23: install_failed." in summary and len(summary) <= implement.SUMMARY_MAX
+    assert validate.toolchain_gaps({"commands": []}) == [] and validate.toolchain_gaps({"toolchain_gaps": "x"}) == []
+
+
+def test_fetch_facts_carry_the_toolchain_report_bounded() -> None:
+    entry = {"tool": "java", "declared": "22", "source": "build.gradle.kts", "chosen": "temurin-22.0.2+9",
+             "action": "install"}  # fmt: skip
+    facts = implement.fetch_facts({"ecosystems": ["gradle"], "toolchains": [entry] * 200, "other": 1})
+    assert facts["ecosystems"] == ["gradle"] and "other" not in facts
+    assert 0 < len(facts["toolchains"]) <= 40 and len(json.dumps(facts["toolchains"])) <= implement.TOOLCHAINS_MAX
+    assert "toolchains" not in implement.fetch_facts({"toolchains": "not a list"})
+
+
 SUMMARY = {"commit_message": "fix: handle empty spans", "pr_title": "Fix empty spans", "pr_body": "Handles it."}
 
 

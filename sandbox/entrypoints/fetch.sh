@@ -51,6 +51,9 @@ mkdir -p "$OUT"
 # shellcheck source=sandbox/entrypoints/lib/netshim.sh disable=SC1091
 source "$(dirname -- "$0")/lib/netshim.sh"
 ossbot_netshim_start
+# build-env design §6: the toolchain environment and the per-repo resolver (lib/tool_env.sh)
+# shellcheck source=sandbox/entrypoints/lib/tool_env.sh disable=SC1091
+source "$(dirname -- "$0")/lib/tool_env.sh"
 # shellcheck source=sandbox/entrypoints/lib/jvm_env.sh disable=SC1091
 source "$(dirname -- "$0")/lib/jvm_env.sh"
 cd "$WORK"  # the container may start inside /work/repo: never delete the working directory
@@ -106,11 +109,15 @@ else
     xy="${entry:0:2}"
     path="${entry:3}"
     if [[ "$xy" == *[RC]* ]]; then IFS= read -r -d '' _ || true; fi  # -z: a rename's source path follows
+    # build-env design §8.2: the toolchain declarations too, so a changed one gets its toolchain installed
     case "${path##*/}" in
       package.json | package-lock.json | pnpm-lock.yaml | yarn.lock | go.mod | go.sum | build.gradle | \
         build.gradle.kts | settings.gradle | settings.gradle.kts | gradle.properties | libs.versions.toml | \
         gradle.lockfile | pom.xml | pyproject.toml | uv.lock | poetry.lock | requirements*.txt | Cargo.toml | \
-        Cargo.lock | Gemfile | Gemfile.lock | Chart.yaml | Chart.lock)
+        Cargo.lock | Gemfile | Gemfile.lock | Chart.yaml | Chart.lock | .tool-versions | mise.toml | .mise.toml | \
+        .java-version | .sdkmanrc | .nvmrc | .node-version | .python-version | rust-toolchain | \
+        rust-toolchain.toml | .terraform-version | .ruby-version | gradle-wrapper.properties | \
+        maven-wrapper.properties | gradle-daemon-jvm.properties)
         DEPS_CHANGED+=("$path")
         ;;
     esac
@@ -118,25 +125,33 @@ else
 fi
 
 # Ecosystem detection and best-effort dependency prefetch (failures are recorded, not fatal).
-export GOMODCACHE="$WORK/cache/go/mod" GOCACHE="$WORK/cache/go/build" GOTOOLCHAIN=auto GOFLAGS=-mod=mod \
+export GOMODCACHE="$WORK/cache/go/mod" GOCACHE="$WORK/cache/go/build" GOFLAGS=-mod=mod \
   npm_config_cache="$WORK/cache/npm" UV_CACHE_DIR="$WORK/cache/uv" PIP_CACHE_DIR="$WORK/cache/pip" \
-  GRADLE_USER_HOME="$WORK/cache/gradle" MISE_DATA_DIR="$WORK/cache/mise" CHECKPOINT_DISABLE=1 \
-  UV_PROJECT_ENVIRONMENT="$WORK/venv"
-# The JVM tools ignore HTTPS_PROXY: lib/jvm_env.sh writes it into gradle.properties and settings.xml
-# (online mode: no offline init script). Never in scout mode, which runs nothing from the repo.
-[[ "$PREFETCH_ON" == 1 ]] && ossbot_jvm_setup online
+  GRADLE_USER_HOME="$WORK/cache/gradle" CHECKPOINT_DISABLE=1 UV_PROJECT_ENVIRONMENT="$WORK/venv"
+ossbot_tool_env online  # MISE_DATA_DIR, GOTOOLCHAIN=local, RUSTUP_HOME, CARGO_HOME, COREPACK_HOME, uv Python
+# The repo's declared toolchains (JDK, Node + its package manager, Python, Go, Rust, Terraform, Ruby, the repo's
+# own mise config) into the task cache, within 1800 s (§6.1); then the JVM tools, which ignore HTTPS_PROXY:
+# lib/jvm_env.sh writes it into gradle.properties and settings.xml (online mode: no offline init script).
+# Never in scout mode, which runs nothing from the repo.
+if [[ "$PREFETCH_ON" == 1 ]]; then
+  ossbot_toolchains install 1800 "$OUT/toolchains.json"
+  ossbot_jvm_setup online
+  ossbot_tool_paths novenv
+fi
 ECOS=()
 PREFETCH=()
-prefetch() { # prefetch <name> <cmd...>
-  local name=$1 code=0
+prefetch() { # prefetch <name> <cmd...> (Gradle and Maven warm-ups get 1800 s, BE-5.5)
+  local name=$1 code=0 limit=900
   [[ "$PREFETCH_ON" == 1 ]] || return 0
   shift
-  timeout 900 "$@" >"$OUT/prefetch-$name.log" 2>&1 || code=$?
+  [[ "$name" == gradle || "$name" == maven* ]] && limit=1800
+  timeout "$limit" "$@" >"$OUT/prefetch-$name.log" 2>&1 || code=$?
   PREFETCH+=("$name=$code")
 }
 has() { [[ -n "$(find . -maxdepth 3 -name "$1" -not -path './.git/*' -print -quit)" ]]; }
 
-if [[ -f .tool-versions || -f mise.toml || -f .mise.toml ]]; then ECOS+=(mise); prefetch mise mise install; fi
+# mise: the resolver ran the repo's own `mise install` (its report entry "mise" has the exit code)
+if [[ -f .tool-versions || -f mise.toml || -f .mise.toml ]]; then ECOS+=(mise); fi
 if [[ -f go.mod ]]; then ECOS+=(go); prefetch go go mod download; fi
 if [[ -f package.json ]]; then
   ECOS+=(node)
@@ -187,18 +202,25 @@ TEST_RE='(^|/)(tests?|specs?|__tests__|testing)/|(^|/)test_[^/]*\.py$|_test\.[A-
 TEST_FILES="$("${G[@]}" ls-files -z | tr '\0' '\n' | grep -Ec "$TEST_RE" || true)"
 [[ "$TEST_FILES" =~ ^[0-9]+$ ]] || TEST_FILES=0
 
-# prefetch_failed: the dependency prefetches that exited non-zero (helm, tofu, mise, venv: informational).
+# prefetch_failed: the dependency prefetches that exited non-zero (helm, tofu, venv: informational).
 DEPS_JSON="$(jq -cn '$ARGS.positional' --args "${DEPS_CHANGED[@]}")"
+# The resolver's report, compact (the runner shows it to the coder as untrusted facts, capped, §6.1).
+TOOLCHAINS_JSON='[]'
+if [[ -f "$OUT/toolchains.json" && ! -L "$OUT/toolchains.json" ]]; then
+  TOOLCHAINS_JSON="$(jq -c '[.tools[]? | {tool, declared, source, chosen, action, gap}
+    | with_entries(select(.value != null))][:40]' "$OUT/toolchains.json" 2>/dev/null)" || TOOLCHAINS_JSON='[]'
+  [[ -n "$TOOLCHAINS_JSON" ]] || TOOLCHAINS_JSON='[]'
+fi
 jq -n --arg base_sha "$HEAD_SHA" --arg base_ref "$BASE_REF" --argjson test_files "$TEST_FILES" \
   --arg ecos "${ECOS[*]:-}" --arg prefetch "${PREFETCH[*]:-}" --arg agent "${AGENT_CONFIG[*]:-}" \
-  --arg refetch "$REFETCH" --argjson deps "$DEPS_JSON" \
+  --arg refetch "$REFETCH" --argjson deps "$DEPS_JSON" --argjson toolchains "$TOOLCHAINS_JSON" \
   '($prefetch | split(" ") | map(select(. != "") | split("=") | {(.[0]): (.[1] | tonumber)}) | add // {}) as $pf
    | {base_sha: $base_sha, base_ref: $base_ref, test_files: $test_files, has_test_suite: ($test_files > 0),
       ecosystems: ($ecos | split(" ") | map(select(. != ""))),
       prefetch: $pf,
       prefetch_failed: ($pf | to_entries | map(select(.value != 0 and (.key | IN("gradle", "maven",
         "maven-compile", "go", "npm", "pnpm", "yarn", "uv", "pip", "cargo"))) | .key)),
-      agent_config: ($agent | split(" ") | map(select(. != "")))}
+      agent_config: ($agent | split(" ") | map(select(. != ""))), toolchains: $toolchains}
    + (if $refetch == "1" then {refetch: true, deps_changed: $deps,
         base_ref: (if $base_ref == "" then null else $base_ref end)} else {} end)' >"$OUT/fetch.json"
 [[ "$PREFETCH_ON" == 1 ]] || : >"$SCOUT_MARK"

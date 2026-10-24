@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>ossbot.fixture</groupId>
+  <artifactId>case</artifactId>
+  <version>1.0</version>
+  <properties><java.release>17</java.release></properties>
+  <build><plugins><plugin>
+    <artifactId>maven-compiler-plugin</artifactId>
+    <configuration><release>${java.release}</release></configuration>
+  </plugin></plugins></build>
+</project>

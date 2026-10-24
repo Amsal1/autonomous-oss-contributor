@@ -20,6 +20,8 @@ COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/numstat2json.py /opt/ossb
 COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/execd.py /opt/ossbot/bin/ossbot-execd
 # ADR-0025: proxy-unaware tools in repo-code jobs (build-env design §3.2); never in the LLM image.
 COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/netshim.py /opt/ossbot/bin/ossbot-netshim
+# build-env design §6: the per-repo toolchain resolver (fetch, validate, agent-exec), run by /usr/bin/python3.
+COPY --chown=0:0 --chmod=0755 src/ossbot/sandbox_tools/toolchains.py /opt/ossbot/bin/ossbot-toolchains
 COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/fetch.sh sandbox/entrypoints/exec.sh \
      sandbox/entrypoints/validate.sh sandbox/entrypoints/package.sh sandbox/entrypoints/unbundle.sh \
      sandbox/entrypoints/snapshot.sh sandbox/entrypoints/probe.sh sandbox/entrypoints/extract_text.sh \
@@ -28,6 +30,7 @@ COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/fetch.sh sandbox/entrypoints/e
 COPY --chown=0:0 --chmod=0755 sandbox/entrypoints/lib/repo_tree.sh /opt/ossbot/entrypoints/lib/
 COPY --chown=0:0 --chmod=0644 sandbox/entrypoints/lib/jvm_env.sh /opt/ossbot/entrypoints/lib/
 COPY --chown=0:0 --chmod=0644 sandbox/entrypoints/lib/netshim.sh /opt/ossbot/entrypoints/lib/
+COPY --chown=0:0 --chmod=0644 sandbox/entrypoints/lib/tool_env.sh /opt/ossbot/entrypoints/lib/
 # Gradle init scripts (DESIGN §9.6 warm-up, §9.8/§9.9 offline mode), read by lib/jvm_env.sh and fetch.sh.
 COPY --chown=0:0 --chmod=0644 sandbox/gradle/ossbot-prefetch.init.gradle sandbox/gradle/ossbot-offline.init.gradle \
      /opt/ossbot/gradle/

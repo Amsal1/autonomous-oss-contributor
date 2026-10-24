@@ -1,0 +1,107 @@
+[
+ {
+  "version": "go1.27.3",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.27.3.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.27.3",
+    "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+    "size": 70588678,
+    "kind": "archive"
+   }
+  ]
+ },
+ {
+  "version": "go1.27.2",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.27.2.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.27.2",
+    "sha256": "ecbadb99091a3f46e31f5f934b068b1864eafa7995211b39eaddf76996045fe5",
+    "size": 70590635,
+    "kind": "archive"
+   }
+  ]
+ },
+ {
+  "version": "go1.27rc1",
+  "stable": false,
+  "files": [
+   {
+    "filename": "go1.27rc1.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.27rc1",
+    "sha256": "102a6055d682b1f233bc1741122cc6fddae7a7dded1305fbcc30079984187144",
+    "size": 70485396,
+    "kind": "archive"
+   }
+  ]
+ },
+ {
+  "version": "go1.26.10",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.26.10.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.26.10",
+    "sha256": "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5",
+    "size": 66936659,
+    "kind": "archive"
+   }
+  ]
+ },
+ {
+  "version": "go1.26.9",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.26.9.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.26.9",
+    "sha256": "42d158b4d8f7b61ac0a830567c940a86098fb7aac52e467a5ebec03ef5cc2f8d",
+    "size": 66935201,
+    "kind": "archive"
+   }
+  ]
+ },
+ {
+  "version": "go1.26.0",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.26.0.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.26.0",
+    "sha256": "aac1b08a0fb0c4e0a7c1555beb7b59180b05dfc5a3d62e40e9de90cd42f88235",
+    "size": 66768540,
+    "kind": "archive"
+   }
+  ]
+ },
+ {
+  "version": "go1.25.12",
+  "stable": true,
+  "files": [
+   {
+    "filename": "go1.25.12.linux-amd64.tar.gz",
+    "os": "linux",
+    "arch": "amd64",
+    "version": "go1.25.12",
+    "sha256": "234828b7a89e0e303d2556310ee549fbcf253d28de937bac3da13d6294262ac1",
+    "size": 59856753,
+    "kind": "archive"
+   }
+  ]
+ }
+]

@@ -31,6 +31,9 @@ DEFAULTS: dict[str, list[tuple[str, str]]] = {
     "gradle": [("gradle-test", "bash ./gradlew --no-daemon test")],
     "maven": [("mvn-test", "if [ -f ./mvnw ]; then bash ./mvnw -B -ntp test; else mvn -B -ntp test; fi")],
 }
+GAP_PREFIX = "Sandbox gap: "  # = implement.GAP_CONCERN
+GAPS_MAX = 10
+GAP_CHARS = 200
 
 
 def commands(plan: dict[str, Any], ecosystems: list[str], base: str) -> list[dict[str, Any]]:
@@ -42,6 +45,19 @@ def commands(plan: dict[str, Any], ecosystems: list[str], base: str) -> list[dic
         for eco in ecosystems:
             out += [{"name": name, "cmd": cmd, "timeout_s": 1200} for name, cmd in DEFAULTS.get(eco, [])]
     return out[:50]
+
+
+def toolchain_gaps(result: object) -> list[str]:
+    """validation.json ``toolchain_gaps`` (build-env design §8.2: what the resolver could not install; untrusted,
+    written by a container running repo code) as ``Sandbox gap: …`` lines, bounded."""
+    raw = result.get("toolchain_gaps") if isinstance(result, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for gap in raw[:GAPS_MAX]:
+        if isinstance(gap, str) and gap.strip():
+            out.append(f"{GAP_PREFIX}{gap.strip()[:GAP_CHARS]}")
+    return out
 
 
 def failure_sig(diff: str, checks: list[dict[str, Any]]) -> str:
@@ -75,7 +91,9 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
     ok = all(cmd.get("exit_code") == 0 for cmd in checks)
     sig = None if ok or diff is None else failure_sig(diff, checks)  # implement compares it (validation_stuck)
     prev = None if sig is None else notes.get("validation_sig")
-    sc.save(cid, validation={"commands": checks}, diff=(diff or "")[:400_000], validation_sig=sig,
+    gaps = toolchain_gaps(result)  # the coder's retry and the owner's failure summary name them (implement)
+    validation: dict[str, Any] = {"commands": checks, **({"toolchain_gaps": gaps} if gaps else {})}
+    sc.save(cid, validation=validation, diff=(diff or "")[:400_000], validation_sig=sig,
             validation_prev_sig=prev)  # fmt: skip
     summary = {"passed": sum(1 for cmd in checks if cmd.get("exit_code") == 0), "total": len(checks)}
     sc.transition(cid, "VALIDATING", "VALIDATED" if ok else "VALIDATION_FAILED", {"validation": summary})

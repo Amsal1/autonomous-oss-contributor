@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<toolchains>
+  <toolchain><type>jdk</type>
+    <provides><version>23</version><vendor>temurin</vendor></provides>
+    <configuration><jdkHome>/Users/author/jdks/23</jdkHome></configuration>
+  </toolchain>
+</toolchains>
