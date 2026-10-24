@@ -559,6 +559,103 @@ def test_resumed_coder_keeps_the_first_runs_sandbox_gaps(sc: StageContext, ctx: 
     assert sc.load(cid)["sandbox_gap"] is True
 
 
+# ------------------------------------------- build-env §8.2: needs_network is terminal only without network
+NEEDS_TWICE = fenced({"files_changed": ["build.gradle"], "needs_network": ["com.google.guava:guava:33.3.1-jre"],
+                      "sandbox_gaps": ["no docker"]})  # fmt: skip
+
+
+def test_i_web_run_with_needs_network_left_is_implemented_with_gaps(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub
+) -> None:
+    """(i) the resumed coder run had the web (sandboxd's exec_network) and still lists needs_network: the entries
+    become sandbox gaps (merged with the first run's, deduped), needs_network is empty, IMPLEMENTED, validate
+    judges; no FAILED, no terminal FYI."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 182, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS_TWICE)
+    sbx.exec_network = ["web"]
+    sbx.handlers["fetch"] = _refetch_handler(["build.gradle"])
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _coder_jobs(sbx) == 2 and len(_refetches(sbx)) == 1
+    saved = sc.load(cid)["implement"]
+    assert saved["needs_network"] == []
+    assert saved["sandbox_gaps"] == ["no docker", "com.google.guava:guava:33.3.1-jre"]
+    assert saved["open_concerns"] == ["Sandbox gap: no docker", "Sandbox gap: com.google.guava:guava:33.3.1-jre"]
+    assert sc.load(cid)["sandbox_gap"] is True and _terminal(ctx, cid) == []
+    assert _evidence(ctx, cid, "IMPLEMENTED")["sandbox_gaps"] == 2
+
+
+@pytest.mark.parametrize("net", [["none"], [None], []], ids=["none", "null", "missing"])
+def test_jk_offline_or_unknown_run_with_needs_network_left_fails(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub, net: list[str | None]
+) -> None:
+    """(j) exec_network none, (k) the field null or missing (an older sandboxd) -> none: FAILED needs_network as
+    before, with the summary."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 183, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS_TWICE)
+    sbx.exec_network = net
+    sbx.handlers["fetch"] = _refetch_handler(["build.gradle"])
+    Scheduler(sc, synchronous=True).run_one(cid)
+    row = db.one(ctx.conn, "SELECT state, state_reason FROM contributions WHERE id = ?", (cid,))
+    assert row is not None and tuple(row) == ("FAILED", "needs_network")
+    assert _evidence(ctx, cid, "FAILED")["summary"] == (
+        "The change adds dependencies the sandbox could not fetch, even after one re-fetch:"
+        " com.google.guava:guava:33.3.1-jre."
+    )
+
+
+def test_only_the_resumed_runs_network_counts(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                              github: FakeGitHub) -> None:  # fmt: skip
+    """The decision reads the run whose answer is used: a web first run and an offline resumed run fail."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 184, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS_TWICE)
+    sbx.exec_network = ["web", "none"]
+    sbx.handlers["fetch"] = _refetch_handler(["build.gradle"])
+    Scheduler(sc, synchronous=True).run_one(cid)
+    assert state(ctx, cid) == "FAILED"
+
+
+TOOLCHAIN_FILES = [".tool-versions", "mise.toml", ".mise.toml", ".java-version", ".sdkmanrc", ".nvmrc",
+                   ".node-version", ".python-version", "rust-toolchain", "rust-toolchain.toml", ".terraform-version",
+                   ".ruby-version", "gradle/wrapper/gradle-wrapper.properties",
+                   ".mvn/wrapper/maven-wrapper.properties", "gradle/gradle-daemon-jvm.properties"]  # fmt: skip
+
+
+def test_l_deps_changed_covers_the_toolchain_files(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
+                                                   github: FakeGitHub) -> None:  # fmt: skip
+    """(l) build-env §8.2: a re-fetch that saw a changed toolchain file (``.java-version``) resumes the coder;
+    every §8.2 toolchain file passes the runner's deps_changed charset."""
+    assert implement.deps_changed({"deps_changed": TOOLCHAIN_FILES}) == TOOLCHAIN_FILES
+    cid = _after_gate1(ctx, github, State.PLANNED, 185, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS, CLEAN)
+    sbx.handlers["fetch"] = _refetch_handler([".java-version"])
+    implement.run(sc, sc.gk.contribution(cid))
+    assert state(ctx, cid) == "IMPLEMENTED" and _coder_jobs(sbx) == 2
+    assert '"deps_changed": [".java-version"]' in _coder_prompts(sbx)[1]
+
+
+def _table_cases() -> list[tuple[str, str]]:
+    from ossbot.common.yamlio import safe_load
+    from tests.conftest import FIXTURES
+
+    rows = safe_load((FIXTURES / "implement_network_table.yaml").read_text(encoding="utf-8"))["rows"]
+    cols = ("no_grant", "grant")
+    return [(f"{r['setting']}-{r['mode']}-{r['repo']}-{col}", str(r[col])) for r in rows for col in cols]
+
+
+@pytest.mark.parametrize(("case", "net"), _table_cases(), ids=[c for c, _ in _table_cases()])
+def test_needs_network_is_terminal_only_where_the_table_says_none(
+    sc: StageContext, ctx: AppContext, sbx: FakeSbx, github: FakeGitHub, case: str, net: str
+) -> None:
+    """build-env §8.2 proof, against every cell of the shared decision table (incl. the sandbox_full rows): the
+    network sandboxd gives agent-exec for that cell decides; FAILED needs_network only in the ``none`` cells."""
+    cid = _after_gate1(ctx, github, State.PLANNED, 186, plan_json=json.dumps(PLAN))
+    sbx.kiro("coder", NEEDS)
+    sbx.exec_network = [net]
+    sbx.handlers["fetch"] = _refetch_handler(["build.gradle"])
+    Scheduler(sc, synchronous=True).run_one(cid)
+    assert state(ctx, cid) == ("FAILED" if net == "none" else "IMPLEMENTED"), case
+
+
 @pytest.mark.parametrize("deps", ["go.mod", [f"m{i}/go.mod" for i in range(51)], ["web app/package.json"],
                                   [1, 2], None, {"go.mod": 1}])  # fmt: skip
 def test_malformed_deps_changed_counts_as_empty(sc: StageContext, ctx: AppContext, sbx: FakeSbx,
@@ -872,7 +969,7 @@ def test_the_network_line_appears_only_when_the_gatekeeper_says_web(
     implement.run(sc, sc.gk.contribution(cid))
     prompts_ = _coder_prompts(sbx)
     assert len(prompts_) == 2 and all(implement.NETWORK_LINE in p for p in prompts_)  # both coder runs
-    assert "record it in `sandbox_gaps` and continue" in prompts_[0]
+    assert "Install what the build needs and continue" in prompts_[0]
     assert [s["egress"] for s in _coder_specs(sbx)] == ["mode", "mode"]
     assert "egress" in _refetches(sbx)[0]  # the refetch keeps its own fetch egress rule
 

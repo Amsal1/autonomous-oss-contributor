@@ -50,13 +50,14 @@ def test_coder_prompt_states_the_new_dependency_rule_gaps_and_pipefail() -> None
 
 
 @pytest.mark.parametrize("prompt", [CODER, PLANNER], ids=["coder", "planner"])
-def test_prompts_name_the_jdk_homes_and_the_java25_prefix(prompt: str) -> None:
-    assert "/usr/lib/jvm/java-{17,21,25}-openjdk-amd64" in prompt
-    assert "prefix the command with `JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64`" in prompt
+def test_prompts_name_the_image_jdks_and_maven(prompt: str) -> None:
+    """build-env §8.3: the image's JDKs and Maven are named; the per-repo toolchain is preset (no prefix rule,
+    tests/unit/runner/test_prompts.py)."""
+    assert "JDK 8, 11, 17, 21 and 25" in prompt
     assert re.search(r"Maven 3\.9", prompt)
 
 
-def test_planner_prompt_states_pipefail_and_jvm_offline() -> None:
+def test_planner_prompt_states_pipefail_and_the_offline_fallback() -> None:
     assert "Validation runs with `pipefail`" in PLANNER
-    assert "Gradle runs offline from the fetched cache" in PLANNER
+    assert "Gradle offline" in PLANNER
     assert "Maven may download its test providers through the registry proxy" in PLANNER

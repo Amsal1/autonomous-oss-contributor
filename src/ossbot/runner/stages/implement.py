@@ -9,9 +9,11 @@ names). The coder adds tests that cover the change (tests-required rule, §9.14)
 
 ``needs_network`` is only for a NEW dependency the change adds. It triggers exactly one re-fetch per stage
 run (a fetch job in refetch mode that keeps the working tree), then one resumed coder run if the re-fetch saw
-changed dependency files; a ``needs_network`` left after that fails the stage ``needs_network`` (the owner is
-told by the gatekeeper's terminal FYI, which shows the summary carried in the FAILED evidence). Without a
-changed dependency file the entries are carried as sandbox gaps. ``sandbox_gaps`` (checks the sandbox could
+changed dependency files; a ``needs_network`` left after that fails the stage ``needs_network`` only when that
+coder run had no network (``exec_network`` from sandboxd, build-env design §8.2; the owner is told by the
+gatekeeper's terminal FYI, which shows the summary carried in the FAILED evidence); after a networked run the
+entries become sandbox gaps and validate judges. Without a changed dependency file the entries are carried as
+sandbox gaps. ``sandbox_gaps`` (checks the sandbox could
 not run) never stop the stage: validate runs the plan's commands later, each gap is appended to
 ``open_concerns`` as ``Sandbox gap: …`` and the runner note ``sandbox_gap`` is set until a new round from
 PLANNED. A validation loop that ends (``implement_attempts``, or ``validation_stuck`` when a retry left the
@@ -51,7 +53,8 @@ TOOLCHAINS_MAX = 4000  # the resolver's report inside the fetch facts (build-env
 REFETCH_LINE = "The runner re-fetched dependencies once for your change; continue and run the checks again."
 NETWORK_LINE = (  # ADR-0024, carried criterion D22: conditional, the coder checks the real admission result
     "This run should have network (check `echo $OSSBOT_EXEC_NETWORK`): the public web through a proxy, allowed by"
-    " the owner. If a download fails, record it in `sandbox_gaps` and continue."
+    " the owner. Install what the build needs and continue; report in `sandbox_gaps` only what still fails after"
+    " trying."
 )
 NEEDS_NETWORK_SUMMARY = "The change adds dependencies the sandbox could not fetch, even after one re-fetch: {deps}."
 GAP_CONCERN = "Sandbox gap: "
@@ -294,12 +297,15 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
                 result = _coder(sc, cid, f"{task_line} {REFETCH_LINE}", again, egress)
                 run_.model_actual = result.model_actual
                 report = result.value
-                if report.needs_network:  # the gatekeeper's terminal FYI carries the summary (§14.13.1)
+                # build-env §8.2: needs_network is terminal only when the coder's run had no network; the one
+                # place it is raised (the gatekeeper's terminal FYI carries the summary, §14.13.1)
+                if report.needs_network and result.exec_network != "web":
                     deps = ", ".join(report.needs_network[:5])
                     raise StageFailed("needs_network", summary=NEEDS_NETWORK_SUMMARY.format(deps=deps))
-                # the first run's gaps still hold after the resume (review P1-1): merged, deduped, capped
-                merged = list(dict.fromkeys([*first_gaps, *report.sandbox_gaps]))[:SANDBOX_GAPS_MAX]
-                report = report.model_copy(update={"sandbox_gaps": merged})
+                # the first run's gaps still hold after the resume (review P1-1): merged, deduped, capped; with
+                # the web, what the coder still could not get is a gap too, and validate judges
+                merged = list(dict.fromkeys([*first_gaps, *report.sandbox_gaps, *report.needs_network]))
+                report = report.model_copy(update={"sandbox_gaps": merged[:SANDBOX_GAPS_MAX], "needs_network": []})
             else:  # no dependency file changed: what the coder missed is a sandbox gap, left to validate
                 gaps = [*report.sandbox_gaps, *report.needs_network][:SANDBOX_GAPS_MAX]
                 report = report.model_copy(update={"sandbox_gaps": gaps, "needs_network": []})

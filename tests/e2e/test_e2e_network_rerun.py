@@ -96,11 +96,17 @@ def test_rerun_with_network_reaches_gate_2_with_nothing_pushed(e2e: E2E) -> None
 
 
 def test_a_second_failure_gets_no_button(e2e: E2E) -> None:
+    """build-env §8.2: the networked rerun's needs_network is no longer terminal (the entries are sandbox gaps and
+    validate judges); here validation keeps failing, so the rerun ends gap-tagged, reported without a button."""
     _switches(e2e)
     e2e.answer("coder", NEEDS)  # every coder run asks for the network-only dependency
     cid = _fail_needs_network(e2e)
     network_rerun.start_rerun(e2e.ctx, cid, "tg:4242")
+    e2e.validate_exit = 1
     assert e2e.run_until(cid, "FAILED") == "FAILED", e2e.why(cid)
+    row = db.one(e2e.ctx.conn, "SELECT state_reason, rerun_hint FROM contributions WHERE id = ?", (cid,))
+    assert row[0] in ("validation_stuck", "implement_attempts") and row[1] == 1  # gap-tagged, not needs_network
+    assert e2e.exec_networks[-1].endswith("-exec")  # the rerun's coder had the web
     second = _fyi(e2e, f"terminal:{cid}:1")  # once per run: the rerun's end is reported too
     assert BUTTON not in second and "the sandbox could not build or test this repo offline" in second
     assert network_rerun.refusal(e2e.ctx, cid) == "network_reruns"

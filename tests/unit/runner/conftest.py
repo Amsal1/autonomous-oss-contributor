@@ -88,6 +88,9 @@ class FakeSbx:
     calls: list[str] = field(default_factory=list)  # M11 order: list_models, probes_status, probes_run, kiro:<role>
     error_class: dict[str, str] = field(default_factory=dict)  # handler key -> error_class of a failed job
     destroyed: list[str] = field(default_factory=list)  # POST /v1/tasks/{cid}/destroy
+    # build-env §8.1: the job document's exec_network for coder jobs, in order (the last repeats); empty = the
+    # key is missing (an older sandboxd), which the runner reads as "none"
+    exec_network: list[str | None] = field(default_factory=list)
 
     def run(self, spec: dict[str, Any], *, tick: Callable[[], None] | None = None, poll_s: float = 0) -> dict[str, Any]:
         key = f"kiro:{spec['args']['role']}" if spec["entrypoint"] == "kiro" else spec["entrypoint"]
@@ -115,8 +118,12 @@ class FakeSbx:
         code = handler(spec, out) if handler is not None else 0
         state = "succeeded" if code == 0 else "failed"
         error = self.error_class.get(key, f"{spec['entrypoint']}_exit_{code}")  # result.json error_class
-        return {"run_id": spec["run_id"], "state": state, "artifact_dir": str(out) if code == 0 else None,
-                "error_class": None if code == 0 else error}  # fmt: skip
+        doc: dict[str, Any] = {"run_id": spec["run_id"], "state": state,
+                               "artifact_dir": str(out) if code == 0 else None,
+                               "error_class": None if code == 0 else error}  # fmt: skip
+        if spec["profile"] == "coder" and self.exec_network:
+            doc["exec_network"] = self.exec_network.pop(0) if len(self.exec_network) > 1 else self.exec_network[0]
+        return doc
 
     def destroy(self, cid: str) -> None:
         self.destroyed.append(cid)

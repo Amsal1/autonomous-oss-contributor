@@ -27,10 +27,18 @@ ROLE_PROFILE: dict[str, tuple[str, str]] = {  # role -> (sandboxd profile, repo_
 Check = Callable[[Any], str | None]  # deterministic check of a parsed answer: None = fine, else the reason
 # The target's egress for a job that runs repo code (the coder: ADR-0024); put in the spec when given
 JobEgress = Literal["mode", "strict"]
+# agent-exec's network of a coder run as sandboxd admitted it (build-env design §8.1); "none" unless "web"
+ExecNetwork = Literal["web", "none"]
 
 
 def new_run_id(stage: str) -> str:
     return f"{stage[:10]}-{secrets.token_hex(6)}"
+
+
+def exec_network_of(job: Mapping[str, Any]) -> ExecNetwork:
+    """``exec_network`` of a sandboxd job document (``GET /v1/jobs/{run_id}``): ``web`` only for exactly that
+    value; missing, null or anything else is ``none`` (fail closed: the runner then treats the run as offline)."""
+    return "web" if job.get("exec_network") == "web" else "none"
 
 
 @dataclass
@@ -41,6 +49,7 @@ class LlmResult[T: BaseModel]:
     model_mismatch: bool
     run_ids: list[str] = field(default_factory=list)
     artifact_dir: Path | None = None
+    exec_network: ExecNetwork = "none"  # the last run's agent-exec network (the coder; "none" for every other role)
 
 
 @runtime_checkable

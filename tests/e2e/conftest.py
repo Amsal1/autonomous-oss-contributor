@@ -193,6 +193,7 @@ class E2E:
     upstreams: dict[str, Path] = field(default_factory=dict)  # repo -> local upstream (default: the world's)
     refetch_deps: list[str] = field(default_factory=list)  # fetch.json deps_changed of a refetch (§9.8)
     exec_networks: list[str] = field(default_factory=list)  # agent-exec's network per coder run (ADR-0024)
+    validate_exit: int = 0  # the exit code validate reports for every plan command
 
     # ------------------------------------------------------------------ canned answers
     def answer(self, role: str, *texts: str | dict[str, Any]) -> None:
@@ -392,7 +393,7 @@ def handlers(h: E2E) -> dict[str, Callable[[FakeRuntime, FakeContainer], int]]:
                               cwd=repo, capture_output=True, text=True, check=True).stdout  # fmt: skip
         (out / "logs").mkdir(exist_ok=True)
         (out / "logs" / "ossbot-diff.log").write_text(diff)
-        cmds = [{"name": cmd["name"], "exit_code": 0} for cmd in spec["commands"]]
+        cmds = [{"name": cmd["name"], "exit_code": h.validate_exit} for cmd in spec["commands"]]
         (out / "validation.json").write_text(json.dumps({"commands": cmds}))
         _result(out)
         return 0

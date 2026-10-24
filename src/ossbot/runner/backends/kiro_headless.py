@@ -20,7 +20,15 @@ from pydantic import BaseModel
 from ossbot.common.backends import KIRO_HEADLESS, BackendSpec
 from ossbot.common.models import Catalog, DistinctUnavailable, ModelsFile, ModelUnavailable, ResolvedModel
 from ossbot.runner import output_parse
-from ossbot.runner.backends.base import ROLE_PROFILE, Check, JobEgress, LlmResult, new_run_id
+from ossbot.runner.backends.base import (
+    ROLE_PROFILE,
+    Check,
+    ExecNetwork,
+    JobEgress,
+    LlmResult,
+    exec_network_of,
+    new_run_id,
+)
 from ossbot.runner.errors import Interrupted, OutputInvalidFailed, StageFailed, sandbox_run
 from ossbot.runner.gk_client import Gatekeeper, GkError
 from ossbot.runner.sbx_client import Sandbox
@@ -78,7 +86,7 @@ class KiroHeadlessBackend:
 
     def _once(self, cid: str, role: str, model: ResolvedModel, text: str, files: Mapping[str, str | bytes],
               timeout_s: int, egress: JobEgress | None = None,
-              ) -> tuple[output_parse.KiroOutput, str, Path | None]:  # fmt: skip
+              ) -> tuple[output_parse.KiroOutput, str, Path | None, ExecNetwork]:  # fmt: skip
         run_id = new_run_id(role)
         prompt_file = f"{role}-task.md"
         inputs = self._write_inputs(cid, run_id, {**files, prompt_file: text})
@@ -102,7 +110,7 @@ class KiroHeadlessBackend:
         output = output_parse.read_events(events, stderr)
         if output.agent_fallback:  # the role ran without its agent (tools, paths): never use its answer
             raise StageFailed("agent_config_rejected", f"{role} job {run_id}")
-        return output, run_id, artifact
+        return output, run_id, artifact, exec_network_of(job)
 
     def invoke[T: BaseModel](
         self,
@@ -129,19 +137,20 @@ class KiroHeadlessBackend:
                 raise output_parse.OutputInvalid(reason)
             return value
 
-        output, run_id, artifact = self._once(cid, role, model, text, files, timeout_s, egress)
+        output, run_id, artifact, net = self._once(cid, role, model, text, files, timeout_s, egress)
         runs = [run_id]
         try:
             value = parse(output.text)
         except output_parse.OutputInvalid as exc:  # one repair retry, then the stage fails
             repair = text + "\n\n" + output_parse.repair_prompt(exc.reason, schema_hint)
-            output, run_id, artifact = self._once(cid, role, model, repair, files, timeout_s, egress)
+            output, run_id, artifact, net = self._once(cid, role, model, repair, files, timeout_s, egress)
             runs.append(run_id)
             try:
                 value = parse(output.text)
             except output_parse.OutputInvalid as again:
                 raise OutputInvalidFailed(again.reason[:200], output.text) from again
         mismatch = output.model_mismatch or (output.model_actual is not None and output.model_actual != model.model)
-        return LlmResult(value, model, output.model_actual, mismatch, runs, artifact)
+        # build-env §8.1: the network of the run whose answer is used (the coder's agent-exec; "none" otherwise)
+        return LlmResult(value, model, output.model_actual, mismatch, runs, artifact, net)
 
     run_role = invoke  # the ModelBackend name; the stages keep calling ``invoke``

@@ -48,6 +48,24 @@ async def test_runner_can_submit_and_read(sbx: Sbx) -> None:
         assert (await client.get("/v1/jobs/BAD!")).status_code == 400
 
 
+async def test_job_document_carries_the_coders_exec_network(sbx: Sbx) -> None:
+    """build-env §8.1: GET /v1/jobs/{run_id} returns ``exec_network`` (``web`` for a networked agent-exec, ``none``
+    otherwise; null for non-coder jobs), which the runner reads as InvokeResult.exec_network."""
+    from tests.unit.sandboxd.test_jobs import _coder, pass_all_probes
+
+    pass_all_probes(sbx)
+    sbx.mode[0] = "sandbox_full"
+    sbx.gatekeeper.egress_answer = "web"
+    sbx.jobs.submit(_coder(sbx, "r3"))
+    sbx.gatekeeper.egress_answer = "none"
+    sbx.jobs.submit(_coder(sbx, "r4"))
+    async with _client(sbx, RUNNER_UID) as client:
+        web = (await client.get("/v1/jobs/r3")).json()
+        offline = (await client.get("/v1/jobs/r4")).json()
+    assert (web["state"], web["exec_network"]) == ("succeeded", "web")
+    assert (offline["state"], offline["exec_network"]) == ("succeeded", "none")
+
+
 async def test_errors_are_structured(sbx: Sbx) -> None:
     body = {
         "run_id": "r1",
