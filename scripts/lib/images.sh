@@ -100,19 +100,19 @@ step_images() {
   local full_args llm_args proxy_args
   full_args="--build-arg UV_VERSION=$(lock_get uv.version) --build-arg UV_SHA256=$(lock_get uv.sha256)"
   full_args+=" --build-arg MISE_VERSION=$(lock_get mise.version) --build-arg MISE_SHA256=$(lock_get mise.sha256)"
-  full_args+=" --build-arg TOFU_VERSION=$(lock_get tofu.version) --build-arg KIND_VERSION=$(lock_get kind.version)"
-  full_args+=" --build-arg GITLEAKS_VERSION=$(lock_get gitleaks.version)"
+  # the mise tools' versions and checksums: sandbox/images/full-base/mise.toml + mise.lock (build-env §6.4)
   llm_args=$(kiro_llm_build_args | paste -sd' ' -)
   proxy_args="--build-arg SQUID_VERSION=$(lock_get squid.apt_version)"
 
   local full llm proxy base
   # The toolchains (rarely changed) and the thin top with our scripts (FEAT-007: a script change
   # rebuilds only the top; the base tag also survives a build-cache prune).
-  _build sandbox-full-base sandbox/images/full-base/Dockerfile "$full_args" sandbox/images/full/code-requirements.txt
+  _build sandbox-full-base sandbox/images/full-base/Dockerfile "$full_args" sandbox/images/full/code-requirements.txt \
+    sandbox/images/full-base/mise.toml sandbox/images/full-base/mise.lock
   base=$OSSBOT_IMAGE_TAG
   _build sandbox-full sandbox/images/full/Dockerfile "--build-arg BASE=$base" \
     src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py src/ossbot/sandbox_tools/netshim.py \
-    sandbox/entrypoints sandbox/fixtures sandbox/gradle
+    src/ossbot/sandbox_tools/toolchains.py sandbox/entrypoints sandbox/fixtures sandbox/gradle
   full=$OSSBOT_IMAGE_ID
   _build sandbox-llm sandbox/images/llm/Dockerfile "$llm_args" \
     src/ossbot/sandbox_tools/exec_mcp.py src/ossbot/sandbox_tools/github_mcp.py sandbox/entrypoints sandbox/kiro \

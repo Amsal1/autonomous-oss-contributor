@@ -333,6 +333,22 @@ def test_shipped_egress_floors_of_adr_0025() -> None:
     assert "api.github.com" not in egress.code_denied  # github_read: repo code holds no token (I5 core)
 
 
+def test_shipped_egress_toolchain_hosts_are_base_hosts_of_repo_code_only() -> None:
+    """build-env design §6.5: pkg_toolchains and static.rust-lang.org in the fetch and validate base lists (so the
+    strict pool gets them too, in every mode); never for the key-holding profiles."""
+    egress = parse_yaml_model(EgressConfig, "egress.yaml", load("egress.yaml"))
+    assert egress.categories["pkg_toolchains"] == ["mise-java.jdx.dev", "api.foojay.io", "cdn.azul.com", "corretto.aws",
+                                                   "download.bell-sw.com", "download.java.net"]  # fmt: skip
+    assert "static.rust-lang.org" in egress.categories["pkg_rust"]
+    for profile in ("fetch", "validate"):
+        assert "pkg_toolchains" in egress.sandbox_profiles[profile] and "pkg_rust" in egress.sandbox_profiles[profile]
+    for profile in ("research", "agent-llm", "catalog"):
+        assert not {"pkg_toolchains", "pkg_rust"} & set(egress.sandbox_profiles[profile]), profile
+    assert "mise-versions.jdx.dev" not in {h for hosts in egress.categories.values() for h in hosts}  # M3
+    for mode in egress.modes.values():
+        assert not {"pkg_toolchains"} & {c for cats in mode.values() for c in cats}
+
+
 def _old_snapshot_egress() -> str:
     """egress.yaml as written before ADR-0025: no sandbox_full, no code_denied, no notify_only, old CIDRs."""
     text = load("egress.yaml").decode()

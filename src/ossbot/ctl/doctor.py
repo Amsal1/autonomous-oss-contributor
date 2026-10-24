@@ -448,39 +448,56 @@ def check_kiro_cli(quick: bool) -> list[Result]:
     return results
 
 
-JDK_HOMES = ("java-17-openjdk-amd64", "java-21-openjdk-amd64", "java-25-openjdk-amd64")
-TOOLCHAINS_SCRIPT = "java -version 2>&1 | head -1; ls -1 /usr/lib/jvm; mvn -v | head -1"
+JDK_HOMES = tuple(f"java-{v}-openjdk-amd64" for v in (8, 11, 17, 21, 25))
+TOOLCHAINS_SCRIPT = (
+    "java -version 2>&1 | head -1; ls -1 /usr/lib/jvm; mvn -v | head -1;"
+    " RUSTUP_HOME=/opt/rust/rustup /opt/rust/cargo/bin/rustup --version 2>/dev/null | head -1;"
+    " RUSTUP_HOME=/opt/rust/rustup /opt/rust/cargo/bin/rustc --version;"
+    " test -x /opt/ossbot/bin/ossbot-netshim && echo netshim=ok;"
+    " test -x /opt/ossbot/bin/ossbot-toolchains && echo resolver=ok;"
+    " if grep -Eqw 'lts|latest' /opt/mise/config/config.toml; then echo mise=floating; else echo mise=pinned; fi"
+)
+TOOLCHAINS_NAME = "toolchains (sandbox-full)"
 
 
-def toolchains_verdict(output: str, maven_version: str | None) -> tuple[bool, str]:
-    """sandbox-full's JVM tools (DESIGN §10.1): default java 21, JDK 17/21/25 present, the pinned Maven."""
+def toolchains_verdict(output: str, maven_version: str | None, rustup: str | None = None,
+                       rust: str | None = None) -> tuple[bool, str]:  # fmt: skip
+    """sandbox-full's fallback toolchains (DESIGN §10.1, build-env design §6.4): default java 21, JDK 8/11/17/21/25,
+    the pinned Maven, rustup and rustc, the netshim and resolver binaries, no lts/latest in the mise config."""
     lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
     default_21 = bool(lines) and re.search(r'version "21\.', lines[0]) is not None
     missing = [h for h in JDK_HOMES if h not in lines]
     maven_ok = maven_version is not None and f"Apache Maven {maven_version}" in output
-    ok = default_21 and not missing and maven_ok
-    if ok:
-        return True, f"java 21 default; JDK 17/21/25; Apache Maven {maven_version}"
+    rust_ok = (rustup is not None and any(ln.startswith(f"rustup {rustup} ") for ln in lines)
+               and rust is not None and any(ln.startswith(f"rustc {rust} ") for ln in lines))  # fmt: skip
+    tools_ok = {"netshim=ok", "resolver=ok", "mise=pinned"} <= set(lines)
+    if default_21 and not missing and maven_ok and rust_ok and tools_ok:
+        return True, (f"java 21 default; JDK 8/11/17/21/25; Apache Maven {maven_version}; rustup {rustup},"
+                      f" rustc {rust}; netshim, resolver; mise tools pinned")  # fmt: skip
     return False, output.strip()[:200] or "no output"
 
 
 def check_sandbox_toolchains(quick: bool) -> Result:
-    """sandbox-network Part 1: JDK 17, 21 (the default) and 25 and Maven in the pinned sandbox-full image."""
+    """sandbox-network Part 1 and build-env §6.4: the image's fallback toolchains in the pinned sandbox-full."""
     pins = load_image_pins(LOCK_COPY)
     ref = pins.ref("sandbox-full")
     if ref is None:
-        return Result(WARN, "JVM toolchains (sandbox-full)", "image not pinned", "provision step images")
-    try:
-        maven = _lock_scalar("maven", "version")
-    except OSError:
-        maven = None
+        return Result(WARN, TOOLCHAINS_NAME, "image not pinned", "provision step images")
+    versions: dict[str, str | None] = {}
+    for section in ("maven", "rustup", "rust_default"):
+        try:
+            versions[section] = _lock_scalar(section, "version")
+        except OSError:
+            versions[section] = None
+    maven, rustup, rust = versions["maven"], versions["rustup"], versions["rust_default"]
     if quick:
-        return Result(PASS, "JVM toolchains (sandbox-full)",
-                      f"pinned (JDK 17/21/25, Maven {maven}; verified at build)")  # fmt: skip
+        return Result(PASS, TOOLCHAINS_NAME,
+                      f"pinned (JDK 8/11/17/21/25, Maven {maven}, Rust {rust}; verified at build)")  # fmt: skip
     proc = _run([DOCKER, "run", "--rm", "--network", "none", "--read-only", "--tmpfs", "/tmp",  # noqa: S108
                  "--entrypoint", "/bin/sh", ref, "-c", TOOLCHAINS_SCRIPT], timeout=60)  # fmt: skip
-    ok, detail = toolchains_verdict(proc.stdout if proc.returncode == 0 else proc.stdout + proc.stderr, maven)
-    return Result(PASS if ok and proc.returncode == 0 else FAIL, "JVM toolchains (sandbox-full)", detail)
+    ok, detail = toolchains_verdict(proc.stdout if proc.returncode == 0 else proc.stdout + proc.stderr, maven,
+                                    rustup, rust)  # fmt: skip
+    return Result(PASS if ok and proc.returncode == 0 else FAIL, TOOLCHAINS_NAME, detail)
 
 
 def _catalog_rows() -> list[dict[str, Any]] | None:

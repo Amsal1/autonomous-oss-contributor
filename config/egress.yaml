@@ -13,9 +13,13 @@ categories:
   pkg_node: [registry.npmjs.org, registry.yarnpkg.com, repo.yarnpkg.com, nodejs.org]
   pkg_go: [proxy.golang.org, sum.golang.org, go.dev, dl.google.com, storage.googleapis.com]
   pkg_jvm: [repo.maven.apache.org, repo1.maven.org, plugins.gradle.org, plugins-artifacts.gradle.org, services.gradle.org, downloads.gradle.org, maven.google.com, dl.google.com]
-  pkg_rust: [crates.io, index.crates.io, static.crates.io]
+  # build-env design §6.5: + rustup's per-repo toolchains (dist manifests and components, hashes checked by rustup)
+  pkg_rust: [crates.io, index.crates.io, static.crates.io, static.rust-lang.org]
   pkg_ruby: [rubygems.org, index.rubygems.org]
   pkg_iac: [registry.terraform.io, releases.hashicorp.com, registry.opentofu.org, get.opentofu.org]
+  # build-env design §6.5 (V-M5, V-G2): JDK metadata (mise-java), Gradle's foojay toolchain discovery and the
+  # non-GitHub JDK vendor hosts in that metadata (Temurin, GraalVM CE, SapMachine, Semeru come from github_read)
+  pkg_toolchains: [mise-java.jdx.dev, api.foojay.io, cdn.azul.com, corretto.aws, download.bell-sw.com, download.java.net]
   # CR-002 req 1: GitHub Pages and gists hold much technical knowledge; read-only content hosts with
   # no GitHub write API. research and hermes only, in every mode; never a code-running profile.
   github_user_content: [.github.io, gist.github.com, gist.githubusercontent.com]
@@ -27,8 +31,8 @@ categories:
 denied_by_default: [kiro_telemetry]
 # Base lists = mode `allowlist`. No base list carries web_public; the modes below add it.
 sandbox_profiles:
-  fetch: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_helm]
-  validate: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_helm]
+  fetch: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_toolchains, pkg_helm]
+  validate: [github_read, pkg_python, pkg_node, pkg_go, pkg_jvm, pkg_rust, pkg_ruby, pkg_iac, pkg_toolchains, pkg_helm]
   research: [kiro_core, github_user_content]
   agent-llm: [kiro_core]
   catalog: [kiro_core]

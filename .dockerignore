@@ -5,6 +5,8 @@
 !sandbox/fixtures/
 !sandbox/gradle/
 !sandbox/images/full/code-requirements.txt
+!sandbox/images/full-base/mise.toml
+!sandbox/images/full-base/mise.lock
 !sandbox/kiro/
 !sandbox/probes/
 !src/ossbot/sandbox_tools/

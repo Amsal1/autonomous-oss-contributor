@@ -79,11 +79,13 @@ mise:
   url: "https://github.com/jdx/mise/releases/download/v2026.10.13/mise-v2026.10.13-linux-x64.tar.gz"
   sha256: "b775d3feee8f0cdb1934c60a1ec26526d6eb7cdeb258b48c64cfadcec07a8fec"
   source: "GitHub releases API latest = v2026.10.13 (2026-10-17); sha256 = release asset digest"
+  note: "build-env 2026-10-24: unchanged (2026.10.18 is out, V-M6; the pinned version has every setting used: shared_install_dirs, MISE_SYSTEM_CONFIG_FILE, use_versions_host(_track), locked)"
 
 squid:
   # Ubuntu noble-updates package installed in ossbot/proxy (ADR-0005 addendum, §23 item 16).
   # 2026-10-24: .4 was superseded by the security update .5 and left the noble index (close-out of sandbox-network).
   apt_version: "6.14-0ubuntu0.24.04.5"
+  note: "build-env 2026-10-24: unchanged (annotate_transaction and %note are in this version, V-S1)"
   source: "Launchpad API getPublishedBinaries squid noble amd64 (Security 2026-10-20, Updates 2026-10-21), https://api.launchpad.net/1.0/ubuntu/+archive/primary, checked 2026-10-24 (was 6.14-0ubuntu0.24.04.4, apt-cache policy on the distro, 2026-10-17)"
 
 iptables:
@@ -139,6 +141,105 @@ gradle_fixture:
   wrapper_jar_sha256: "3b8a25775a69158b5ad2b1d17a80a88dc7b40a352a73eb27d06c612a7ce68e98"
   source: "https://services.gradle.org/versions/current (9.8.2, checksum and wrapperChecksum) and the .sha256 files under services.gradle.org/distributions/, read 2026-10-23; the committed wrapper jar is raw.githubusercontent.com/gradle/gradle/v9.8.2/gradle/wrapper/gradle-wrapper.jar, whose sha256 equals wrapperChecksum"
 
+openjdk_11:
+  # build-env (design §6.4, BE-4.5): JDK 11 next to 8, 17, 21 and 25 in ossbot/sandbox-full-base; 21 stays the default.
+  apt_version: "11.0.32.1+1-1ubuntu1~24.04"
+  source: "Launchpad API getPublishedBinaries openjdk-11-jdk-headless noble amd64 (universe; Updates and Security, published 2026-09-21), https://api.launchpad.net/1.0/ubuntu/+archive/primary, V-J1 2026-10-24, re-checked 2026-10-24 (FEAT-003)"
+  verified_at: "2026-10-24"
+
+openjdk_8:
+  apt_version: "8u504-ga-1ubuntu1~24.04.3"
+  source: "Launchpad API getPublishedBinaries openjdk-8-jdk-headless noble amd64 (universe; Updates and Security, published 2026-09-21), V-J1 2026-10-24, re-checked 2026-10-24 (FEAT-003)"
+  verified_at: "2026-10-24"
+
+rustup:
+  # F1 (design §6.4): rustup-init in ossbot/sandbox-full-base (RUSTUP_HOME /opt/rust/rustup, CARGO_HOME /opt/rust/cargo).
+  version: "1.29.2"
+  url: "https://static.rust-lang.org/rustup/archive/1.29.2/x86_64-unknown-linux-gnu/rustup-init"
+  sha256: "5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4"
+  source: "static.rust-lang.org/rustup/release-stable.toml (version 1.29.2) and the .sha256 files of the archive and dist URLs (equal), V-R2, re-checked 2026-10-24 (FEAT-003)"
+  verified_at: "2026-10-24"
+
+rust_default:
+  # The image's default toolchain; jobs link it as ossbot-1.99.1 (sandbox_tools/toolchains.py). The Dockerfile checks
+  # the channel manifest against manifest_sha256 before rustup-init runs; rustup then checks every component.
+  version: "1.99.1"
+  manifest_url: "https://static.rust-lang.org/dist/channel-rust-1.99.1.toml"
+  manifest_sha256: "fb152be80975c194aa5fc684b2aec3a6e14e2b855efe2faa4e5f8ae6e590f463"
+  components: "rustfmt, clippy (profile minimal)"
+  source: "GitHub releases API rust-lang/rust latest = 1.99.1 (2026-10-16); static.rust-lang.org/dist/channel-rust-1.99.1.toml.sha256 (= channel-rust-stable.toml.sha256), V-R3, re-checked 2026-10-24 (FEAT-003)"
+  verified_at: "2026-10-24"
+
+corepack_fallback:
+  # Baked at /opt/ossbot/corepack/corepack-0.36.0.tgz for a Node without a bundled corepack (design §6.2, M8);
+  # installed offline at job time with npm i -g --offline.
+  version: "0.36.0"
+  url: "https://registry.npmjs.org/corepack/-/corepack-0.36.0.tgz"
+  integrity: "sha512-SiiJsBhZqdBiPHTEl6OT3sASrRrKIcYTQMsVGXx6EE/gM8WFMwYjeIX8Tt8RiU4Iv2J6LbT8KpGfCOsBpRWB/w=="
+  sha512: "4a2889b01859a9d0623c74c497a393dec012ad1aca21c61340cb15197c7a104fe033c5853306237885fc4edf11894e08bf627a2db4fc2a919f08eb01a51581ff"
+  source: "registry.npmjs.org/corepack/0.36.0 dist.integrity (= latest 0.36.0), V-N3 2026-10-24, re-checked 2026-10-24 (FEAT-003); sha512 = the base64 integrity as hex (tests/unit/sandbox/test_gitcmd_image_env.py)"
+  verified_at: "2026-10-24"
+
+mise_tools:
+  # The image's mise tools, exact versions (sandbox/images/full-base/mise.toml); their download URLs and sha256
+  # checksums are in sandbox/images/full-base/mise.lock (mise lock --global --platform linux-x64, mise 2026.10.13,
+  # generated 2026-10-24 in a throwaway container of ossbot/sandbox-full-base:in-edee28f7dc46, L-7: 12 entries,
+  # each with url + checksum; MISE_LOCKED=1 mise install installed all 12 from it). The image keeps opentofu 1.13.1
+  # (1.13.2 is out) and mise 2026.10.13 (2026.10.18 is out): no bump in this change.
+  node: "24.22.1"
+  go: "1.27.3"
+  opentofu: "1.13.1"
+  terraform: "1.17.0"
+  tflint: "0.65.0"
+  terraform-docs: "0.24.0"
+  kubectl: "1.37.1"
+  helm: "4.3.1"
+  kind: "0.33.0"
+  kubeconform: "0.8.0"
+  pre-commit: "4.7.0"
+  gitleaks: "8.30.1"
+  lockfile: "sandbox/images/full-base/mise.lock"
+  source: "GitHub releases API repos/<owner>/<repo>/releases/latest (tflint v0.65.0 2026-10-22, terraform-docs v0.24.0, kubeconform v0.8.0, pre-commit v4.7.0, helm v4.3.1, terraform v1.17.0, kind v0.33.0, gitleaks v8.30.1; opentofu tag v1.13.1 exists), dl.k8s.io/release/stable.txt v1.37.1, nodejs.org/dist/index.json (24.22.1 Krypton LTS), go.dev/dl (1.27.3 newest), V-T1, re-checked 2026-10-24 (FEAT-003)"
+  verified_at: "2026-10-24"
+
+gradle_java_matrix:
+  # V-G1: the lowest Gradle that runs on Java N (sandbox_tools/toolchains.py GRADLE_RUN); Gradle >= 9 needs Java >= 17.
+  java_8: "2.0"
+  java_11: "5.0"
+  java_16: "7.0"
+  java_17: "7.3"
+  java_21: "8.5"
+  java_22: "8.8"
+  java_23: "8.10"
+  java_24: "8.14"
+  java_25: "9.1.0"
+  java_26: "9.4.0"
+  java_27: "9.8.0"
+  current: "9.8.2"
+  source: "docs.gradle.org/current/userguide/compatibility.html, services.gradle.org/versions/current (9.8.2), V-G1 2026-10-24; re-checked services.gradle.org/versions/current 2026-10-24 (FEAT-003)"
+  verified_at: "2026-10-24"
+
+fixtures_build_env:
+  # The toolchain sandbox fixtures (tests/fixtures/sandbox/, design §15 "Toolchains") and the index fixtures
+  # (tests/fixtures/toolchains/indexes/, trimmed copies of the live indexes fetched 2026-10-24).
+  gradle: "9.8.2 (distribution and wrapper checksums of gradle_fixture)"
+  temurin_22: "22.0.2+9 (newest GA 22 in mise-java.jdx.dev/jvm/ga/linux/x86_64.json; resolver pick for languageVersion 22)"
+  temurin_22_url: "https://github.com/adoptium/temurin22-binaries/releases/download/jdk-22.0.2%2B9/OpenJDK22U-jdk_x64_linux_hotspot_22.0.2_9.tar.gz"
+  temurin_22_sha256: "05cd9359dacb1a1730f7c54f57e0fed47942a5292eb56a3a0ee6b13b87457a43"
+  rust_1_98_0_manifest_sha256: "3f7d139b73bbbd0004ef6e58b430831c68cdad2b1f64ee2eb35d54c09199489a"
+  go_1_26_10_sha256: "ccfe7ae822d2c2f41f4fe7c956199967a4dac22d0ee0d2b2bfdb440aab3b20c5"
+  node_22: "22.23.4 (Jod)"
+  pnpm: "12.15.0"
+  pnpm_integrity: "sha512-s5UdbW/0qfE9x89WzSjSuOs328ycaOUuHhGRhz6p+CoBcoerULqtxczElPA2xnwOR+sTYIwvo29HcRth6hKOYQ=="
+  foojay_convention: "1.0.0"
+  mvnw: "3.3.2 only-script (maven-wrapper-distribution/src/resources/only-mvnw at tag maven-wrapper-3.3.2, @@project.version@@ = 3.3.2)"
+  mvnw_sha256: "7e6e5d26712efd78140f2f63dafe8d17028f6c5c97ac1f746a043110b7a1d9ad"
+  maven_3_9_16_bin_zip_sha256: "5af3b743dd8b876b5c45da33b676251e5f1687712644abb4ee519ca56e1d89ce"
+  maven_3_9_16_bin_zip_source: "repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.16/apache-maven-3.9.16-bin.zip downloaded 2026-10-24; its sha512 equals the published .sha512 (ed41650d...4af3), sha256 computed (mvnw checks sha256 only)"
+  indexes_fetched: "2026-10-24 (node-index.json, go-dl.json, mise-java-ga-linux-x86_64.json, terraform-index.json; trimmed)"
+  source: "mise-java.jdx.dev metadata, static.rust-lang.org/dist/channel-rust-1.98.0.toml.sha256, go.dev/dl/?mode=json&include=all, nodejs.org/dist/index.json, registry.npmjs.org/pnpm/12.15.0, plugins.gradle.org foojay-resolver-convention maven-metadata.xml (1.0.0), all read 2026-10-24 (FEAT-003)"
+  verified_at: "2026-10-24"
+
 images:
   # Written by the provision 'images' step (FEAT-004) after each build; the root-owned copy at
   # /etc/ossbot/versions.lock.yaml is what the Docker filter and sandboxd read. 'pending' = not
@@ -154,14 +255,16 @@ images:
     digest: "sha256:67ca27184c98bcad1dc6d52a386b2b96d8373c51c7145ed7a4a1e18ced3645dc"
 
 kind:
+  # build-env: installed from sandbox/images/full-base/mise.toml (= mise_tools.kind); url and sha256 in mise.lock.
   version: "0.33.0"
-  sha256: "pending (recorded when installed, phase 2)"
-  source: "GitHub releases API latest = v0.33.0 (2026-08-26)"
+  sha256: "aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d"
+  source: "GitHub releases API latest = v0.33.0 (2026-08-26); sha256 from mise.lock (aqua checksum of kind-linux-amd64, 2026-10-24)"
 
 tofu:
+  # build-env: installed from sandbox/images/full-base/mise.toml (= mise_tools.opentofu); url and sha256 in mise.lock.
   version: "1.13.1"
-  sha256: "pending (recorded when installed, phase 2)"
-  source: "GitHub releases API latest = v1.13.1 (2026-10-01)"
+  sha256: "378ada19d4bc70c43732004e8159be771b23b9a5afdf059e5f8a2b3fa2c70a69"
+  source: "GitHub releases API tag v1.13.1 (2026-10-01); sha256 from mise.lock (tofu_1.13.1_linux_amd64.tar.gz, 2026-10-24)"
 
 age:
   # Backup encryption (DESIGN §18.8, ADR-0016); installed by the apt-base step as /usr/local/bin/age and

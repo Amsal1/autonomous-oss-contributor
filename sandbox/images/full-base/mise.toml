@@ -1,0 +1,16 @@
+# The image's mise tools (build-env design §6.4, M8): exact versions only, each pinned with its source in
+# config/versions.lock.yaml mise_tools; download URLs and checksums in mise.lock next to this file (generated
+# once with `mise lock --global --platform linux-x64`). Installed with MISE_LOCKED=1 (Dockerfile).
+[tools]
+node = "24.22.1"
+go = "1.27.3"
+opentofu = "1.13.1"
+terraform = "1.17.0"
+tflint = "0.65.0"
+terraform-docs = "0.24.0"
+kubectl = "1.37.1"
+helm = "4.3.1"
+kind = "0.33.0"
+kubeconform = "0.8.0"
+pre-commit = "4.7.0"
+gitleaks = "8.30.1"
