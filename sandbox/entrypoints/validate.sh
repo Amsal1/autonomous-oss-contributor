@@ -30,6 +30,11 @@ export HOME="$WORK/.home" LANG=C.UTF-8 GOFLAGS=-mod=mod GOPROXY=off npm_config_o
   npm_config_cache="$WORK/cache/npm" UV_CACHE_DIR="$WORK/cache/uv" GRADLE_USER_HOME="$WORK/cache/gradle" \
   MISE_DATA_DIR="$WORK/cache/mise" CHECKPOINT_DISABLE=1 VIRTUAL_ENV="$WORK/venv"
 export PATH="$WORK/venv/bin:/opt/mise/shims:$PATH"
+# ADR-0025: proxy-unaware tools reach the proxy via netshim; ssh GitHub URLs (submodules) use https
+# shellcheck source=sandbox/entrypoints/lib/netshim.sh disable=SC1091
+source "$(dirname -- "$0")/lib/netshim.sh"
+ossbot_netshim_start
+ossbot_gitconfig
 # JVM tools (lib/jvm_env.sh): Gradle offline through its init script, Maven online through the proxy (its
 # surefire providers resolve only when tests run, V-M6), the JDK homes; GRADLE_OPTS stays unset.
 # shellcheck source=sandbox/entrypoints/lib/jvm_env.sh disable=SC1091

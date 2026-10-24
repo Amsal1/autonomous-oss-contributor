@@ -85,7 +85,7 @@ POOLS: dict[str, str] = {
     "fetch-strict": "10.213.192.0/19",
     "validate-strict": "10.213.192.0/19",
     # ADR-0024: the coder's executor (agent-exec, no credential) when implement_network allows it. It
-    # sits in pool_fetch, so it gets the fetch base list plus web_public only in sandbox_open, behind
+    # sits in pool_fetch, so it gets the fetch base list plus web_public only in sandbox_open/sandbox_full, behind
     # the always-denied floors; strict repos' agent-exec never gets this network (--network none).
     "exec": "10.213.0.0/18",
 }

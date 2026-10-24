@@ -12,10 +12,10 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HOME=/work/.home",
-     "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY="
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
+     "HOME=/work/.home",
+     "HTTPS_PROXY=http://proxy:3128"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -169,7 +169,7 @@
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "OSSBOT_EXEC_NETWORK=web"
     ],
     "HostConfig": {
@@ -325,18 +325,18 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "TRUST_TOOLS=@ossbot-exec/run",
+     "HTTP_PROXY=http://proxy:3128",
      "EFFORT=high",
      "MODEL=claude-test",
      "PROMPT_FILE=plan.md",
-     "ROLE=coder",
-     "HOME=/home/agent",
-     "NO_PROXY=",
-     "OSSBOT_TRUST_MODE=ids",
      "REQUIRE_MCP=1",
-     "TRUST_TOOLS=@ossbot-exec/run",
+     "HOME=/home/agent",
      "HTTPS_PROXY=http://proxy:3128",
-     "HTTP_PROXY=http://proxy:3128"
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "OSSBOT_TRUST_MODE=ids",
+     "ROLE=coder"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -487,11 +487,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "KIRO_API_KEY=ksk_test_key_value_0123456789",
      "HOME=/home/agent",
-     "HTTPS_PROXY=http://proxy:3128"
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -639,7 +639,7 @@
     "Env": [
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "OSSBOT_ARG_LANGUAGE=python",
      "OSSBOT_ARG_TIMEOUT_S=120"
     ],
@@ -784,7 +784,7 @@
     "Env": [
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY="
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -925,12 +925,12 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HOME=/work/.home",
-     "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "OSSBOT_ARG_CLONE_DEPTH=200",
-     "OSSBOT_ARG_REPO=owner/repo"
+     "OSSBOT_ARG_REPO=owner/repo",
+     "HOME=/work/.home",
+     "HTTPS_PROXY=http://proxy:3128"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1082,7 +1082,7 @@
     "Env": [
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "OSSBOT_PROBE=extract_fixture"
     ],
     "HostConfig": {
@@ -1218,11 +1218,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
      "OSSBOT_ARG_ROUND_BASE=1111111111111111111111111111111111111111",
      "HOME=/work/.home",
-     "HTTPS_PROXY=http://proxy:3128"
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1368,11 +1368,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "OSSBOT_PROBE=smoke",
-     "HOME=/home/agent"
+     "HOME=/home/agent",
+     "HTTPS_PROXY=http://proxy:3128"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1523,11 +1523,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
+     "OSSBOT_PROBE=smoke",
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
-     "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "OSSBOT_PROBE=smoke"
+     "HTTP_PROXY=http://proxy:3128"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1677,11 +1677,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
      "OSSBOT_PROBE=settings",
      "HOME=/home/agent",
-     "HTTPS_PROXY=http://proxy:3128"
+     "HTTPS_PROXY=http://proxy:3128",
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1823,17 +1823,17 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "KIRO_API_KEY=ksk_test_key_value_0123456789",
-     "OSSBOT_TRUST_MODE=ids",
-     "PROMPT_FILE=plan.md",
-     "ROLE=vetter",
      "HOME=/home/agent",
-     "EFFORT=high",
+     "HTTPS_PROXY=http://proxy:3128",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
      "MODEL=claude-test",
+     "PROMPT_FILE=plan.md",
      "TRUST_TOOLS=read,web_search,web_fetch",
-     "HTTPS_PROXY=http://proxy:3128"
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
+     "EFFORT=high",
+     "OSSBOT_TRUST_MODE=ids",
+     "ROLE=vetter"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -1979,18 +1979,18 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
+     "OSSBOT_TRUST_MODE=ids",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "EFFORT=high",
+     "MODEL=claude-test",
+     "PROMPT_FILE=plan.md",
      "ROLE=scout",
      "TRUST_TOOLS=read,web_search,web_fetch",
      "HOME=/home/agent",
      "HTTPS_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "KIRO_API_KEY=ksk_test_key_value_0123456789",
-     "GITHUB_READ_TOKEN=github_pat_TTTTTTTTTTTTTTTTTTTTTTTTTTTTTT",
-     "EFFORT=high",
-     "MODEL=claude-test",
-     "PROMPT_FILE=plan.md",
      "HTTP_PROXY=http://proxy:3128",
-     "OSSBOT_TRUST_MODE=ids"
+     "GITHUB_READ_TOKEN=github_pat_TTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -2142,17 +2142,17 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "HTTPS_PROXY=http://proxy:3128",
-     "KIRO_API_KEY=ksk_test_key_value_0123456789",
-     "EFFORT=high",
      "OSSBOT_TRUST_MODE=ids",
+     "TRUST_TOOLS=read,web_search,web_fetch",
+     "HOME=/home/agent",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "PROMPT_FILE=plan.md",
      "ROLE=planner",
-     "TRUST_TOOLS=read,web_search,web_fetch",
+     "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
-     "MODEL=claude-test",
-     "HOME=/home/agent"
+     "KIRO_API_KEY=ksk_test_key_value_0123456789",
+     "EFFORT=high",
+     "MODEL=claude-test"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -2306,7 +2306,7 @@
     "Env": [
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "OSSBOT_PROBE=snapshot_check"
     ],
     "HostConfig": {
@@ -2445,7 +2445,7 @@
     "Env": [
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY="
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -2586,9 +2586,9 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "HTTPS_PROXY=http://proxy:3128",
-     "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY="
+     "HTTP_PROXY=http://proxy:3128"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -2720,11 +2720,11 @@
     "Domainname": "",
     "Entrypoint": null,
     "Env": [
-     "NO_PROXY=",
-     "OSSBOT_ARG_MODE=fix_round",
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
-     "HTTP_PROXY=http://proxy:3128"
+     "HTTP_PROXY=http://proxy:3128",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
+     "OSSBOT_ARG_MODE=fix_round"
     ],
     "HostConfig": {
      "AutoRemove": false,
@@ -2873,7 +2873,7 @@
      "HOME=/work/.home",
      "HTTPS_PROXY=http://proxy:3128",
      "HTTP_PROXY=http://proxy:3128",
-     "NO_PROXY=",
+     "NO_PROXY=localhost,127.0.0.1,::1,.localhost",
      "OSSBOT_ARG_PLAN_FILE=validate.json"
     ],
     "HostConfig": {

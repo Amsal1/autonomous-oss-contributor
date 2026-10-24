@@ -11,6 +11,10 @@ from ossbot.sandboxd.db import Store
 from ossbot.sandboxd.profiles import POOLS
 
 PREFIX = 28
+# The last four /28s of every pool are never handed out (build-env design §4.6, N8): the floor-reach system
+# test and the other root system tests use them for their own networks, so a test can never share a job's
+# /28 or be attributed to a job. An existing row there (allocated before) keeps working; nothing is moved.
+RESERVED_TAIL = 4
 
 
 class PoolExhausted(RuntimeError):
@@ -43,7 +47,7 @@ class SubnetAllocator:
             if row is not None:
                 return subnet_for(pool, int(row["idx"]))
             used = {int(r["idx"]) for r in conn.execute("SELECT idx FROM subnets WHERE pool = ?", (pool,))}
-            idx = next((i for i in range(pool_size(pool)) if i not in used), None)
+            idx = next((i for i in range(pool_size(pool) - RESERVED_TAIL) if i not in used), None)
             if idx is None:
                 raise PoolExhausted(pool)
             conn.execute(

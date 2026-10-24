@@ -168,6 +168,15 @@ def test_rw_profiles_use_task_home() -> None:
 
 
 @pytest.mark.parametrize("name", sorted(variants()))
+def test_local_test_servers_bypass_the_proxy(name: str) -> None:
+    """build-env design §3.2: NO_PROXY names the container's own loopback (netshim and the repo's test servers),
+    so local traffic never becomes a proxy deny; the proxy variables are unchanged."""
+    env = _pairs(build_argv(variants()[name]), "--env")
+    assert "NO_PROXY=localhost,127.0.0.1,::1,.localhost" in env
+    assert "HTTPS_PROXY=http://proxy:3128" in env and "HTTP_PROXY=http://proxy:3128" in env
+
+
+@pytest.mark.parametrize("name", sorted(variants()))
 def test_filter_accepts_every_variant(name: str, tmp_path: Path) -> None:
     decision = rules.decide(create_request(variants()[name]), FakeLookup(), policy(tmp_path))
     assert decision.allow, decision.reason

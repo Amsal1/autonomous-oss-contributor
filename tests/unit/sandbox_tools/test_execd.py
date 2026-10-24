@@ -247,7 +247,8 @@ def test_fixed_env_offline_and_online() -> None:
     assert online["OSSBOT_EXEC_NETWORK"] == "web"
     for name in ("GOPROXY", "npm_config_offline", "UV_OFFLINE", "PIP_NO_INDEX"):
         assert name not in online
-    assert online["HTTPS_PROXY"] == online["HTTP_PROXY"] == "http://proxy:3128" and online["NO_PROXY"] == ""
+    assert online["HTTPS_PROXY"] == online["HTTP_PROXY"] == "http://proxy:3128"
+    assert online["NO_PROXY"] == "localhost,127.0.0.1,::1,.localhost"  # build-env §3.2: local servers direct
     assert online["MAVEN_OPTS"] == ("-Duser.home=/work/.home -Dhttps.proxyHost=proxy -Dhttps.proxyPort=3128"
                                     " -Dhttp.proxyHost=proxy -Dhttp.proxyPort=3128")  # fmt: skip
     assert online["GOFLAGS"] == "-mod=mod" and online["GOMODCACHE"] == offline["GOMODCACHE"]

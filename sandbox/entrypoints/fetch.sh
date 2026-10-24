@@ -47,6 +47,10 @@ mkdir -p "$OUT"
 [[ "$REFETCH" =~ ^[01]$ ]] || fail bad_args "OSSBOT_ARG_REFETCH"
 [[ "$REFETCH" == 0 || ("$PREFETCH_ON" == 1 && -z "$BASE_REF" && -z "$BASE_SHA") ]] ||
   fail bad_args "OSSBOT_ARG_REFETCH takes no base and needs the prefetch"
+# ADR-0025: proxy-unaware tools (a JVM, curl in a build script, installers) reach the proxy via netshim
+# shellcheck source=sandbox/entrypoints/lib/netshim.sh disable=SC1091
+source "$(dirname -- "$0")/lib/netshim.sh"
+ossbot_netshim_start
 # shellcheck source=sandbox/entrypoints/lib/jvm_env.sh disable=SC1091
 source "$(dirname -- "$0")/lib/jvm_env.sh"
 cd "$WORK"  # the container may start inside /work/repo: never delete the working directory

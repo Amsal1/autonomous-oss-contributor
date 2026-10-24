@@ -17,9 +17,14 @@ fi
 
 export WORK=/work HOME=/work/.home GRADLE_USER_HOME=/work/cache/gradle
 mkdir -p "$HOME" /work/cache
+# ADR-0025: ssh GitHub URLs (submodules) use https; with web, proxy-unaware tools reach the proxy via netshim
+# shellcheck source=sandbox/entrypoints/lib/netshim.sh disable=SC1091
+source "$(dirname -- "$0")/lib/netshim.sh"
+ossbot_gitconfig
 # shellcheck source=sandbox/entrypoints/lib/jvm_env.sh disable=SC1091
 source "$(dirname -- "$0")/lib/jvm_env.sh"
 if [[ $NET == web ]]; then
+  ossbot_netshim_start
   ossbot_jvm_setup online
   NETWORK=web
 else

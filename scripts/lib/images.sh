@@ -111,7 +111,8 @@ step_images() {
   _build sandbox-full-base sandbox/images/full-base/Dockerfile "$full_args" sandbox/images/full/code-requirements.txt
   base=$OSSBOT_IMAGE_TAG
   _build sandbox-full sandbox/images/full/Dockerfile "--build-arg BASE=$base" \
-    src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py sandbox/entrypoints sandbox/fixtures
+    src/ossbot/sandbox_tools/numstat2json.py src/ossbot/sandbox_tools/execd.py src/ossbot/sandbox_tools/netshim.py \
+    sandbox/entrypoints sandbox/fixtures sandbox/gradle
   full=$OSSBOT_IMAGE_ID
   _build sandbox-llm sandbox/images/llm/Dockerfile "$llm_args" \
     src/ossbot/sandbox_tools/exec_mcp.py src/ossbot/sandbox_tools/github_mcp.py sandbox/entrypoints sandbox/kiro \

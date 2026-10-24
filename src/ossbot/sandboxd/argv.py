@@ -18,6 +18,9 @@ from ossbot.sandboxd.runtime.base import Mount, RunSpec
 
 ENTRYPOINTS_DIR = "/opt/ossbot/entrypoints"
 PROXY_URL = "http://proxy:3128"
+# Local test servers are reached directly and never become proxy denies (build-env design §3.2, ADR-0025);
+# the container's loopback is its own netns (netshim and the repo's own test servers only).
+NO_PROXY = "localhost,127.0.0.1,::1,.localhost"
 TMP_EXEC = "/tmp:rw,exec,nosuid,nodev,size=2g"  # noqa: S108 - container path
 TMP_NOEXEC = "/tmp:rw,noexec,nosuid,nodev,size=2g"  # noqa: S108
 # mode=1777: Docker mounts the tmpfs root as root:root 0700 (verified live on Docker 29.9.1, FEAT-004),
@@ -218,7 +221,7 @@ def build_argv(spec: RunSpec, docker: str = "docker") -> list[str]:
     if spec.home is not None:
         argv += ["--env", f"HOME={spec.home}"]
     argv += ["--workdir", spec.workdir]
-    argv += ["--env", f"HTTPS_PROXY={PROXY_URL}", "--env", f"HTTP_PROXY={PROXY_URL}", "--env", "NO_PROXY="]
+    argv += ["--env", f"HTTPS_PROXY={PROXY_URL}", "--env", f"HTTP_PROXY={PROXY_URL}", "--env", f"NO_PROXY={NO_PROXY}"]
     if spec.key:
         argv += ["--env", "KIRO_API_KEY"]  # name-only: the value never appears in argv (ps)
     if spec.github_read:

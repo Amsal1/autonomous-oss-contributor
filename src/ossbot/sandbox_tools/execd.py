@@ -74,7 +74,8 @@ def fixed_env(work: str = "/work", online: bool = False, proxy: str | None = Non
     if parsed is not None:
         host, port = parsed
         url = f"http://{host}:{port}"
-        env.update({"HTTPS_PROXY": url, "HTTP_PROXY": url, "NO_PROXY": ""})
+        # local test servers are reached directly, never through the proxy (build-env design §3.2; = argv.NO_PROXY)
+        env.update({"HTTPS_PROXY": url, "HTTP_PROXY": url, "NO_PROXY": "localhost,127.0.0.1,::1,.localhost"})
         env["MAVEN_OPTS"] = (f"-Duser.home={work}/.home -Dhttps.proxyHost={host} -Dhttps.proxyPort={port}"
                              f" -Dhttp.proxyHost={host} -Dhttp.proxyPort={port}")  # fmt: skip
     return env
