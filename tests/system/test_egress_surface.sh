@@ -262,7 +262,27 @@ fi
 conf=/etc/ossbot/proxy/squid.conf
 bad=$(awk '$1 == "acl" && ($3 == "dstdomain" || $3 == "dstdom_regex") && $4 != "-n" {print $2}' "$conf")
 if [[ -z $bad ]]; then pass "live squid.conf: every name ACL is -n"; else fail "live squid.conf: name ACLs without -n: $bad"; fi
-if grep -Eq '^http_access deny .*denied_dst' "$conf"; then fail "live squid.conf: a deny line resolves (denied_dst)"; else pass "live squid.conf: no deny line uses the dst ACL"; fi
+# P1-12 with the ADR-0025 floor lines: a deny line may use a dst ACL only as a sandbox floor line, i.e. after the
+# port, the pool and the category (`deny port_sandbox <pool_*> <cat_*|all> denied_dst[_loop] mark_*`) of an allow
+# line that resolves those names anyway (same rule as test_render.py _no_lookup_before_a_category_match).
+floor_bad=$(awk '$1 == "http_access" && $2 == "allow" && $3 == "port_sandbox" {ok[$4 " " $(NF - 2)] = 1}
+  $1 == "http_access" && $2 == "deny" && / !?denied_dst/ {d[++n] = $0}
+  END {
+    for (i = 1; i <= n; i++) {
+      k = split(d[i], t, " ")
+      if (!(k == 7 && t[3] == "port_sandbox" && t[4] ~ /^pool_/ && (t[5] == "all" || t[5] ~ /^cat_/) &&
+            (t[6] == "denied_dst" || t[6] == "denied_dst_loop") && t[7] ~ /^mark_dst/ && ((t[4] " " t[5]) in ok)))
+        print d[i]
+    }
+    print "count " n
+  }' "$conf")
+floor_n=$(sed -n 's/^count //p' <<<"$floor_bad")
+floor_bad=$(grep -v '^count ' <<<"$floor_bad")
+if [[ -z $floor_bad ]]; then
+  pass "live squid.conf: a deny line resolves only as a sandbox floor line after its pool and category ($floor_n lines)"
+else
+  fail "live squid.conf: deny lines that resolve outside the sandbox floor shape: $floor_bad"
+fi
 check "live squid.conf: pinger off" grep -qx 'pinger_enable off' "$conf"
 expect "live squid.conf: 'deny manager' comes before the first allow line" yes \
   "$(awk '/^http_access deny manager$/ {print "yes"; exit} /^http_access allow / {print "no"; exit}' "$conf")"
