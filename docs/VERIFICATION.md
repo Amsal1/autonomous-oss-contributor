@@ -1146,6 +1146,39 @@ Commits 3f8161a (test: the fake Kiro catalogs list `claude-haiku-5.5`, the `role
 | F1c upload | `ROOT bash tests/system/test_proxy_log_bytes.sh` | all checks passed (17): download 108 381 B (`%<st` 113 504), upload 1 048 576 B sent, curl exit 0, `%>st` 1 051 870 ≥ sent; V11b and V11 rotation |
 | Status | `ROOT ossctl status` after the deploy | dry_run false, egress_mode sandbox_open, implement_network auto (= baseline); lifecycle up, state running |
 
+## Post-v1 build-env FEAT-004 (owner controls, needs_network, F-SN-1, 2026-10-24/25)
+
+Commits cf33b52 (runner: `needs_network` terminal only without network), b7dcd95 (`sandbox_full` owner controls), fdc3cdf (F-SN-1), 9561156 (Hyper-V checks), 05ff3b1 (doctor floor detector), 615925a (docs), 9011e86 (sandbox-llm digest). FEAT-002 (floors, netshim, guard, ADR-0025) and FEAT-003 (toolchains) are recorded in ADR-0025 and the ADR-0005 addendum; the build logs and evidence are in `.ossbot-local/postv1/build-env/` (not tracked). One redeploy with nothing in flight; dry-run (`false`, owner-set), the egress mode (`sandbox_open`) and `implement_network` (`auto`) unchanged; no contribution touched; no GitHub write; no `/reload`.
+
+| Check | Command | Result |
+|---|---|---|
+| Lint gate | `DEV ruff check src tests`; `ruff format --check`; `mypy`; `lint-imports`; `ROOT shellcheck -x scripts/lib/services.sh tests/fixtures/provision/restart_pending.sh` | clean; 682 files formatted; 291 files no issues; 21 contracts kept; clean |
+| Hermetic suite | `DEV pytest -m "unit or telegram or acp or e2e" -n auto --timeout=120` | 6467 passed |
+| Runner (AC 13) | `tests/unit/runner/test_stage_flow.py` cases i–l and the decision-table enumeration (60 cells incl. `sandbox_full`), `test_prompts.py`, `tests/unit/sandboxd/test_app.py`, `tests/e2e/test_e2e_network_rerun.py` | passed |
+| Owner controls (AC 9, 10, 23) | `test_control_egress_full.py`, `tests/telegram/test_egress_full_cards.py` (classic and rich goldens), `test_cli_egress.py`, `test_doctor_build_env.py`; `DEV ossctl docs commands --check` | passed; command table current |
+| F-SN-1 (AC 16) | `DEV pytest -m unit tests/unit/test_provision_restart_pending.py tests/unit/test_systemd_units.py` | 67 passed; live: deploy run 1 restarted the seven services and left no marker (`/var/lib/ossbot/provision` root 0700, `restart-pending` absent); run 2 every step `unchanged` |
+| Redeploy | `scripts\bootstrap.ps1 -Only provision` twice | run 1 exit 0 (app-deploy, sandbox-llm rebuilt for the coder prompt, services restarted; doctor PASS 47, WARN 2: probes not yet run for the new tuple, Hermes surface right after its restart); run 2 every step `unchanged`, doctor PASS 48, SKIP 1, WARN 1 (the probes, run next) |
+| Live after the deploy | `ROOT ossbot-firewall --check`; sandboxd `/v1/health`; `ROOT ossctl egress status`; sandboxd journal | exit 0; `floor_detector ok`, public floor known (1 entry, never the value); egress status shows both; `POST /v1/egress/health` 200 every 30 s; no ERROR in the gatekeeper, sandboxd or runner journals |
+| Probes and doctor | `ROOT ossctl doctor --probes` | exit 0, PASS 56: safety probes all passed for the new tuple a0e5d90b8c1e; `public floor: known`, `floor log reader: active; floor detector ok`, `host floor: every host address is inside a static floor range`, `resolver_returns_floor_addresses: … outside the floors` |
+| Hygiene | `DEV ossctl lint personal`; `ROOT gitleaks git --redact --config .gitleaks.toml .` | 0 hits; 398 commits, no leaks |
+| Status | `ROOT ossctl status` | dry_run false, egress_mode sandbox_open, implement_network auto, state running, kill_level null (= baseline) |
+
+floci and kestra (BE-10, build-env design §8.4/§8.5). floci c_D1D31ZG6DA failed `validation_stuck` because of a half-applied deploy (the new planner prompt's `JAVA_HOME=…java-25…` prefix met the old image without JDK 25, so `mvnw` printed "JAVA_HOME … not defined correctly"); today `JAVA_HOME` is valid in every job and the resolver selects JDK 25 from `maven.compiler.release` (ROOTDEV `test_toolchain_maven25.py` PASSED, no prefix), the prompts have no prefix rule, and F-SN-1 closes the half-applied window. kestra c_D1D18SPWQ5 and c_D1D18TQJ75 (`needs_network`, "v1 does not re-fetch"): the four causes (JVM proxy, the Gradle offline flag, JDK 25, no re-fetch) are handled by the current code, and the rest is closed (validate online in the web modes, the 1800 s warm-up, `needs_network` not terminal after a networked run). Neither kestra item was re-run (owner decision: both issues are contested).
+
+### BE-W isolation record 2026-10-24 (21:12 UTC, read-only)
+
+| Check | Command | Result |
+|---|---|---|
+| `.wslconfig` | `Compare-Object` of `config/wsl/wslconfig` and `%USERPROFILE%\.wslconfig` (content, CRLF-insensitive) | 23 and 23 lines, 0 differences; the user file was not written (last write 2026-10-17) |
+| `/etc/wsl.conf` | `wsl -d ossbot -u root --exec cat /etc/wsl.conf` | `[user] default=ossnobody`, `[automount] enabled=false`, `[interop] enabled=false`, `appendWindowsPath=false`, `[boot] systemd=true` |
+| Interop | `ls /proc/sys/fs/binfmt_misc/` | `python3.12`, `register`, `status`: no `WSLInterop` |
+| Mounts | `findmnt -rn -t 9p,drvfs` | only `/mnt/d/Work/autonomous-oss-contributor` |
+| Hyper-V VM setting | `Get-NetFirewallHyperVVMSetting -PolicyStore ActiveStore -Name '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'` | Enabled True, DefaultInbound Block, DefaultOutbound Block (LoopbackEnabled True) |
+| Hyper-V rules | `Get-NetFirewallHyperVRule` for that VMCreatorId | enabled allows only `ossbot-out-https` (TCP 443), `ossbot-out-http` (TCP 80) and WSL's inbound ICMPv4, ICMPv6, mDNS IPv4/IPv6 |
+| Isolation test | `powershell -NoProfile -File scripts\test-isolation.ps1 -NoRestart` | PASS (16 checks), incl. the new `hyperv_vm_setting`, `hyperv_enabled_rules`, `hyperv_allow_ports` |
+
+The full run (without `-NoRestart`) does `wsl --shutdown`; it is scheduled with the owner and recorded here when done.
+
 ## Owner live checks (after the build)
 
 Recorded with `scripts/dev/record-owner-check.ps1` (steps in docs/FINAL_REPORT.md).
