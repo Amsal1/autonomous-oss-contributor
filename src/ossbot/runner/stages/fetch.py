@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ossbot.common.project import comment_disclosure
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.pipeline import Deferred, StageContext, StageRun
 from ossbot.runner.stages.common import artifact_json, job, target
@@ -20,7 +21,6 @@ STAGE = "fetch"
 CLAIM_BODY = (
     "Hi! I'd like to work on this issue and open a pull request with a fix and tests. "
     "Please let me know if someone else is already on it or if you'd prefer a different approach."
-    "\n\n— drafted with AI assistance, reviewed by @{login}"
 )
 
 
@@ -28,8 +28,9 @@ def _claim(sc: StageContext, c: dict[str, Any]) -> None:
     cid = str(c["id"])  # the gatekeeper's guard applies only to items with an issue
     if sc.load(cid).get("claim_requested"):
         raise Deferred("waiting_for_claim")
-    login = sc.config().profile.github_login
-    sc.gk.action(cid, "issue_claim", int(c["issue_number"]), CLAIM_BODY.format(login=login))
+    cfg = sc.config()
+    footer = comment_disclosure(cfg.profile.github_login, cfg.policy.text.project_url)
+    sc.gk.action(cid, "issue_claim", int(c["issue_number"]), f"{CLAIM_BODY}\n\n{footer}")
     sc.save(cid, claim_requested=True)
     raise Deferred("claim_requested")
 

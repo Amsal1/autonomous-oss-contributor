@@ -440,7 +440,7 @@ async def ask_first(tap: Tap) -> str:
     c = db.one(ctx.conn, "SELECT issue_number FROM contributions WHERE id = ?", (a.cid,))
     if c is None or not c["issue_number"]:
         return "No issue to ask on."
-    body = claim_body(ctx.config.profile.github_login)
+    body = claim_body(ctx.config.profile.github_login, ctx.config.policy.text.project_url)
     try:  # the same path as POST /v1/actions: marker, normalization, policy check, running check
         done = request_action(ctx, a.cid, "issue_claim", int(c["issue_number"]), body, tap.actor)
     except Blocked:

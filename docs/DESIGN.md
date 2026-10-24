@@ -1647,7 +1647,7 @@ Post-v1 (owner, 2026-10-21): the disclosure is one small `<sub>` line that links
 
 Repos whose policy demands a specific disclosure format get a per-repo `disclosure_template:` in targets.yaml. After any user edit the gatekeeper checks the marker `<!-- ossbot:cid=` and the phrase "AI assistance disclosure"; if missing it re-appends the block and the refreshed card says so.
 
-Watcher-drafted comments end with `— drafted with AI assistance, reviewed by @{{ profile.github_login }}`. Every `comment` and `issue_claim` body also ends with the hidden marker `<!-- ossbot:action=<action_id> -->`. It is appended at storage time, so it is part of the shown, hashed and posted bytes. Restart reconciliation (12.5, M5) finds a posted comment by this marker.
+Watcher-drafted comments and issue claims end with the same one-line credit as the PR footer (`common/project.py` `comment_disclosure`): `<sub>🤖 AI assistance disclosure: prepared with <a href="{{ policy.text.project_url }}">autonomous-oss-contributor</a>; reviewed and approved by @{{ profile.github_login }} before posting.</sub>`. Every `comment` and `issue_claim` body also ends with the hidden marker `<!-- ossbot:action=<action_id> -->`. It is appended at storage time, so it is part of the shown, hashed and posted bytes. Restart reconciliation (12.5, M5) finds a posted comment by this marker.
 
 The commit message is subject to the same checks as title/body: secret scan, Kiro key hash check, confidentiality floor + denylist, max 10 000 bytes, subject line ≤ 100 chars.
 

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 from ossbot.common.clock import to_iso
 from ossbot.common.ids import new_action_id
+from ossbot.common.project import PROJECT_URL, comment_disclosure
 from ossbot.common.schemas import TERMINAL_STATES, State
 from ossbot.gatekeeper import db, policy
 from ossbot.gatekeeper.anomaly import Signal
@@ -28,11 +29,11 @@ if TYPE_CHECKING:
 
 RequestKind = Literal["issue_claim", "comment"]
 OPEN_STATUSES = ("pending_approval", "approved", "executing")
-# The same bytes as runner/stages/fetch.py CLAIM_BODY (tests/unit/gatekeeper/test_action_requests.py).
+# The same bytes as runner/stages/fetch.py CLAIM_BODY (tests/telegram/test_proposal_card.py); the footer is
+# common/project.py comment_disclosure.
 CLAIM_TEMPLATE = (
     "Hi! I'd like to work on this issue and open a pull request with a fix and tests. "
     "Please let me know if someone else is already on it or if you'd prefer a different approach."
-    "\n\n— drafted with AI assistance, reviewed by @{login}"
 )
 SECRET_CODES = frozenset({"secret_pattern", "kiro_key", "gatekeeper_secret"})
 OPEN_CLAIM_SQL = (
@@ -56,8 +57,8 @@ class Requested:
     reused: bool = False
 
 
-def claim_body(login: str) -> str:
-    return CLAIM_TEMPLATE.format(login=login)
+def claim_body(login: str, project_url: str = PROJECT_URL) -> str:
+    return f"{CLAIM_TEMPLATE}\n\n{comment_disclosure(login, project_url)}"
 
 
 def marked(text: str, action_id: str) -> str:

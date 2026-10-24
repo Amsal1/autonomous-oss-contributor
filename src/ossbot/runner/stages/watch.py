@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from ossbot.common.github_bots import is_bot, is_owner
+from ossbot.common.project import comment_disclosure
 from ossbot.runner import prompts
 from ossbot.runner.gk_client import GkError
 from ossbot.runner.outputs import WatchDecision
@@ -111,9 +112,10 @@ def run(sc: StageContext, c: dict[str, Any]) -> None:
     if pr.get("state") == "closed":
         sc.transition(cid, "WATCHING", "CLOSED", {"reason": "closed_unmerged"})
         return
-    login = sc.config().profile.github_login
+    cfg = sc.config()
     if decision.action == "reply" and decision.reply_body.strip():
-        reply = decision.reply_body.strip() + f"\n\n— drafted with AI assistance, reviewed by @{login}"
+        footer = comment_disclosure(cfg.profile.github_login, cfg.policy.text.project_url)
+        reply = f"{decision.reply_body.strip()}\n\n{footer}"
         try:
             sc.gk.action(cid, "comment", int(number), reply)
             sc.transition(cid, "WATCHING", "WATCHING", {"reason": "reply_drafted"})

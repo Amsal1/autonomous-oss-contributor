@@ -210,8 +210,12 @@ async def test_ask_maintainers_first_creates_a_claim_card(rig: TgRig) -> None:
     stored = json.loads(claim["payload_json"])["body"]
     login = rig.ctx.config.profile.github_login
     # the bytes of the actions path: the AI-assistance line and the reconciliation marker (§12)
-    assert stored == action_requests.claim_body(login) + f"\n\n<!-- ossbot:action={claim['id']} -->"
-    assert f"— drafted with AI assistance, reviewed by @{login}" in stored
+    body = action_requests.claim_body(login, rig.ctx.config.policy.text.project_url)
+    assert stored == body + f"\n\n<!-- ossbot:action={claim['id']} -->"
+    assert "🤖 AI assistance disclosure: prepared with" in stored
+    assert f'<a href="{rig.ctx.config.policy.text.project_url}">autonomous-oss-contributor</a>' in stored
+    assert f"reviewed and approved by @{login} before posting." in stored
+    assert "drafted with AI assistance" not in stored
     assert state(rig.ctx, card.cid) == "PROPOSED"  # the proposal stays open
     await rig.tap(token(rig, card.message_id, "🙋 Ask maintainers first"), message=card.message_id)
     assert toast(rig) == "A claim card is already waiting."
