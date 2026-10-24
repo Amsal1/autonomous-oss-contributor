@@ -31,6 +31,7 @@ with warnings.catch_warnings():
     from starlette.testclient import TestClient
 
 from ossbot.common.models import ModelsFile
+from ossbot.common.public_floor import FloorStatus
 from ossbot.common.schemas import CatalogEntry
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.app import create_app as create_gatekeeper
@@ -135,6 +136,22 @@ class SandboxdGatekeeper:
         from ossbot.gatekeeper.implement_network import decide_and_audit
 
         return decide_and_audit(self.ctx, cid, run_id, "uid:2002/sandbox")[0]
+
+    def notify(self, text: str, priority: str = "P1") -> None:
+        """``POST /v1/notify`` as the sandbox role (ADR-0025): the worker branch, a feed message."""
+        self.ctx.notify("ℹ️ " + text, priority=1 if priority == "P1" else 2, thread="feed")
+
+    def egress_note(self, cid: str, body: dict[str, Any]) -> None:
+        """``POST /v1/contributions/{cid}/egress-notes`` as the sandbox role (ADR-0025)."""
+        from ossbot.common.schemas import EgressNoteRequest
+        from ossbot.gatekeeper.egress_notes import EgressNotes, NoteRefused
+        from ossbot.sandboxd.jobs import HoldError
+
+        try:
+            EgressNotes(self.ctx.conn, self.ctx.clock, self.ctx.audit).record(
+                cid, EgressNoteRequest.model_validate(body), "uid:2002/sandbox")  # fmt: skip
+        except NoteRefused as exc:
+            raise HoldError(exc.status, exc.code) from exc
 
 
 class StubProbes:
@@ -447,6 +464,7 @@ def build_e2e(gctx: AppContext, world: GitWorld, tmp_path: Path, *, repo: str = 
         gctx.clock), gatekeeper=SandboxdGatekeeper(gctx), scanner=KeyScanner([KEY]), clock=gctx.clock,
         settings=settings, trust_mode=lambda: "ids", networks=Networks(runtime, SubnetAllocator(store, gctx.clock)),
         background=False, exec_egress_mode=lambda: gctx.control.egress_mode(gctx.config.egress.mode_default),
+        public_floor=lambda: FloorStatus(True, None, 1, 1, True),  # ADR-0025: the public-address floor is known
     )  # fmt: skip
     probes = StubProbes(jobs)
     sbx_app = create_sandboxd(jobs, probes, frozenset({RUNNER_UID}))  # type: ignore[arg-type]

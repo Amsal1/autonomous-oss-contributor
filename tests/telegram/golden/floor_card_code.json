@@ -1,0 +1,35 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🚨 ",
+    {
+     "text": "Floor reach attempt",
+     "type": "bold"
+    },
+    " · ",
+    "acme/widgets#123",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    },
+    " · validate job stopped"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "It tried to reach ",
+    "api.telegram.org",
+    " (a control or model host that repo code may never reach)."
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Blocked; only this contribution is held.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

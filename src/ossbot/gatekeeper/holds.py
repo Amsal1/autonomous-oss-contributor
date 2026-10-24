@@ -1,10 +1,12 @@
-"""Per-contribution holds (open-discovery design §13.3, ADR-0023): the ``sandbox_open`` safety net.
+"""Per-contribution holds (open-discovery design §13.3, ADR-0023, ADR-0025): the web modes' safety net.
 
 sandboxd's egress meter (or the runner) asks for a hold when a fetch/validate job went over its egress
-limits. A hold is a stop request (I9): sandbox and worker may set it, only the human releases it
-(Telegram two-tap ``hold_resume_confirm`` or ``ossctl egress release`` with a TTY confirm). While it is
-open, ``StageRuns.open`` and ``/package`` answer 423 ``contribution_held`` and ``submit`` stops before
-the next write (cause ``held``). It is not a state transition (I13): the contribution keeps its state.
+limits (``egress_anomaly``) or, in every mode, when a repo-code job tried to reach a floor (``egress_floor``:
+a private, reserved or host address, the owner's public address, an always-denied or repo-code-denied name).
+A hold is a stop request (I9): sandbox and worker may set it, only the human releases it (Telegram two-tap
+``hold_resume_confirm`` or ``ossctl egress release`` with a TTY confirm). While it is open, ``StageRuns.open``
+and ``/package`` answer 423 ``contribution_held`` and ``submit`` stops before the next write (cause ``held``).
+It is not a state transition (I13): the contribution keeps its state.
 
 This module is the only SQL writer of ``contribution_holds`` (``tests/unit/gatekeeper/test_holds_writer.py``)
 and never imports a Telegram module: the P1 card is queued through the injected ``publish_hold``
@@ -21,7 +23,7 @@ from typing import Any
 
 from ossbot.common.clock import Clock, to_iso
 from ossbot.common.ids import new_id
-from ossbot.common.schemas import HoldRequest, HoldView
+from ossbot.common.schemas import FloorHoldRequest, HoldRequest, HoldView
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.approvals import ApprovalService
 from ossbot.gatekeeper.audit import AuditLog
@@ -91,22 +93,27 @@ class ContributionHolds:
                 self.audit.append(actor, "contribution_hold_repeat", {"hold": existing["id"], "run": req.run_id}, cid)
                 return view(existing), False
             hold_id = new_id("h")
-            detail = req.model_dump(mode="json")
+            detail = req.model_dump(mode="json", by_alias=True)  # FloorInfo.cls is "class" on the wire
             self.conn.execute(
                 "INSERT INTO contribution_holds (id, cid, reason, detail_json, held_by, held_at)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
                 (hold_id, cid, req.reason, json.dumps(detail, sort_keys=True), actor, now),
             )
-            invalidated = self.approvals.invalidate_contribution(cid, "egress_anomaly", actor)  # REASON_LABELS
+            # egress_anomaly or egress_floor (ADR-0025): both are REASON_LABELS entries
+            invalidated = self.approvals.invalidate_contribution(cid, req.reason, actor)
             self.audit.append(actor, "contribution_held", {"hold": hold_id, **detail,
                                                            "invalidated": [i.approval_id for i in invalidated]},
                               cid)  # fmt: skip
             row = self._open_row(cid)
             assert row is not None
             out = view(row)
-        log.warning("contribution %s held: egress anomaly in %s job %s (%s)", cid, req.stage, req.run_id,
-                    ",".join(req.breached),
-                    extra={"event": "contribution_held", "cid": cid, "run_id": req.run_id})  # fmt: skip
+        if isinstance(req.root, FloorHoldRequest):  # the floor class and the target (escaped), never a breach alone
+            what = f"floor reach attempt ({req.root.floor.cls} {req.root.floor.target!r})"
+        else:
+            what = f"egress anomaly ({','.join(req.root.breached)})"
+        log.warning("contribution %s held: %s in %s job %s", cid, what, req.stage, req.run_id,
+                    extra={"event": "contribution_held", "cid": cid, "run_id": req.run_id,
+                           "reason": req.reason})  # fmt: skip
         try:
             self.publish_hold(out)
         except Exception:

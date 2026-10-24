@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 
 from ossbot.common.schemas import (
     ContributionCreate,
+    EgressNoteRequest,
     ImplementEgressDecide,
     ImplementEgressView,
     ImportRequest,
@@ -23,6 +24,7 @@ from ossbot.common.schemas import (
 from ossbot.gatekeeper import implement_network
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
+from ossbot.gatekeeper.egress_notes import EgressNotes, NoteRefused
 from ossbot.gatekeeper.imports import Importer, ImportInvalid
 from ossbot.gatekeeper.packaging import Packager, PackageRefused, gitleaks_scan
 from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
@@ -170,6 +172,21 @@ async def decide_implement_egress(
     _check_cid(cid)
     egress, reason = implement_network.decide_and_audit(ctx(request), cid, body.run_id, caller.actor)
     return ImplementEgressView(egress=egress, reason=reason)
+
+
+@router.post("/contributions/{cid}/egress-notes")
+async def egress_note(
+    request: Request, cid: str, body: EgressNoteRequest, caller: Annotated[Caller, Depends(require(Role.SANDBOX))]
+) -> JSONResponse:
+    """ADR-0025: sandboxd's meter records a volume note (``sandbox_full`` web job) or a job's floor notes. Data for
+    the digest only: no transition, no invalidation, no message now. A repeat of the run is 200 (idempotent)."""
+    _check_cid(cid)
+    c = ctx(request)
+    try:
+        note, created = EgressNotes(c.conn, c.clock, c.audit).record(cid, body, caller.actor)
+    except NoteRefused as exc:
+        return JSONResponse(status_code=exc.status, content={"error": exc.code, "detail": exc.detail})
+    return JSONResponse(status_code=201 if created else 200, content=note.model_dump(mode="json"))
 
 
 @router.post("/contributions/{cid}/package-ts")

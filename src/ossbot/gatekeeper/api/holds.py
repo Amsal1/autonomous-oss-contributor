@@ -26,7 +26,7 @@ async def hold(
     caller: Annotated[Caller, Depends(require(Role.SANDBOX, Role.WORKER))],
 ) -> JSONResponse:  # fmt: skip
     found, created = ctx(request).holds.hold(cid, body, caller.actor)
-    return JSONResponse(status_code=201 if created else 200, content=found.model_dump(mode="json"))
+    return JSONResponse(status_code=201 if created else 200, content=found.model_dump(mode="json", by_alias=True))
 
 
 @router.get("/holds")
@@ -35,7 +35,8 @@ async def list_holds(
     caller: Annotated[Caller, Depends(require(Role.WORKER, Role.OPERATOR))],
     open_only: Annotated[bool, Query(alias="open")] = True,
 ) -> list[dict[str, Any]]:
-    return [v.model_dump(mode="json") for v in ctx(request).holds.open_holds(include_released=not open_only)]
+    holds = ctx(request).holds.open_holds(include_released=not open_only)
+    return [v.model_dump(mode="json", by_alias=True) for v in holds]  # FloorInfo.cls is "class" on the wire
 
 
 @router.post("/contributions/{cid}/hold/release")
@@ -45,4 +46,4 @@ async def release(
     c = ctx(request)
     released = c.holds.release(cid, caller.actor)
     c.operator_fyi(f"RESUME HOLD {cid}", caller.peer.uid, caller.peer.pid)
-    return released.model_dump(mode="json")
+    return released.model_dump(mode="json", by_alias=True)

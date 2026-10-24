@@ -1,0 +1,35 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🚨 ",
+    {
+     "text": "Floor reach attempt",
+     "type": "bold"
+    },
+    " · ",
+    "acme/widgets#123",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    },
+    " · validate job stopped"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "It tried to reach ",
+    "your public address",
+    " (your router's or this laptop's public address (it can lead into your home network))."
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Blocked; only this contribution is held.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

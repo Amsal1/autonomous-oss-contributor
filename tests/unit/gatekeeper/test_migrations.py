@@ -17,7 +17,7 @@ CR004_TABLES = {"runner_requests"}
 HERMES_TABLES = {"skill_reviews", "chat_turns", "chat_sessions"}  # 0004_hermes.sql (FEAT-007)
 UX_TABLES = {"tg_topics", "pending_input", "review_comments", "ux_prefs"}  # 0005_telegram_ux.sql (FEAT-009)
 UX_OUTBOX_COLUMNS = {"priority", "thread_key", "coalesce_key", "merged_into"}
-LATEST = 9
+LATEST = 10
 M2_TABLES = {"digest_runs", "reminders", "review_mirror", "telegraph_pages"}  # 0006_telegram_m2.sql (FEAT-010)
 OPEN_TABLES = {"discovered_targets", "contribution_holds"}  # 0007_open_discovery.sql (post-v1)
 MIGRATIONS = ((1, "0001_init.sql"), (2, "0002_decisions.sql"), (3, "0003_cr004.sql"), (4, "0004_hermes.sql"),
@@ -296,3 +296,49 @@ def test_from_version_8_adds_implement_network(tmp_path: Path) -> None:
             conn.execute(sql)
     for value in ("on_request", "auto", "off"):
         conn.execute("UPDATE control_state SET implement_network = ? WHERE id = 1", (value,))
+
+
+def _at_version_9(path: Path) -> sqlite3.Connection:
+    conn = _at_version_8(path)
+    sql = (resources.files("ossbot.gatekeeper.migrations") / "0009_implement_network.sql").read_text(encoding="utf-8")
+    conn.executescript(f"BEGIN IMMEDIATE;\n{sql}\nPRAGMA user_version = 9;\nCOMMIT;")
+    return conn
+
+
+def test_from_version_9_rebuilds_holds_and_adds_egress_notes(tmp_path: Path) -> None:
+    """0010 (ADR-0025): an open and a released egress_anomaly hold survive the rebuild unchanged, the partial
+    unique index is back, the reason set gains egress_floor, and egress_notes is one row per run."""
+    conn = _at_version_9(tmp_path / "i.db")
+    for n, cid in enumerate(("c_0000000001", "c_0000000002")):
+        conn.execute(
+            "INSERT INTO contributions (id, upstream, issue_number, source, state, created_at, updated_at)"
+            " VALUES (?, 'o/r', ?, 'discover', 'VALIDATING', 't', 't')",
+            (cid, 5 + n),
+        )
+    hold = (
+        "INSERT INTO contribution_holds (id, cid, reason, detail_json, held_by, held_at, released_by, released_at)"
+        " VALUES (?, ?, ?, ?, 'sandbox', 't', ?, ?)"
+    )
+    conn.execute(hold, ("h1", "c_0000000001", "egress_anomaly", '{"a": 1}', None, None))
+    conn.execute(hold, ("h2", "c_0000000002", "egress_anomaly", '{"b": 2}', "op", "t2"))
+    assert db.migrate(conn) == LATEST
+    rows = conn.execute("SELECT id, cid, reason, detail_json, released_by, released_at FROM contribution_holds"
+                        " ORDER BY id").fetchall()  # fmt: skip
+    assert [tuple(r) for r in rows] == [("h1", "c_0000000001", "egress_anomaly", '{"a": 1}', None, None),
+                                        ("h2", "c_0000000002", "egress_anomaly", '{"b": 2}', "op", "t2")]  # fmt: skip
+    assert "contribution_holds_v10" not in _tables(conn) and "egress_notes" in _tables(conn)
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    indexes = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert {"contribution_holds_open", "egress_notes_created"} <= indexes
+    conn.execute(hold, ("h3", "c_0000000002", "egress_floor", "{}", None, None))  # the new reason
+    for args in (("h4", "c_0000000001", "egress_floor", "{}", None, None),  # one open hold per cid
+                 ("h5", "c_0000000002", "other", "{}", "op", "t3")):  # the reason is a closed set  # fmt: skip
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(hold, args)
+    note = (
+        "INSERT INTO egress_notes (cid, run_id, stage, kind, summary_json, created_at) VALUES (?, ?, ?, ?, '{}', 't')"
+    )
+    conn.execute(note, ("c_0000000001", "r_1", "validate", "volume"))
+    for args in (("c_0000000001", "r_1", "validate", "volume"), ("c_0000000001", "r_2", "validate", "other")):
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(note, args)

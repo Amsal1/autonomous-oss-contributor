@@ -16,6 +16,9 @@ audit rows the runner's reports left), candidates found, new ``source = 'discove
 proposals, the top terminal drop reasons (vet and scout), the scout's on-main skips (always shown, 0
 included) and discovery stage error classes, all from the gatekeeper's own tables; reasons are ``k.Text``.
 A period without a finished cycle shows a warning line.
+
+Egress notes (ADR-0025): a "🌐 Egress notes" block with the period's count and up to three lines (volume notes of
+``sandbox_full`` web jobs, floor notes such as loopback names) when there are any; absent otherwise.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from zoneinfo import ZoneInfo
 
 from ossbot.common.clock import from_iso, to_iso
 from ossbot.gatekeeper import db, outcomes
+from ossbot.gatekeeper.egress_notes import EgressNotes
 from ossbot.gatekeeper.telegram.runtime import ui_of
 from ossbot.gatekeeper.telegram.ui import kit as k
 from ossbot.gatekeeper.telegram.ui import send as ui_send
@@ -154,7 +158,58 @@ def collect(ctx: AppContext, period: Period, gh: dict[str, int]) -> dict[str, An
     stats["errors"] = dict(errors.most_common(3))
     stats["streak"] = outcomes.streak(live_days(ctx), period.start)
     stats["discovery"] = discovery_stats(ctx, span)
+    stats["egress_notes"] = egress_notes_stats(ctx, span)
     return stats
+
+
+NOTES_SHOWN = 3
+GIB = 1024 * 1024 * 1024
+MIB = 1024 * 1024
+
+
+def egress_notes_stats(ctx: AppContext, span: tuple[str, str]) -> dict[str, Any]:
+    """ADR-0025: the period's egress notes (volume notes of ``sandbox_full`` web jobs, floor notes such as loopback
+    names): the count and the newest ``NOTES_SHOWN`` as plain numbers (rendered escaped by ``egress_notes_block``)."""
+    notes = [n for n in EgressNotes(ctx.conn, ctx.clock, ctx.audit).since(span[0]) if n.created_at < span[1]]
+    items = []
+    for note in notes[:NOTES_SHOWN]:
+        row = db.one(ctx.conn, "SELECT upstream, issue_number FROM contributions WHERE id = ?", (note.cid,))
+        subject = note.cid if row is None else str(row["upstream"]) + (
+            f"#{row['issue_number']}" if row["issue_number"] else "")  # fmt: skip
+        s = note.summary
+        items.append({"subject": subject, "stage": s.stage, "kind": s.kind, "breached": list(s.breached),
+                      "hosts": s.hosts, "max_hosts": s.limits.max_hosts, "up": s.up_bytes,
+                      "max_up_mb": s.limits.max_upload_mb, "down": s.down_bytes,
+                      "max_down_mb": s.limits.max_download_mb, "notes": len(s.notes)})  # fmt: skip
+    return {"count": len(notes), "items": items}
+
+
+def _bytes(n: int) -> str:
+    return f"{n / GIB:.1f} GB" if n >= GIB else f"{n // MIB} MB"
+
+
+def egress_notes_block(notes: dict[str, Any]) -> k.Block | None:
+    """🌐 Egress notes: the count and up to three lines ``repo#N · validate · 74 hosts (> 60) · ↓ 7.2 GB (> 6 GB)``;
+    None when the period had none."""
+    count = int(notes.get("count") or 0)
+    if not count:
+        return None
+    lines: list[k.Line] = [(k.Const("🌐 "), k.Bold(k.Const("Egress notes")),
+                            k.Const(f" · {_n(count, 'note')} · nothing was held"))]  # fmt: skip
+    for item in list(notes.get("items") or [])[:NOTES_SHOWN]:
+        parts: list[str] = []
+        breached = set(item.get("breached") or [])
+        if "hosts" in breached:
+            parts.append(f"{int(item['hosts'])} hosts (> {int(item['max_hosts'])})")
+        if "upload" in breached:
+            parts.append(f"↑ {_bytes(int(item['up']))} (> {int(item['max_up_mb'])} MB)")
+        if "download" in breached:
+            parts.append(f"↓ {_bytes(int(item['down']))} (> {_bytes(int(item['max_down_mb']) * MIB)})")
+        if item.get("notes"):
+            parts.append(_n(item["notes"], "floor note"))
+        tail = " · ".join([str(item.get("stage") or "-"), *parts])
+        lines.append((k.Text(str(item.get("subject") or "?"), 160), k.Const(" · "), k.Text(tail, 200)))
+    return k.Block((k.Lines(tuple(lines)),), required=False, priority=2, name="egress_notes")
 
 
 ON_MAIN = ("already_fixed_on_main", "not_reproducible_on_main")  # scout's check-main skips (fix 10)
@@ -284,6 +339,9 @@ def view(ctx: AppContext, period: Period, stats: dict[str, Any], prev: dict[str,
     blocks = [k.Block((k.Lines(tuple(lines)),), name="facts")]
     if isinstance(stats.get("discovery"), dict):  # older stats_json rows have no discovery section
         blocks.append(discovery_block(stats["discovery"]))
+    notes_block = egress_notes_block(stats["egress_notes"]) if isinstance(stats.get("egress_notes"), dict) else None
+    if notes_block is not None:  # ADR-0025: absent when the period had no egress note
+        blocks.append(notes_block)
     if period.kind == "weekly" or stats["proposed"] or stats["merged"]:
         since = to_iso(ctx.clock.now() - timedelta(days=WINDOW_DAYS))
         rows = outcomes.merge_rate_rows(ctx.conn, since)

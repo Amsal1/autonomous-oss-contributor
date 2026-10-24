@@ -72,7 +72,7 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("GET", "/v1/models/catalog"): ANY,
     ("POST", "/v1/models/catalog"): frozenset({W}),
     ("POST", "/v1/discovery-requests"): frozenset({R, O}),
-    ("POST", "/v1/notify"): frozenset({W, R}),
+    ("POST", "/v1/notify"): frozenset({W, R, S}),  # S: sandboxd's floor notices (ADR-0025), the worker branch
     ("POST", "/v1/features/{feature}/cards"): frozenset({R}),  # FEAT-010 item 49: Hermes feature cards (U12)
     ("POST", "/v1/reminders"): frozenset({R}),  # FEAT-010 item 50: ossbot_reminder_create (U12)
     ("GET", "/v1/review-mirror"): frozenset({O}),  # FEAT-010 item 51: ossctl review-mirror (ADR-0019 C)
@@ -113,6 +113,9 @@ EXPECTED: dict[tuple[str, str], frozenset[Role]] = {
     ("POST", "/v1/contributions/{cid}/hold"): frozenset({S, W}),
     ("GET", "/v1/holds"): frozenset({W, O}),
     ("POST", "/v1/contributions/{cid}/hold/release"): frozenset({O}),
+    # build-env design §5.2 (ADR-0025): sandboxd records egress notes (data, no transition); read-only list
+    ("POST", "/v1/contributions/{cid}/egress-notes"): frozenset({S}),
+    ("GET", "/v1/egress/notes"): frozenset({W, O}),
 }
 UIDS = {O: UID_OPERATOR, W: UID_WORKER, S: UID_SANDBOX, R: UID_REQUESTER}
 

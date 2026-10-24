@@ -1,0 +1,32 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🌐 ",
+    {
+     "text": "Egress notes",
+     "type": "bold"
+    },
+    " · 2 notes · nothing was held"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "acme/<b>tools</b>#7",
+    " · ",
+    "fetch · 2 floor notes"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "acme/widgets#123",
+    " · ",
+    "validate · 74 hosts (> 60) · ↓ 7.2 GB (> 6.0 GB)"
+   ],
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

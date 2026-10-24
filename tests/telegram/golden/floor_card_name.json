@@ -1,0 +1,35 @@
+{
+ "blocks": [
+  {
+   "text": [
+    "🚨 ",
+    {
+     "text": "Floor reach attempt",
+     "type": "bold"
+    },
+    " · ",
+    "acme/widgets#123",
+    " · ",
+    {
+     "text": "c_CID",
+     "type": "code"
+    },
+    " · validate job stopped"
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": [
+    "It tried to reach ",
+    "uploads.github.com",
+    " (an always-blocked write or publishing host)."
+   ],
+   "type": "paragraph"
+  },
+  {
+   "text": "Blocked; only this contribution is held.",
+   "type": "paragraph"
+  }
+ ],
+ "skip_entity_detection": true
+}

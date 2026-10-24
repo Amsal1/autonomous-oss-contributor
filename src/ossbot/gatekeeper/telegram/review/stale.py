@@ -49,6 +49,7 @@ REASON_LABELS: dict[str, tuple[str, Second]] = {
     "superseded": ("a newer version was staged", "show_current"),  # skill_reviews: a newer staged skill
     # open-discovery §13.3: no Retry/Show current while held (Resume on the hold card first)
     "egress_anomaly": ("egress anomaly: contribution held", "none"),
+    "egress_floor": ("floor reach attempt: contribution held", "none"),  # ADR-0025: Resume on the hold card
 }
 S5_REASONS = frozenset({"entered_implementing", "changes_requested"})
 # the rows whose way forward is an explicit 🔁 Retry (a fresh window), not an automatic re-send

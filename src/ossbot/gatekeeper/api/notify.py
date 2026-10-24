@@ -5,6 +5,9 @@
   The notice goes to that turn's thread (never Reviews, Control or OSS feed), starts with 🤖, and is P2
   unless ``priority: "P1"`` (at most 5 P1 per local day, then P2).
 * **Worker notices** (role ``worker``, the information-sign prefix): no session; 📈 OSS feed as P2, or P1 on request.
+* **sandboxd notices** (role ``sandbox``, ADR-0025): the worker branch with the same 10/h per-caller limit, for
+  "Floor detector down", an unattributed proxy floor drop and the failing public-address check only. A notice
+  is a message, never a go action (I9).
 
 ``priority`` is ``"P1"`` or ``"P2"``; anything else, ``"P0"`` included, is a 422. The text is relayed
 escaped (classic HTML built by ``ui/ids.autocode``: no markup from the caller, ids as one-tap code, no
@@ -35,7 +38,7 @@ PRIORITIES = frozenset({"P1", "P2"})
 async def notify(
     request: Request,
     body: NotifyRequest,
-    caller: Annotated[Caller, Depends(require(Role.WORKER, Role.REQUESTER))],
+    caller: Annotated[Caller, Depends(require(Role.WORKER, Role.REQUESTER, Role.SANDBOX))],
 ) -> Any:
     c = ctx(request)
     if body.priority not in PRIORITIES:

@@ -30,6 +30,7 @@ from ossbot.gatekeeper.api import (
     control,
     discovered,
     discovery_cycles,
+    egress,
     features,
     holds,
     models,
@@ -213,7 +214,7 @@ def create_app(ctx: AppContext, *, housekeeping: bool = True, services: Sequence
     _install_handlers(app)
     feature_registry.load(ctx.config.telegram.features.enabled)  # §14.18.3: entry points, enabled ones only
     for module in (control, config, contributions, actions, models, audit, notify, work, prefs, stage_runs, chat,
-                   features, reminders, review_mirror, retention, discovered, discovery_cycles, holds,
+                   features, reminders, review_mirror, retention, discovered, discovery_cycles, holds, egress,
                    signing):  # fmt: skip
         app.include_router(module.router)
     return app

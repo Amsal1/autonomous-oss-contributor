@@ -8,10 +8,12 @@ import ast
 import re
 from collections.abc import AsyncIterator
 from datetime import timedelta
+from typing import get_args
 
 import pytest
 
 from ossbot.common.clock import to_iso
+from ossbot.common.schemas import HoldReason
 from ossbot.gatekeeper import db
 from ossbot.gatekeeper.context import AppContext
 from ossbot.gatekeeper.telegram.review import stale
@@ -57,13 +59,16 @@ def reason_literals() -> set[str]:
                 value = _literal(node.args[index])
                 if value is not None:
                     found.add(value)
+    # holds.py invalidates with the hold's own reason (ADR-0025: req.reason), whose values are HoldReason
+    found |= set(get_args(HoldReason))
     return found
 
 
 def test_every_invalidation_reason_has_a_label() -> None:
     found = reason_literals()
     assert {"reissued", "text_edited", "new_package_rev", "killed", "live_check:", "binding_unavailable:",
-            "render_failed", "no_write_token", "changes_requested", "egress_anomaly"} <= found  # fmt: skip
+            "render_failed", "no_write_token", "changes_requested", "egress_anomaly",
+            "egress_floor"} <= found  # fmt: skip
     missing = sorted(r for r in found if r not in stale.REASON_LABELS)
     assert missing == [], missing
     for reason in found:

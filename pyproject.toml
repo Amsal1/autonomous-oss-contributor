@@ -331,6 +331,20 @@ source_modules = ["ossbot.gatekeeper"]
 forbidden_modules = ["ossbot.ctl"]
 
 [[tool.importlinter.contracts]]
+# build-env design §5.2, §14 (ADR-0025): egress_notes is the only writer of egress_notes; the POST and GET
+# endpoints and the digest are its only importers, and features never import it.
+name = "Only api.contributions, api.egress and telegram.digest import ossbot.gatekeeper.egress_notes"
+type = "forbidden"
+source_modules = ["ossbot.common", "ossbot.runner", "ossbot.sandboxd", "ossbot.sandbox_tools", "ossbot.dockerfilter",
+    "ossbot.ctl", "ossbot.watchdog", "ossbot.gatekeeper.**"]
+ignore_imports = ["ossbot.gatekeeper.api.contributions -> ossbot.gatekeeper.egress_notes",
+    "ossbot.gatekeeper.api.egress -> ossbot.gatekeeper.egress_notes",
+    "ossbot.gatekeeper.telegram.digest -> ossbot.gatekeeper.egress_notes"]
+unmatched_ignore_imports_alerting = "error"
+forbidden_modules = ["ossbot.gatekeeper.egress_notes"]
+allow_indirect_imports = false
+
+[[tool.importlinter.contracts]]
 # build-env design §4.4 (ADR-0025): the root kernel-log reader decides nothing and imports only ossbot.common.
 name = "ossbot.watchdog.floorlog imports only ossbot.common"
 type = "forbidden"

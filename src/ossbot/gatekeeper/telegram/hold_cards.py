@@ -1,4 +1,4 @@
-"""The P1 egress-anomaly hold card and its Resume two-tap (open-discovery design §13.3, ADR-0023).
+"""The P1 hold cards and their Resume two-tap (open-discovery design §13.3, ADR-0023; ADR-0025 floor holds).
 
 ``queue_hold_card`` is the ``publish_hold`` callback ``context.py`` injects into ``ContributionHolds`` (so
 ``holds.py`` never imports Telegram). The card is built with the kit only; the host names come from the
@@ -64,7 +64,50 @@ def _stage_label(stage: str) -> str:
     return "coder's executor (implement)" if stage == "implement" else stage
 
 
+# ADR-0025 (build-env design §5.2): what each floor class means, in the owner's words (never an address value)
+FLOOR_CLASS_TEXT = {
+    "dst": "a name that points into your private network or a reserved range",
+    "name": "an always-blocked write or publishing host",
+    "code": "a control or model host that repo code may never reach",
+    "literal": "a private or reserved IP address",
+    "host": "this computer's own addresses",
+    "proxy": "a connection the proxy was tricked into opening towards your private network (blocked by the firewall)",
+    "pub": "your router's or this laptop's public address (it can lead into your home network)",
+}
+PUBLIC_SHOWN = "your public address"
+
+
 def hold_view(ctx: AppContext, hold: HoldView) -> k.View:
+    """The card of the hold's reason: ``egress_anomaly`` (volume) or ``egress_floor`` (a floor reach attempt)."""
+    if hold.reason == "egress_floor":
+        return floor_view(ctx, hold)
+    return anomaly_view(ctx, hold)
+
+
+def floor_view(ctx: AppContext, hold: HoldView) -> k.View:
+    """🚨 Floor reach attempt · owner/repo#N · c_… · <stage> job stopped / It tried to reach <target> (<class
+    text>). Blocked; only this contribution is held. / [▶️ Resume…] [📜 Logs]. The target is untrusted (squid
+    log through sandboxd): a ``k.Text`` span, redacted and escaped; the public address is never shown."""
+    d = hold.detail
+    floor = d.floor
+    subject = _subject(ctx, hold.cid)
+    head: list[k.Span] = [k.Const("🚨 "), k.Bold(k.Const("Floor reach attempt")), k.Const(" · ")]
+    if subject != hold.cid:
+        head += [k.Text(subject, 160), k.Const(" · ")]
+    head += [k.Id(hold.cid), k.Const(f" · {_stage_label(d.stage)} job stopped")]
+    target: k.Span = (k.Const(PUBLIC_SHOWN) if floor.cls == "pub" or floor.target == "public-address"
+                      else k.Text(floor.target, HOST_SHOWN))  # fmt: skip
+    lines: list[k.Line] = [
+        tuple(head),
+        (k.Const("It tried to reach "), target, k.Const(f" ({FLOOR_CLASS_TEXT.get(floor.cls, floor.cls)}).")),
+        k.line("Blocked; only this contribution is held."),
+    ]
+    arg = {"cid": hold.cid, "hold": hold.id}
+    rows: k.Rows = [[k.button("▶️ Resume…", "hold_resume", arg), k.button("📜 Logs", "logs_pick", {"cid": hold.cid})]]
+    return k.View(kind="fyi", blocks=[k.Block((k.Lines(tuple(lines)),))], rows=rows, cid=hold.cid)
+
+
+def anomaly_view(ctx: AppContext, hold: HoldView) -> k.View:
     """🚨 Egress anomaly · owner/repo#N · c_… · <stage> job stopped, the numbers against the limits, ≤ 5 hosts."""
     d = hold.detail
     lim = d.limits

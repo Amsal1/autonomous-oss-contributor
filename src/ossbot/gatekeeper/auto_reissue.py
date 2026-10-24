@@ -10,7 +10,7 @@ the sweep is durable across restarts and idempotent: once a fresh card exists no
 Read-only queries here; no Telegram imports. Excluded on purpose: ``expired``, ``live_check:*`` and
 ``no_write_token`` (explicit 🔁 Retry), newer-version and ``reissued`` reasons (a newer card exists),
 work-in-progress reasons, ``render_failed`` and ``binding_unavailable:*`` (would loop), holds
-(``egress_anomaly``: Resume first), ``restored`` and rejections.
+(``egress_anomaly``, ``egress_floor``: Resume first), ``restored`` and rejections.
 
 The window rule (``expires_at > floor``, floor = now + confirm TTL) stops a restart from resurrecting
 an old card: an owed card always keeps its original window.

@@ -37,4 +37,4 @@ def test_only_holds_writes_contribution_holds() -> None:
 def test_table_created_only_by_the_migration() -> None:
     creators = [p.name for p in SRC.rglob("*.*") if p.suffix in {".py", ".sql"}
                 and "CREATE TABLE CONTRIBUTION_HOLDS" in p.read_text(encoding="utf-8").upper()]  # fmt: skip
-    assert creators == ["0007_open_discovery.sql"]
+    assert sorted(creators) == ["0007_open_discovery.sql", "0010_build_env.sql"]  # 0010 rebuilds it (ADR-0025)
