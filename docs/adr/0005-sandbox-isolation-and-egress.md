@@ -319,3 +319,36 @@ the floors as the safety line). Facts this ADR's layers rest on, checked live af
 - **L-8** a no-cache image build on `docker0` that fetches from PyPI succeeds with the new `OSSBOT-FWD` drops for
   `10.211.0.0/24` and `10.214.0.0/16`, and neither a build nor a root-created network reaches a floor; no
   exemption was needed.
+
+**Toolchains (build-env FEAT-003, 2026-10-24).** Per-repo toolchains are resolved inside the repo-code container
+by the stdlib resolver `ossbot-toolchains` (`sandbox_tools/toolchains.py`) and installed per task under
+`/work/cache` (the shared read-only cache was evaluated and rejected, design §6.6: the task volume is mounted only
+into that contribution's repo-code containers; the filter still refuses task mounts on `research`, `agent-llm`,
+`catalog`, unchanged). The base lists of `fetch` and `validate` (so `pool_fetch` and `pool_strict`) gain
+`pkg_toolchains` (`mise-java.jdx.dev`, `api.foojay.io`, `cdn.azul.com`, `corretto.aws`, `download.bell-sw.com`,
+`download.java.net`) and `static.rust-lang.org` in `pkg_rust`; no key-holding profile and no mode grant changes.
+The image's fallbacks are pinned by version and checksum: the mise tools from `sandbox/images/full-base/mise.toml`
++ `mise.lock` installed with `MISE_LOCKED=1`, rustup-init 1.29.2 by sha256 and the Rust 1.99.1 channel manifest by
+sha256 before rustup-init runs, OpenJDK 11/8 by apt version, the corepack 0.36.0 fallback tarball by sha512.
+`MISE_USE_VERSIONS_HOST(_TRACK)=false` in the build and in every job (no request to `mise-versions.jdx.dev`).
+Live checks:
+- **L-7** `mise lock --global --platform linux-x64` (mise 2026.10.13, throwaway container of the previous base)
+  wrote a URL and a sha256 checksum for each of the twelve tools (core: node, go; aqua: the other ten), and
+  `MISE_LOCKED=1 mise install` installed all twelve from it, in the throwaway container and in the image build. No
+  version-only entry, so no tool needed the release-asset fallback.
+- **L-4** under execd's `env -i` set, offline (`MISE_OFFLINE=1`), the image's go 1.27.3, node 24.22.1, terraform
+  1.17.0 and tofu 1.13.1 run through `/opt/mise/shims` with `MISE_DATA_DIR` on the task volume, because
+  `MISE_SHARED_INSTALL_DIRS=/opt/mise/installs` and `MISE_SYSTEM_CONFIG_FILE=/opt/mise/config/config.toml` are in
+  `fixed_env` (`tests/sandbox/test_toolchain_go.py`; the findings §3.6 shim bug is fixed). No PATH pinning needed.
+- **L-5** `uv python install '>=3.11,<3.12'` in a strict fetch used the GitHub mirror (`UV_PYTHON_INSTALL_MIRROR`,
+  `release-assets.githubusercontent.com` in `github_read`); no request to `releases.astral.sh`, so `pkg_python`
+  is unchanged.
+- **L-9** Gradle's foojay resolver (`api.foojay.io`) provisioned JDK 23 at fetch into `$GRADLE_USER_HOME/jdks`
+  from GitHub (Temurin, `github_read`); no host was added. The fetch warm-up resolves each project's Java toolchain
+  once for this (`sandbox/gradle/ossbot-prefetch.init.gradle`).
+- **L-12** the strict Node (nodejs.org, corepack's registry.npmjs.org), Go (go.dev, dl.google.com) and Gradle-JDK
+  (mise-java.jdx.dev, GitHub) installs produced no `TCP_DENIED` line and no request to `mise-versions.jdx.dev` or
+  `api.github.com` in their jobs' squid lines.
+- pnpm 12 fetches its platform binary on first use (into `COREPACK_HOME`); the resolver therefore runs `<pm>
+  --version` once at install, in a scratch project under the state dir (never in the repo), so the offline
+  agent-exec finds it.
