@@ -1158,8 +1158,8 @@ class Resolver:
             with contextlib.suppress(OSError):
                 scratch.mkdir(parents=True, exist_ok=True)
                 shims.mkdir(parents=True, exist_ok=True)  # corepack enable needs an existing directory
-                _write(scratch / "package.json", json.dumps({"name": "ossbot-pm", "private": True,
-                                                             "packageManager": f"{name}@{version}"}) + "\n")  # fmt: skip
+                manifest = {"name": "ossbot-pm", "private": True, "packageManager": f"{name}@{version}"}
+                _write(scratch / "package.json", json.dumps(manifest) + "\n")
         env = {"COREPACK_HOME": str(home), "COREPACK_ENABLE_DOWNLOAD_PROMPT": "0",
                "PATH": f"{node_bin}:{os.environ.get('PATH', '/usr/bin:/bin')}"}  # fmt: skip
         key = f"corepack-{name}@{version}"
