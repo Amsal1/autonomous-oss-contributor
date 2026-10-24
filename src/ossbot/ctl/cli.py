@@ -23,6 +23,7 @@ from typing import Annotated, Any, NoReturn
 import httpx
 import typer
 
+from ossbot.common import public_floor
 from ossbot.common.config import ConfigError, LifecyclePolicy, parse_bundle
 from ossbot.common.control_flags import (
     EGRESS_MODES,
@@ -443,13 +444,16 @@ def egress_mode(
 
 @egress_app.command("status")
 def egress_status() -> None:
-    """The active egress mode, the snapshot default (``egress.mode_default``) and the implement network."""
+    """The active egress mode, the snapshot default (``egress.mode_default``), the implement network and the
+    public-address floor (ADR-0025: known, since, the entry count; never an address)."""
     code, data = api("GET", "/v1/control/egress-mode")
     if code != 200:
         _fail(f"gatekeeper answered {code}: {data}")
     icode, idata = api("GET", "/v1/control/implement-network")
     if icode == 200 and isinstance(data, dict) and isinstance(idata, dict):
         data = {**data, "implement_network": idata.get("value"), "implement_network_active": idata.get("active")}
+    if isinstance(data, dict):
+        data = {**data, "public_floor": public_floor.read_state().as_dict()}
     _show(data)
 
 

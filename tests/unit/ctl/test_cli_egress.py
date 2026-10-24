@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 from typer.testing import CliRunner
 
+from ossbot.common import public_floor
 from ossbot.common.control_flags import EGRESS_MODES
 from ossbot.ctl import cli
 
@@ -47,6 +48,18 @@ def test_status_shows_the_implement_network(monkeypatch: pytest.MonkeyPatch) -> 
     result = CliRunner().invoke(cli.app, ["egress", "status"])
     assert result.exit_code == 0, result.output
     assert '"implement_network": "auto"' in result.output and '"implement_network_active": false' in result.output
+
+
+@pytest.mark.parametrize("known", [True, False])
+def test_status_shows_the_public_floor_as_a_count(monkeypatch: pytest.MonkeyPatch, known: bool) -> None:
+    """ADR-0025 (build-env design §4.7): known, since and the entry count, never an address."""
+    _api(monkeypatch, (200, {"mode": "sandbox_full", "default": "open", "previous": None}))
+    status = public_floor.FloorStatus(known, None if known else 1_792_600_300.0, 2 if known else 0, 7, True)
+    monkeypatch.setattr(cli.public_floor, "read_state", lambda: status)
+    result = CliRunner().invoke(cli.app, ["egress", "status"])
+    assert result.exit_code == 0, result.output
+    shown = json.loads(result.output)["public_floor"]
+    assert shown == {"known": known, "since": status.since, "entries": status.entries}
 
 
 def test_implement_network_needs_a_valid_value_and_the_tty_confirm(monkeypatch: pytest.MonkeyPatch) -> None:
