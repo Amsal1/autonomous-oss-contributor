@@ -234,3 +234,60 @@ rewritten fresh, never through a symlink; a malformed proxy writes no proxy line
 `MAVEN_USER_HOME`, `MAVEN_OPTS`; `pipefail` in execd and validate. Trust note: repo code can write `/work/cache`
 in fetch (other `init.d` scripts, a `settings-security.xml`); that gives it nothing its build scripts don't have in
 validate, and our files are rewritten at every job start.
+
+## Implementation addendum 2026-10-24 (build-env)
+
+F1c, the owner's separately verified criterion (build-env design `.ossbot-local/postv1/build-env/design.md` §7,
+findings §2; not tracked). It applies in every egress mode, the default `allowlist` path included, because squid
+originates every upstream TCP connection.
+
+**Root cause.** A TCP path-MTU black hole between the laptop's uplink and Fastly (pypi.org and
+files.pythonhosted.org are Fastly anycast `151.101.0.223`, `151.101.64.223`). Full-size segments towards Fastly
+are dropped and no ICMP "fragmentation needed" comes back, so uv's 2009-byte TLS ClientHello and any upload
+stall, while small packets pass. Ruled out with evidence: `pkg_python` already lists both hosts and every CONNECT
+was `TCP_TUNNEL/200` (no deny, so neither the category nor the CONNECT rule); squid resolved and connected (not
+DNS); uv used the proxy (not the pip/uv proxy settings); a root probe from the distro's host netns, bypassing
+squid and Docker, fails at MSS ≥ 1380 and succeeds at MSS ≤ 1360 (so not squid, Docker or their 1492/1500 MTU
+mismatch). `net.ipv4.tcp_mtu_probing` was 0 in the host and the proxy netns.
+
+**Fix.**
+- `ctl/render.py firewall_plan` part `host` gains three single-parent chains in the **mangle** table, each
+  `-p tcp -m tcp --tcp-flags SYN,RST SYN … -j TCPMSS --set-mss 1300`, jumped at position 1: `OSSBOT-MSS-FWD`
+  (FORWARD: squid's upstream SYN and the peer's SYN-ACK), `OSSBOT-MSS-OUT` (OUTPUT, `! -o lo`: the distro's own
+  SYNs) and `OSSBOT-MSS-IN` (INPUT, `! -i lo`: the peer's SYN-ACK to host sockets, which caps what root sends).
+  1300 leaves margin under the largest tested good value (1360) for VPN/PPPoE paths. `ossbot-firewall --check`
+  covers them like every other chain (the watchdog's `firewall_drift`).
+- `net.ipv4.tcp_mtu_probing=1` (Linux PLPMTUD) in the proxy netns (`ossbot-proxy-run --sysctl`, next to
+  `ip_forward=0`) and in the host netns (`/etc/sysctl.d/60-ossbot.conf` next to `kernel.io_uring_disabled`,
+  applied by provision step `firewall`), so a black hole on any other path below 1300 recovers. Doctor WARNs when
+  the host value is not 1; it is a robustness setting, not a floor, so `--check` ignores it.
+- The firewall render foundations the build-env floors build on: `Chain.table` (`-t <table>` in the script only
+  for non-filter chains, so every filter line is byte-identical; `-t` on every `apply`/`check` call),
+  `Chain.parent = None` (a chain without its own jump), an arity table in the `--check` normaliser (2 values for
+  `--tcp-flags`, compared as comma-sorted sets; 1 for the rest), a defaults table (`--reject-with
+  icmp(6)-port-unreachable`, `--log-level 4|warning`), hashlimit table tuning compared only when rendered, and a
+  `shlex` listing parser. An unknown option stays drift.
+- L-6: `tests/system/capture_firewall_fixture.sh` applies the rendered plan in a scratch netns (never the live
+  rules) and records `iptables -S` for both tables of both families into
+  `tests/fixtures/firewall/iptables-S-1.8.10-nft.txt`; `test_check_matches_recorded_listing` finds no drift
+  against it. The recorded forms matched the canonical render with no change (iptables `1.8.10-3ubuntu2`, pinned
+  in `config/versions.lock.yaml`).
+
+Verified facts (2026-10-24; fetched content treated as data):
+- **V-K1** WSL kernel 6.18.54.1: `XT_TARGET_LOG=m`, `NFLOG=m`, `TCPMSS=y`, `XT_MATCH_LIMIT=m`, `HASHLIMIT=m`,
+  `OWNER=m`, `NF_LOG_IPV4/6=m` (`zcat /proc/config.gz` in the distro, as ossnobody). The live apply confirmed
+  `TCPMSS` in mangle FORWARD, OUTPUT and INPUT.
+- **V-K2** Linux `xt_TCPMSS`: only `--clamp-mss-to-pmtu` is hook-restricted ("path-MTU clamping only supported in
+  FORWARD, OUTPUT and POSTROUTING hooks", `tcpmss_tg4_check_hooks`); with `--set-mss` the option is rewritten only
+  when `oldmss > newmss`, never raised (https://raw.githubusercontent.com/torvalds/linux/master/net/netfilter/xt_TCPMSS.c,
+  same code in `microsoft/WSL2-Linux-Kernel` `linux-msft-wsl-6.6.y`). Hence `OSSBOT-MSS-IN` in mangle INPUT.
+- **V-D3** `docker run --sysctl` accepts namespaced `net.*` sysctls (`docker/cli`
+  `docs/reference/commandline/container_run.md`); `docker inspect` of the live proxy shows
+  `{"net.ipv4.ip_forward":"0","net.ipv4.tcp_mtu_probing":"1"}`.
+
+Evidence after the redeploy (24446ff): `ossbot-firewall --check` exit 0; the three chains listed with
+`--set-mss 1300` and jumped first in mangle FORWARD/OUTPUT/INPUT; `tcp_mtu_probing = 1` in the host netns and
+(`nsenter`) in the proxy netns; no watchdog `firewall_drift`; `tests/sandbox/test_cfn_lint_on_demand.py` PASSED
+in 14 s (a strict validate job, `pool_strict`, the base allowlist path; 205 s timeout before);
+`tests/system/test_proxy_log_bytes.sh` all 17 checks passed, the upload included (1 048 576 bytes sent, curl exit
+0, `%>st` 1 051 870). Details in `docs/VERIFICATION.md` "Post-v1 build-env FEAT-001 (F1c)".
