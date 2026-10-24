@@ -1,0 +1,7 @@
+{
+  "name": "fixture-node",
+  "version": "1.0.0",
+  "private": true,
+  "packageManager": "pnpm@12.15.0",
+  "scripts": {"test": "node test.js"}
+}

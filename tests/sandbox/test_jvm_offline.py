@@ -36,7 +36,7 @@ JDK25 = "JAVA_HOME=/usr/lib/jvm/java-25-openjdk-amd64"
 
 
 def fixture_tar(name: str) -> bytes:
-    """The fixture tree as a tar (uid 10001, the gradlew mode kept); no .git, nothing outside the tree."""
+    """The fixture tree as a tar (uid 10001, gradlew/mvnw/build.sh executable); no .git, nothing outside the tree."""
     buf = io.BytesIO()
     base = FIXTURES / name
     with tarfile.open(fileobj=buf, mode="w") as archive:
@@ -45,7 +45,7 @@ def fixture_tar(name: str) -> bytes:
             info.uid = info.gid = 10001
             info.uname = info.gname = ""
             if path.is_file():
-                info.mode = 0o755 if path.name == "gradlew" else 0o644
+                info.mode = 0o755 if path.name in ("gradlew", "mvnw", "build.sh") else 0o644
                 with path.open("rb") as fh:
                     archive.addfile(info, fh)
             else:

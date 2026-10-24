@@ -27,6 +27,31 @@ def test_gradle_wrapper_jar_and_distribution_are_pinned() -> None:
     assert (GRADLE / "gradlew").read_text(encoding="utf-8").startswith("#!/bin/sh")
 
 
+def test_toolchain_fixtures_are_pinned_and_strict_by_construction() -> None:
+    """build-env design §15 "Toolchains": the Gradle fixtures reuse the pinned wrapper; mvnw is the only-script
+    wrapper 3.3.2 with the Maven 3.9.16 distribution checksum; every declared version is the one the test expects."""
+    fixtures = ROOT / "tests" / "fixtures" / "sandbox"
+    for name in ("gradle-jdk22", "gradle-foojay"):
+        for rel in ("gradlew", "gradle/wrapper/gradle-wrapper.jar", "gradle/wrapper/gradle-wrapper.properties"):
+            assert (fixtures / name / rel).read_bytes() == (GRADLE / rel).read_bytes(), (name, rel)
+    pin = LOCK["fixtures_build_env"]
+    mvnw = (fixtures / "maven-release25" / "mvnw").read_bytes()
+    assert hashlib.sha256(mvnw).hexdigest() == pin["mvnw_sha256"]
+    props = (fixtures / "maven-release25" / ".mvn" / "wrapper" / "maven-wrapper.properties").read_text(encoding="utf-8")
+    assert f"distributionSha256Sum={pin['maven_3_9_16_bin_zip_sha256']}" in props.splitlines()
+    assert "distributionType=only-script" in props.splitlines()
+    pom = (fixtures / "maven-release25" / "pom.xml").read_text(encoding="utf-8")
+    assert "<maven.compiler.release>25</maven.compiler.release>" in pom
+    assert "JavaLanguageVersion.of(22)" in (fixtures / "gradle-jdk22" / "build.gradle.kts").read_text(encoding="utf-8")
+    foojay = (fixtures / "gradle-foojay" / "settings.gradle.kts").read_text(encoding="utf-8")
+    assert f'version "{pin["foojay_convention"]}"' in foojay
+    assert (fixtures / "go-toolchain" / ".tool-versions").read_text(encoding="utf-8") == "golang 1.26.10\n"
+    assert 'channel = "1.98.0"' in (fixtures / "rust-toolchain" / "rust-toolchain.toml").read_text(encoding="utf-8")
+    assert '"packageManager": "pnpm@12.15.0"' in (fixtures / "node-nvmrc-pnpm" / "package.json").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_gradle_fixture_shape() -> None:
     assert "include 'lib', 'app'" in (GRADLE / "settings.gradle").read_text(encoding="utf-8")
     assert "JavaLanguageVersion.of(17)" in (GRADLE / "lib" / "build.gradle").read_text(encoding="utf-8")
