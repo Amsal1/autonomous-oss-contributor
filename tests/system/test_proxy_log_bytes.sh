@@ -7,7 +7,7 @@
 # V11b first: with the proxy container not running the rotation is skipped (exit 0, access.log untouched).
 # On a failure here, stop and ask the owner before sandbox_open is offered (V10 fallback, design §15).
 # Read-only for the mode: it switches no egress mode (the fetch pool reaches pypi in every mode).
-# shellcheck source=tests/system/lib.sh disable=SC1091
+# shellcheck source=tests/system/lib.sh disable=SC1091,SC2317
 source "$(dirname "$0")/lib.sh"
 require_running
 
