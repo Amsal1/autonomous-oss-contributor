@@ -10,7 +10,7 @@ sandbox:
   coder_mode: split                # split only in v1 (single is phase 2)
   kiro_trust_mode: ids             # ids = --trust-tools=<exact ids>; all = --trust-all-tools (needs probes under 'all')
 limits:
-  prs_per_24h: 2
+  prs_per_24h: 5
   open_prs_per_repo: 1
   comments_per_24h: 10
   issue_claims_per_24h: 2
