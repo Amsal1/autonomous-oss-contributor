@@ -128,6 +128,8 @@ fi
 export GOMODCACHE="$WORK/cache/go/mod" GOCACHE="$WORK/cache/go/build" GOFLAGS=-mod=mod \
   npm_config_cache="$WORK/cache/npm" UV_CACHE_DIR="$WORK/cache/uv" PIP_CACHE_DIR="$WORK/cache/pip" \
   GRADLE_USER_HOME="$WORK/cache/gradle" CHECKPOINT_DISABLE=1 UV_PROJECT_ENVIRONMENT="$WORK/venv"
+# Go workspace mode (go.work) refuses GOFLAGS=-mod=mod ("set GOWORK=off to disable workspace mode")
+if [[ -f "$WORK/repo/go.work" ]]; then unset GOFLAGS; fi
 ossbot_tool_env online  # MISE_DATA_DIR, GOTOOLCHAIN=local, RUSTUP_HOME, CARGO_HOME, COREPACK_HOME, uv Python
 # The repo's declared toolchains (JDK, Node + its package manager, Python, Go, Rust, Terraform, Ruby, the repo's
 # own mise config) into the task cache, within 1800 s (§6.1); then the JVM tools, which ignore HTTPS_PROXY:

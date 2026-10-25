@@ -127,6 +127,8 @@ def fixed_env(work: str = "/work", online: bool = False, proxy: str | None = Non
     toolchain.env of exec.sh's resolver run, build-env design §6.3) sets JAVA_HOME, the PATH prepend and the Rust
     toolchain; without it the image defaults apply."""
     env = _base_env(work)
+    if os.path.isfile(f"{work}/repo/go.work"):  # Go workspace mode refuses -mod=mod (gofr: "set GOWORK=off")
+        env.pop("GOFLAGS")
     env["OSSBOT_EXEC_NETWORK"] = "web" if online else "none"
     tc = {k: v for k, v in (toolchain or {}).items() if tc_valid(k, v, work)}
     java = tc.get("JAVA_HOME", DEFAULT_JAVA_HOME)

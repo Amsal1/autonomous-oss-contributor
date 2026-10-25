@@ -328,3 +328,12 @@ def test_executor_reads_the_toolchain_env_file(tmp_path: Path) -> None:
 def test_run_has_pipefail(ex: Executor, cmd: str, code: int) -> None:
     result, _ = ex.run({"cmd": cmd, "timeout_s": 10})
     assert result["exit_code"] == code
+
+
+def test_fixed_env_drops_goflags_in_go_workspace_mode(tmp_path: Path) -> None:
+    """gofr c_D1DJ9BCP72: with a go.work, GOFLAGS=-mod=mod makes every go command fail ("set GOWORK=off")."""
+    (tmp_path / "repo").mkdir()
+    assert execd.fixed_env(str(tmp_path))["GOFLAGS"] == "-mod=mod"
+    (tmp_path / "repo" / "go.work").write_text("go 1.24\n\nuse .\n", encoding="utf-8")
+    assert "GOFLAGS" not in execd.fixed_env(str(tmp_path))
+    assert "GOFLAGS" not in execd.fixed_env(str(tmp_path), True, "http://proxy:3128")

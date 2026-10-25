@@ -52,6 +52,8 @@ source "$(dirname -- "$0")/lib/jvm_env.sh"
 ossbot_jvm_setup validate
 ossbot_tool_paths venv
 cd "$WORK/repo"
+# Go workspace mode (go.work) refuses GOFLAGS=-mod=mod ("set GOWORK=off to disable workspace mode")
+if [[ -f go.work ]]; then unset GOFLAGS; fi
 
 RESULTS="$OUT/validation.ndjson"
 : >"$RESULTS"

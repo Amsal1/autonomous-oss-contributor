@@ -98,6 +98,17 @@ PROBE_CID = "sys-probe"
 # cannot hold the gate (and every Kiro job behind it) for the old 900 s.
 PROBE_SESSION_TIMEOUT_S = 30
 INTERRUPTED = "interrupted"  # job error_class after a drain timeout or a crash (CR-001); state 'failed'
+# A Docker CLI failure that means the API connection itself went away (the filter or dockerd restarting, e.g. a
+# provision run), not that the job failed: floci c_D1E12M7FY6 died "docker wait failed (1): unexpected EOF".
+DOCKER_LINK_LOST = ("unexpected eof", "cannot connect to the docker daemon", "connection reset by peer",
+                    "connection refused", "broken pipe", "is the docker daemon running")  # fmt: skip
+
+
+def docker_link_lost(message: str) -> bool:
+    text = message.lower()
+    return any(needle in text for needle in DOCKER_LINK_LOST)
+
+
 INTERRUPT_GRACE_S = 15.0  # after killing the containers, how long the job threads get to record
 PROMPT_DIR_PROBES = "/opt/ossbot/probes"
 # Before Start work (CR-004 gate 1) a task volume holds only the scout clone and may be destroyed.
@@ -534,8 +545,10 @@ class JobService:
             log.warning("job failed: %s", exc, extra={"run_id": plan.run_id, "cid": plan.cid})
             if isinstance(exc, StageError):
                 outcome.error_class = "stage_in"
-            else:
-                outcome.error_class = "timeout" if str(exc) == "timeout" else "runtime"
+            elif str(exc) == "timeout":
+                outcome.error_class = "timeout"
+            else:  # the Docker API link dropped (a redeploy restarting the filter or dockerd): re-queue, not fail
+                outcome.error_class = INTERRUPTED if docker_link_lost(str(exc)) else "runtime"
         finally:
             for name in reversed(created):
                 self._quiet(self.runtime.remove, name)

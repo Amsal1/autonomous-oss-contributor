@@ -483,3 +483,19 @@ def test_killwatch_kills_running_jobs_on_kill_only(sbx: Sbx) -> None:
     assert watch.tick() == 1
     assert ("kill", spec.name) in sbx.runtime.calls
     assert "r1-plan" in sbx.jobs._cancelled
+
+
+@pytest.mark.parametrize(
+    ("message", "lost"),
+    [
+        ("docker wait failed (1): unexpected EOF", True),  # floci c_D1E12M7FY6 during a provision run
+        ("Cannot connect to the Docker daemon at unix:///run/ossbot/docker-filter.sock", True),
+        ("docker start failed (1): read: connection reset by peer", True),
+        ("docker create failed (1): no such image", False),
+        ("image sandbox-full has no pinned digest", False),
+    ],
+)
+def test_a_lost_docker_link_interrupts_instead_of_failing(message: str, lost: bool) -> None:
+    from ossbot.sandboxd.jobs import docker_link_lost
+
+    assert docker_link_lost(message) is lost
