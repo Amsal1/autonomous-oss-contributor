@@ -21,7 +21,7 @@ import shutil
 import stat
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -29,6 +29,7 @@ from ossbot.common.hashing import sha256_hex
 from ossbot.common.paths import Paths
 
 GIT_BIN = "/usr/bin/git"
+WARM_TIMEOUT_S = 1800.0  # warm_upstream: a first fetch of a large repo, in a worker thread
 GITHUB_PROXY = "http://10.212.0.2:3150"
 DEFAULT_GIT_HOME = "/srv/ossbot/gatekeeper/githome"
 GIT_ENV: dict[str, str] = {
@@ -331,6 +332,19 @@ class GitOps:
         if live is not None:
             self.git.run(["update-ref", f"refs/upstream-live/{base_ref}", tip], cwd=live)
         return tip
+
+    def warm_upstream(self, upstream: str, base_ref: str, timeout_s: float = WARM_TIMEOUT_S) -> None:
+        """The same cache fetch with a longer timeout, for a worker thread before ``/package``: the first fetch of
+        a large repo (litellm) took over 300 s, and inside the event loop it stalled ``/v1/health`` until the
+        watchdog paused everything (``gatekeeper_unhealthy``). The packager's own fetch is then incremental."""
+        if not REF_NAME_RE.match(base_ref) or ".." in base_ref:
+            raise ValueError(f"bad base_ref {base_ref!r}")
+        cache = self.cache_dir(upstream)
+        self.git.home.mkdir(parents=True, exist_ok=True)
+        if not (cache / "HEAD").exists():
+            self.init_bare(cache)
+        git = replace(self.git, timeout=timeout_s, calls=self.git.calls)
+        self.remote(git, cache, github_url(upstream), f"+refs/heads/{base_ref}:refs/upstream/{base_ref}")
 
     # ----------------------------------------------------------------- mirrors
     def create_mirror(self, upstream: str, cid: str, rev: int, base_ref: str, tip: str) -> Path:

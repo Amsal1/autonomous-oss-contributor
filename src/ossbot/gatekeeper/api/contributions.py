@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import re
+import subprocess
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -21,16 +25,18 @@ from ossbot.common.schemas import (
     TransitionRequest,
     TransitionResponse,
 )
-from ossbot.gatekeeper import implement_network
+from ossbot.gatekeeper import db, implement_network
 from ossbot.gatekeeper.api.deps import ctx
 from ossbot.gatekeeper.authz import Caller, Role, require
 from ossbot.gatekeeper.egress_notes import EgressNotes, NoteRefused
+from ossbot.gatekeeper.gitops import GitError
 from ossbot.gatekeeper.imports import Importer, ImportInvalid
 from ossbot.gatekeeper.packaging import Packager, PackageRefused, gitleaks_scan
 from ossbot.gatekeeper.proposals import ProposalRefused, ProposalService
 from ossbot.gatekeeper.state_machine import Actor
 
 router = APIRouter(prefix="/v1")
+log = logging.getLogger(__name__)
 CID_PATTERN = r"^c_[0-9A-Z]{10}$"
 
 
@@ -142,6 +148,16 @@ async def package(
 ) -> JSONResponse:
     _check_cid(cid)
     c = ctx(request)
+    row = db.one(c.conn, "SELECT upstream, state FROM contributions WHERE id = ?", (cid,))
+    expected = str(c.gitops.artifact_dir(cid, body.rev))
+    # off the event loop: a slow first fetch must not stall /v1/health (the watchdog). Only for a request the
+    # packager would get past its first checks; it repeats them and its own (now incremental) fetch.
+    if (row is not None and row["state"] == State.PACKAGING.value
+            and os.path.normpath(body.artifact_dir).rstrip("/") == expected):  # fmt: skip
+        try:
+            await asyncio.to_thread(c.gitops.warm_upstream, str(row["upstream"]), body.base_ref)
+        except (GitError, ValueError, OSError, subprocess.TimeoutExpired) as exc:
+            log.warning("upstream warm fetch for %s failed: %s", cid, exc, extra={"cid": cid})
     packager = Packager(c, c.gitops, scanner=c.gitleaks_scanner or gitleaks_scan)
     try:
         result = packager.package(cid, body, caller.actor)

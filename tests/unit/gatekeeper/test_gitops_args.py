@@ -164,3 +164,20 @@ async def test_artifact_dir_must_be_gatekeeper_built(gctx: AppContext, world: Gi
     assert resp.status_code == 400
     assert resp.json()["error"] == "artifact_dir"
     assert not gctx.gitops.git.calls  # refused before any git ran
+
+
+def test_warm_upstream_fetches_with_the_long_timeout(paths: Paths, tmp_path: Path) -> None:
+    """litellm c_D1E05SGFG7: the first fetch outlived 300 s on the event loop and the watchdog paused the bot;
+    /package now warms the cache in a worker thread with WARM_TIMEOUT_S, same hardened fetch."""
+    seen: list[tuple[float, str, str]] = []
+
+    def remote(git: gitops.Git, git_dir: Path, url: str, refspec: str) -> None:
+        seen.append((git.timeout, url, refspec))
+
+    ops = gitops.GitOps(paths, gitops.Git(home=tmp_path / "githome"), remote=remote)
+    ops.warm_upstream("BerriAI/litellm", "main")
+    assert seen == [(gitops.WARM_TIMEOUT_S, "https://github.com/BerriAI/litellm.git",
+                     "+refs/heads/main:refs/upstream/main")]  # fmt: skip
+    assert ops.git.timeout == 300.0  # the packager's own git keeps its timeout
+    with pytest.raises(ValueError, match="bad base_ref"):
+        ops.warm_upstream("BerriAI/litellm", "../x")
